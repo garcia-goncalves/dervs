@@ -125,6 +125,7 @@
           <span class="proj"></span>
           <span class="grow"></span>
           <span class="pill"></span>
+          <button class="paste" title="Colar texto da área de transferência neste agente (ou botão direito no terminal)">📋</button>
           <button class="link" title="Conectar a outro node">⛓</button>
           <button class="kill" title="Encerrar processo">■</button>
           <button class="del" title="Remover da lousa">✕</button>
@@ -143,6 +144,7 @@
         startDragNode(e, node);
       });
       head.addEventListener("dblclick", (e) => { if (!e.target.closest("button")) focusNode(node.id); });
+      $(".paste", el).addEventListener("click", () => pasteInto(node));
       $(".link", el).addEventListener("click", () => beginConnect(node.id));
       $(".kill", el).addEventListener("click", () => killNode(node));
       $(".del", el).addEventListener("click", () => removeNode(node));
@@ -188,6 +190,9 @@
     try { term.loadAddon(new WebLinksAddon.WebLinksAddon()); } catch {}
     term.open(body);
     try { fit.fit(); } catch {}
+
+    // botao direito do mouse cola o conteudo da area de transferencia (estilo terminal)
+    body.addEventListener("contextmenu", (e) => { e.preventDefault(); pasteInto(node); });
 
     const rec = { term, fit, ws: null, fitFn: null, reconnectTimer: null };
     terms[node.id] = rec;
@@ -247,6 +252,21 @@
     if (node.sessionId) api("POST", "/api/term/" + node.sessionId + "/kill");
     setDot(node, "exited");
     toast("Processo encerrado.");
+  }
+
+  // cola o texto da area de transferencia DENTRO do terminal deste node.
+  // usa term.paste() => bracketed paste (texto multilinha entra como UM bloco,
+  // sem submeter linha a linha) e segue pelo onData -> WS -> PTY.
+  async function pasteInto(node) {
+    const rec = terms[node.id];
+    if (!rec || !rec.ws || rec.ws.readyState !== 1) { toast("Terminal não conectado."); return; }
+    let text = "";
+    try { text = await navigator.clipboard.readText(); }
+    catch { toast("Sem acesso à área de transferência (permita no navegador)."); return; }
+    if (!text) { toast("Área de transferência vazia."); return; }
+    rec.term.focus();
+    rec.term.paste(text);
+    toast("Colado (" + text.length + " caracteres).");
   }
 
   function removeNode(node) {
