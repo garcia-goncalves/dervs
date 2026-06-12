@@ -14,6 +14,18 @@ const ROOT = __dirname;
 const PORT = Number(process.env.HUB_PORT || 4321);
 const CONFIG_PATH = path.join(ROOT, "projects.json");
 
+// REDE DE SEGURANCA: o Hub gerencia muitos PTYs e sockets. Um erro solto (ex.: o
+// node-pty faz fork de um helper SEM tratar 'error' — se o fork falha por excesso
+// de processos/handles, vira "Unhandled 'error' event" e mataria o processo todo).
+// Aqui logamos com stack em _crash.log e SEGUIMOS VIVOS, em vez de derrubar o Hub.
+function logCrash(kind, err) {
+  const line = `[${new Date().toISOString()}] ${kind}: ${(err && err.stack) || err}\n`;
+  try { fs.appendFileSync(path.join(ROOT, "_crash.log"), line); } catch {}
+  console.error("\n[Hub] " + kind + " (continuando):\n", err);
+}
+process.on("uncaughtException", (e) => logCrash("uncaughtException", e));
+process.on("unhandledRejection", (e) => logCrash("unhandledRejection", e));
+
 // separador de campos do git log (byte 0x1f = unit separator, nunca aparece em texto)
 const SEP = "\x1f";
 
