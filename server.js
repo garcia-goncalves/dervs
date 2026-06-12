@@ -1213,8 +1213,12 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  const url = `http://127.0.0.1:${PORT}`;
-  console.log(`\n  Hub de Projetos rodando em ${url}\n`);
-  // abre o navegador automaticamente
-  spawn("cmd.exe", ["/c", "start", "", url], { detached: true, stdio: "ignore", shell: false }).unref();
+  const base = `http://127.0.0.1:${PORT}`;
+  console.log(`\n  Hub de Projetos rodando em ${base}\n`);
+  // abre o navegador automaticamente. HUB_OPEN=0 desliga; HUB_OPEN_URL escolhe a
+  // pagina (ex.: o atalho "Lousa" abre direto em /canvas.html).
+  if (process.env.HUB_OPEN !== "0") {
+    const openUrl = process.env.HUB_OPEN_URL || base;
+    spawn("cmd.exe", ["/c", "start", "", openUrl], { detached: true, stdio: "ignore", shell: false }).unref();
+  }
 });

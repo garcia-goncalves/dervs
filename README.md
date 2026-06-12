@@ -49,6 +49,10 @@ Botão **🪧 Lousa** no topo (lousa do **Portfolio**) ou no card de cada projet
 (lousa **daquele projeto**). É a canvas estilo Cursor: cada agente vira um **node
 arrastável com um terminal Claude embutido**, e você liga os nodes com linhas.
 
+> **Atalho na área de trabalho:** o ícone **Lousa** (`Abrir Lousa.bat`) abre a lousa
+> direto — sobe o Hub sozinho se ele não estiver rodando. Link direto:
+> `http://127.0.0.1:4321/canvas.html`.
+
 - **+ Agente** — escolhe um **papel** (Orchestrator · Code Reviewer · Tester · Dev ·
   Claude puro · Shell) e o **projeto** (pasta onde roda). Cada papel entra com um
   system-prompt próprio. Opcionalmente já começa com uma tarefa.
