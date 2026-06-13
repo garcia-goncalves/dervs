@@ -1078,13 +1078,20 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const role = String(body.role || "claude");
       if (!ptySessions.ROLES[role]) return sendJson(res, 400, { ok: false, msg: "role invalido" });
-      let proj = null;
-      if (body.projectId) {
-        proj = findProject(String(body.projectId));
-        if (!proj) return sendJson(res, 404, { ok: false, msg: "projeto nao encontrado" });
-      }
       const b = rawBoard(boardId);
       const parentNodeId = body.parentNodeId && b.nodes.some((n) => n.id === body.parentNodeId) ? body.parentNodeId : null;
+      // o filho HERDA o projeto do pai quando nao for especificado — senao cairia no
+      // HOME (sem repo) e nao teria o que commitar. --project so pra mudar de projeto.
+      let projId = body.projectId;
+      if (!projId && parentNodeId) {
+        const parent = b.nodes.find((n) => n.id === parentNodeId);
+        if (parent && parent.projectId) projId = parent.projectId;
+      }
+      let proj = null;
+      if (projId) {
+        proj = findProject(String(projId));
+        if (!proj) return sendJson(res, 404, { ok: false, msg: "projeto nao encontrado" });
+      }
       const pos = body.x != null && body.y != null ? { x: Math.round(body.x), y: Math.round(body.y) } : placeNode(b, parentNodeId);
       const nodeId = genId("n");
       const env = { HUB_PORT: String(PORT), HUB_BOARD: boardId, HUB_NODE: nodeId, HUB_LOUSA: LOUSA_CLI };

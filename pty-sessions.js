@@ -77,7 +77,7 @@ const ROLES = {
 const CANVAS_GUIDE = [
   "CONTROLE DA LOUSA (visual, ao vivo para o usuario): voce e um node numa lousa de agentes do Hub.",
   "Voce PODE criar outros agentes e conexoes — eles aparecem na hora na tela. Use o CLI pelo Bash:",
-  '- Criar agente ligado a voce: node "$HUB_LOUSA" spawn --role <reviewer|tester|dev|orchestrator> --task "<o que ele faz>" [--project <id>]',
+  '- Criar agente ligado a voce: node "$HUB_LOUSA" spawn --role <reviewer|tester|dev|orchestrator> --task "<o que ele faz>"  (ele HERDA o seu projeto; use --project <id> so pra mudar)',
   '- Conectar voce a outro node: node "$HUB_LOUSA" connect <nodeId>',
   '- Listar os nodes da lousa: node "$HUB_LOUSA" list',
   '- Post-it na lousa: node "$HUB_LOUSA" note "<texto>"',
