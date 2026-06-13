@@ -197,18 +197,46 @@ const boardClients = new Map(); // boardId -> Set(res)  (assinantes SSE)
 let canvasSeq = 0;
 function genId(p) { return p + (++canvasSeq).toString(36) + Math.random().toString(36).slice(2, 6); }
 
-function loadCanvas() {
-  try { return JSON.parse(fs.readFileSync(CANVAS_PATH, "utf8")); } catch { return { boards: {} }; }
+// O canvas vive EM MEMORIA (fonte da verdade), carregado uma vez do disco. Isso
+// evita o bug que apagou a lousa: antes, cada operacao RE-LIA o arquivo; com disco
+// cheio a leitura/gravacao falhava, retornava vazio e a gravacao seguinte persistia
+// o vazio — apagando os nodes (as sessoes, em memoria, sobreviviam orfas).
+// Agora: ler so na 1a vez; gravar de forma ATOMICA (tmp+rename); se a gravacao
+// falhar (ex.: ENOSPC), o estado em memoria CONTINUA intacto e a lousa segue certa.
+let _canvas = null;
+function canvas() {
+  if (_canvas) return _canvas;
+  try {
+    _canvas = JSON.parse(fs.readFileSync(CANVAS_PATH, "utf8"));
+    if (!_canvas || typeof _canvas !== "object" || !_canvas.boards) _canvas = { boards: {} };
+  } catch (e) {
+    // arquivo ausente => comeca vazio. Arquivo CORROMPIDO => preserva pra forense
+    // (nao sobrescreve cegamente) e segue com vazio em memoria.
+    if (fs.existsSync(CANVAS_PATH)) {
+      try { fs.copyFileSync(CANVAS_PATH, CANVAS_PATH + ".bad-" + Date.now()); } catch {}
+      console.error("[Hub] canvas.json ilegivel — backup salvo (.bad-*):", e.message);
+    }
+    _canvas = { boards: {} };
+  }
+  return _canvas;
 }
-function saveCanvas(data) { fs.writeFileSync(CANVAS_PATH, JSON.stringify(data, null, 2)); }
+function persistCanvas() {
+  try {
+    const tmp = CANVAS_PATH + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(_canvas, null, 2));
+    fs.renameSync(tmp, CANVAS_PATH); // atomico: nunca deixa o arquivo truncado
+  } catch (e) {
+    // disco cheio/permite: NAO perde o estado — fica em memoria e tenta na proxima.
+    console.error("[Hub] nao consegui salvar canvas.json (mantido em memoria):", e.message);
+  }
+}
 function rawBoard(boardId) {
-  const data = loadCanvas();
-  return data.boards[boardId] || { nodes: [], edges: [], notes: [], viewport: { x: 120, y: 80, scale: 1 } };
+  const c = canvas();
+  return c.boards[boardId] || { nodes: [], edges: [], notes: [], viewport: { x: 120, y: 80, scale: 1 } };
 }
 function writeBoard(boardId, board) {
-  const data = loadCanvas();
-  data.boards[boardId] = board;
-  saveCanvas(data);
+  canvas().boards[boardId] = board;
+  persistCanvas();
 }
 function broadcastBoard(boardId, ev) {
   const set = boardClients.get(boardId);
