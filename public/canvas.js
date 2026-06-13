@@ -500,8 +500,10 @@
     const r = await api("POST", `/api/canvas/${encodeURIComponent(boardId)}/spawn`,
       { role, projectId, task, x: Math.round(c.x), y: Math.round(c.y) });
     if (!r.ok) { toast(r.msg || "Falha ao criar"); return; }
-    applyNodeAdded(r.node); // render imediato (o echo do SSE e idempotente)
-    selectNode(r.node.id);
+    // criacao e escalonada (fila anti-corrupcao do .claude.json): o node aparece
+    // pelo SSE (node_added) quando for realmente criado.
+    if (r.node) { applyNodeAdded(r.node); selectNode(r.node.id); }
+    else toast("Agente na fila — abrindo em instantes…");
   }
 
   // ====================================================================

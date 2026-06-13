@@ -69,7 +69,7 @@ function usage() {
         projectId: f.project, label: f.label && f.label !== "true" ? f.label : undefined,
         parentNodeId: NODE || undefined,
       });
-      if (r.json && r.json.ok) console.log(`criado node ${r.json.nodeId} (sessao ${r.json.sessionId})`);
+      if (r.json && r.json.ok) console.log(`agente enfileirado: node ${r.json.nodeId} (sobe em alguns segundos)`);
       else { console.error("falhou:", (r.json && r.json.msg) || r.status); process.exit(1); }
     } else if (cmd === "connect") {
       const to = f._[0]; const from = f._[1] || NODE;

@@ -331,6 +331,31 @@ function placeNode(b, parentNodeId) {
   return { x: 120 + (i % 4) * 510, y: 100 + Math.floor(i / 4) * 380 };
 }
 
+// Fila de criacao ESCALONADA: sobe 1 agente por vez, com intervalo entre starts.
+// Evita que varios `claude` iniciem juntos e corrompam o ~/.claude.json (limitacao
+// do Claude Code no Windows). Mesma ideia do Neguin. O node aparece na lousa (via
+// SSE) quando e de fato criado.
+const SPAWN_STAGGER_MS = Number(process.env.HUB_SPAWN_STAGGER_MS || 3000);
+const spawnQueue = [];
+let spawning = false;
+function enqueueSpawn(spec) { spawnQueue.push(spec); processSpawnQueue(); }
+function processSpawnQueue() {
+  if (spawning) return;
+  const spec = spawnQueue.shift();
+  if (!spec) return;
+  spawning = true;
+  const r = ptySessions.create(spec.createArgs);
+  if (r.error) {
+    console.error("[Hub] spawn recusado:", r.error);
+    spawning = false;
+    setTimeout(processSpawnQueue, 200);
+    return;
+  }
+  boardAddNode(spec.boardId, { ...spec.node, sessionId: r.session.id });
+  if (spec.parentNodeId) boardAddEdge(spec.boardId, spec.parentNodeId, spec.node.id);
+  setTimeout(() => { spawning = false; processSpawnQueue(); }, SPAWN_STAGGER_MS);
+}
+
 // ---------- chat com o Claude (headless, SOMENTE-LEITURA) ----------
 // Roda `claude -p` com allowedTools de leitura (Read/Grep/Glob): o Claude le o
 // repo pra responder, mas NAO executa comandos nem escreve arquivos. Sem
@@ -1092,19 +1117,24 @@ const server = http.createServer(async (req, res) => {
         proj = findProject(String(projId));
         if (!proj) return sendJson(res, 404, { ok: false, msg: "projeto nao encontrado" });
       }
+      // teto rodando + fila (feedback imediato; create() e o backstop final)
+      if (ptySessions.runningCount() + spawnQueue.length >= ptySessions.MAX_AGENTS) {
+        return sendJson(res, 200, { ok: false, msg: `Limite de ${ptySessions.MAX_AGENTS} agentes (rodando+fila) atingido. Encerre algum antes.` });
+      }
       const pos = body.x != null && body.y != null ? { x: Math.round(body.x), y: Math.round(body.y) } : placeNode(b, parentNodeId);
       const nodeId = genId("n");
+      const label = body.label ? String(body.label).slice(0, 60) : ptySessions.ROLES[role].label;
       const env = { HUB_PORT: String(PORT), HUB_BOARD: boardId, HUB_NODE: nodeId, HUB_LOUSA: LOUSA_CLI };
-      const r = ptySessions.create({
-        projectId: proj ? proj.id : null, projectName: proj ? proj.name : null, projectPath: proj ? proj.path : null,
-        role, task: String(body.task || "").slice(0, 4000), label: body.label ? String(body.label).slice(0, 60) : null,
-        boardId, nodeId, env,
+      // ENFILEIRA (criacao escalonada). O node aparece na lousa via SSE ao ser criado.
+      enqueueSpawn({
+        boardId, parentNodeId,
+        node: { id: nodeId, role, projectId: proj ? proj.id : null, projectName: proj ? proj.name : null, label, x: pos.x, y: pos.y, w: 460, h: 320 },
+        createArgs: {
+          projectId: proj ? proj.id : null, projectName: proj ? proj.name : null, projectPath: proj ? proj.path : null,
+          role, task: String(body.task || "").slice(0, 4000), label, boardId, nodeId, env,
+        },
       });
-      if (r.error) return sendJson(res, 500, { ok: false, msg: r.error });
-      const node = { id: nodeId, sessionId: r.session.id, role, projectId: proj ? proj.id : null, projectName: proj ? proj.name : null, label: r.session.label, x: pos.x, y: pos.y, w: 460, h: 320 };
-      boardAddNode(boardId, node);
-      if (parentNodeId) boardAddEdge(boardId, parentNodeId, nodeId);
-      return sendJson(res, 200, { ok: true, node, nodeId, sessionId: r.session.id });
+      return sendJson(res, 200, { ok: true, queued: true, nodeId });
     }
 
     // conectar dois nodes

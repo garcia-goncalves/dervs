@@ -119,6 +119,8 @@ function buildSpawn(role, projectPath, task, boardId) {
   const t = (task || "").replace(/\r?\n/g, " ").trim();
   if (t) args.push(t.slice(0, 4000)); // prompt posicional primeiro
   if (SKIP_PERMISSIONS) args.push("--dangerously-skip-permissions"); // autonomia total
+  // modelo por papel: Orchestrator usa Opus (coordena/raciocina); o resto, Sonnet.
+  args.push("--model", role === "orchestrator" ? "opus" : "sonnet");
   let persona = def.persona;
   if (persona && boardId) persona += "\n\n" + CANVAS_GUIDE;
   if (persona) args.push("--append-system-prompt", persona);
@@ -271,4 +273,4 @@ function list() {
   return [...sessions.values()].map(meta);
 }
 
-module.exports = { ROLES, create, attach, detach, write, resize, kill, remove, get, list, meta };
+module.exports = { ROLES, MAX_AGENTS, create, attach, detach, write, resize, kill, remove, get, list, meta, runningCount };
