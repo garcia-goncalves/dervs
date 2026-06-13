@@ -44,6 +44,10 @@ const SCROLLBACK_BYTES = 256 * 1024; // ~256KB de historico por sessao p/ replay
 const DEFAULT_COLS = 100;
 const DEFAULT_ROWS = 30;
 
+// Teto de agentes rodando ao mesmo tempo — evita runaway (agente criando agente)
+// que enche disco/CPU. Ajustavel por HUB_MAX_AGENTS.
+const MAX_AGENTS = Number(process.env.HUB_MAX_AGENTS || 8);
+
 // Presets de papel (roles). Cada um define como o Claude entra. O comando base e
 // sempre "claude"; o que muda e o system-prompt (--append-system-prompt) e se ja
 // inicia com uma tarefa. shell = terminal cru pra quando voce quer mao na massa.
@@ -51,7 +55,7 @@ const ROLES = {
   orchestrator: {
     label: "Orchestrator",
     persona:
-      "Voce e o ORCHESTRATOR de uma lousa de agentes. Coordene o trabalho: divida tarefas, acompanhe os outros agentes (Reviewer, Tester, Dev) e consolide resultados. Seja conciso e direto em pt-BR.",
+      "Voce e o ORCHESTRATOR de uma lousa de agentes. Coordene o trabalho: divida tarefas, acompanhe os outros agentes (Reviewer, Tester, Dev) e consolide resultados. Ao criar cada agente, deixe CLARO na tarefa dele que ele deve COMMITAR (git add + commit) ao concluir. Seja conciso e direto em pt-BR.",
   },
   reviewer: {
     label: "Code Reviewer",
@@ -83,6 +87,7 @@ const CANVAS_GUIDE = [
   '- Post-it na lousa: node "$HUB_LOUSA" note "<texto>"',
   '- Atualizar seu status (sai no seu cabecalho): node "$HUB_LOUSA" status "<texto curto>"',
   "Crie agentes SO quando dividir o trabalho ajudar de verdade — nao crie a toa.",
+  "COMMITE SEMPRE: ao concluir cada parte, rode git add + git commit no projeto. Trabalho NAO commitado se perde se o Hub reiniciar.",
   "HUB_NODE (seu id), HUB_BOARD e HUB_PORT ja estao no ambiente; o CLI usa sozinho.",
 ].join("\n");
 
@@ -120,7 +125,16 @@ function buildSpawn(role, projectPath, task, boardId) {
   return { file: resolveCommand("claude"), args };
 }
 
+function runningCount() {
+  let n = 0;
+  for (const s of sessions.values()) if (s.status === "running") n++;
+  return n;
+}
+
 function create({ projectId, projectName, projectPath, role = "claude", task = "", label, boardId, nodeId, env }) {
+  if (runningCount() >= MAX_AGENTS) {
+    return { error: `Limite de ${MAX_AGENTS} agentes simultaneos atingido. Encerre algum (ou aumente HUB_MAX_AGENTS) antes de criar outro.` };
+  }
   const id = genId();
   const { file, args } = buildSpawn(role, projectPath, task, boardId);
   const cwd = projectPath || os.homedir();
