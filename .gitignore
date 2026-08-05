@@ -19,6 +19,7 @@ telegram/config.json
 canvas.json
 insights.json
 readiness.json
+telegram/notifier-state.json
 
 # temporarios / OS
 *.tmp

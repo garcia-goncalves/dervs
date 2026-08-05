@@ -10,6 +10,8 @@
     { "id": "ajudei", "name": "Ajudei", "path": "C:\\Users\\andre\\source\\repos\\Ajudei", "tags": [] },
     { "id": "espacoflow", "name": "EspacoFlow", "path": "C:\\Users\\andre\\source\\repos\\EspacoFlow", "tags": [] },
     { "id": "medconsultoria", "name": "Med Consultoria", "path": "C:\\Users\\andre\\source\\repos\\medconsultoria", "tags": [] },
-    { "id": "aninha-site", "name": "Aninha (site)", "path": "C:\\Users\\andre\\source\\repos\\aninha-site", "tags": ["site"] }
+    { "id": "aninha-site", "name": "Aninha (site)", "path": "C:\\Users\\andre\\source\\repos\\aninha-site", "tags": ["site"] },
+    { "id": "zerofalta", "name": "ZeroFalta", "path": "C:\\Users\\andre\\source\\repos\\zerofalta", "tags": ["SaaS", "anti-falta", "clinicas"] },
+    { "id": "cuidadores", "name": "Cuidadores", "path": "C:\\Users\\andre\\source\\repos\\cuidadores", "tags": [] }
   ]
 }
