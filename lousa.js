@@ -65,7 +65,7 @@ function usage() {
   try {
     if (cmd === "spawn") {
       const r = await req("POST", base + "/spawn", {
-        role: f.role || "dev", task: f.task && f.task !== "true" ? f.task : "",
+        role: f.role || process.env.HUB_ROLE || "dev", task: f.task && f.task !== "true" ? f.task : "",
         projectId: f.project, label: f.label && f.label !== "true" ? f.label : undefined,
         parentNodeId: NODE || undefined,
       });

@@ -293,11 +293,28 @@ function boardUpdateNode(boardId, nodeId, patch) {
   const n = b.nodes.find((x) => x.id === nodeId);
   if (!n) return null;
   const clean = {};
+  // sessionId NAO entra aqui de proposito: este caminho e exposto na API (a UI e o
+  // CLI do agente chamam /update-node). Deixar o cliente escolher o sessionId de um
+  // node seria dar a ele o terminal de OUTRO agente. Quem amarra sessao a node e o
+  // boardAttachSession(), so pelo caminho interno do spawn.
   for (const k of ["label", "status", "x", "y", "w", "h"]) if (patch[k] !== undefined) clean[k] = patch[k];
   Object.assign(n, clean);
   writeBoard(boardId, b);
   broadcastBoard(boardId, { type: "node_updated", nodeId, patch: clean });
   return n;
+}
+// amarra a sessao recem-criada ao node placeholder (caminho INTERNO do spawn).
+// Se o node sumiu (usuario removeu enquanto estava na fila), devolve false pro
+// chamador matar a sessao — senao ficaria um agente rodando sem node nenhum.
+function boardAttachSession(boardId, nodeId, sessionId) {
+  const b = rawBoard(boardId);
+  const n = b.nodes.find((x) => x.id === nodeId);
+  if (!n) return false;
+  n.sessionId = sessionId;
+  n.status = "running";
+  writeBoard(boardId, b);
+  broadcastBoard(boardId, { type: "node_updated", nodeId, patch: { sessionId, status: "running" } });
+  return true;
 }
 // PUT de layout: faz MERGE de posicoes/zoom/texto de notas em itens existentes.
 // NUNCA cria nem apaga nada (estrutura e so pelas ops granulares) -> nao some o
@@ -347,12 +364,18 @@ function processSpawnQueue() {
   const r = ptySessions.create(spec.createArgs);
   if (r.error) {
     console.error("[Hub] spawn recusado:", r.error);
+    // o node ja esta na lousa (placeholder "na fila"); marca como falho em vez de sumir.
+    boardUpdateNode(spec.boardId, spec.nodeId, { status: "error" });
     spawning = false;
     setTimeout(processSpawnQueue, 200);
     return;
   }
-  boardAddNode(spec.boardId, { ...spec.node, sessionId: r.session.id });
-  if (spec.parentNodeId) boardAddEdge(spec.boardId, spec.parentNodeId, spec.node.id);
+  // o node ja apareceu na fila; agora vira terminal vivo (sessionId + running).
+  if (!boardAttachSession(spec.boardId, spec.nodeId, r.session.id)) {
+    // node removido enquanto esperava a vez: nao deixa a sessao orfa consumindo slot.
+    console.warn("[Hub] node sumiu antes do spawn — encerrando sessao orfa", r.session.id);
+    ptySessions.remove(r.session.id);
+  }
   setTimeout(() => { spawning = false; processSpawnQueue(); }, SPAWN_STAGGER_MS);
 }
 
@@ -1055,6 +1078,31 @@ const server = http.createServer(async (req, res) => {
       const roles = Object.entries(ptySessions.ROLES).map(([id, r]) => ({ id, label: r.label }));
       return sendJson(res, 200, { sessions: ptySessions.list(), roles });
     }
+    // lista GLOBAL de agentes vivos (todas as lousas) — pro painel "Agentes em background".
+    // Cruza sessao->node varrendo o canvas: a tarefa AO VIVO mora no label do node
+    // (o agente atualiza via `lousa status`), nao no label da sessao.
+    if (pathname === "/api/agents" && req.method === "GET") {
+      const loc = {}; // sessionId -> { board, nodeId, nodeLabel }
+      for (const [bid, b] of Object.entries(canvas().boards)) {
+        for (const n of b.nodes || []) if (n.sessionId) loc[n.sessionId] = { board: bid, nodeId: n.id, nodeLabel: n.label };
+      }
+      const agents = ptySessions.list()
+        .filter((s) => s.status === "running")
+        .map((s) => {
+          const l = loc[s.id] || {};
+          const role = ptySessions.ROLES[s.role] || {};
+          // tarefa = label do node, mas so quando difere do label-padrao do papel
+          // (senao seria so "Orchestrator" repetido, sem informacao real).
+          const task = l.nodeLabel && l.nodeLabel !== (role.label || "") ? l.nodeLabel : null;
+          return {
+            sessionId: s.id, role: s.role, roleLabel: role.label || s.role, roleDesc: role.desc || "",
+            projectName: s.projectName, board: l.board || null, nodeId: l.nodeId || null,
+            task, createdAt: s.createdAt,
+          };
+        })
+        .sort((a, b) => a.createdAt - b.createdAt);
+      return sendJson(res, 200, { agents });
+    }
     // cria uma sessao nova (role = enum; cwd/binario saem da config do servidor)
     if (pathname === "/api/term" && req.method === "POST") {
       const body = await readBody(req);
@@ -1124,17 +1172,22 @@ const server = http.createServer(async (req, res) => {
       const pos = body.x != null && body.y != null ? { x: Math.round(body.x), y: Math.round(body.y) } : placeNode(b, parentNodeId);
       const nodeId = genId("n");
       const label = body.label ? String(body.label).slice(0, 60) : ptySessions.ROLES[role].label;
-      const env = { HUB_PORT: String(PORT), HUB_BOARD: boardId, HUB_NODE: nodeId, HUB_LOUSA: LOUSA_CLI };
-      // ENFILEIRA (criacao escalonada). O node aparece na lousa via SSE ao ser criado.
+      const env = { HUB_PORT: String(PORT), HUB_BOARD: boardId, HUB_NODE: nodeId, HUB_ROLE: role, HUB_LOUSA: LOUSA_CLI };
+      // O node aparece na lousa JA (status "na fila"), antes mesmo do processo subir —
+      // assim TODO agente fica visivel na hora. A linha pai->filho tambem ja e desenhada.
+      // Ao subir de fato, processSpawnQueue() troca pra sessionId + running.
+      const node = { id: nodeId, role, projectId: proj ? proj.id : null, projectName: proj ? proj.name : null, label, x: pos.x, y: pos.y, w: 460, h: 320, status: "queued" };
+      boardAddNode(boardId, node);
+      if (parentNodeId) boardAddEdge(boardId, parentNodeId, nodeId);
+      // ENFILEIRA (criacao escalonada).
       enqueueSpawn({
-        boardId, parentNodeId,
-        node: { id: nodeId, role, projectId: proj ? proj.id : null, projectName: proj ? proj.name : null, label, x: pos.x, y: pos.y, w: 460, h: 320 },
+        boardId, nodeId,
         createArgs: {
           projectId: proj ? proj.id : null, projectName: proj ? proj.name : null, projectPath: proj ? proj.path : null,
           role, task: String(body.task || "").slice(0, 4000), label, boardId, nodeId, env,
         },
       });
-      return sendJson(res, 200, { ok: true, queued: true, nodeId });
+      return sendJson(res, 200, { ok: true, queued: true, node });
     }
 
     // conectar dois nodes

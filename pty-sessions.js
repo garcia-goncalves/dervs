@@ -54,6 +54,7 @@ const MAX_AGENTS = Number(process.env.HUB_MAX_AGENTS || 8);
 const ROLES = {
   orchestrator: {
     label: "Orchestrator",
+    desc: "Decompõe o trabalho, dispara workers, audita o resultado e consolida.",
     persona: [
       "Voce e o MESTRE de uma lousa de agentes — ORQUESTRADOR PURO: decompoe o trabalho, dispara workers, audita o resultado e consolida. NAO faz o trabalho-pesado voce mesmo (build/feature/refactor denso rodam nos workers).",
       "GROUND-FIRST: antes de planejar, leia o estado REAL (git log, git status, os arquivos) — nunca proponha trabalho de memoria.",
@@ -71,21 +72,24 @@ const ROLES = {
   },
   reviewer: {
     label: "Code Reviewer",
+    desc: "Revisa o código com olhar crítico: bugs, segurança, simplificação, convenções.",
     persona:
       "Voce e o CODE REVIEWER. Revise o codigo deste repositorio com olhar critico: bugs, seguranca, simplificacao, convencoes. Aponte achados objetivos com arquivo:linha. pt-BR, conciso.",
   },
   tester: {
     label: "Tester",
+    desc: "Roda a suíte, escreve testes faltantes e reproduz bugs com teste antes de corrigir.",
     persona:
       "Voce e o TESTER. Foque em testes: rode a suite, escreva testes faltantes, reproduza bugs com um teste antes de corrigir. Reporte o que passou/falhou com a saida real. pt-BR, conciso.",
   },
   dev: {
     label: "Dev",
+    desc: "Implementa o que for pedido pelo menor caminho que entrega valor.",
     persona:
       "Voce e o DEV deste projeto. Implemente o que for pedido pelo menor caminho que entrega valor, sem cerimonia. Commits pequenos. pt-BR, conciso.",
   },
-  claude: { label: "Claude", persona: null }, // claude puro, sem persona
-  shell: { label: "Shell", persona: null, shell: true }, // terminal cru
+  claude: { label: "Claude", desc: "Claude puro, sem persona — propósito geral.", persona: null }, // claude puro, sem persona
+  shell: { label: "Shell", desc: "Terminal cru, sem agente — mão na massa.", persona: null, shell: true }, // terminal cru
 };
 
 // Instrucoes que viram parte do system-prompt dos agentes-de-papel quando eles
@@ -100,7 +104,12 @@ const CANVAS_GUIDE = [
   '- Atualizar seu status (sai no seu cabecalho): node "$HUB_LOUSA" status "<texto curto>"',
   "Crie agentes SO quando dividir o trabalho ajudar de verdade — nao crie a toa.",
   "COMMITE SEMPRE: ao concluir cada parte, rode git add + git commit no projeto. Trabalho NAO commitado se perde se o Hub reiniciar.",
-  "HUB_NODE (seu id), HUB_BOARD e HUB_PORT ja estao no ambiente; o CLI usa sozinho.",
+  "HANDOFF AUTOMATICO (~40% de contexto RESTANTE): sua janela de contexto e finita. Quando perceber que sobrou ~40% (ANTES de comecar a perder o fio / as respostas degradarem), NAO siga ate estourar — passe o bastao:",
+  "  1) destile um resumo curto: FEITO / EM-VOO / PROXIMA / DECISOES / arquivos-chave (se orchestrator, tambem os workers ativos).",
+  '  2) crie o sucessor do MESMO papel com esse resumo: node "$HUB_LOUSA" spawn --role $HUB_ROLE --task "<resumo destilado>"  (ele ja nasce ligado a voce por uma linha e herda o seu projeto).',
+  '  3) confirme que subiu (node "$HUB_LOUSA" list) e entao se remova: node "$HUB_LOUSA" remove $HUB_NODE.',
+  "Seu estado vive em git + notes + no resumo do sucessor — voce e substituivel. Faca o handoff UMA vez por vida; nao crie sucessor a toa.",
+  "HUB_NODE (seu id), HUB_ROLE (seu papel), HUB_BOARD e HUB_PORT ja estao no ambiente; o CLI usa sozinho.",
 ].join("\n");
 
 // AUTONOMIA TOTAL: abre os agentes com --dangerously-skip-permissions (pedido do
