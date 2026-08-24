@@ -58,8 +58,18 @@ class PastasDeProjeto(unittest.TestCase):
         caminhos = [str(p).lower() for p in coletar.pastas_de_projeto()]
         self.assertEqual(len(caminhos), len(set(caminhos)))
 
-    def test_traz_todos_os_repositorios(self):
-        self.assertGreater(len(coletar.pastas_de_projeto()), 1)
+    def test_sem_a_pasta_de_repositorios_ainda_devolve_o_hub(self):
+        """Contrato: a lista nunca fica vazia por causa do que ha na maquina.
+
+        A primeira versao deste teste era "tem mais de 1 pasta", e passava so
+        porque source/repos existe NESTA maquina. A CI pegou: no servidor do
+        GitHub essa pasta nao existe. Teste que depende da maquina nao e teste.
+        """
+        original = coletar.RAIZ
+        coletar.RAIZ = Path(r"C:\pasta\que\nao\existe")
+        self.addCleanup(setattr, coletar, "RAIZ", original)
+        nomes = {p.name for p in coletar.pastas_de_projeto()}
+        self.assertEqual(nomes, {coletar.AQUI.name})
 
 
 class NomeDaMarca(unittest.TestCase):
