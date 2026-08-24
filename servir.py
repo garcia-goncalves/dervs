@@ -65,6 +65,11 @@ SEM_JANELA = 0x08000000 if _sem_console() else 0
 AQUI = Path(__file__).resolve().parent
 PAGINA = AQUI / "index.html"
 
+# Os UNICOS arquivos servidos alem da pagina. Delegar ao handler estatico
+# publicava a pasta toda — inclusive o hub.db e o .git/config.
+ESTATICOS_OK = {"/painel-projetos.svg", "/painel-projetos.png",
+                "/painel-projetos.ico", "/favicon.ico"}
+
 COLETORES = {
     "local": (AQUI / "coletar.py", None),          # intervalo vem da linha de comando
     "github": (AQUI / "coletar_github.py", 20 * 60),
@@ -131,8 +136,10 @@ def acao_docker_up(p):
 
 
 def acao_vscode(p):
-    # `code` no Windows e um .cmd: sem shell o CreateProcess nao acha.
-    ok, saida = _rodar('code "%s"' % p["caminho"], shell=True, limite=30)
+    # `code` no Windows e um .cmd: o CreateProcess nao acha sozinho. "cmd /c"
+    # resolve SEM shell=True, entao o caminho vai como argumento, nunca como
+    # texto de linha de comando — nada nele pode virar comando.
+    ok, saida = _rodar(["cmd", "/c", "code", p["caminho"]], limite=30)
     return ok, saida or "VS Code aberto."
 
 
@@ -176,9 +183,13 @@ def executar_acao(corpo: dict):
         return True, "recoletado."
 
     if comando == "silenciar":
-        pid, horas = corpo.get("id"), int(corpo.get("horas") or 24)
+        pid = corpo.get("id")
         if not pid:
             return False, "faltou o id da pendência."
+        try:
+            horas = max(1, min(24 * 30, int(corpo.get("horas") or 24)))
+        except (TypeError, ValueError):
+            return False, "prazo inválido."
         ate = (datetime.now(timezone.utc) + timedelta(hours=horas)).isoformat(timespec="seconds")
         banco.silenciar(pid, ate)
         return True, "silenciada por %d h." % horas
@@ -231,7 +242,10 @@ class Hub(SimpleHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             return self._pagina()
 
-        return super().do_GET()
+        if self.path in ESTATICOS_OK:
+            return super().do_GET()
+
+        return self._json(404, {"erro": "não existe"})
 
     def _estado(self):
         con = banco.conectar()
@@ -248,7 +262,7 @@ class Hub(SimpleHTTPRequestHandler):
             "infra": e["infra"],
             "infra_medido_em": e["infra_medido_em"],
             "quota": e["quota"],
-            "falhas_de_coleta": _ultima_falha,
+            "falhas_de_coleta": dict(_ultima_falha),   # copia: o vivo muda em outra thread
         }
 
     def _pagina(self):
@@ -275,8 +289,7 @@ class Hub(SimpleHTTPRequestHandler):
         if self.path != "/api/acao":
             return self._json(404, {"erro": "não existe"})
 
-        origem = self.headers.get("Origin")
-        if origem and origem not in ORIGENS_OK:
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem não permitida"})
         if not secrets.compare_digest(self.headers.get("X-Token") or "", TOKEN):
             return self._json(403, {"erro": "recarregue a página (token vencido)"})

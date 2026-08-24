@@ -73,9 +73,12 @@ def _consulta(slugs: dict, com_vulns: bool) -> str:
 
 
 def _gh_graphql(consulta: str):
-    r = subprocess.run(["gh", "api", "graphql", "-f", "query=" + consulta],
-                       capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=90, creationflags=SEM_JANELA)
+    try:
+        r = subprocess.run(["gh", "api", "graphql", "-f", "query=" + consulta],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=90, creationflags=SEM_JANELA)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return None, "gh nao respondeu: %s" % e
     if r.returncode != 0:
         return None, (r.stderr or "").strip()[:300]
     try:
@@ -147,14 +150,15 @@ def main():
     dados, erro = _gh_graphql(_consulta(slugs, com_vulns=True))
     com_vulns = True
     if dados is None:
-        # Provavel falta de permissao para ler alertas. Tentamos sem esse campo:
-        # CI e PR valem por si, e ficar sem nada por causa de um campo e pior.
+        # A primeira consulta pode falhar por falta de permissao para ler alertas,
+        # mas tambem por rede, timeout ou limite de uso — daqui nao da para
+        # distinguir. Tentamos sem esse campo, porque CI e PR valem por si.
         dados, erro2 = _gh_graphql(_consulta(slugs, com_vulns=False))
         com_vulns = False
         if dados is None:
             print("FALHA ao consultar o GitHub: %s / %s" % (erro, erro2))
             return 1
-        print("aviso: sem permissao para ler alertas de segurança (%s)" % erro)
+        print("aviso: vim sem os alertas de segurança nesta rodada (%s)" % erro)
 
     con = banco.conectar()
     gravados = 0
@@ -163,7 +167,17 @@ def main():
             no = dados.get(alias)
             if not no:
                 continue                   # repo sumiu ou sem acesso: fica sem camada
-            banco.gravar(nome, "github", traduz(no, com_vulns), con)
+            novo = traduz(no, com_vulns)
+            if not com_vulns:
+                # NAO medimos alertas nesta rodada. Gravar {} aqui apagaria do
+                # painel um alerta de seguranca REAL que ja estava no banco —
+                # um blip de rede as 20h faria "93 alertas abertos" virar silencio
+                # ate a proxima coleta boa. Carregamos o valor anterior e dizemos
+                # de quando ele e, para a tela poder mostrar que esta velho.
+                antes = ((tudo.get(nome) or {}).get("github") or {})
+                novo["vulns"] = (antes.get("dados") or {}).get("vulns") or {}
+                novo["vulns_medido_em"] = antes.get("medido_em")
+            banco.gravar(nome, "github", novo, con)
             gravados += 1
     finally:
         con.close()

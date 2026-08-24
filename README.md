@@ -103,9 +103,32 @@ Por isso toda ação exige as três coisas:
 E o cliente **nunca manda caminho** — manda o nome do projeto, e o caminho vem do
 banco. Não existe ação que rode em pasta escolhida por quem chamou.
 
+O servidor publica **só** a página e os três arquivos de ícone. Todo o resto
+responde 404 — o banco, o `casos.json` e o `.git/` não ficam acessíveis.
+
 **Segredo nenhum entra no banco ou na tela.** O coletor abre o arquivo de
-variáveis só para extrair **nomes** de variável: a expressão regular para no sinal
-de igual. Quem autentica no GitHub é o `gh` que o dono já logou.
+variáveis só para extrair **nomes** de variável. Quem autentica no GitHub é o
+`gh` que o dono já logou.
+
+### O que a revisão de segurança pegou (24/08/2026, antes de ir para a `main`)
+
+- **Vazamento de segredo, corrigido.** Ler o arquivo de variáveis linha a linha
+  não bastava: num valor multilinha entre aspas — chave RSA, certificado,
+  credencial — a última linha de um bloco PEM termina em `=` e casava como se
+  fosse nome de variável. O pedaço da chave ia para o banco, para a tela e para
+  o botão "Copiar as diferenças". Agora o leitor pula tudo que está dentro de um
+  valor com aspas ainda abertas, e nome de variável tem limite de 64 caracteres.
+  `test_coletar.py` tranca isso.
+- **Pasta publicada, fechada.** Ver acima.
+- **`Origin` ausente deixou de passar.**
+- **Abrir o VS Code** não usa mais `shell=True`.
+- **O coletor não executa mais código de fora do repositório.** A detecção de
+  "projeto aberto no editor" lia e *executava* `~/.claude/scripts/vigia-vscode.py`
+  a cada 60 s — uma pasta que sessões de agente escrevem com frequência, dentro
+  de um processo que escuta em rede e roda comandos. Agora lê as marcas que o
+  próprio vigia grava em `~/.claude/state/vigia`: mesma verdade, zero execução.
+- **Nome de repositório remoto** é validado contra o alfabeto do GitHub antes de
+  entrar na consulta GraphQL.
 
 ## O que ainda não existe
 

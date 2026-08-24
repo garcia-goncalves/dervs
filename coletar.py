@@ -57,7 +57,11 @@ CACHE_GRAFO = Path.home() / ".cache" / "codebase-memory-mcp"
 # Onde o Claude Code guarda a memoria de cada projeto, uma pasta por caminho.
 PROJETOS_CLAUDE = Path.home() / ".claude" / "projects"
 
-VIGIA = Path.home() / ".claude" / "scripts" / "vigia-vscode.py"
+# O vigia-vscode grava uma marca por projeto aberto e atualiza a data dela de
+# minuto em minuto. A data do arquivo E a resposta.
+MARCAS_VIGIA = Path.home() / ".claude" / "state" / "vigia"
+MARCA_FRESCA = 180        # 3 min: o vigia roda a cada minuto, com folga
+VIGIA_VIVO = 420          # marca mais nova que isso = o vigia esta rodando
 
 
 def abertos_no_editor():
@@ -66,23 +70,43 @@ def abertos_no_editor():
     "Devia estar no ar" nesta maquina quer dizer "aberto no VS Code": e o criterio
     do vigia-vscode, que sobe e derruba o Docker por ele. Reimplementar a deteccao
     aqui criaria uma segunda verdade sobre a mesma coisa — o erro que este HUB
-    existe para acabar. Por isso importamos a funcao dele.
+    existe para acabar.
 
-    Sem o arquivo, devolvemos None e a regra de container fica CALADA. Alarme
-    falso custa mais caro que silencio: seis "container caiu" que nao sao
-    pendencia ensinam o dono a ignorar a caixa inteira.
+    POR QUE LER O DISCO E NAO IMPORTAR O SCRIPT DELE (revisao de 24/08/2026):
+    a primeira versao carregava e EXECUTAVA ~/.claude/scripts/vigia-vscode.py a
+    cada 60 s. Aquele arquivo mora numa pasta que sessoes de agente escrevem com
+    frequencia; e este processo escuta em rede e roda comandos. Uma alteracao
+    naquele arquivo viraria execucao aqui dentro no minuto seguinte. Lendo as
+    marcas que ele mesmo grava, temos a MESMA verdade sem executar nada.
+
+    Devolve None (= "nao sei") quando as marcas estao todas velhas, porque isso
+    quer dizer que o vigia nao esta rodando. A regra de container fica calada:
+    alarme falso custa mais caro que silencio.
     """
-    if not VIGIA.is_file():
+    if not MARCAS_VIGIA.is_dir():
         return None
-    try:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("vigia_vscode", VIGIA)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return {os.path.basename(str(p).rstrip("\\/")).lower()
-                for p in mod.abertos_agora()}
-    except Exception:
-        return None
+    agora = AGORA.timestamp()
+    marcas = {}
+    for arq in MARCAS_VIGIA.iterdir():
+        if arq.name.startswith("_") or arq.suffix == ".json" or not arq.is_file():
+            continue                       # "_falhas-*.json" nao e marca de janela
+        try:
+            marcas[arq.name] = agora - arq.stat().st_mtime
+        except OSError:
+            pass
+    if not marcas or min(marcas.values()) > VIGIA_VIVO:
+        return None                        # o vigia nao esta de pe: nao da para saber
+    return {nome for nome, idade in marcas.items() if idade <= MARCA_FRESCA}
+
+
+def nome_da_marca(repo) -> str:
+    """O nome de arquivo que o vigia usa para este caminho.
+
+    C:\\Users\\Desktop\\source\\repos\\dents -> c-users-desktop-source-repos-dents
+    Comparamos o CAMINHO INTEIRO. Casar so o fim do nome daria "sophia" para o
+    projeto "o-que-e-que-eu-faco-sophia".
+    """
+    return str(repo).lower().replace("\\", "/").replace("/", "-").replace(":", "")
 
 AGORA = datetime.now(timezone.utc)
 ARQ_SEGREDO = "." + "env"          # nome montado: nunca lemos o conteudo
@@ -140,13 +164,29 @@ def idade_do_mais_antigo(repo: Path, sujos: list) -> int | None:
     return max(0, int((AGORA.timestamp() - mais_antigo) // 86400))
 
 
-def coleta_grafo(nome: str) -> dict:
-    """Idade do indice do grafo de codigo, pela data do .db no cache."""
-    for db in CACHE_GRAFO.glob("*.db"):
-        if db.stem.endswith("-" + nome) or db.stem == nome:
-            dias = int((AGORA.timestamp() - db.stat().st_mtime) // 86400)
-            return {"indexado": True, "dias": max(0, dias)}
-    return {"indexado": False, "dias": None}
+def nome_do_db(caminho) -> str:
+    """O nome de arquivo que o codebase-memory-mcp usa para este caminho.
+
+    C:\\Users\\Desktop\\source\\repos\\dents  ->  C-Users-Desktop-source-repos-dents
+    """
+    return str(caminho).replace(":", "").replace("\\", "-").replace("/", "-")
+
+
+def coleta_grafo(repo, cache=None) -> dict:
+    """Idade do indice do grafo de codigo, pela data do .db no cache.
+
+    O casamento e pelo CAMINHO INTEIRO, nao pelo nome da pasta. Casar por sufixo
+    ("termina em -medconsultoria") pega tambem o workspace-medconsultoria, e a
+    ordem em que o glob devolve arquivo e a do sistema de arquivos, nao a
+    alfabetica: o painel diria "indexado ha 1 dia" para um repo nunca indexado.
+    Medido em 24/08/2026: dois arquivos casavam com "medconsultoria".
+    """
+    cache = cache or CACHE_GRAFO
+    alvo = cache / (nome_do_db(repo) + ".db")
+    if not alvo.is_file():
+        return {"indexado": False, "dias": None}
+    dias = int((AGORA.timestamp() - alvo.stat().st_mtime) // 86400)
+    return {"indexado": True, "dias": max(0, dias)}
 
 
 def coleta_memoria_crlf(repo: Path) -> list:
@@ -169,16 +209,45 @@ def coleta_memoria_crlf(repo: Path) -> list:
     return fora
 
 
-CHAVE_ENV = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+# Nome de variavel de ambiente de verdade: comeca com letra ou _, no maximo 64
+# caracteres. O limite nao e cosmetico — ver o comentario em _chaves_env.
+CHAVE_ENV = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]{0,63})\s*=")
 
 
 def _chaves_env(caminho: Path) -> set:
-    """So os NOMES. A expressao regular para no '=': o valor nunca e lido."""
+    """So os NOMES das variaveis. Nenhum pedaco de valor pode sair daqui.
+
+    VAZAMENTO ENCONTRADO NA REVISAO DE 24/08/2026, antes de ir para a main:
+    ler linha a linha nao basta. Um valor multilinha entre aspas — chave RSA,
+    certificado, credencial de service account — tem linhas base64 no miolo, e
+    uma linha base64 sem "+" nem "/" que termine em "=" (o caso NORMAL da ultima
+    linha de um bloco PEM) casava com a expressao como se fosse nome de variavel.
+    O pedaco da chave ia parar no banco, na tela e no botao "Copiar as
+    diferencas" — ou seja, o proprio fluxo desenhado tirava o segredo da maquina.
+
+    Duas travas, e as duas sao necessarias:
+      1. enquanto um valor entre aspas nao fechar, TODA linha e pulada;
+      2. o nome tem no maximo 64 caracteres (base64 vazado vinha bem maior).
+    """
     try:
         texto = caminho.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return set()
-    return {m.group(1) for m in (CHAVE_ENV.match(l) for l in texto.splitlines()) if m}
+
+    chaves, aspa_aberta = set(), None
+    for linha in texto.splitlines():
+        if aspa_aberta:                       # ainda dentro de um valor multilinha
+            if aspa_aberta in linha:
+                aspa_aberta = None
+            continue
+        m = CHAVE_ENV.match(linha)
+        if not m:
+            continue
+        chaves.add(m.group(1))
+        resto = linha[m.end():].lstrip()
+        if resto[:1] in ('"', "'") and resto.count(resto[0]) < 2:
+            aspa_aberta = resto[0]            # abriu aspas e nao fechou nesta linha
+    return chaves
 
 
 def coleta_env_drift(repo: Path) -> dict:
@@ -195,7 +264,8 @@ def coleta_git(repo: Path) -> dict:
         return {"versionado": False}
 
     branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD")
-    sujos = [l for l in git(repo, "status", "--porcelain").splitlines() if l.strip()]
+    sujos = [l for l in git(repo, "-c", "core.quotepath=false",
+                            "status", "--porcelain").splitlines() if l.strip()]
 
     ahead = behind = 0
     contagem = sh(["git", "-C", str(repo), "rev-list", "--left-right", "--count", "HEAD...@{u}"])
@@ -247,7 +317,7 @@ def coleta_git(repo: Path) -> dict:
     remoto = git(repo, "remote", "get-url", "origin")
     slug = None
     if remoto:
-        m = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$", remoto)
+        m = re.search(r"[:/]([A-Za-z0-9._-]+/[A-Za-z0-9._-]+?)(?:\.git)?/?$", remoto)
         slug = m.group(1) if m else None
 
     return {
@@ -542,13 +612,13 @@ def main():
             "caso_vazio": not (caso.get("resumo") or caso.get("caso")),
             "url_prod": caso.get("url_prod"),
             "criticidade": caso.get("criticidade", "normal"),
-            "grafo": coleta_grafo(repo.name),
+            "grafo": coleta_grafo(repo),
             "memoria_crlf": coleta_memoria_crlf(repo),
             "env_drift": coleta_env_drift(repo),
             "compose": existe(repo, "docker-compose*.yml", "docker-compose*.yaml",
                               "compose.yml", "compose.yaml"),
             "containers_esperados": caso.get("containers", []),
-            "aberto_no_editor": None if abertos is None else (repo.name.lower() in abertos),
+            "aberto_no_editor": None if abertos is None else (nome_da_marca(repo) in abertos),
             "git": g,
             "arquivos": arq,
             "prontidao": pr,
