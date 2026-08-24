@@ -1,0 +1,275 @@
+{
+ "_leia-me": "Camada CURADA do painel. O coletar.py nao mexe aqui: tudo neste arquivo e narrativa escrita a mao (caso de uso, publico, valor, proximo passo) e ancoras de infra (portas, containers). Metrica de git/Docker vem do coletor, ao vivo. Edite a vontade.",
+
+ "Ajudei-Saude": {
+  "titulo": "Ajudei Saúde",
+  "resumo": "SaaS multi-tenant de gestão para clínicas médicas: faturamento, agenda, prontuário eletrônico, prescrição digital, EAD e BI. Isolamento schema-per-tenant no PostgreSQL, backend ASP.NET Core.",
+  "url_prod": "https://saude.ajudei.com.br",
+  "criticidade": "critica",
+  "portas": [8090, 8091, 8082, 5432],
+  "containers": ["medcrm"],
+  "caso": {
+   "publico": "Clínicas médicas de pequeno e médio porte que hoje operam em planilha + WhatsApp + sistema de faturamento separado.",
+   "dor": "O dado do paciente vive em três lugares que não conversam. Glosa de convênio só aparece no fim do mês, quando já não dá para recorrer.",
+   "proposta": "Uma base só por clínica, isolada por schema, cobrindo do agendamento ao faturamento — com prontuário e prescrição no mesmo fluxo.",
+   "valor": "Receita recorrente por clínica; o multi-tenant é o que torna a margem viável a partir do segundo cliente.",
+   "risco": "Dado de paciente sob LGPD: erro de isolamento entre schemas é incidente grave, não bug. Toda mudança em query com tenant pede revisor healthcare.",
+   "metrica": "Nº de clínicas ativas · glosa evitada por mês · tempo do agendamento à cobrança emitida."
+  }
+ },
+
+ "workspace-medconsultoria": {
+  "titulo": "Workspace MedConsultoria",
+  "resumo": "Cérebro operacional interno da MedConsultoria. Monorepo pnpm + Turborepo: apps/web (Vite + React + TanStack) e apps/api (Fastify + tRPC + Prisma/MySQL). Não é SaaS e não será vendido.",
+  "url_prod": "https://workspace.medconsultoria.com.br",
+  "criticidade": "alta",
+  "portas": [4310, 3307],
+  "containers": ["medconsultoria-mysql"],
+  "caso": {
+   "publico": "A própria equipe da MedConsultoria.",
+   "dor": "Caos operacional: cada rotina mora numa ferramenta diferente e ninguém sabe o estado real de um cliente sem perguntar a alguém.",
+   "proposta": "Um lugar só para a operação interna, feito sob medida — sem o peso de generalizar para outros clientes.",
+   "valor": "Não gera receita direta: economiza hora de equipe e reduz erro. O retorno é medido em retrabalho que deixou de existir.",
+   "risco": "Ferramenta interna tende a virar dívida invisível — ninguém reclama até parar. É o projeto mais ativo do parque hoje.",
+   "metrica": "Uso semanal pela equipe · rotinas migradas para dentro · tempo de resposta ao cliente."
+  }
+ },
+
+ "dents": {
+  "titulo": "Dents",
+  "resumo": "SaaS de gestão clínica odontológica: agendamento, prontuários e análise de dados. Next.js 16 + React 19, Supabase (Postgres + Auth), Prisma, deploy Docker + nginx + Let's Encrypt.",
+  "url_prod": null,
+  "criticidade": "alta",
+  "portas": [3002, 54321, 54323],
+  "containers": ["_Dents"],
+  "caso": {
+   "publico": "Consultórios odontológicos — mercado vizinho ao do Ajudei Saúde, com fluxo clínico e vocabulário próprios.",
+   "dor": "Software odontológico de mercado é caro, pesado e desenhado para clínica grande. O consultório de 1–3 cadeiras não é atendido.",
+   "proposta": "Stack moderna e enxuta sobre Supabase, entregando agenda + prontuário + números sem o peso de um ERP.",
+   "valor": "Segunda aposta de SaaS, reaproveitando aprendizado clínico do Ajudei Saúde num nicho menos disputado.",
+   "risco": "Dependência forte do Supabase — Auth, banco e storage no mesmo fornecedor. Trocar depois é caro.",
+   "metrica": "Consultórios em teste · agendamentos criados por semana · retenção no 2º mês."
+  }
+ },
+
+ "grimoire": {
+  "titulo": "Grimoire",
+  "resumo": "Inteligência comercial: localiza empresas por categoria + geografia, audita a presença digital de cada uma e revela a quem vender primeiro. Roda em modo pessoal, com chave APP_MODE para virar SaaS.",
+  "url_prod": null,
+  "criticidade": "normal",
+  "portas": [3939, 8039, 5435],
+  "containers": ["grimoire"],
+  "caso": {
+   "publico": "Hoje: o próprio dono, prospectando. Amanhã (se APP_MODE virar): agências e times comerciais.",
+   "dor": "Prospecção é feita no escuro — a lista de alvos não diz quem tem site quebrado, quem não tem Google Meu Negócio, quem está pronto para comprar.",
+   "proposta": "Cruzar categoria + geografia com auditoria automática de presença digital e ordenar a fila de ataque por lacuna encontrada.",
+   "valor": "Alimenta a própria operação comercial dos outros projetos deste parque — é ferramenta de aquisição, não produto final.",
+   "risco": "Coleta de dado de terceiro pede cuidado com termo de uso das fontes. E o modo SaaS dobra a superfície (multi-tenant, cobrança) para um produto ainda não validado.",
+   "metrica": "Leads qualificados por hora de uso · taxa de resposta da lista gerada."
+  }
+ },
+
+ "investrix": {
+  "titulo": "Investrix",
+  "resumo": "Inteligência operacional para o mercado de opções dos EUA (CALL e PUT): cadastro de operações, acompanhamento de posição, lucro/prejuízo, alvo, stop e trailing stop. pt-BR + inglês.",
+  "url_prod": null,
+  "criticidade": "normal",
+  "portas": [5173, 8000, 5434],
+  "containers": ["investrix"],
+  "caso": {
+   "publico": "Uso pessoal do dono como operador de opções.",
+   "dor": "Planilha não acompanha posição em tempo real nem dispara quando o stop é atingido — o controle depende de olhar.",
+   "proposta": "Registrar a operação uma vez e deixar o sistema calcular resultado, alvo e stop, inclusive trailing.",
+   "valor": "Dinheiro próprio: o retorno é evitar a perda que o descuido causa.",
+   "risco": "Cálculo financeiro errado custa caro e passa despercebido — é o caso clássico para TDD e para Decimal, nunca float.",
+   "metrica": "Operações registradas · desvio entre P/L calculado e o da corretora."
+  }
+ },
+
+ "ccvp": {
+  "titulo": "Painel de Indicadores CCVP",
+  "resumo": "Painel web privado do Centro CardioVascular Paulista. Substitui a planilha INDICADORES CCVP_2026.xlsx: receita, glosa, produtividade médica e volume de procedimentos, filtrável por ano, período, operadora, médico, hospital e procedimento.",
+  "url_prod": "https://dev.medconsultoria.com.br/ccvp",
+  "criticidade": "alta",
+  "portas": [],
+  "containers": ["ccvp"],
+  "caso": {
+   "publico": "Direção do CCVP e a equipe da MedConsultoria que atende a conta.",
+   "dor": "A planilha era a fonte da verdade: um arquivo, uma pessoa, zero histórico confiável e nenhuma chance de dois olharem o mesmo número ao mesmo tempo.",
+   "proposta": "Mesmos indicadores, mesmo vocabulário do cliente, mas com login, filtro e número que não depende de quem abriu o arquivo por último.",
+   "valor": "Cliente pagante real, com entrega visível — é o tipo de projeto que renova contrato.",
+   "risco": "Se o número do painel divergir do da planilha, a confiança morre na primeira reunião. Paridade com a planilha é requisito, não detalhe.",
+   "metrica": "Divergência painel × planilha · acessos por semana da direção · glosa identificada no mês."
+  }
+ },
+
+ "medconsultoria": {
+  "titulo": "MedConsultoria — site institucional",
+  "resumo": "Site institucional da MedConsultoria. React 18 + TypeScript + Vite, backend Node/Express, e-mail por Nodemailer (SMTP TineHost), deploy TineHost.",
+  "url_prod": "https://medconsultoria.com.br",
+  "criticidade": "alta",
+  "portas": [],
+  "containers": [],
+  "caso": {
+   "publico": "Clínicas e consultórios buscando consultoria — é a porta de entrada comercial da empresa.",
+   "dor": "Sem site que converta, toda aquisição depende de indicação.",
+   "proposta": "Institucional enxuto com formulário que chega de fato na caixa de entrada certa.",
+   "valor": "É o topo do funil de todos os outros projetos da MedConsultoria.",
+   "risco": "Site institucional parado envelhece silenciosamente: preço velho, serviço que não existe mais, formulário quebrado que ninguém testa.",
+   "metrica": "Formulários recebidos por mês · taxa de resposta · posição orgânica para os termos-alvo."
+  }
+ },
+
+ "medconsultoria-crm": {
+  "titulo": "MedConsultoria CRM (legado)",
+  "resumo": "CRM de gestão para consultórios: clínicas, médicos, faturamento, equipe. React + Vite. Sem commit há meses — provável antecessor do Ajudei Saúde.",
+  "url_prod": null,
+  "criticidade": "baixa",
+  "portas": [],
+  "containers": [],
+  "caso": {
+   "publico": "Era o mesmo público do Ajudei Saúde.",
+   "dor": "—",
+   "proposta": "Geração anterior da mesma ideia, antes da virada para .NET e multi-tenant.",
+   "valor": "Hoje o valor é histórico: código de referência, não produto.",
+   "risco": "Repositório vivo que ninguém mantém confunde quem chega e polui busca. Merece decisão explícita: arquivar ou retomar.",
+   "metrica": "—"
+  }
+ },
+
+ "sophia-camargo": {
+  "titulo": "Sophia Camargo — site oficial",
+  "resumo": "Site institucional oficial de Sophia Camargo — jornalista, advogada e criadora da coluna 'O que é que eu faço, Sophia?'. Domínio sophiacamargo.com.br.",
+  "url_prod": "https://sophiacamargo.com.br",
+  "criticidade": "normal",
+  "portas": [8080, 8025],
+  "containers": ["sophia"],
+  "caso": {
+   "publico": "Leitores, veículos de imprensa e quem contrata palestra ou consultoria.",
+   "dor": "Autoridade construída em 25 anos de jornalismo econômico espalhada por veículos de terceiros, sem um endereço próprio.",
+   "proposta": "Um domínio que centraliza obra, contato e credenciais.",
+   "valor": "Ativo de marca pessoal — sustenta a coluna e o que vier depois dela.",
+   "risco": "Site de pessoa pública: erro factual ou link quebrado é dano de reputação, não bug de software.",
+   "metrica": "Tráfego orgânico · contatos de imprensa recebidos."
+  }
+ },
+
+ "o-que-e-que-eu-faco-sophia": {
+  "titulo": "O que é que eu faço, Sophia?",
+  "resumo": "Site da coluna editorial independente de Sophia Camargo: dúvidas reais sobre imposto de renda, FGTS, INSS, dívidas, golpes, direito do consumidor, trabalho e família.",
+  "url_prod": null,
+  "criticidade": "normal",
+  "portas": [],
+  "containers": [],
+  "caso": {
+   "publico": "Leitor comum tentando resolver um problema concreto de dinheiro ou direito.",
+   "dor": "A informação existe, mas está escrita em juridiquês, em portal que quer vender outra coisa.",
+   "proposta": "Resposta direta a uma pergunta real, em linguagem de gente.",
+   "valor": "É o produto de audiência: alimenta a marca Sophia Camargo e cria a base para monetizar depois.",
+   "risco": "Conteúdo sobre direito e imposto envelhece por lei nova, não por desuso. Post desatualizado orienta errado.",
+   "metrica": "Publicações por mês · tráfego orgânico · perguntas recebidas de leitor."
+  }
+ },
+
+ "camargo-e-soares": {
+  "titulo": "Camargo e Soares Advogados",
+  "resumo": "Ecossistema digital do escritório: site institucional + área do escritório e área do cliente (clientes, atendimentos, casos, documentos, mensagens, pendências, agenda, assinaturas, financeiro).",
+  "url_prod": null,
+  "criticidade": "alta",
+  "portas": [],
+  "containers": [],
+  "caso": {
+   "publico": "O escritório e seus clientes.",
+   "dor": "Cliente de advocacia liga para saber 'como está meu processo' porque não tem onde olhar.",
+   "proposta": "Área do cliente com o andamento, os documentos e o financeiro no mesmo lugar — em linguagem simples.",
+   "valor": "Reduz atendimento reativo e diferencia o escritório na proposta comercial.",
+   "risco": "Documento de processo é dado sensível e sigiloso: autorização por caso, não por usuário logado. Assinatura eletrônica tem exigência legal própria.",
+   "metrica": "Clientes ativos na área · ligações de status evitadas · documentos assinados no sistema."
+  }
+ },
+
+ "odontologia-pericia": {
+  "titulo": "Odontologia Perícia — Dr. Marcelo Fristachi",
+  "resumo": "Site profissional de perícia odontológica em Next.js 15 + TypeScript + Tailwind.",
+  "url_prod": null,
+  "criticidade": "normal",
+  "portas": [],
+  "containers": [],
+  "caso": {
+   "publico": "Advogados, seguradoras e juízes que precisam de perito odontolegal.",
+   "dor": "Perito é escolhido por indicação; quem não aparece na busca não é chamado.",
+   "proposta": "Presença digital objetiva: quem é, o que faz, como contratar.",
+   "valor": "Site de captação para cliente de serviço — escopo pequeno, entrega rápida.",
+   "risco": "Projeto de escopo fechado que fica parado: o risco é ninguém decidir que ele acabou.",
+   "metrica": "Contatos recebidos · posição orgânica para 'perícia odontológica' + cidade."
+  }
+ },
+
+ "fristachiodontologia": {
+  "titulo": "Fristachi Odontologia",
+  "resumo": "Sem README. Provável site da clínica, irmão do odontologia-pericia — o conteúdo precisa ser confirmado antes de qualquer plano.",
+  "url_prod": null,
+  "criticidade": "baixa",
+  "portas": [],
+  "containers": [],
+  "caso": {
+   "publico": "A confirmar.",
+   "dor": "—",
+   "proposta": "—",
+   "valor": "—",
+   "risco": "Repositório sem README é repositório sem dono declarado: ninguém sabe se está pronto, abandonado ou pela metade.",
+   "metrica": "—"
+  }
+ },
+
+ "zacareli": {
+  "titulo": "Zacareli",
+  "resumo": "Sem README. Conteúdo e objetivo a confirmar.",
+  "url_prod": null,
+  "criticidade": "baixa",
+  "portas": [],
+  "containers": [],
+  "caso": {
+   "publico": "A confirmar.",
+   "dor": "—",
+   "proposta": "—",
+   "valor": "—",
+   "risco": "Mesmo caso do fristachiodontologia: sem README, o repositório não se explica.",
+   "metrica": "—"
+  }
+ },
+
+ "museu-particular": {
+  "titulo": "Museu Particular",
+  "resumo": "Acervo pessoal estático dedicado à Sophia. HTML, CSS e JavaScript puros — sem framework, sem build, sem dependência.",
+  "url_prod": null,
+  "criticidade": "baixa",
+  "portas": [],
+  "containers": [],
+  "caso": {
+   "publico": "Privado, de uma pessoa só.",
+   "dor": "—",
+   "proposta": "Site estático como objeto pessoal, deliberadamente sem stack.",
+   "valor": "Afetivo. Não entra em conta de projeto.",
+   "risco": "Tem um servidor.zip deletado e não commitado — decidir se é remoção intencional ou acidente.",
+   "metrica": "—"
+  }
+ },
+
+ "museu-particular-bkp": {
+  "titulo": "Museu Particular (backup)",
+  "resumo": "Cópia sem controle de versão do museu-particular.",
+  "url_prod": null,
+  "criticidade": "baixa",
+  "portas": [],
+  "containers": [],
+  "caso": {
+   "publico": "—",
+   "dor": "—",
+   "proposta": "—",
+   "valor": "—",
+   "risco": "Pasta de backup fora do git é o pior dos dois mundos: ocupa espaço, não tem histórico e ninguém sabe se diverge do original.",
+   "metrica": "—"
+  }
+ }
+}
