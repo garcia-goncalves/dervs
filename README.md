@@ -90,6 +90,71 @@ ensinando o dono a ignorar a lista inteira.
 **Regra 6 existe porque o erro é calado.** Arquivo de memória em CRLF faz o
 harness ignorar o frontmatter, e a memória nunca carrega. Nada na tela avisa.
 
+## A paleta de comandos (`Ctrl+K`)
+
+Uma porta de entrada só. `Ctrl+K` (ou `Cmd+K`) abre uma caixa de busca; digitar
+`dents` cai no projeto, digitar `subir` sobe contêiner, digitar `grafo` abre a
+aba do mapa de código. Com 17 repositórios, menu em árvore vira caça ao tesouro.
+
+O botão **"Buscar projeto ou ação  `Ctrl K`"** fica visível no cabeçalho de
+propósito: atalho que só existe no teclado é atalho que ninguém descobre.
+
+### O que entra na lista
+
+Hoje são ~76 comandos, montados a cada abertura a partir do que a tela já sabe:
+
+1. **Toda pendência da caixa**, com a ação dela pronta (as urgentes vêm com selo
+   vermelho).
+2. **Cada projeto**, com as portas de entrada que **existem** para ele: abrir no
+   VS Code, subir os contêineres (só se tem compose), enviar ao GitHub (só se há
+   commit parado), abrir no GitHub, abrir o site no ar (só se tem `url_prod`),
+   abrir o endereço local (só se a porta está viva de fato).
+3. **Comandos da máquina**: medir de novo, atualizar GitHub, abrir o grafo,
+   trocar o tema.
+
+Item que abre nada é pior que item ausente, então nada entra "por via das
+dúvidas".
+
+### Como a busca ordena
+
+Quatro níveis, do melhor para o pior: nome igual → começa com → contém →
+**letras na ordem** (`wsmed` acha `workspace-medconsultoria`). Acento e hífen
+são ignorados dos dois lados — `ajudei saude` acha `Ajudei-Saúde`, que é como
+uma pessoa digita.
+
+Uma regra de desempate merece explicação. Digitar o **nome inteiro** de um
+projeto põe *"Abrir no VS Code"* em primeiro, mesmo havendo pendência desse
+projeto — quem digita `dents` quer o dents. Mas digitar **letras soltas** deixa a
+pendência urgente ganhar: ali o dono não sabe o nome, está procurando o que
+precisa dele. É o `BONUS_NOME` no `index.html`.
+
+### O que ela deliberadamente não faz
+
+**A paleta não tem ação própria nenhuma.** Ela encontra e dispara o que já
+existe: mesma função `agir()`, mesma lista branca do `servir.py`. Se pudesse
+fazer algo que a tela não faz, viraria uma segunda superfície de risco para
+revisar a cada mudança. Um teste amarra isso (`PaletaNaoInventaComando`, no
+`test_servir.py`): ele lê os comandos que o `index.html` manda e exige que cada
+um exista no servidor.
+
+### Detalhes de implementação
+
+Escrita à mão em ~200 linhas, sem `cmdk` nem `kbar`, porque as duas custariam
+build e dependência — as duas virtudes que este projeto tem.
+
+Usa `<dialog closedby="any">` com `showModal()`: o navegador dá de graça o foco
+preso dentro, `Esc` fechando, clique fora fechando e camada acima de tudo sem
+guerra de `z-index`. Safari ainda não tem `closedby`, então há um fallback de 8
+linhas para o clique fora. Navegação é `↑` `↓` `Home` `End` `Enter`, com o
+padrão ARIA de `combobox` + `listbox` e `aria-activedescendant` para leitor de
+tela.
+
+**Não há teste automatizado da busca em si** — o projeto não tem executor de
+teste JavaScript, e instalar um quebraria "zero dependência, zero build". Foi
+verificada no navegador em 24/08/2026 com estes casos: `dents`, `wsmed`,
+`ajudei saude`, `subir`, `grafo`, `tema`, termo sem resultado, e navegação por
+seta com volta ao fim da lista.
+
 ## A nota de prontidão, e por que ela mentia
 
 A coluna **Prontidão** dá a cada projeto uma nota de 0 a 100. Ela é a soma dos
@@ -321,8 +386,8 @@ o ganho ficou pequeno o bastante para não pagar o preço agora.
 
 Fases 3 e 4 da especificação (a **fase 2 está entregue**, seção acima) (`~/.claude/docs/superpowers/plans/2026-08-24-hub-do-dev.md`):
 
-- **Fase 3** — paleta de comandos (`Ctrl+K`), briefing matinal, detecção de
-  divergência entre local e servidor. A **nota de saúde por projeto está
-  entregue** (seção "A nota de prontidão, e por que ela mentia").
+- **Fase 3** — falta o briefing matinal e a detecção de divergência entre local
+  e servidor. Já entregues: a **nota de saúde por projeto** e a **paleta de
+  comandos (`Ctrl+K`)**, ambas com seção própria acima.
 - **Fase 4** — o `radar.py` do `~/.claude` passa a ler este banco em vez de
   coletar por conta própria, acabando com os dois coletores.

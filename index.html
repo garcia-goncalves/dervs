@@ -128,6 +128,48 @@ td.num{font-family:var(--mono);text-align:right}
 .tenue{color:var(--fraquinho)}
 .velho{opacity:.45}
 
+/* ------------------------------------------------------------------ paleta */
+.btn.busca{display:inline-flex;align-items:center;gap:9px;color:var(--fraco)}
+.btn.busca kbd{font-size:10px}
+kbd{font-family:var(--mono);font-size:10.5px;border:1px solid var(--borda);
+  border-radius:4px;padding:1px 5px;color:var(--fraquinho);background:var(--grade)}
+
+#paleta{width:min(620px,92vw);max-height:min(70vh,560px);padding:0;border:none;
+  border-radius:13px;background:var(--painel);color:var(--texto);
+  box-shadow:0 18px 60px rgba(0,0,0,.28);overflow:hidden;
+  /* margin auto + top fixo: a paleta abre onde o olho ja esta, nao no centro
+     vertical da tela, que num monitor grande fica longe demais da leitura. */
+  margin:12vh auto auto}
+#paleta::backdrop{background:rgba(0,0,0,.42)}
+#paleta .p-topo{display:flex;align-items:center;gap:10px;padding:13px 15px;
+  border-bottom:1px solid var(--borda)}
+#p-busca{flex:1;border:none;background:none;color:var(--texto);font:inherit;
+  font-size:15px;outline:none}
+#p-busca::placeholder{color:var(--fraquinho)}
+#p-lista{list-style:none;margin:0;padding:6px;overflow-y:auto;
+  max-height:calc(min(70vh,560px) - 104px)}
+#p-lista li{display:flex;align-items:baseline;gap:10px;padding:8px 11px;
+  border-radius:8px;cursor:pointer;scroll-margin:6px}
+#p-lista li[aria-selected="true"]{background:var(--grade)}
+#p-lista li .rot{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:13.5px}
+#p-lista li .sub{font-size:11px;color:var(--fraquinho);font-family:var(--mono);
+  white-space:nowrap}
+#p-lista li .selo{font-size:10px;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--fraquinho);border:1px solid var(--borda);border-radius:99px;
+  padding:1px 7px;white-space:nowrap}
+#p-lista li.alta .selo{color:var(--erro);border-color:var(--erro)}
+#p-lista .vazio{padding:22px 13px;color:var(--fraquinho);font-size:13px;
+  cursor:default;justify-content:center}
+#paleta .p-rodape{display:flex;gap:14px;align-items:center;padding:9px 15px;
+  border-top:1px solid var(--borda);font-size:11px;color:var(--fraquinho)}
+#paleta .p-rodape span{display:inline-flex;gap:5px;align-items:center}
+#p-conta{margin-left:auto;font-family:var(--mono)}
+@media (prefers-reduced-motion:no-preference){
+  #paleta[open]{animation:sobe .13s ease-out}
+  @keyframes sobe{from{opacity:0;transform:translateY(-6px)}}
+}
+
 /* A conta por trás da nota: o número é um botão que abre os critérios. */
 .conta-btn{background:none;border:none;padding:0;cursor:pointer;color:inherit;
   font:inherit;border-bottom:1px dotted currentColor}
@@ -163,6 +205,12 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
       <div class="sub" id="linhafina">carregando…</div>
     </div>
     <div class="acoes">
+      <!-- O atalho precisa ser VISIVEL. Paleta que so existe no Ctrl+K e paleta
+           que o dono nunca descobre — e este dono nao vive em teclado. -->
+      <button class="btn busca" id="btn-paleta"
+              aria-keyshortcuts="Control+K Meta+K">
+        <span>Buscar projeto ou ação</span><kbd>Ctrl K</kbd>
+      </button>
       <button class="btn" id="btn-recoletar">Medir agora</button>
       <button class="btn" id="btn-github">Atualizar GitHub</button>
       <button class="btn" id="btn-tema">Tema</button>
@@ -203,6 +251,26 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
 
   <div class="rodape" id="rodape"></div>
 </div>
+
+<!-- ------------------------------------------------------------- paleta ----
+     closedby="any" + showModal() dao de graca o que se costuma escrever a mao
+     e errado: foco preso dentro, Esc fechando, clique fora fechando, e camada
+     acima de tudo sem guerra de z-index. O fallback do closedby esta no JS. -->
+<dialog id="paleta" closedby="any" aria-label="Buscar projeto ou ação">
+  <div class="p-topo">
+    <input id="p-busca" type="text" role="combobox" autocomplete="off"
+           spellcheck="false" aria-expanded="true" aria-controls="p-lista"
+           aria-autocomplete="list" placeholder="Digite um projeto, ou o que quer fazer…">
+    <kbd>Esc</kbd>
+  </div>
+  <ul id="p-lista" role="listbox" aria-label="Resultados"></ul>
+  <div class="p-rodape">
+    <span><kbd>↑</kbd><kbd>↓</kbd> escolher</span>
+    <span><kbd>Enter</kbd> fazer</span>
+    <span><kbd>Esc</kbd> fechar</span>
+    <span id="p-conta"></span>
+  </div>
+</dialog>
 <div id="recado" role="status" aria-live="polite"></div>
 
 <script>
@@ -256,8 +324,11 @@ async function agir(pend, botao){
     return;
   }
   if (ocupado){ recado("Espere a ação anterior terminar."); return; }
-  ocupado = true; botao.disabled = true;
-  const antes = botao.textContent; botao.textContent = "…";
+  // botao e opcional: a paleta (Ctrl+K) dispara a MESMA acao sem ter um botao
+  // na tela. Um executor so para os dois caminhos — dois divergiriam.
+  ocupado = true;
+  const antes = botao ? botao.textContent : "";
+  if (botao){ botao.disabled = true; botao.textContent = "…"; }
   try{
     const corpo = a.tipo === "vscode"
       ? {comando:"vscode", projeto: pend.projeto}
@@ -266,7 +337,8 @@ async function agir(pend, botao){
     recado(r.ok ? (r.saida || "Feito.") : ("Não deu certo: " + (r.saida||r.erro)), !r.ok);
   } catch(e){ recado("Não consegui falar com o servidor: " + e.message, true); }
   finally{
-    ocupado = false; botao.disabled = false; botao.textContent = antes;
+    ocupado = false;
+    if (botao){ botao.disabled = false; botao.textContent = antes; }
     carregar();
   }
 }
@@ -548,6 +620,199 @@ try {
 $("#todos").addEventListener("toggle", () => {
   try { localStorage.setItem("todos-aberto", $("#todos").open ? "1" : "0"); } catch {}
 });
+
+/* --------------------------------------------------------- paleta (Ctrl+K)
+   Porta de entrada unica: digitar "dents" e cair no projeto, digitar "subir" e
+   subir o contêiner. Com 17 repositorios, menu em arvore vira caca ao tesouro.
+
+   Implementacao propria de proposito: o projeto e sem build e sem dependencia,
+   e cmdk/kbar custariam as duas coisas por ~200 linhas que sabemos escrever.
+
+   A paleta NAO tem acao propria nenhuma. Ela so encontra e dispara o que ja
+   existe — mesmo `agir()`, mesma lista branca do servidor. Se ela pudesse
+   fazer algo que a tela nao faz, viraria uma segunda superficie de risco para
+   revisar; assim, o que vale para a caixa vale para ela, de graca. */
+const paleta = $("#paleta"), pBusca = $("#p-busca"), pLista = $("#p-lista");
+let pItens = [], pAtivo = 0;
+
+/* "Ajudei-Saúde" tem de casar com "ajudei saude": sem isso o dono digita o
+   nome do projeto dele, sem acento e sem hifen, e a paleta responde "nada". */
+const semAcento = s => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "")
+  .toLowerCase().replace(/[-_./]+/g, " ").trim();
+
+function pontua(alvo, termo){
+  if (!termo) return 1;
+  const a = semAcento(alvo), t = semAcento(termo);
+  if (a === t) return 1000;
+  if (a.startsWith(t)) return 500 - a.length;
+  const i = a.indexOf(t);
+  if (i >= 0) return 300 - i;
+  // Ultimo recurso: as letras aparecem na ordem ("wsmed" acha "workspace-
+  // medconsultoria"). Vale menos que qualquer casamento literal.
+  let j = 0;
+  for (const c of a) if (c === t[j]) j++;
+  return j === t.length ? 40 : -1;
+}
+
+/* Um comando = rotulo, subtitulo, selo e o que fazer.
+   `chave` e o nome cru do projeto, so no comando de abrir: e o que faz "digitar
+   dents e cair no projeto" (a especificacao) vencer a pendencia do dents, que
+   tambem tem "dents" no meio do texto. Vale so para nome digitado inteiro ou
+   pelo comeco — em busca por letras soltas a pendencia continua ganhando, que e
+   o certo: ali o dono nao sabe o nome, esta procurando o que precisa dele. */
+function cmd(rot, sub, selo, faz, classe, chave){
+  return {rot, sub, selo, faz, classe: classe || "", chave: chave || ""};
+}
+const BONUS_NOME = 400;
+
+function comandosDe(d){
+  const c = [];
+
+  // 1. As pendencias primeiro: e a pergunta que o HUB existe para responder.
+  for (const p of d.pendencias || [])
+    c.push(cmd(p.acao.rotulo + ": " + p.texto, p.projeto || "a máquina",
+               p.gravidade === "alta" ? "urgente" : "pendência",
+               () => agir(p, null), p.gravidade));
+
+  // 2. Um projeto = varias portas de entrada. So entram as que EXISTEM: item
+  //    que abre nada e pior que item ausente.
+  for (const p of d.projetos || []){
+    const g = p.git || {};
+    c.push(cmd("Abrir " + p.nome + " no VS Code", p.caminho, "projeto",
+               () => agir({projeto: p.nome, acao: {tipo: "vscode"}}, null),
+               "", p.nome));
+    if (p.compose)
+      c.push(cmd("Subir os contêineres do " + p.nome, p.caminho, "docker",
+                 () => agir({projeto: p.nome,
+                             acao: {tipo: "rodar", comando: "docker_up"}}, null)));
+    if (g.ahead)
+      c.push(cmd("Enviar " + p.nome + " ao GitHub", g.ahead + " commit(s) parado(s)",
+                 "git", () => agir({projeto: p.nome,
+                                    acao: {tipo: "rodar", comando: "git_push"}}, null)));
+    if (g.remoto_slug)
+      c.push(cmd("Abrir " + p.nome + " no GitHub", g.remoto_slug, "site",
+                 () => window.open("https://github.com/" + g.remoto_slug,
+                                   "_blank", "noopener")));
+    if (p.url_prod)
+      c.push(cmd("Abrir o site no ar do " + p.nome, p.url_prod, "produção",
+                 () => window.open(p.url_prod, "_blank", "noopener")));
+    for (const porta of (p.portas || []))
+      if (porta.vivo)
+        c.push(cmd("Abrir " + p.nome + " local", "porta " + porta.porta, "local",
+                   () => window.open("http://localhost:" + porta.porta,
+                                     "_blank", "noopener")));
+  }
+
+  // 3. Comandos da maquina inteira.
+  c.push(cmd("Medir tudo de novo agora", "recoleta a camada local", "hub",
+             () => $("#btn-recoletar").click()));
+  c.push(cmd("Atualizar os dados do GitHub", "CI, PRs e alertas", "hub",
+             () => $("#btn-github").click()));
+  c.push(cmd("Abrir o grafo de código", "aba do mapa de funções", "hub",
+             () => trocaAba("#aba-btn-grafo", true)));
+  c.push(cmd("Trocar o tema (claro / escuro)", "", "hub",
+             () => $("#btn-tema").click()));
+  return c;
+}
+
+function desenhaPaleta(){
+  const termo = pBusca.value.trim();
+  const todos = comandosDe(ESTADO || {});
+  pItens = todos
+    .map(x => {
+      const nome = x.chave ? pontua(x.chave, termo) : -1;
+      return {x, n: Math.max(
+        pontua(x.rot, termo),
+        pontua(x.sub, termo) - 60,
+        nome >= 500 ? nome + BONUS_NOME : -1)};   // >=500 = nome inteiro ou inicio
+    })
+    .filter(v => v.n > 0)
+    .sort((a, b) => b.n - a.n)
+    .slice(0, 50)
+    .map(v => v.x);
+
+  pAtivo = 0;
+  pLista.textContent = "";
+  if (!pItens.length){
+    const li = document.createElement("li");
+    li.className = "vazio";
+    li.textContent = "Nada encontrado para “" + termo + "”.";
+    pLista.append(li);
+    pBusca.removeAttribute("aria-activedescendant");
+    $("#p-conta").textContent = "0 de " + todos.length;
+    return;
+  }
+  pItens.forEach((it, i) => {
+    const li = document.createElement("li");
+    li.id = "p-op-" + i;
+    li.setAttribute("role", "option");
+    li.className = it.classe;
+    li.setAttribute("aria-selected", i === 0 ? "true" : "false");
+    const r = document.createElement("span"); r.className = "rot"; r.textContent = it.rot;
+    const s = document.createElement("span"); s.className = "sub"; s.textContent = it.sub;
+    const e = document.createElement("span"); e.className = "selo"; e.textContent = it.selo;
+    li.append(r, s, e);
+    li.addEventListener("click", () => roda(i));
+    pLista.append(li);
+  });
+  pBusca.setAttribute("aria-activedescendant", "p-op-0");
+  $("#p-conta").textContent = pItens.length + " de " + todos.length;
+}
+
+function move(delta){
+  if (!pItens.length) return;
+  const li = pLista.children;
+  li[pAtivo].setAttribute("aria-selected", "false");
+  pAtivo = (pAtivo + delta + pItens.length) % pItens.length;
+  li[pAtivo].setAttribute("aria-selected", "true");
+  li[pAtivo].scrollIntoView({block: "nearest"});
+  pBusca.setAttribute("aria-activedescendant", "p-op-" + pAtivo);
+}
+
+function roda(i){
+  const it = pItens[i];
+  if (!it) return;
+  paleta.close();          // fecha ANTES: acao que abre aba ou janela precisa
+  it.faz();                // da paleta fora do caminho.
+}
+
+function abrePaleta(){
+  if (paleta.open) return;
+  pBusca.value = "";
+  desenhaPaleta();
+  paleta.showModal();      // showModal: foco preso, Esc e camada de topo nativos
+  pBusca.focus();
+}
+
+$("#btn-paleta").addEventListener("click", abrePaleta);
+pBusca.addEventListener("input", desenhaPaleta);
+pBusca.addEventListener("keydown", e => {
+  if (e.key === "ArrowDown"){ e.preventDefault(); move(1); }
+  else if (e.key === "ArrowUp"){ e.preventDefault(); move(-1); }
+  else if (e.key === "Home"){ e.preventDefault(); move(-pAtivo); }
+  else if (e.key === "End"){ e.preventDefault(); move(pItens.length - 1 - pAtivo); }
+  else if (e.key === "Enter"){ e.preventDefault(); roda(pAtivo); }
+});
+
+document.addEventListener("keydown", e => {
+  // Ctrl+K no Windows, Cmd+K no Mac. Sem o preventDefault o Chrome leva o foco
+  // para a barra de endereco e a paleta abre atras dela.
+  if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")){
+    e.preventDefault();
+    paleta.open ? paleta.close() : abrePaleta();
+  }
+});
+
+// Safari ainda nao tem closedby. Sem isto, clicar fora nao fecha la.
+if (!("closedBy" in HTMLDialogElement.prototype)){
+  paleta.addEventListener("click", e => {
+    if (e.target !== paleta) return;      // clique num filho: nao e o fundo
+    const r = paleta.getBoundingClientRect();
+    const dentro = r.top <= e.clientY && e.clientY <= r.top + r.height
+                && r.left <= e.clientX && e.clientX <= r.left + r.width;
+    if (!dentro) paleta.close();
+  });
+}
 
 /* ------------------------------------------------------------------- abas */
 /* MONTAGEM preguicosa, nao import preguicoso: o quadro do grafo nao existe no

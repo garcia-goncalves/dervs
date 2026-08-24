@@ -260,5 +260,35 @@ class EstadoDoGrafo(unittest.TestCase):
         self.assertEqual(servir.classificar_grafo(False, True, False), "fora")
 
 
+class PaletaNaoInventaComando(unittest.TestCase):
+    """A paleta (Ctrl+K) so pode disparar o que o servidor ja aceita.
+
+    A paleta e uma segunda porta para as MESMAS acoes — nao uma porta nova. Um
+    comando escrito com erro de digitacao ali falha calado na cara do dono, e um
+    comando novo posto so na tela e uma acao sem revisao do lado do servidor.
+    Este teste amarra os dois lados: le os comandos que o index.html manda e
+    exige que cada um exista na lista branca do servir.py.
+    """
+
+    #: comandos que o servidor trata direto em executar_acao, fora do dict ACOES
+    FORA_DO_DICT = {"recoletar", "silenciar", "grafo_ligar"}
+
+    def _comandos_do_html(self):
+        import re
+        from pathlib import Path
+        html = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
+        return set(re.findall(r'comando\s*:\s*["\']([a-z_]+)["\']', html))
+
+    def test_todo_comando_da_tela_existe_no_servidor(self):
+        conhecidos = set(servir.ACOES) | self.FORA_DO_DICT
+        for c in self._comandos_do_html():
+            self.assertIn(c, conhecidos,
+                          "a tela manda '%s', que o servidor nao conhece" % c)
+
+    def test_a_tela_realmente_manda_algum_comando(self):
+        """Se a extracao parar de achar nada, o teste acima passa vazio e mente."""
+        self.assertTrue(self._comandos_do_html())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
