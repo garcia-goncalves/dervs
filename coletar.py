@@ -292,6 +292,44 @@ def fase(g: dict, pr: dict) -> str:
     return "Construção"
 
 
+# ----------------------------------------------------------------------- esteira
+FASES_ESTEIRA = [
+    ("briefing", "Briefing"), ("spec", "Spec"),
+    ("design", "Design"), ("verificacao", "Verificação"),
+]
+
+
+def coleta_esteira(repo: Path) -> list:
+    """Le docs/esteira/<slug>/ e diz que fases ja produziram artefato.
+
+    Nao valida contrato: so registra o que existe em disco, que e onde o estado
+    da esteira mora.
+    """
+    base = repo / "docs" / "esteira"
+    if not base.is_dir():
+        return []
+    trabalhos = []
+    for pasta in sorted(base.iterdir()):
+        if not pasta.is_dir():
+            continue
+        fases = []
+        for arquivo, rotulo in FASES_ESTEIRA:
+            alvo = pasta / f"{arquivo}.md"
+            fases.append({"rotulo": rotulo, "ok": alvo.is_file(),
+                          "linhas": alvo.read_text(encoding="utf-8", errors="replace").count("\n")
+                                    if alvo.is_file() else 0})
+        feitas = sum(1 for f in fases if f["ok"])
+        if not feitas:
+            continue
+        trabalhos.append({
+            "slug": pasta.name,
+            "fases": fases,
+            "feitas": feitas,
+            "atual": next((f["rotulo"] for f in fases if not f["ok"]), "concluída"),
+        })
+    return trabalhos
+
+
 # ------------------------------------------------------------------ infra ao vivo
 def coleta_docker() -> list:
     fmt = ('{{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}\t'
@@ -360,6 +398,7 @@ def main():
             "prontidao": pr,
             "projecao": projecao(g, pr),
             "fase": fase(g, pr),
+            "esteiras": coleta_esteira(repo),
             "containers": meus,
             "portas": [{"porta": p, "vivo": p in portas and porta_viva(p)}
                        for p in caso.get("portas", [])],

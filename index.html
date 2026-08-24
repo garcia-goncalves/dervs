@@ -327,7 +327,8 @@ function card(p){
     </div>
     ${g.semanas ? spark(g.semanas) : ''}
     <div class="pes">${prod}${conts}${portas}
-      <span class="pastilha">${esc(pj.tendencia||'—')}</span></div>
+      <span class="pastilha">${esc(pj.tendencia||'—')}</span>
+      ${(p.esteiras||[]).map(e=>`<span class="pastilha" style="background:rgba(59,110,245,.13);color:var(--acento)">⚙ esteira: ${esc(e.atual)}</span>`).join('')}</div>
     ${riscos.length ? `<div class="risco-mini">▲ ${esc(riscos.slice(0,2).join(' · '))}${riscos.length>2?` +${riscos.length-2}`:''}</div>`:''}
   </article>`;
 }
@@ -361,6 +362,15 @@ function detalhe(p){
   <div class="secao"><p style="margin:0;font-size:13.5px;color:var(--fraco)">${esc(p.resumo||'—')}</p></div>
 
   <div class="secao"><h4>Estudo de caso</h4><div class="caso">${casoHtml}</div></div>
+
+  ${(p.esteiras||[]).length?`<div class="secao"><h4>Esteira em andamento</h4>
+    ${p.esteiras.map(e=>`<div style="margin-bottom:12px">
+      <div style="font-family:var(--mono);font-size:12px;margin-bottom:6px">${esc(e.slug)}
+        <span style="color:var(--fraco)">— fase atual: <b>${esc(e.atual)}</b></span></div>
+      <div class="chk">${e.fases.map(f=>`<span class="${f.ok?'sim':''}">
+        <b class="mk ${f.ok?'sim':'nao'}">${f.ok?'✓':'○'}</b>${esc(f.rotulo)}
+        ${f.ok?`<em style="color:var(--fraquinho);font-style:normal;font-size:11px">${f.linhas} linhas</em>`:''}</span>`).join('')}</div>
+    </div>`).join('')}</div>`:''}
 
   <div class="secao"><h4>Situação em números</h4>
     <table class="tabela">
