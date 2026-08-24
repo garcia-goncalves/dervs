@@ -12,12 +12,34 @@ So escuta em 127.0.0.1: o painel nao fica exposto na rede.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+
+# A TELINHA PISCANDO NA TELA DO DONO (24/08/2026). O painel roda sob pythonw.exe,
+# que nao tem console proprio — entao cada programa de console que ele chama
+# (git, aqui ~20 vezes por coleta, de minuto em minuto) ganha um console NOVO,
+# que aparece por cima do que o dono estiver fazendo. CREATE_NO_WINDOW resolve
+# na origem: o filho roda sem janela, e continuamos lendo o stdout normalmente.
+# Mesma correcao ja aplicada em .claude/scripts/vigia-vscode.py em 13/08/2026.
+#
+# So sob pythonw, porque a marca nao e de graca: o Windows aloca um console
+# escondido por filho (~11ms cada). Rodando do terminal o filho herda o console
+# que ja existe — nada pisca ali.
+def _sem_console():
+    if not sys.platform.startswith("win"):
+        return False
+    if os.path.basename(sys.executable or "").lower() == "pythonw.exe":
+        return True
+    return sys.stdout is None
+
+
+SEM_JANELA = 0x08000000 if _sem_console() else 0
 
 AQUI = Path(__file__).resolve().parent
 COLETOR = AQUI / "coletar.py"
@@ -36,7 +58,8 @@ def coletar(motivo: str) -> None:
     with _trava:
         inicio = time.time()
         r = subprocess.run([sys.executable, str(COLETOR)], capture_output=True,
-                           text=True, encoding="utf-8", errors="replace")
+                           text=True, encoding="utf-8", errors="replace",
+                           creationflags=SEM_JANELA)
         _ultima = time.time()
         marca = time.strftime("%H:%M:%S")
         if r.returncode == 0:
