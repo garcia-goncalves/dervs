@@ -141,6 +141,9 @@ EXT_LINGUAGEM = {
     ".html": "HTML", ".md": "Markdown", ".json": "JSON", ".yml": "YAML", ".yaml": "YAML",
     ".prisma": "Prisma", ".sh": "Shell", ".ps1": "PowerShell", ".php": "PHP", ".go": "Go",
 }
+# Linguagens onde existe logica testavel. Fora daqui e tela, dado ou config —
+# e a regra da casa isenta CSS, layout e texto de tela de TDD.
+LINGUAGENS_TESTAVEIS = {"TypeScript", "JavaScript", "C#", "Python", "PHP", "Go"}
 IGNORAR_DIR = {
     "node_modules", ".git", "dist", "build", ".next", "obj", "bin", ".turbo",
     "venv", ".venv", "__pycache__", "coverage", ".pnpm-store", "vendor", "out",
@@ -359,6 +362,9 @@ def coleta_git(repo: Path) -> dict:
         "sujos_dias": idade_do_mais_antigo(repo, sujos),
         "tem_remoto": bool(remoto),
         "remoto_slug": slug,
+        # So o NOME do arquivo entra na conta: o conteudo nunca e lido. Ter o
+        # arquivo de variaveis no disco e o certo; te-lo no historico e o erro.
+        "env_versionado": bool(git(repo, "ls-files", "--", ARQ_SEGREDO).strip()),
         "ahead": ahead,
         "behind": behind,
         "commits_total": int(total) if total.isdigit() else 0,
@@ -405,6 +411,10 @@ def coleta_arquivos(repo: Path) -> dict:
         "linhas": sum(linguagens.values()),
         "linguagens": [{"nome": n, "linhas": v} for n, v in principais[:6]],
         "arquivos_teste": testes,
+        # Quanto do projeto e LOGICA, e nao tela. E o que decide se cobrar
+        # teste automatizado faz sentido: site de HTML e CSS e isento.
+        "linhas_testaveis": sum(v for n, v in linguagens.items()
+                                if n in LINGUAGENS_TESTAVEIS),
     }
 
 
@@ -422,37 +432,130 @@ def tem_deploy(r: Path) -> bool:
                for p in r.glob(".github/workflows/*"))
 
 
+def tem_docker(r: Path) -> bool:
+    return existe(r, "Dockerfile", "docker-compose*.yml", "docker-compose*.yaml",
+                  "compose.yml", "compose.yaml")
+
+
+def tem_exemplo(r: Path) -> bool:
+    return existe(r, ARQ_EXEMPLO, "*/" + ARQ_EXEMPLO, "apps/*/" + ARQ_EXEMPLO)
+
+
+# Limiares da regua, num lugar so — sao o que o dono vai querer girar primeiro.
+LIMIAR_DOCS = 100        # abaixo de 100 arquivos, um README honesto basta
+LIMIAR_TESTES = 500      # linhas em linguagem com logica; abaixo disso e tela
+
+
+# A REGUA. Cinco colunas: chave, rotulo, peso, TESTE (passou?) e APLICA (cabe
+# cobrar deste projeto?). `aplica=None` significa "cabe cobrar de todo mundo".
+#
+# A quinta coluna e o conserto de um defeito medido em 24/08/2026: a regua era
+# uma so para os 17 projetos, e descontava de cada um o que ele nao tinha
+# motivo para ter. O proprio HUB tirava 64% por nao ter contêiner, arquivo de
+# variaveis nem publicacao — tres coisas que ele nunca vai ter, por decisao.
+# Nota que cobra o impossivel nao mede nada: so ensina o dono a ignora-la.
+#
+# Regra dura: o que NAO se aplica sai do denominador. Nao vira ponto de graca
+# (isso inflaria a nota) nem falta (isso e o defeito antigo) — some da conta.
 CRITERIOS = [
-    ("readme", "README", 1, lambda r: existe(r, "README.md", "readme.md")),
-    ("git_limpo", "Árvore limpa e enviada", 1, None),
-    ("ci", "CI configurada", 2, tem_ci),
-    ("testes", "Testes automatizados", 2, None),
-    ("docker", "Docker / compose", 1, lambda r: existe(r, "Dockerfile", "docker-compose*.yml")),
+    ("readme", "README", 1,
+     lambda c: existe(c["repo"], "README.md", "readme.md"),
+     None),
+
+    ("git_limpo", "Árvore limpa e enviada", 1,
+     lambda c: c["g"].get("sujos", 1) == 0 and c["g"].get("ahead", 1) == 0,
+     lambda c: bool(c["g"].get("versionado"))),
+
+    # CI so faz sentido onde ha GitHub para roda-la.
+    ("ci", "CI configurada", 2,
+     lambda c: tem_ci(c["repo"]),
+     lambda c: bool(c["g"].get("versionado")) and bool(c["g"].get("tem_remoto"))),
+
+    # Regra da casa: CSS, layout e texto de tela sao isentos de TDD. Site
+    # estatico nao devia perder 2 pontos por nao ter suite de teste.
+    ("testes", "Testes automatizados", 2,
+     lambda c: c["arq"].get("arquivos_teste", 0) > 0,
+     lambda c: c["arq"].get("linhas_testaveis", 0) >= LIMIAR_TESTES),
+
+    # "Devia ter contêiner" e o dono quem diz, no casos.json — ou o disco, se o
+    # projeto ja tem Dockerfile. Nao e uma virtude universal.
+    ("docker", "Docker / compose", 1,
+     lambda c: tem_docker(c["repo"]),
+     lambda c: bool(c["caso"].get("containers")) or tem_docker(c["repo"])),
+
     ("env_exemplo", "Exemplo de variáveis", 1,
-     lambda r: existe(r, ARQ_EXEMPLO, "*/" + ARQ_EXEMPLO, "apps/*/" + ARQ_EXEMPLO)),
-    ("deploy", "Workflow de deploy", 2, tem_deploy),
-    ("docs", "Pasta docs/", 1, lambda r: (r / "docs").is_dir()),
-    ("gitignore", ".gitignore", 1, lambda r: (r / ".gitignore").is_file()),
-    ("segredo", "Sem segredo na raiz", 2, lambda r: not (r / ARQ_SEGREDO).exists()),
+     lambda c: c["tem_exemplo"],
+     lambda c: c["tem_env"] or c["tem_exemplo"]),
+
+    # So cobra publicacao de quem publica: tem endereco de producao declarado,
+    # ou ja tem o workflow. Projeto de gaveta nao deve 2 pontos a ninguem.
+    ("deploy", "Workflow de deploy", 2,
+     lambda c: tem_deploy(c["repo"]),
+     lambda c: bool(c["caso"].get("url_prod")) or tem_deploy(c["repo"])),
+
+    ("docs", "Pasta docs/", 1,
+     lambda c: (c["repo"] / "docs").is_dir(),
+     lambda c: c["arq"].get("arquivos", 0) >= LIMIAR_DOCS),
+
+    ("gitignore", ".gitignore", 1,
+     lambda c: (c["repo"] / ".gitignore").is_file(),
+     lambda c: bool(c["g"].get("versionado"))),
+
+    # O criterio antigo reprovava a EXISTENCIA do arquivo de variaveis, com o
+    # peso mais alto da regua — e derrubava 6 dos 17 projetos por fazerem o
+    # certo. Local e de mentira: ter o arquivo com senha de teste e o esperado.
+    # O risco real e ele estar dentro do historico do git, e e isso que se mede.
+    ("segredo", "Segredo fora do histórico", 2,
+     lambda c: not c["g"].get("env_versionado"),
+     lambda c: c["tem_env"] and bool(c["g"].get("versionado"))),
 ]
 
 
-def coleta_prontidao(repo: Path, g: dict, arq: dict) -> dict:
+def _seguro(f, ctx) -> bool:
+    """Criterio que explode nao pode derrubar a coleta do projeto inteiro."""
+    try:
+        return bool(f(ctx))
+    except Exception:
+        return False
+
+
+def coleta_prontidao(repo: Path, g: dict, arq: dict, caso: dict | None = None) -> dict:
+    """Nota de prontidao, cobrando de cada projeto so o que cabe a ele.
+
+    `caso` e a entrada do projeto no casos.json. A palavra final e do dono: a
+    chave "prontidao" de la liga (true) ou desliga (false) qualquer criterio,
+    passando por cima da deteccao automatica nos dois sentidos.
+    """
+    caso = caso or {}
+    ctx = {
+        "repo": repo, "g": g, "arq": arq, "caso": caso,
+        "tem_env": _seguro(lambda _: (repo / ARQ_SEGREDO).exists(), None),
+        "tem_exemplo": _seguro(lambda _: tem_exemplo(repo), None),
+    }
+    manual = caso.get("prontidao") or {}
+
     itens = []
-    for chave, rotulo, peso, teste in CRITERIOS:
-        if chave == "git_limpo":
-            ok = bool(g.get("versionado")) and g.get("sujos", 1) == 0 and g.get("ahead", 1) == 0
-        elif chave == "testes":
-            ok = arq["arquivos_teste"] > 0
+    for chave, rotulo, peso, teste, aplica in CRITERIOS:
+        if chave in manual:
+            vale = bool(manual[chave])
+        elif aplica is None:
+            vale = True
         else:
-            try:
-                ok = bool(teste(repo))
-            except Exception:
-                ok = False
-        itens.append({"chave": chave, "rotulo": rotulo, "peso": peso, "ok": bool(ok)})
-    total = sum(i["peso"] for i in itens)
-    feito = sum(i["peso"] for i in itens if i["ok"])
-    return {"itens": itens, "pontos": feito, "total": total, "pct": round(100 * feito / total)}
+            vale = _seguro(aplica, ctx)
+        itens.append({
+            "chave": chave, "rotulo": rotulo, "peso": peso,
+            "aplica": vale,
+            "ok": _seguro(teste, ctx) if vale else False,
+            "manual": chave in manual,
+        })
+
+    total = sum(i["peso"] for i in itens if i["aplica"])
+    feito = sum(i["peso"] for i in itens if i["aplica"] and i["ok"])
+    return {
+        "itens": itens, "pontos": feito, "total": total,
+        # total 0 = o dono desligou tudo. Nada cobrado, nada devendo.
+        "pct": round(100 * feito / total) if total else 100,
+    }
 
 
 # --------------------------------------------------------------------- projecoes
@@ -622,8 +725,10 @@ def main():
     for repo in pastas_de_projeto():
         g = coleta_git(repo)
         arq = coleta_arquivos(repo)
-        pr = coleta_prontidao(repo, g, arq)
+        # O caso vem ANTES da nota: e ele que diz se o projeto tem contêiner e
+        # se publica, e sem isso a regua volta a cobrar de todos a mesma coisa.
         caso = casos.get(repo.name, {})
+        pr = coleta_prontidao(repo, g, arq, caso)
 
         alvos = [t.lower() for t in caso.get("containers", [])]
         meus = [c for c in containers

@@ -256,5 +256,191 @@ class TraduzGitHub(unittest.TestCase):
         self.assertEqual(coletar_github.traduz(no, True)["vulns"]["total"], 7)
 
 
+class ProntidaoSoCobraOQueSeAplica(unittest.TestCase):
+    """A regua cobrava contêiner, deploy e docs/ de todo mundo.
+
+    O proprio HUB tirava 64%: descontado por nao ter contêiner, nao ter arquivo
+    de variaveis e nao ter workflow de publicacao — sendo que "sem dependencia e
+    sem build" e virtude declarada dele, e ele nunca vai para servidor nenhum.
+    Nota que cobra o impossivel treina o dono a ignorar a nota.
+    """
+
+    def _repo(self, *arquivos, pastas=()):
+        d = Path(tempfile.mkdtemp())
+        for nome in arquivos:
+            (d / nome).parent.mkdir(parents=True, exist_ok=True)
+            (d / nome).write_text("x", encoding="utf-8")
+        for nome in pastas:
+            (d / nome).mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _arq(self, arquivos=10, testaveis=0, testes=0):
+        return {"arquivos": arquivos, "linhas": arquivos * 10,
+                "linhas_testaveis": testaveis, "arquivos_teste": testes,
+                "linguagens": []}
+
+    def _por_chave(self, pr):
+        return {i["chave"]: i for i in pr["itens"]}
+
+    # ---------------------------------------------------------------- Docker
+    def test_docker_nao_se_aplica_a_quem_nao_declara_conteiner(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+                                      self._arq(), {})
+        self.assertFalse(self._por_chave(pr)["docker"]["aplica"])
+
+    def test_docker_se_aplica_a_quem_declara_conteiner_no_casos_json(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+                                      self._arq(), {"containers": ["medcrm"]})
+        item = self._por_chave(pr)["docker"]
+        self.assertTrue(item["aplica"])
+        self.assertFalse(item["ok"])          # declara contêiner e nao tem compose
+
+    # ---------------------------------------------------------------- deploy
+    def test_deploy_nao_se_aplica_a_projeto_que_nunca_publica(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+                                      self._arq(), {})
+        self.assertFalse(self._por_chave(pr)["deploy"]["aplica"])
+
+    def test_deploy_se_aplica_a_quem_tem_endereco_de_producao(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+                                      self._arq(), {"url_prod": "https://x.com.br"})
+        self.assertTrue(self._por_chave(pr)["deploy"]["aplica"])
+
+    # ------------------------------------------------------------------ docs
+    def test_docs_nao_se_aplica_a_projeto_pequeno(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+                                      self._arq(arquivos=24), {})
+        self.assertFalse(self._por_chave(pr)["docs"]["aplica"])
+
+    def test_docs_se_aplica_a_projeto_grande(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+                                      self._arq(arquivos=2602), {})
+        self.assertTrue(self._por_chave(pr)["docs"]["aplica"])
+
+    # ---------------------------------------------------------------- testes
+    def test_teste_nao_e_cobrado_de_site_estatico(self):
+        """Regra da casa: CSS, layout e texto de tela sao isentos de TDD."""
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+                                      self._arq(arquivos=35, testaveis=40), {})
+        self.assertFalse(self._por_chave(pr)["testes"]["aplica"])
+
+    def test_teste_e_cobrado_de_quem_tem_logica(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+                                      self._arq(arquivos=300, testaveis=25000), {})
+        self.assertTrue(self._por_chave(pr)["testes"]["aplica"])
+
+    # -------------------------------------------------------------------- CI
+    def test_ci_nao_e_cobrada_de_pasta_sem_github(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md"),
+                                      {"versionado": True, "tem_remoto": False},
+                                      self._arq(), {})
+        self.assertFalse(self._por_chave(pr)["ci"]["aplica"])
+
+    def test_nada_de_git_e_cobrado_de_pasta_sem_git(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": False},
+                                      self._arq(), {})
+        por = self._por_chave(pr)
+        for chave in ("git_limpo", "ci", "gitignore"):
+            self.assertFalse(por[chave]["aplica"], chave)
+
+    # --------------------------------------------------------------- segredo
+    def test_ter_arquivo_de_variaveis_local_nao_e_pecado(self):
+        """Local e de mentira: senha de teste no arquivo e o certo, nao o errado.
+
+        A regra antiga reprovava a mera existencia do arquivo, com o peso mais
+        alto da regua — e derrubava 6 dos 17 projetos por fazerem o certo.
+        """
+        pr = coletar.coleta_prontidao(self._repo("README.md", coletar.ARQ_SEGREDO),
+                                      {"versionado": True, "env_versionado": False},
+                                      self._arq(), {})
+        item = self._por_chave(pr)["segredo"]
+        self.assertTrue(item["aplica"])
+        self.assertTrue(item["ok"])
+
+    def test_segredo_dentro_do_historico_e_pecado(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md", coletar.ARQ_SEGREDO),
+                                      {"versionado": True, "env_versionado": True},
+                                      self._arq(), {})
+        self.assertFalse(self._por_chave(pr)["segredo"]["ok"])
+
+    def test_sem_arquivo_de_variaveis_nao_ha_o_que_verificar(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md"),
+                                      {"versionado": True}, self._arq(), {})
+        self.assertFalse(self._por_chave(pr)["segredo"]["aplica"])
+
+    # ------------------------------------------------- exemplo de variaveis
+    def test_exemplo_so_e_cobrado_de_quem_usa_variavel(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+                                      self._arq(), {})
+        self.assertFalse(self._por_chave(pr)["env_exemplo"]["aplica"])
+        pr2 = coletar.coleta_prontidao(self._repo("README.md", coletar.ARQ_SEGREDO),
+                                       {"versionado": True}, self._arq(), {})
+        self.assertTrue(self._por_chave(pr2)["env_exemplo"]["aplica"])
+
+    # --------------------------------------------------------------- a conta
+    def test_o_que_nao_se_aplica_sai_do_denominador(self):
+        pr = coletar.coleta_prontidao(
+            self._repo("README.md", ".gitignore"),
+            {"versionado": True, "tem_remoto": False, "sujos": 0, "ahead": 0},
+            self._arq(arquivos=24), {})
+        aplicaveis = [i for i in pr["itens"] if i["aplica"]]
+        self.assertEqual(pr["total"], sum(i["peso"] for i in aplicaveis))
+        self.assertEqual(pr["pct"], 100)
+
+    def test_dono_pode_desligar_um_criterio_pelo_casos_json(self):
+        caso = {"url_prod": "https://x.com.br", "prontidao": {"deploy": False}}
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+                                      self._arq(), caso)
+        self.assertFalse(self._por_chave(pr)["deploy"]["aplica"])
+
+    def test_dono_pode_ligar_um_criterio_pelo_casos_json(self):
+        caso = {"prontidao": {"docker": True}}
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+                                      self._arq(), caso)
+        item = self._por_chave(pr)["docker"]
+        self.assertTrue(item["aplica"])
+        self.assertFalse(item["ok"])
+
+    def test_criterio_que_nao_se_aplica_nunca_conta_como_feito(self):
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": False},
+                                      self._arq(), {})
+        for i in pr["itens"]:
+            if not i["aplica"]:
+                self.assertFalse(i["ok"], i["chave"])
+
+    def test_criterio_quebrado_nao_derruba_a_coleta(self):
+        """Nenhum criterio pode explodir a coleta inteira de um projeto."""
+        pr = coletar.coleta_prontidao(Path("nao/existe/em/lugar/nenhum"),
+                                      {"versionado": True}, self._arq(), {})
+        self.assertIsInstance(pr["pct"], int)
+
+    def test_a_chamada_antiga_continua_valendo(self):
+        """coleta_prontidao sem casos.json nao pode explodir."""
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+                                      self._arq())
+        self.assertIsInstance(pr["pct"], int)
+
+
+class LinhasTestaveis(unittest.TestCase):
+    """Site de CSS e HTML nao devia ser cobrado por falta de teste."""
+
+    def test_conta_so_linguagem_com_logica(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "estilo.css").write_text("a{color:red}\n" * 300, encoding="utf-8")
+        (d / "app.py").write_text("x = 1\n" * 40, encoding="utf-8")
+        arq = coletar.coleta_arquivos(d)
+        por_ling = {l["nome"]: l["linhas"] for l in arq["linguagens"]}
+        # O numero exato segue a convencao antiga da casa (conta \n e soma 1
+        # pela ultima linha). O contrato aqui e outro: so o Python entra.
+        self.assertEqual(arq["linhas_testaveis"], por_ling["Python"])
+        self.assertLess(arq["linhas_testaveis"], arq["linhas"])
+
+    def test_css_e_html_sozinhos_nao_pedem_teste(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "estilo.css").write_text("a{color:red}\n" * 300, encoding="utf-8")
+        (d / "index.html").write_text("<p>oi</p>\n" * 300, encoding="utf-8")
+        self.assertEqual(coletar.coleta_arquivos(d)["linhas_testaveis"], 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

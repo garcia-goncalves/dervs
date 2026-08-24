@@ -90,6 +90,102 @@ ensinando o dono a ignorar a lista inteira.
 **Regra 6 existe porque o erro é calado.** Arquivo de memória em CRLF faz o
 harness ignorar o frontmatter, e a memória nunca carrega. Nada na tela avisa.
 
+## A nota de prontidão, e por que ela mentia
+
+A coluna **Prontidão** dá a cada projeto uma nota de 0 a 100. Ela é a soma dos
+pesos dos critérios cumpridos, dividida pela soma dos pesos que **se aplicam
+àquele projeto** — e essa segunda metade da frase é nova.
+
+### O defeito (medido em 24/08/2026)
+
+A régua era uma só para os 17 projetos: dez critérios, 14 pontos, cobrados de
+todo mundo. O resultado era uma nota que descontava de cada projeto aquilo que
+ele não tinha motivo nenhum para ter.
+
+O caso mais claro era o próprio painel: **64%**, descontado por não ter
+contêiner, não ter arquivo de variáveis e não ter workflow de publicação. As
+três coisas são decisões declaradas deste projeto — "zero dependência e zero
+build" está na especificação, e ele nunca vai para servidor nenhum. A nota não
+media dívida técnica; media distância de um projeto imaginário.
+
+Pior: o critério de maior peso da régua (2 pontos, junto com CI e testes) era
+*"sem arquivo de variáveis na raiz"* — ou seja, reprovava a **existência** do
+arquivo. Mas local é de mentira e servidor é de verdade: ter esse arquivo com
+senha de teste é exatamente o certo. O item derrubava 6 dos 17 projetos por
+fazerem a coisa certa. O risco real nunca foi o arquivo existir; é ele estar
+dentro do histórico do git — e é isso que passou a ser medido.
+
+### Como ficou
+
+Todo critério agora tem duas perguntas, não uma: **cabe cobrar isto deste
+projeto?** e só então **ele cumpre?**. O que não se aplica **sai do
+denominador** — não vira ponto de graça (isso inflaria a nota) nem falta (isso
+era o defeito), simplesmente some da conta.
+
+| Critério | Peso | Cobrado de quem |
+|---|---|---|
+| README | 1 | todos |
+| Árvore limpa e enviada | 1 | quem tem git |
+| CI configurada | 2 | quem tem git **e** cópia no GitHub |
+| Testes automatizados | 2 | quem tem ≥ 500 linhas em linguagem com lógica |
+| Docker / compose | 1 | quem declara contêiner no `casos.json`, ou já tem Dockerfile |
+| Exemplo de variáveis | 1 | quem usa variáveis de ambiente |
+| Workflow de deploy | 2 | quem tem `url_prod` no `casos.json`, ou já tem o workflow |
+| Pasta `docs/` | 1 | projetos com ≥ 100 arquivos |
+| `.gitignore` | 1 | quem tem git |
+| Segredo fora do histórico | 2 | quem tem arquivo de variáveis, versionado |
+
+Os dois limiares (`LIMIAR_DOCS`, `LIMIAR_TESTES`) e a lista
+`LINGUAGENS_TESTAVEIS` ficam no topo do `coletar.py`, num lugar só.
+
+O critério de testes fica calado em site de HTML e CSS: a regra da casa isenta
+CSS, layout e texto de tela de TDD, e cobrar suíte de teste de uma página
+estática é a mesma acusação vazia de antes, com outro nome.
+
+### A palavra final é do dono
+
+A detecção automática erra para os dois lados. Qualquer projeto pode ligar ou
+desligar qualquer critério pelo `casos.json`:
+
+```json
+"meu-projeto": {
+  "titulo": "...",
+  "prontidao": { "deploy": false, "docker": true }
+}
+```
+
+`false` tira o critério da conta; `true` força a cobrança mesmo sem evidência no
+disco. A tela marca esses itens como *"desligado por você"* / *"exigido por
+você"*, para a nota nunca parecer automática quando não é.
+
+### A tela passou a mostrar a conta
+
+O número aparecia sozinho, em vermelho, sem dizer de que era feito. Número sem
+conta não é medida, é acusação. Clicar na porcentagem abre os dez critérios em
+três estados — **✓ feito**, **✗ falta**, **— não se aplica** — com o peso de
+cada um e o total aplicável.
+
+A tabela inteira é redesenhada de 15 em 15 segundos. A lista `CONTAS_ABERTAS`
+(no `index.html`) guarda o que está aberto **por nome de projeto**, não por
+elemento, porque os elementos morrem a cada redesenho — sem isso a gaveta
+fechava sozinha no meio da leitura.
+
+### O efeito nos 17 projetos
+
+Doze subiram, um caiu, dois ficaram iguais. Os movimentos maiores:
+`medconsultoria-crm` 50 → 83, `odontologia-pericia` 29 → 60, `investrix` 71 →
+100, o próprio painel 64 → 86.
+
+Dois casos merecem leitura, porque **não** são inflação:
+
+- **`Ajudei-Saude` caiu 93 → 92.** Antes ele ganhava 2 pontos de graça por *não*
+  ter arquivo de variáveis. Agora o critério não se aplica a ele e sai da conta,
+  em vez de virar brinde. Nota menor, medida mais honesta.
+- **`museu-particular-bkp` caiu 14 → 0.** É uma pasta de backup, sem git e com
+  12 arquivos: o único critério que cabe cobrar dela é o README, e ela não tem.
+  0% aqui não é "projeto péssimo", é "quase nada a medir". Se incomodar, o
+  caminho é tirar a pasta de `source/`, não afrouxar a régua.
+
 ## O grafo de código embutido
 
 A aba **Grafo de código** mostra o mapa de funções, chamadas e dependências dos
@@ -225,7 +321,8 @@ o ganho ficou pequeno o bastante para não pagar o preço agora.
 
 Fases 3 e 4 da especificação (a **fase 2 está entregue**, seção acima) (`~/.claude/docs/superpowers/plans/2026-08-24-hub-do-dev.md`):
 
-- **Fase 3** — paleta de comandos (`Ctrl+K`), nota de saúde por projeto,
-  briefing matinal, detecção de divergência entre local e servidor.
+- **Fase 3** — paleta de comandos (`Ctrl+K`), briefing matinal, detecção de
+  divergência entre local e servidor. A **nota de saúde por projeto está
+  entregue** (seção "A nota de prontidão, e por que ela mentia").
 - **Fase 4** — o `radar.py` do `~/.claude` passa a ler este banco em vez de
   coletar por conta própria, acabando com os dois coletores.

@@ -128,6 +128,21 @@ td.num{font-family:var(--mono);text-align:right}
 .tenue{color:var(--fraquinho)}
 .velho{opacity:.45}
 
+/* A conta por trás da nota: o número é um botão que abre os critérios. */
+.conta-btn{background:none;border:none;padding:0;cursor:pointer;color:inherit;
+  font:inherit;border-bottom:1px dotted currentColor}
+.conta-btn:hover,.conta-btn:focus-visible{opacity:.75}
+tr.conta>td{white-space:normal;background:var(--grade);padding:11px 14px}
+tr.conta .pecas{display:flex;flex-wrap:wrap;gap:6px}
+tr.conta .peca{font-size:12px;padding:3px 9px;border-radius:99px;
+  border:1px solid var(--borda);display:inline-flex;gap:7px;align-items:baseline}
+tr.conta .peca i{font-style:normal;font-size:10.5px;color:var(--fraquinho);
+  font-family:var(--mono)}
+tr.conta .peca.ok{color:var(--ok)}
+tr.conta .peca.mal{color:var(--erro);border-color:var(--erro)}
+tr.conta .peca.na{color:var(--fraquinho);opacity:.7}
+tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
+
 .rodape{margin-top:22px;font-size:12px;color:var(--fraquinho);
   display:flex;gap:16px;flex-wrap:wrap;font-family:var(--mono)}
 .aviso{margin-top:14px;background:var(--painel);border:1px solid var(--erro);
@@ -352,6 +367,78 @@ function ciTexto(p){
   return c.estado_bruto ? c.estado_bruto.toLowerCase() : "sem CI";
 }
 
+/* ------------------------------------------------------- conta da prontidão
+   A nota aparecia como um número solto ("64%", em vermelho) e nada mais. Número
+   sem conta não é medida: é acusação. Clicar abre a lista dos critérios em três
+   estados — feito, falta, e NÃO SE APLICA, que é o estado que faltava existir.  */
+function pecaDoCriterio(i){
+  const el = document.createElement("span");
+  const estado = !i.aplica ? "na" : i.ok ? "ok" : "mal";
+  el.className = "peca " + estado;
+  el.textContent = (estado === "ok" ? "✓ " : estado === "mal" ? "✗ " : "— ") + i.rotulo;
+  const nota = document.createElement("i");
+  nota.textContent = !i.aplica
+    ? (i.manual ? "desligado por você" : "não se aplica")
+    : (i.manual ? i.peso + " pt · exigido por você" : i.peso + " pt");
+  el.append(nota);
+  return el;
+}
+
+function linhaDaConta(pr){
+  const tr = document.createElement("tr");
+  tr.className = "conta";
+  const td = document.createElement("td");
+  td.colSpan = 11;
+
+  const caixa = document.createElement("div");
+  caixa.className = "pecas";
+  for (const i of pr.itens || []) caixa.append(pecaDoCriterio(i));
+  td.append(caixa);
+
+  const fora = (pr.itens || []).filter(i => !i.aplica).length;
+  const p = document.createElement("p");
+  p.className = "tenue";
+  p.textContent = pr.pontos + " de " + pr.total + " pontos aplicáveis"
+    + (fora ? " · " + fora + " critério(s) não entram na conta deste projeto" : "")
+    + " · ajuste em casos.json → \"prontidao\"";
+  td.append(p);
+
+  tr.append(td);
+  return tr;
+}
+
+/* A tabela inteira e redesenhada de 15 em 15 segundos (setInterval la embaixo).
+   Sem esta lista, a gaveta que o dono acabou de abrir fechava sozinha na cara
+   dele no meio da leitura. Guardamos por NOME do projeto, nao por elemento:
+   os elementos morrem a cada redesenho, o nome sobrevive. */
+const CONTAS_ABERTAS = new Set();
+
+function celulaProntidao(pr, linha, nome){
+  const td = document.createElement("td");
+  td.className = "num pt " + (pr.pct >= 80 ? "" : pr.pct >= 55 ? "meio" : "mal");
+  if (pr.pct == null){ td.textContent = "—"; return td; }
+
+  const b = document.createElement("button");
+  b.className = "conta-btn";
+  b.textContent = pr.pct + "%";
+  b.setAttribute("aria-expanded", String(CONTAS_ABERTAS.has(nome)));
+  b.title = "Ver de que é feita esta nota";
+  b.onclick = () => {
+    const conta = linha.nextElementSibling;
+    if (conta && conta.classList.contains("conta")){
+      conta.remove();
+      CONTAS_ABERTAS.delete(nome);
+      b.setAttribute("aria-expanded", "false");
+    } else {
+      linha.after(linhaDaConta(pr));
+      CONTAS_ABERTAS.add(nome);
+      b.setAttribute("aria-expanded", "true");
+    }
+  };
+  td.append(b);
+  return td;
+}
+
 function desenhaTabela(projetos){
   const tb = $("#linhas");
   tb.textContent = "";
@@ -381,9 +468,7 @@ function desenhaTabela(projetos){
     tr.append(celula(g.ahead || "—", "num"));
     tr.append(celula(g.dias_parado != null ? g.dias_parado + " d" : "—", "num tenue"));
 
-    const pontos = celula((pr.pct != null ? pr.pct + "%" : "—"),
-      "num pt " + (pr.pct >= 80 ? "" : pr.pct >= 55 ? "meio" : "mal"));
-    tr.append(pontos);
+    tr.append(celulaProntidao(pr, tr, p.nome));
 
     const gr = p.grafo || {};
     tr.append(celula(gr.indexado ? gr.dias + " d" : "sem", "num tenue"));
@@ -392,6 +477,8 @@ function desenhaTabela(projetos){
     if (velho((p.medido_em||{}).local, "local")) carimbo.classList.add("velho");
     tr.append(carimbo);
     tb.append(tr);
+    // Reabre a conta que o dono ja tinha aberto antes deste redesenho.
+    if (CONTAS_ABERTAS.has(p.nome)) tb.append(linhaDaConta(pr));
   }
   $("#rot-todos").textContent = "Todos os projetos (" + projetos.length + ")";
 }
