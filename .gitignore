@@ -1,3 +1,5 @@
-dados.json
+hub.db
+hub.db-wal
+hub.db-shm
 __pycache__/
 .playwright-mcp/

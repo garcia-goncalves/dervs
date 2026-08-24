@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Coletor do Painel de Projetos.
+"""Coletor do HUB do dev.
 
-Le o estado REAL de cada repositorio (git), do Docker e das portas da maquina,
-calcula maturidade e projecoes, e grava dados.json. Nao escreve nada nos repos.
-Nunca abre arquivo de segredo: apenas testa a existencia do nome.
+Le o estado REAL de cada repositorio (git), do Docker, das portas da maquina, do
+grafo de codigo e da memoria do Claude; calcula maturidade e projecoes; e grava
+no SQLite (banco.py, camada "local"). Nao escreve nada nos repositorios.
+
+SEGREDO: o coletor abre o arquivo de variaveis para extrair NOMES de variavel e
+so isso — a expressao regular para no sinal de igual, o valor nunca e lido, nunca
+entra no banco e nunca chega a tela. E o unico jeito de detectar que o exemplo
+versionado divergiu do real, que e onde erro silencioso de deploy costuma nascer.
 """
 from __future__ import annotations
 
@@ -15,6 +20,8 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import banco
 
 
 # A TELINHA PISCANDO NA TELA DO DONO (24/08/2026). O painel roda sob pythonw.exe,
@@ -39,8 +46,43 @@ SEM_JANELA = 0x08000000 if _sem_console() else 0
 
 RAIZ = Path(r"C:\Users\Desktop\source\repos")
 AQUI = Path(__file__).resolve().parent
-SAIDA = AQUI / "dados.json"
 CASOS = AQUI / "casos.json"
+
+# Onde o grafo de codigo guarda um .db por projeto. A data de modificacao do
+# arquivo E a idade do indice — o codebase-memory-mcp nao expoe isso por API, e
+# desde 24/08/2026 ele nao reindexa mais sozinho (a varredura automatica foi
+# desligada depois de congelar a maquina duas vezes).
+CACHE_GRAFO = Path.home() / ".cache" / "codebase-memory-mcp"
+
+# Onde o Claude Code guarda a memoria de cada projeto, uma pasta por caminho.
+PROJETOS_CLAUDE = Path.home() / ".claude" / "projects"
+
+VIGIA = Path.home() / ".claude" / "scripts" / "vigia-vscode.py"
+
+
+def abertos_no_editor():
+    """Nomes de projeto com janela do VS Code aberta AGORA. None se nao der.
+
+    "Devia estar no ar" nesta maquina quer dizer "aberto no VS Code": e o criterio
+    do vigia-vscode, que sobe e derruba o Docker por ele. Reimplementar a deteccao
+    aqui criaria uma segunda verdade sobre a mesma coisa — o erro que este HUB
+    existe para acabar. Por isso importamos a funcao dele.
+
+    Sem o arquivo, devolvemos None e a regra de container fica CALADA. Alarme
+    falso custa mais caro que silencio: seis "container caiu" que nao sao
+    pendencia ensinam o dono a ignorar a caixa inteira.
+    """
+    if not VIGIA.is_file():
+        return None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("vigia_vscode", VIGIA)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return {os.path.basename(str(p).rstrip("\\/")).lower()
+                for p in mod.abertos_agora()}
+    except Exception:
+        return None
 
 AGORA = datetime.now(timezone.utc)
 ARQ_SEGREDO = "." + "env"          # nome montado: nunca lemos o conteudo
@@ -72,6 +114,79 @@ def sh(args, cwd=None, timeout=25):
 
 def git(repo: Path, *args):
     return sh(["git", "-C", str(repo), *args])
+
+
+def idade_do_mais_antigo(repo: Path, sujos: list) -> int | None:
+    """Ha quantos dias o trabalho nao commitado esta parado ai.
+
+    O git nao guarda "desde quando o arquivo esta sujo" — quem guarda e o sistema
+    de arquivos. Pegamos a modificacao MAIS ANTIGA entre os arquivos alterados:
+    e ela que diz ha quanto tempo esse trabalho espera. A mais recente diria so
+    que o dono digitou algo agora, que nao e a pergunta.
+    """
+    mais_antigo = None
+    for linha in sujos:
+        caminho = linha[3:].strip()
+        if " -> " in caminho:                   # renomeado: interessa o destino
+            caminho = caminho.split(" -> ")[-1]
+        caminho = caminho.strip('"')
+        try:
+            m = (repo / caminho).stat().st_mtime
+        except OSError:
+            continue
+        mais_antigo = m if mais_antigo is None else min(mais_antigo, m)
+    if mais_antigo is None:
+        return None
+    return max(0, int((AGORA.timestamp() - mais_antigo) // 86400))
+
+
+def coleta_grafo(nome: str) -> dict:
+    """Idade do indice do grafo de codigo, pela data do .db no cache."""
+    for db in CACHE_GRAFO.glob("*.db"):
+        if db.stem.endswith("-" + nome) or db.stem == nome:
+            dias = int((AGORA.timestamp() - db.stat().st_mtime) // 86400)
+            return {"indexado": True, "dias": max(0, dias)}
+    return {"indexado": False, "dias": None}
+
+
+def coleta_memoria_crlf(repo: Path) -> list:
+    """Arquivos de memoria gravados com quebra de linha do Windows.
+
+    Falha calada e cara: em CRLF o harness ignora o frontmatter e a memoria
+    NUNCA carrega. Nada na tela avisa. So um varredor externo descobre.
+    """
+    slug = str(repo).replace("\\", "-").replace("/", "-").replace(":", "-")
+    pasta = PROJETOS_CLAUDE / slug / "memory"
+    if not pasta.is_dir():
+        return []
+    fora = []
+    for md in sorted(pasta.glob("*.md")):
+        try:
+            if b"\r\n" in md.read_bytes()[:4096]:
+                fora.append(md.name)
+        except OSError:
+            pass
+    return fora
+
+
+CHAVE_ENV = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+
+def _chaves_env(caminho: Path) -> set:
+    """So os NOMES. A expressao regular para no '=': o valor nunca e lido."""
+    try:
+        texto = caminho.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return set()
+    return {m.group(1) for m in (CHAVE_ENV.match(l) for l in texto.splitlines()) if m}
+
+
+def coleta_env_drift(repo: Path) -> dict:
+    real, exemplo = repo / ARQ_SEGREDO, repo / ARQ_EXEMPLO
+    if not (real.is_file() and exemplo.is_file()):
+        return {"faltando": [], "sobrando": []}
+    a, b = _chaves_env(real), _chaves_env(exemplo)
+    return {"faltando": sorted(a - b)[:20], "sobrando": sorted(b - a)[:20]}
 
 
 # --------------------------------------------------------------------------- git
@@ -129,11 +244,20 @@ def coleta_git(repo: Path) -> dict:
     branches = [b for b in git(repo, "branch", "-a", "--format=%(refname:short)").splitlines()
                 if b and "->" not in b]
 
+    remoto = git(repo, "remote", "get-url", "origin")
+    slug = None
+    if remoto:
+        m = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$", remoto)
+        slug = m.group(1) if m else None
+
     return {
         "versionado": True,
         "branch": branch,
         "sujos": len(sujos),
         "sujos_lista": [s.strip() for s in sujos[:8]],
+        "sujos_dias": idade_do_mais_antigo(repo, sujos),
+        "tem_remoto": bool(remoto),
+        "remoto_slug": slug,
         "ahead": ahead,
         "behind": behind,
         "commits_total": int(total) if total.isdigit() else 0,
@@ -391,6 +515,7 @@ def main():
     casos = json.loads(CASOS.read_text(encoding="utf-8")) if CASOS.exists() else {}
     containers = coleta_docker()
     portas = portas_escutando()
+    abertos = abertos_no_editor()
 
     projetos = []
     for repo in sorted(RAIZ.iterdir()):
@@ -410,11 +535,20 @@ def main():
         projetos.append({
             "nome": repo.name,
             "caminho": str(repo),
+            "casos_json": str(CASOS),
             "titulo": caso.get("titulo", repo.name),
             "resumo": caso.get("resumo", ""),
             "caso": caso.get("caso", {}),
+            "caso_vazio": not (caso.get("resumo") or caso.get("caso")),
             "url_prod": caso.get("url_prod"),
             "criticidade": caso.get("criticidade", "normal"),
+            "grafo": coleta_grafo(repo.name),
+            "memoria_crlf": coleta_memoria_crlf(repo),
+            "env_drift": coleta_env_drift(repo),
+            "compose": existe(repo, "docker-compose*.yml", "docker-compose*.yaml",
+                              "compose.yml", "compose.yaml"),
+            "containers_esperados": caso.get("containers", []),
+            "aberto_no_editor": None if abertos is None else (repo.name.lower() in abertos),
             "git": g,
             "arquivos": arq,
             "prontidao": pr,
@@ -426,17 +560,21 @@ def main():
                        for p in caso.get("portas", [])],
         })
 
-    dados = {
-        "gerado_em": AGORA.astimezone().isoformat(timespec="seconds"),
-        "projetos": projetos,
-        "infra": {
+    # Uma linha por projeto, com carimbo proprio: quando a coleta de um repo
+    # falhar, os outros continuam com data honesta em vez de herdar a do lote.
+    con = banco.conectar()
+    try:
+        for p in projetos:
+            banco.gravar(p["nome"], "local", p, con)
+        banco.gravar(banco.INFRA, "local", {
             "containers": containers,
             "quebrados": [c["nome"] for c in containers if c["reiniciando"]],
             "portas": portas,
-        },
-    }
-    SAIDA.write_text(json.dumps(dados, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"ok: {len(projetos)} projetos, {len(containers)} containers -> {SAIDA}")
+        }, con)
+    finally:
+        con.close()
+
+    print(f"ok: {len(projetos)} projetos, {len(containers)} containers -> {banco.BANCO.name}")
     return 0
 
 
