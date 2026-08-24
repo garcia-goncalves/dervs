@@ -30,6 +30,7 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `banco.py` | O SQLite (`hub.db`): uma linha por (projeto, camada), com carimbo de tempo. |
 | `regras.py` | O motor das 14 pendências. Puro: entra dicionário, sai lista. |
 | `test_regras.py` | 30 testes do motor. `python test_regras.py`. |
+| `test_servir.py` | 35 testes do proxy do grafo. `python test_servir.py`. |
 | `coletar.py` | Camada **local**: git, Docker, portas, grafo, memória, variáveis. |
 | `coletar_github.py` | Camada **github**: CI, PRs, alertas. Uma consulta GraphQL em lote. |
 | `coletar_pesado.py` | Camada **pesado**: cota do Actions e `npm audit`. |
@@ -89,6 +90,49 @@ ensinando o dono a ignorar a lista inteira.
 **Regra 6 existe porque o erro é calado.** Arquivo de memória em CRLF faz o
 harness ignorar o frontmatter, e a memória nunca carrega. Nada na tela avisa.
 
+## O grafo de código embutido
+
+A aba **Grafo de código** mostra o mapa de funções, chamadas e dependências dos
+seus projetos, servido dentro do próprio HUB em `/grafo/*`. São três coisas
+distintas, e vale entender por quê.
+
+**a) Ele não é um servidor independente.** A porta 9749 é a tela de um servidor
+MCP que fala por `stdin`. Medido em 24/08/2026: com o `stdin` fechado, o
+processo registra `ui.serving` e em seguida `server.shutdown` **no mesmo
+segundo** — a porta abre e fecha, e a tela fica em branco sem erro nenhum. O que
+o segura de pé é o cano de entrada **aberto**. Por isso o botão **Ligar o
+grafo** guarda o processo em `_grafo_proc` e nunca fecha esse cano.
+
+Consequência aceita de propósito: **o grafo vive enquanto o HUB viver, e morre
+junto**. É melhor que a alternativa — este binário já congelou a máquina duas
+vezes por consumo de memória, e processo órfão ninguém lembra de matar.
+
+**b) Quatro estados na tela**, não dois:
+
+| Estado | O que aparece |
+|---|---|
+| No ar | o grafo, embutido |
+| Fora do ar | cartão com o botão **Ligar o grafo** |
+| Subindo | contador; a tela aparece sozinha quando ele responder |
+| Sem o programa | cartão explicando que não há o que ligar |
+
+**c) Montagem preguiçosa.** O quadro do grafo **não existe no DOM** até você
+clicar na aba. Grafo pesado dentro de painel é a receita clássica de painel que
+demora a abrir.
+
+### O que o proxy precisa reescrever, e por quê
+
+A tela do grafo pede caminho **absoluto**: `/api/...`, `/assets/...` e `/rpc`.
+Servida sob `/grafo/`, ela pediria `/api/index-status` na raiz do HUB — onde
+mora o `/api/dados` do painel. Por isso o proxy reescreve o corpo de texto.
+
+O defeito que só o navegador mostrou (24/08/2026): a primeira versão cobria
+apenas aspas simples e duplas, mas a tela monta `` `/api/layout?...` `` e
+`` `/api/browse${...}` `` **com crase**. Resultado: a visualização do grafo
+respondia `HTTP 404` sem dizer de onde vinha. A reescrita cobre as três aspas —
+e de propósito **não** toca `` `/${e}` ``, que no mesmo pacote junta caminho de
+pasta, não URL.
+
 ## Segurança
 
 O servidor executa `git push`, `docker compose up` e abre o VS Code. Escutar só
@@ -104,11 +148,58 @@ E o cliente **nunca manda caminho** — manda o nome do projeto, e o caminho vem
 banco. Não existe ação que rode em pasta escolhida por quem chamou.
 
 O servidor publica **só** a página e os três arquivos de ícone. Todo o resto
-responde 404 — o banco, o `casos.json` e o `.git/` não ficam acessíveis.
+responde 404, e `HEAD` responde 405 — sem isso ele caía no handler de arquivos
+padrão e revelava existência, tamanho e data de qualquer arquivo da pasta — o banco, o `casos.json` e o `.git/` não ficam acessíveis.
 
 **Segredo nenhum entra no banco ou na tela.** O coletor abre o arquivo de
 variáveis só para extrair **nomes** de variável. Quem autentica no GitHub é o
 `gh` que o dono já logou.
+
+### O preço de embutir o grafo na mesma origem
+
+Mesma origem faz sumir de uma vez o `SameSite` dos cookies e o CORS, mas cobra:
+um quadro de mesma origem **lê o DOM da página que o contém**, inclusive o token
+de ação. Isso é **aceito conscientemente** — o binário do grafo já roda como MCP
+com acesso total ao código e ao disco desta máquina, e o token só acrescenta
+`git push`, `docker compose up` e abrir o VS Code, que qualquer processo local
+já faz.
+
+Quem resolve o enquadramento não é a mesma origem: é o proxy **não repassar
+`frame-ancestors`**. O fornecedor do grafo manda `frame-ancestors 'none'` — uma
+recusa explícita de ser embutido — e este desenho a contorna por conta própria.
+Fica registrado aqui, não escondido no código.
+
+O que **não** é aceito, e por isso é barrado:
+
+- **Pedido vindo de outro site**, seja `GET` ou `POST`: o proxy exige
+  `Sec-Fetch-Site: same-origin`, cabeçalho que navegador nenhum deixa
+  JavaScript forjar. Até a revisão de 24/08/2026 isso valia só para o `POST`, e
+  qualquer aba aberta do dono podia varrer a API do grafo por `GET` — inclusive
+  a rota que **lista pasta do disco**.
+- **`/api/process-kill` não passa**, nem disfarçado. Comparar texto cru não
+  bastava: `%65`, `//`, `/./` e `#` furavam o filtro, porque quem decide o que
+  esses caracteres significam é o servidor de destino. Agora o caminho é
+  decodificado e normalizado **antes** de comparar.
+- **A política de segurança do fornecedor volta para o navegador.** O proxy
+  descartava a `Content-Security-Policy` do grafo, e o código de terceiro
+  passava a rodar **sem política** na origem que guarda o token. Isso importa
+  menos pelo binário (que já tem o disco inteiro) e mais pelo que ele
+  **indexa**: nome de função e caminho de arquivo vindos de um repositório
+  hostil são desenhados por essa tela. Agora a política é repassada inteira,
+  menos `frame-ancestors`, mais `X-Content-Type-Options: nosniff`.
+- **O token não vaza para o grafo.** Sobem apenas `Accept` e `Content-Type`, já
+  achatados numa linha; `X-Token`, `Cookie`, `Authorization` e `Origin` ficam.
+- **`/grafo/../api/dados` é recusado**, não normalizado.
+- **Resposta comprimida vira erro 502**, não tela em branco. O proxy não pede
+  compressão, mas isso é suposição sobre binário de terceiro: se ele comprimir
+  mesmo assim, reescrever produziria lixo rotulado como JavaScript, e a tela
+  ficaria branca sem log nenhum.
+
+Uma alternativa que **não** foi tomada, e vale saber que existe: servir o proxy
+numa **origem separada** (uma segunda porta atendendo só `/grafo/*`). O quadro
+deixaria de ser mesma origem e perderia o acesso ao token, ao custo de ~10
+linhas e de mais uma porta na máquina. Com a política do fornecedor restaurada,
+o ganho ficou pequeno o bastante para não pagar o preço agora.
 
 ### O que a revisão de segurança pegou (24/08/2026, antes de ir para a `main`)
 
@@ -132,10 +223,8 @@ variáveis só para extrair **nomes** de variável. Quem autentica no GitHub é 
 
 ## O que ainda não existe
 
-Fases 2 a 4 da especificação (`~/.claude/docs/superpowers/plans/2026-08-24-hub-do-dev.md`):
+Fases 3 e 4 da especificação (a **fase 2 está entregue**, seção acima) (`~/.claude/docs/superpowers/plans/2026-08-24-hub-do-dev.md`):
 
-- **Fase 2** — o grafo de código embutido, por proxy reverso em `/grafo/*`, com
-  botão "Ligar o grafo" e montagem preguiçosa.
 - **Fase 3** — paleta de comandos (`Ctrl+K`), nota de saúde por projeto,
   briefing matinal, detecção de divergência entre local e servidor.
 - **Fase 4** — o `radar.py` do `~/.claude` passa a ler este banco em vez de

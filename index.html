@@ -55,6 +55,23 @@ button.btn{font:inherit;font-size:12.5px;padding:6px 12px;border-radius:7px;
 button.btn:hover{border-color:var(--acento)}
 button.btn:disabled{opacity:.5;cursor:progress}
 
+/* ----------------------------------------------------------------- as abas */
+nav.abas{display:flex;gap:2px;border-bottom:1px solid var(--borda);margin:-6px 0 18px}
+nav.abas button{font:inherit;font-size:13px;font-weight:550;padding:8px 14px;
+  border:0;border-bottom:2px solid transparent;background:none;color:var(--fraco);
+  cursor:pointer;margin-bottom:-1px}
+nav.abas button:hover{color:var(--texto)}
+nav.abas button[aria-selected="true"]{color:var(--texto);border-bottom-color:var(--acento)}
+nav.abas button:focus-visible{outline:2px solid var(--acento);outline-offset:-2px;border-radius:5px}
+
+/* ------------------------------------------------------------ o grafo */
+#quadro-grafo{width:100%;height:min(72vh,760px);border:1px solid var(--borda);
+  border-radius:10px;background:var(--painel);display:block}
+.cartao-grafo{border:1px solid var(--borda);border-radius:10px;background:var(--painel);
+  padding:26px;text-align:center;box-shadow:var(--sombra)}
+.cartao-grafo h3{margin:0 0 8px;font-size:15px;font-weight:600}
+.cartao-grafo p{margin:0 auto 16px;color:var(--fraco);font-size:13px;max-width:56ch}
+
 /* ---------------------------------------------------------------- a caixa */
 h2.secao{font-size:12px;text-transform:uppercase;letter-spacing:.09em;
   color:var(--fraco);font-weight:650;margin:0 0 10px}
@@ -137,6 +154,14 @@ td.num{font-family:var(--mono);text-align:right}
     </div>
   </header>
 
+  <nav class="abas" role="tablist" aria-label="Seções do HUB">
+    <button role="tab" id="aba-btn-painel" aria-controls="aba-painel"
+            aria-selected="true" tabindex="0">Painel</button>
+    <button role="tab" id="aba-btn-grafo" aria-controls="aba-grafo"
+            aria-selected="false" tabindex="-1">Grafo de código</button>
+  </nav>
+
+  <div id="aba-painel" role="tabpanel" aria-labelledby="aba-btn-painel" tabindex="0">
   <h2 class="secao">Precisa de você agora</h2>
   <div class="caixa" id="caixa"></div>
 
@@ -155,6 +180,12 @@ td.num{font-family:var(--mono);text-align:right}
   </details>
 
   <div id="falhas"></div>
+  </div><!-- /aba-painel -->
+
+  <!-- Vazio de proposito: o quadro do grafo so entra no DOM quando o dono abre
+       esta aba. Ver montaGrafo() la embaixo. -->
+  <div id="aba-grafo" role="tabpanel" aria-labelledby="aba-btn-grafo" tabindex="0" hidden></div>
+
   <div class="rodape" id="rodape"></div>
 </div>
 <div id="recado" role="status" aria-live="polite"></div>
@@ -387,6 +418,8 @@ async function carregar(){
     + (inf.portas||[]).length + " portas escutando"
     + (q ? " · Actions " + q.pct + "% de " + q.cota + " min" : "");
 
+  if (grafoMontado && !$("#aba-grafo").hidden && d.grafo_ui) desenhaGrafo(d.grafo_ui);
+
   const falhas = $("#falhas");
   falhas.textContent = "";
   for (const [camada, erro] of Object.entries(d.falhas_de_coleta || {})){
@@ -428,6 +461,147 @@ try {
 $("#todos").addEventListener("toggle", () => {
   try { localStorage.setItem("todos-aberto", $("#todos").open ? "1" : "0"); } catch {}
 });
+
+/* ------------------------------------------------------------------- abas */
+/* MONTAGEM preguicosa, nao import preguicoso: o quadro do grafo nao existe no
+   DOM ate o dono clicar na aba. Grafo pesado dentro de painel e a receita
+   classica de painel que demora a abrir. */
+const ABAS = [["#aba-btn-painel", "#aba-painel"], ["#aba-btn-grafo", "#aba-grafo"]];
+let grafoMontado = false;
+
+function trocaAba(qualBotao, focar){
+  for (const [b, painel] of ABAS){
+    const ativa = b === qualBotao;
+    $(b).setAttribute("aria-selected", ativa ? "true" : "false");
+    $(b).tabIndex = ativa ? 0 : -1;
+    $(painel).hidden = !ativa;
+  }
+  if (focar) $(qualBotao).focus();
+  try { localStorage.setItem("aba", qualBotao); } catch {}
+  if (qualBotao === "#aba-btn-grafo") montaGrafo();
+}
+
+for (const [b] of ABAS){
+  $(b).addEventListener("click", () => trocaAba(b, false));
+  $(b).addEventListener("keydown", e => {
+    const i = ABAS.findIndex(([x]) => x === b);
+    if (e.key === "ArrowRight") trocaAba(ABAS[(i + 1) % ABAS.length][0], true);
+    else if (e.key === "ArrowLeft") trocaAba(ABAS[(i - 1 + ABAS.length) % ABAS.length][0], true);
+    else return;
+    e.preventDefault();
+  });
+}
+
+/* -------------------------------------------------------- os tres estados */
+let esperandoGrafo = null;
+
+function cartaoGrafo(titulo, texto, rotuloBotao){
+  const d = document.createElement("div");
+  d.className = "cartao-grafo";
+  const h = document.createElement("h3"); h.textContent = titulo;
+  const p = document.createElement("p"); p.textContent = texto;
+  d.append(h, p);
+  if (rotuloBotao){
+    const b = document.createElement("button");
+    b.className = "btn"; b.textContent = rotuloBotao;
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      const r = await mandar({comando:"grafo_ligar"});
+      if (r && r.ok === false){
+        recado(r.saida || "não consegui ligar o grafo.", true);
+        b.disabled = false; return;
+      }
+      desenhaGrafo({estado:"subindo", ha:0});
+    });
+    d.append(b);
+  }
+  return d;
+}
+
+function desenhaGrafo(g){
+  const alvo = $("#aba-grafo");
+  if (esperandoGrafo){ clearInterval(esperandoGrafo); esperandoGrafo = null; }
+
+  if (g.estado === "no_ar"){
+    /* Recria o quadro so quando ele ainda nao esta la — trocar o src a cada
+       carregada faria a tela do grafo recomecar do zero de 15 em 15 s. */
+    if (alvo.querySelector("#quadro-grafo")) return;
+    alvo.textContent = "";
+    const q = document.createElement("iframe");
+    q.id = "quadro-grafo"; q.src = "/grafo/"; q.title = "Grafo de código";
+    q.loading = "lazy"; q.referrerPolicy = "no-referrer";
+    /* CONTORNO de comportamento do grafo, medido em 24/08/2026: a tela dele
+       so mede a area de desenho quando a janela muda de tamanho. Sem empurrao,
+       o dono abre a aba, escolhe o projeto, ve o menu e os filtros — e a area
+       do grafo VAZIA. Conclui que o painel quebrou.
+       O empurrao no "load" nao basta sozinho: a area de desenho so nasce quando
+       ele escolhe um projeto, bem depois. Dai o observador, que empurra quando o
+       desenho aparece e se desliga assim que ele ganha tamanho de verdade. */
+    q.addEventListener("load", () => {
+      try {
+        const jan = q.contentWindow, doc = q.contentDocument;
+        const empurra = () => jan.dispatchEvent(new Event("resize"));
+        empurra();
+        const olho = new jan.MutationObserver(() => {
+          const tela = doc.querySelector("canvas");
+          if (!tela) return;
+          empurra();
+          if (tela.width > 300) olho.disconnect();
+        });
+        olho.observe(doc.body, {childList:true, subtree:true});
+      } catch {}
+    });
+    alvo.append(q);
+    return;
+  }
+
+  alvo.textContent = "";
+  if (g.estado === "subindo"){
+    const c = cartaoGrafo("Ligando o grafo…",
+      "O primeiro carregamento costuma levar alguns segundos. A tela aparece "
+      + "sozinha quando ele responder.", null);
+    const cont = document.createElement("p");
+    cont.className = "sub"; cont.textContent = "esperando há 0 s";
+    c.append(cont);
+    alvo.append(c);
+    let s = g.ha || 0;
+    esperandoGrafo = setInterval(async () => {
+      s += 2;
+      cont.textContent = "esperando há " + s + " s";
+      try {
+        const e = await (await fetch("/api/grafo")).json();
+        if (e.estado !== "subindo") desenhaGrafo(e);
+      } catch {}
+    }, 2000);
+    return;
+  }
+
+  if (g.estado === "sem_exe"){
+    alvo.append(cartaoGrafo("O grafo não está instalado nesta máquina",
+      "O HUB procurou o programa codebase-memory-mcp no PATH e em "
+      + "~/.local/bin e não achou. Sem ele não há o que ligar.", null));
+    return;
+  }
+
+  alvo.append(cartaoGrafo("O grafo de código está desligado",
+    "Ele mapeia funções, chamadas e dependências do seu código. Costuma subir "
+    + "junto com o Claude Code — e cai junto quando você fecha. Este botão sobe "
+    + "ele pelo HUB, e daí ele fica de pé enquanto o painel estiver de pé.",
+    "Ligar o grafo"));
+}
+
+function montaGrafo(){
+  if (!grafoMontado){
+    grafoMontado = true;
+    $("#aba-grafo").append(cartaoGrafo("Verificando…", "Um instante.", null));
+  }
+  fetch("/api/grafo").then(r => r.json()).then(desenhaGrafo).catch(() => {});
+}
+
+try {
+  const a = localStorage.getItem("aba");
+  if (a === "#aba-btn-grafo") trocaAba(a, false);
+} catch {}
 
 carregar();
 setInterval(carregar, 15000);

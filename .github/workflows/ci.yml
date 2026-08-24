@@ -38,3 +38,6 @@ jobs:
 
       - name: Coletor
         run: python test_coletar.py
+
+      - name: Proxy do grafo
+        run: python test_servir.py
