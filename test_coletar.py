@@ -26,6 +26,42 @@ class NomeDoDb(unittest.TestCase):
             "C-Users-Desktop-source-repos-dents")
 
 
+class ReconhecerArquivoDeTeste(unittest.TestCase):
+    """O HUB dizia que ELE MESMO nao tinha teste, com 56 no disco."""
+
+    def test_convencao_do_python(self):
+        for nome in ("test_regras.py", "test_coletar.py", "conftest.py"):
+            self.assertTrue(coletar.EH_TESTE.search(nome), nome)
+
+    def test_convencao_do_javascript(self):
+        for nome in ("botao.test.tsx", "api.spec.ts", "util_test.js"):
+            self.assertTrue(coletar.EH_TESTE.search(nome), nome)
+
+    def test_convencao_do_csharp(self):
+        self.assertTrue(coletar.EH_TESTE.search("PedidoTests.cs"))
+
+    def test_nao_confunde_arquivo_comum(self):
+        for nome in ("regras.py", "servir.py", "index.html", "latest.py",
+                     "protester.js"):
+            self.assertFalse(coletar.EH_TESTE.search(nome), nome)
+
+
+class PastasDeProjeto(unittest.TestCase):
+    """O HUB tem de se vigiar. Ele mora fora de source/repos e ficava de fora."""
+
+    def test_inclui_a_pasta_do_proprio_hub(self):
+        nomes = {p.name for p in coletar.pastas_de_projeto()}
+        self.assertIn(coletar.AQUI.name, nomes)
+
+    def test_nao_duplica_se_a_avulsa_ja_estiver_na_raiz(self):
+        """Se um dia o projeto for movido para source/repos, nao pode aparecer duas vezes."""
+        caminhos = [str(p).lower() for p in coletar.pastas_de_projeto()]
+        self.assertEqual(len(caminhos), len(set(caminhos)))
+
+    def test_traz_todos_os_repositorios(self):
+        self.assertGreater(len(coletar.pastas_de_projeto()), 1)
+
+
 class NomeDaMarca(unittest.TestCase):
     def test_usa_o_caminho_inteiro(self):
         self.assertEqual(

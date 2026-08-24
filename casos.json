@@ -1,6 +1,22 @@
 {
  "_leia-me": "Camada CURADA do painel. O coletar.py nao mexe aqui: tudo neste arquivo e narrativa escrita a mao (caso de uso, publico, valor, proximo passo) e ancoras de infra (portas, containers). Metrica de git/Docker vem do coletor, ao vivo. Edite a vontade.",
 
+ "painel-projetos": {
+  "titulo": "HUB do dev",
+  "resumo": "O próprio painel. Responde \"o que precisa de mim agora?\" sobre os 17 projetos da máquina, com uma ação por pendência. SQLite com carimbo por camada, três coletores em cadências diferentes, motor de 14 regras. Sem build e sem dependência externa.",
+  "criticidade": "normal",
+  "portas": [4777],
+  "containers": [],
+  "caso": {
+   "publico": "O dono, que decide o produto, não opera terminal e tem 17 projetos ao mesmo tempo.",
+   "dor": "O aviso do que está pendente chegava projeto por projeto, dentro de cada conversa, e sumia com ela. Nada juntava as pontas, e erro silencioso (memória em CRLF, alerta de segurança aberto, índice de código velho) não aparecia em lugar nenhum.",
+   "proposta": "Uma tela só, aberta todo dia, com o urgente no topo e um botão que resolve cada item. O resto colapsado: o que está saudável não ocupa tela.",
+   "valor": "Substitui a vigilância manual dos 17 projetos. Na primeira coleta já achou 8 arquivos de memória que nunca carregavam e 203 alertas de segurança abertos.",
+   "risco": "O servidor executa comandos (enviar ao GitHub, subir contêiner, abrir o editor). Escutar em 127.0.0.1 não basta: exige token de sessão, Origin e Host. Toda mudança em /api/acao pede revisor de segurança.",
+   "metrica": "Itens urgentes na caixa ao abrir · quantos são resolvidos pelo botão · dias sem o painel mentir sobre um número."
+  }
+ },
+
  "Ajudei-Saude": {
   "titulo": "Ajudei Saúde",
   "resumo": "SaaS multi-tenant de gestão para clínicas médicas: faturamento, agenda, prontuário eletrônico, prescrição digital, EAD e BI. Isolamento schema-per-tenant no PostgreSQL, backend ASP.NET Core.",

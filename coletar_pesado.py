@@ -24,7 +24,9 @@ from pathlib import Path
 import banco
 
 ORCAMENTO = Path.home() / ".claude" / "scripts" / "orcamento-actions.py"
-RAIZ = Path(r"C:\Users\Desktop\source\repos")
+# Mesma lista de pastas do coletor local — importada, nao repetida: duas listas
+# divergem, e divergencia de lista e como o HUB deixa de ver um projeto.
+from coletar import pastas_de_projeto
 
 # "Medido nos 8 maiores: 2313 min — 116% da cota do plano team (2000 min)."
 LINHA_COTA = re.compile(
@@ -101,9 +103,7 @@ def main():
             print("cota do Actions: nao consegui medir (nao conte como zero)")
 
         auditados = 0
-        for repo in sorted(RAIZ.iterdir()):
-            if not repo.is_dir() or repo.name.startswith("."):
-                continue
+        for repo in pastas_de_projeto():
             if not (repo / "package-lock.json").is_file():
                 continue
             banco.gravar(repo.name, "pesado", {"deps_inseguras": audita_npm(repo)}, con)

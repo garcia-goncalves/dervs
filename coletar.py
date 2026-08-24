@@ -48,6 +48,29 @@ RAIZ = Path(r"C:\Users\Desktop\source\repos")
 AQUI = Path(__file__).resolve().parent
 CASOS = AQUI / "casos.json"
 
+# O PROPRIO HUB mora fora de source\repos, e por isso nao se vigiava: sapateiro
+# de pe no chao. Se este projeto ficasse com trabalho sem commit ou com a CI
+# vermelha, nada avisaria.
+#
+# Listar a pasta aqui foi a correcao escolhida em 24/08/2026 em vez de mudar o
+# projeto de lugar. Mover quebraria tres coisas batizadas pelo CAMINHO — a pasta
+# de memoria do Claude, o indice do grafo e o processo no ar — e a primeira
+# falha CALADA: a memoria nao some, so deixa de ser encontrada, e ninguem avisa.
+# E o mesmo tipo de erro silencioso que a regra 6 existe para pegar.
+#
+# AQUI, e nao o caminho escrito na mao, para continuar certo se a pasta mudar
+# de nome.
+AVULSOS = [AQUI]
+
+
+def pastas_de_projeto():
+    """Toda pasta que o HUB mede: as filhas de source\\repos, mais as avulsas."""
+    achadas = [p for p in RAIZ.iterdir() if p.is_dir() and not p.name.startswith(".")] \
+        if RAIZ.is_dir() else []
+    vistas = {str(p).lower() for p in achadas}
+    achadas += [p for p in AVULSOS if p.is_dir() and str(p).lower() not in vistas]
+    return sorted(achadas, key=lambda p: p.name.lower())
+
 # Onde o grafo de codigo guarda um .db por projeto. A data de modificacao do
 # arquivo E a idade do indice — o codebase-memory-mcp nao expoe isso por API, e
 # desde 24/08/2026 ele nao reindexa mais sozinho (a varredura automatica foi
@@ -122,6 +145,14 @@ IGNORAR_DIR = {
     "node_modules", ".git", "dist", "build", ".next", "obj", "bin", ".turbo",
     "venv", ".venv", "__pycache__", "coverage", ".pnpm-store", "vendor", "out",
 }
+
+# Como se chama um arquivo de teste, por linguagem. O prefixo "test_" faltava:
+# e a convencao do Python, e por isso o HUB dizia que ELE MESMO nao tinha teste
+# automatizado — com 56 deles no disco. Achado em 24/08/2026, na primeira coleta
+# depois que o painel passou a se vigiar. Falso negativo em medida de qualidade e
+# pior que numero ausente: parece informacao.
+EH_TESTE = re.compile(
+    r"(\.test\.|\.spec\.|_test\.|^test_.*\.py$|^conftest\.py$|Tests?\.cs$)", re.I)
 
 
 def sh(args, cwd=None, timeout=25):
@@ -355,7 +386,7 @@ def coleta_arquivos(repo: Path) -> dict:
         dirs[:] = [d for d in dirs if d not in IGNORAR_DIR and not d.startswith(".git")]
         for nome in nomes:
             arquivos += 1
-            if re.search(r"(\.test\.|\.spec\.|_test\.|Tests?\.cs$)", nome):
+            if EH_TESTE.search(nome):
                 testes += 1
             ling = EXT_LINGUAGEM.get(os.path.splitext(nome)[1].lower())
             if not ling:
@@ -588,9 +619,7 @@ def main():
     abertos = abertos_no_editor()
 
     projetos = []
-    for repo in sorted(RAIZ.iterdir()):
-        if not repo.is_dir() or repo.name.startswith("."):
-            continue
+    for repo in pastas_de_projeto():
         g = coleta_git(repo)
         arq = coleta_arquivos(repo)
         pr = coleta_prontidao(repo, g, arq)
