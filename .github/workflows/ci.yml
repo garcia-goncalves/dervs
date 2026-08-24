@@ -1,0 +1,40 @@
+name: CI
+
+# Escalonado de proposito: no push roda so o barato. A cota de minutos desta
+# conta ja estourou uma vez (2.313 min em 30 dias num repositorio so), e a
+# cobranca e por tarefa arredondada — job paralelo triplica a conta.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Sem dependencia externa: e a virtude do projeto, e a CI cobra isso.
+      - name: Nada de dependencia externa
+        run: |
+          if ls requirements*.txt pyproject.toml 2>/dev/null | grep -q .; then
+            echo "Este projeto e de biblioteca padrao. Apareceu arquivo de dependencia."
+            exit 1
+          fi
+
+      - name: Compila
+        run: python -m py_compile banco.py regras.py coletar.py coletar_github.py coletar_pesado.py servir.py
+
+      - name: Motor de regras
+        run: python test_regras.py
+
+      - name: Coletor
+        run: python test_coletar.py
