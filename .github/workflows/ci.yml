@@ -31,7 +31,7 @@ jobs:
           fi
 
       - name: Compila
-        run: python -m py_compile banco.py regras.py coletar.py coletar_github.py coletar_pesado.py servir.py
+        run: python -m py_compile banco.py regras.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py
 
       - name: Motor de regras
         run: python test_regras.py
@@ -41,3 +41,6 @@ jobs:
 
       - name: Proxy do grafo
         run: python test_servir.py
+
+      - name: Execução
+        run: python test_execucao.py
