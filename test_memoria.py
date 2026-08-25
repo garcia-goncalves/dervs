@@ -389,7 +389,10 @@ class Agrupar(unittest.TestCase):
         self.assertEqual(regras.agrupar(ps)[0]["gravidade"], "alta")
 
     def test_grupo_vem_antes_de_item_menos_grave(self):
-        ps = ([pend(regra="vulnerabilidade", projeto=n, gravidade="alta")
+        # `ci_vermelha`, e nao `vulnerabilidade`: alerta de seguranca entrou em
+        # NAO_AGRUPAR e nunca mais vira grupo. O que este teste mede — grupo
+        # grave na frente de item leve — nao mudou; so o exemplo mudou.
+        ps = ([pend(regra="ci_vermelha", projeto=n, gravidade="alta")
                for n in "abc"] + [pend(regra="abandonado", projeto="z", gravidade="baixa")])
         g = regras.agrupar(ps)
         self.assertEqual(g[0]["tipo"], "grupo")

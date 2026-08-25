@@ -215,7 +215,21 @@ PEDACO = """
     %(vulns)s
   }
 """
-CAMPO_VULNS = 'vulnerabilityAlerts(states: OPEN, first: 1) { totalCount }'
+# `first: 100` e o teto util do GraphQL, e vem na MESMA ida a rede que ja
+# existia — o detalhe nao custa consulta a mais. Repositorio com mais alertas que
+# isso devolve AMOSTRA, e `_resume_alertas` marca isso: medido em 25/08/2026,
+# medconsultoria tem 93 e odontologia-pericia 71, os dois cabem.
+CAMPO_VULNS = """vulnerabilityAlerts(states: OPEN, first: 100) {
+      totalCount
+      nodes {
+        dependencyScope
+        securityAdvisory { ghsaId }
+        securityVulnerability {
+          severity
+          package { name ecosystem }
+        }
+      }
+    }"""
 
 
 def _consulta(slugs: dict, com_vulns: bool) -> str:
@@ -307,6 +321,68 @@ def _dias(iso: str):
         return 0
 
 
+# O GitHub responde CRITICAL/HIGH/MODERATE/LOW; a tela fala minusculo.
+SEVERIDADES = {"CRITICAL": "critical", "HIGH": "high",
+               "MODERATE": "moderate", "LOW": "low"}
+ESCOPOS = {"RUNTIME": "runtime", "DEVELOPMENT": "development"}
+
+
+def _resume_alertas(bloco: dict) -> dict:
+    """Transforma o bloco de alertas em numeros que a tela pode usar.
+
+    Tres verdades diferentes, e confundi-las e uma das formas de o painel mentir:
+
+      `totalCount` diz QUANTOS alertas ha. E a unica contagem completa.
+      `nodes` diz O QUE eles sao, e vem no maximo 100. Quando sao menos que o
+        total, tudo que sai deles e amostra — marcada em `amostra`.
+      `pacotes`/`defeitos` dizem o TAMANHO DO TRABALHO. Medido em 25/08/2026: os
+        203 alertas dos quatro projetos eram 32 pacotes, e os 6 "criticos" do
+        workspace-medconsultoria eram DOIS CVEs de vitest repetidos por tres
+        manifestos. Contagem bruta faz 3 tarefas de 1.
+
+    `dependencyScope` entra como fato e NADA MAIS. A tentacao e rebaixar tudo que
+    e DEVELOPMENT ("vitest e ferramenta de teste, nao vai para producao"), mas foi
+    medido no proprio workspace-medconsultoria que o MESMO vitest volta
+    DEVELOPMENT num manifesto e RUNTIME noutro — porque num package.json ele esta
+    declarado fora de devDependencies. Rebaixar por escopo esconderia um critico
+    real. Quem decide gravidade e regras.py, e ele nao olha para este campo.
+    """
+    total = bloco.get("totalCount")
+    if total is None:
+        return {}
+    saida = {"total": total}
+    nos = bloco.get("nodes")
+    if nos is None:
+        # A permissao pode conceder a contagem e recusar o detalhe. O total
+        # sozinho ja e a tela de hoje: devolver so ele e degradar, nao quebrar.
+        return saida
+
+    sev = dict.fromkeys(SEVERIDADES.values(), 0)
+    escopo = dict.fromkeys(ESCOPOS.values(), 0)
+    pacotes, defeitos = set(), set()
+    for no in nos:
+        vuln = (no or {}).get("securityVulnerability") or {}
+        chave = SEVERIDADES.get(vuln.get("severity") or "")
+        if chave:
+            sev[chave] += 1
+        # Severidade que o GitHub nao mandou fica FORA da soma. Jogar em
+        # "moderate" por omissao inventaria um numero que ninguem mediu.
+        nome = (vuln.get("package") or {}).get("name") or ""
+        if nome:
+            pacotes.add(nome)
+            aviso = ((no or {}).get("securityAdvisory") or {}).get("ghsaId") or ""
+            defeitos.add((nome, aviso))
+        alvo = ESCOPOS.get((no or {}).get("dependencyScope") or "")
+        if alvo:
+            escopo[alvo] += 1
+
+    saida.update(sev=sev, escopo=escopo,
+                 pacotes=len(pacotes), defeitos=len(defeitos))
+    if len(nos) < total:
+        saida["amostra"] = True
+    return saida
+
+
 def traduz(no: dict, com_vulns: bool) -> dict:
     """Um repositorio do GraphQL -> o que as regras consomem."""
     url = no.get("url", "")
@@ -322,8 +398,8 @@ def traduz(no: dict, com_vulns: bool) -> dict:
         prs.append({"numero": pr.get("number"), "titulo": pr.get("title", "")[:120],
                     "url": pr.get("url", ""), "dias": _dias(pr.get("updatedAt", ""))})
 
-    total_vulns = ((no.get("vulnerabilityAlerts") or {}).get("totalCount")
-                   if com_vulns else None)
+    alertas = (_resume_alertas(no.get("vulnerabilityAlerts") or {})
+               if com_vulns else {})
 
     return {
         "slug": no.get("nameWithOwner", ""),
@@ -338,8 +414,8 @@ def traduz(no: dict, com_vulns: bool) -> dict:
                "url": url + "/actions",
                "quando": ""},
         "prs": prs,
-        "vulns": ({"total": total_vulns, "url": url + "/security/dependabot"}
-                  if total_vulns is not None else {}),
+        "vulns": (dict(alertas, url=url + "/security/dependabot")
+                  if alertas else {}),
     }
 
 
