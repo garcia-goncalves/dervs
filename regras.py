@@ -240,3 +240,91 @@ def avaliar(projetos, quota=None, silenciadas=None) -> list:
     itens = [i for i in itens if i["id"] not in calados]
     itens.sort(key=lambda i: (ORDEM[i["gravidade"]], i["projeto"], i["regra"]))
     return itens
+
+
+# ----------------------------------------------------------------- agrupar
+MIN_GRUPO = 3             # abaixo disso, repetir e mais claro que resumir
+
+# Rotulo curto por regra, para a linha do grupo. Sem isto o grupo diria
+# "10 x grafo_velho", que e nome de variavel, nao portugues.
+ROTULO_REGRA = {
+    "ci_vermelha": "com a verificação automática vermelha",
+    "container_caido": "com contêiner caído",
+    "vulnerabilidade": "com alertas de segurança abertos",
+    "nao_commitado": "com trabalho sem salvar no histórico",
+    "so_no_disco": "com commit que não foi para o GitHub",
+    "memoria_crlf": "com memória em quebra de linha do Windows",
+    "cota_actions": "com a cota do GitHub estourando",
+    "grafo_velho": "com o mapa de código velho",
+    "pr_parado": "com pedido de alteração parado",
+    "dependencia_insegura": "com dependência a atualizar",
+    "env_drift": "com o exemplo de variáveis desatualizado",
+    "abandonado": "sem commit há muito tempo",
+    "sem_remoto": "sem cópia no GitHub",
+    "sem_descricao": "sem descrição escrita",
+    "site_fora": "com o site fora do ar",
+    "nao_publicado": "com trabalho pronto e não publicado",
+}
+
+
+def agrupar(pendencias) -> list:
+    """A lista achatada -> a lista que a tela desenha, com os repetidos juntos.
+
+    POR QUE ISTO EXISTE: em 25/08/2026, 10 das 27 pendencias abertas eram a mesma
+    regra (grafo velho) em 10 projetos, cada uma com a mesma acao manual. E 37% da
+    caixa de entrada dizendo a mesma coisa — exatamente o mecanismo que o filtro
+    da regra 2 existe para evitar. Caixa que nasce com muitos alarmes iguais
+    ensina o dono a ignorar a caixa inteira, inclusive o alarme que importava.
+
+    E POR QUE E UMA VISAO, NAO UM SUBSTITUTO: o /api/dados continua mandando a
+    lista achatada. O botao "Resolver" recalcula a pendencia pelo `id` no
+    servidor (e e isso que mantem o prompt fechado a texto de estranho), e o "x"
+    de esconder por 24 h tambem e por `id`. Trocar o formato de `pendencias`
+    quebraria os dois. Aqui muda o desenho; a identidade nao muda.
+
+    Devolve entradas {"tipo": "item", "pendencia": p} ou
+    {"tipo": "grupo", regra, gravidade, n, dias, texto, projetos, acao, itens}.
+    """
+    por_regra: dict = {}
+    for p in pendencias or []:
+        por_regra.setdefault(p.get("regra", ""), []).append(p)
+
+    fora = []
+    for regra, itens in por_regra.items():
+        if len(itens) < MIN_GRUPO:
+            fora.extend({"tipo": "item", "pendencia": p} for p in itens)
+            continue
+
+        # A pior gravidade manda: um grupo com uma alta dentro nao pode descer
+        # para o meio da lista so porque as outras nove sao medias.
+        pior = min(ORDEM.get(p.get("gravidade"), 9) for p in itens)
+        gravidade = next(g for g, o in ORDEM.items() if o == pior)
+        idades = [p["dias"] for p in itens if p.get("dias") is not None]
+        mais_velha = max(idades) if idades else None
+        projetos = sorted({p.get("projeto", "") for p in itens} - {""})
+
+        texto = "%d projetos %s." % (len(itens),
+                                     ROTULO_REGRA.get(regra, "com a mesma pendência"))
+        if mais_velha:
+            texto = texto[:-1] + " (o mais antigo há %d dias)." % mais_velha
+
+        fora.append({
+            "tipo": "grupo", "regra": regra, "gravidade": gravidade,
+            "n": len(itens), "dias": mais_velha, "texto": texto,
+            "projetos": projetos,
+            # "expandir" nao entra em ACOES: aquilo e o contrato das acoes de
+            # PENDENCIA, e um grupo nao e uma pendencia. A acao de verdade
+            # continua uma por item, dentro.
+            "acao": {"tipo": "expandir", "rotulo": "Ver %d" % len(itens)},
+            "itens": sorted(itens, key=lambda p: (-(p.get("dias") or 0),
+                                                  p.get("projeto") or "")),
+        })
+
+    def chave(x):
+        g = x["gravidade"] if x["tipo"] == "grupo" else x["pendencia"]["gravidade"]
+        r = x["regra"] if x["tipo"] == "grupo" else x["pendencia"]["regra"]
+        proj = "" if x["tipo"] == "grupo" else (x["pendencia"].get("projeto") or "")
+        return (ORDEM.get(g, 9), r, proj)
+
+    fora.sort(key=chave)
+    return fora
