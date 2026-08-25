@@ -4,6 +4,17 @@
 > `spec.md` e `design.md` aprovados, mais verificação pontual no código e três
 > medições feitas na máquina.
 
+> **CONCLUÍDO em 25/08/2026.** As 7 etapas foram executadas e o resultado está
+> mesclado na `main` pelo PR #3 (merge `32900a8`), com CI verde e 203 testes.
+> Onze dos doze critérios de aceitação foram provados; o 12º (custo ao vivo
+> durante a execução) fica pela metade por limite do próprio Claude Code, que só
+> informa o gasto no evento final. Antes do merge, os revisores especialistas
+> acharam dois bloqueantes que este plano não previa e nenhum teste pegava —
+> injeção de prompt vinda de título de PR, e processo órfão cobrando na API. Os
+> dois estão corrigidos; o relato está no `README.md`, seção "O texto de
+> estranho que quase virou comando". **Este arquivo é registro histórico: não há
+> etapa pendente aqui.**
+
 ## Resumo
 
 São **7 etapas**. Duas frentes correm em paralelo: a trilha Python (etapas 1→2→3→4,
