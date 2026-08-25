@@ -501,6 +501,159 @@ async function agir(pend, botao){
   }
 }
 
+/* ------------------------------------------------------ o botao "Resolver"
+   Segundo executor, ao lado de agir(), e NAO uma reforma dela: agir() e o
+   executor de acao unica e e onde vive a trava `ocupado` global. O Resolver
+   nao usa `ocupado` de proposito — a trava de execucao mora no SERVIDOR
+   agora, e os outros botoes do painel seguem clicaveis enquanto o Claude
+   trabalha. Duas travas para a mesma coisa divergem no primeiro erro. */
+let EXEC_TIMER = null, EXEC_LINHAS = 0, EXEC_BOTAO = null, EXEC_ABA = "resumo";
+let EXEC_TEXTOS = {resumo: "", diff: ""};
+
+function podeResolver(p){
+  if (!p.projeto) return false;
+  // A regra mora no servidor; aqui e so a copia que esconde o botao. Quem
+  // recusa de verdade e execucao.pode_resolver(), do outro lado.
+  const bloqueados = (ESTADO && ESTADO.resolver_bloqueado) || [];
+  return !bloqueados.includes(p.projeto.toLowerCase());
+}
+
+function rodandoAgora(){
+  const e = ESTADO && ESTADO.execucao;
+  return e && e.estado === "rodando" ? e : null;
+}
+
+function abreExecucao(botao){
+  const d = $("#execucao");
+  if (botao) EXEC_BOTAO = botao;
+  if (!d.open) d.showModal();
+  $("#e-titulo").focus();          // o h2, e nao o "Parar": abrir a tela nao
+}                                   // pode convidar a interromper por engano
+
+function fechaExecucao(){
+  const d = $("#execucao");
+  if (d.open) d.close();
+}
+
+async function resolver(pend, botao){
+  const d = $("#execucao");
+  abreExecucao(botao);
+  d.dataset.estado = "rodando";
+  $("#e-titulo").textContent = "Resolvendo: " + pend.projeto;
+  $("#e-frase").textContent = "Preparando uma cópia isolada de " + pend.projeto;
+  $("#e-log").textContent = "";
+  $("#e-custo").textContent = "≈ R$ 0,00 · estimativa, ainda rodando";
+  $("#e-aviso").hidden = pend.projeto !== "painel-projetos";
+  EXEC_LINHAS = 0;
+  EXEC_TEXTOS = {resumo: "", diff: ""};
+
+  try{
+    const r = await mandar({comando: "resolver", id: pend.id});
+    if (!r.ok){
+      if ((r.saida || "").indexOf("já há uma execução") >= 0) return telaRecusada();
+      return telaDeFalha("Falhou: o painel não conseguiu começar",
+                         r.saida || r.erro || "O servidor recusou sem explicar.");
+    }
+  } catch(e){
+    return telaDeFalha("Falhou: não consegui falar com o servidor", e.message);
+  }
+  await consultarExecucao();
+  lacoDeExecucao();
+}
+
+function telaRecusada(){
+  const d = $("#execucao"), emCurso = rodandoAgora();
+  d.dataset.estado = "recusada";
+  $("#e-titulo").textContent = "Resolver: " + (emCurso ? emCurso.projeto : "—");
+  $("#e-manchete").textContent = "Já há uma execução em andamento";
+  $("#e-corpo-falha").textContent =
+    "Só é possível rodar uma correção por vez nesta máquina. Agora mesmo o "
+    + "Claude está trabalhando em " + (emCurso ? emCurso.projeto : "outro projeto") + ".";
+}
+
+function telaDeFalha(manchete, corpo){
+  const d = $("#execucao");
+  d.dataset.estado = "falha";
+  $("#e-manchete").textContent = manchete;
+  $("#e-corpo-falha").textContent = corpo;
+}
+
+/* De 1 em 1 segundo, e so enquanto roda. `desde` = quantas linhas ja temos,
+   para o servidor mandar so o que falta em vez do log inteiro toda vez. */
+function lacoDeExecucao(){
+  clearInterval(EXEC_TIMER);
+  EXEC_TIMER = setInterval(async () => {
+    const e = await consultarExecucao();
+    if (!e || e.estado !== "rodando"){ clearInterval(EXEC_TIMER); EXEC_TIMER = null; carregar(); }
+  }, 1000);
+}
+
+async function consultarExecucao(){
+  try{
+    // O GET manda o token a mao: `mandar()` so serve o POST de /api/acao.
+    const r = await fetch("/api/execucao?desde=" + EXEC_LINHAS,
+                          {headers: {"X-Token": TOKEN}});
+    if (!r.ok) return null;
+    const e = await r.json();
+    pintaExecucao(e);
+    return e;
+  } catch(err){ return null; }
+}
+
+function pintaExecucao(e){
+  const d = $("#execucao");
+  if (e.estado !== "parada") d.dataset.estado = e.estado;
+  if (e.projeto) $("#e-titulo").textContent =
+    (e.estado === "rodando" ? "Resolvendo: " : "Resolver: ") + e.projeto;
+  if (e.frase) $("#e-frase").textContent = e.frase;
+
+  for (const linha of e.linhas || []){
+    $("#e-log").append(linha + "\n");
+    EXEC_LINHAS++;
+  }
+  if (typeof e.total_de_linhas === "number") EXEC_LINHAS = e.total_de_linhas;
+  const log = $("#e-log");
+  log.scrollTop = log.scrollHeight;
+
+  $("#e-custo").textContent = e.estado === "rodando"
+    ? "≈ " + e.custo_brl + " · estimativa, ainda rodando"
+    : e.custo_brl + " · estimativa";
+
+  if (e.manchete) $("#e-manchete").textContent = e.manchete;
+  if (e.corpo) $("#e-corpo-falha").textContent = e.corpo;
+  if (e.pr_url) $("#e-pr").href = e.pr_url;
+
+  EXEC_TEXTOS = {
+    resumo: e.resumo || "A sessão terminou sem alterar nenhum arquivo.",
+    diff: e.diff || "Nenhuma diferença registrada.",
+  };
+  pintaAbaDoResultado();
+}
+
+/* As abas NAO fazem requisicao: os dois textos ja vieram no mesmo estado. */
+function pintaAbaDoResultado(){
+  const alvo = $("#e-resultado");
+  alvo.textContent = EXEC_TEXTOS[EXEC_ABA] || "";
+  alvo.classList.toggle("diff", EXEC_ABA === "diff");
+  for (const b of document.querySelectorAll("#execucao nav.abas button"))
+    b.setAttribute("aria-selected", b.dataset.aba === EXEC_ABA ? "true" : "false");
+}
+
+async function pararExecucao(botao){
+  const antes = botao.textContent;
+  botao.disabled = true; botao.textContent = "Parando…";
+  try{
+    const r = await mandar({comando: "parar"});
+    if (!r.ok) recado(r.saida || "Não consegui confirmar que parou.", true);
+  } catch(e){ recado("Não consegui falar com o servidor: " + e.message, true); }
+  finally{
+    botao.disabled = false; botao.textContent = antes;
+    clearInterval(EXEC_TIMER); EXEC_TIMER = null;
+    await consultarExecucao();
+    carregar();
+  }
+}
+
 async function calar(pend){
   const r = await mandar({comando:"silenciar", id: pend.id, horas: 24});
   recado(r.ok ? "Escondida por 24 h." : "Não deu certo.", !r.ok);
@@ -569,6 +722,24 @@ function itensEm(caixa, pend){
     b.textContent = p.acao.rotulo;
     b.addEventListener("click", () => agir(p, b));
     botoes.append(b);
+
+    // O "Resolver" entra AO LADO da acao de sempre, nunca no lugar dela: a
+    // acao continua sendo a resposta rapida, e esta e a demorada. So aparece
+    // onde ha o que resolver — pendencia sem projeto (cota_actions) e projeto
+    // bloqueado ficam so com a acao. Botao que existe para dizer "nao" e o
+    // oposto do invariante "toda pendencia tem uma acao".
+    if (podeResolver(p)){
+      const emCurso = rodandoAgora();
+      const rb = document.createElement("button");
+      rb.className = "btn";
+      const vendo = emCurso && emCurso.projeto === p.projeto;
+      rb.textContent = vendo ? "Ver execução" : "Resolver";
+      rb.addEventListener("click", () => vendo
+        ? (abreExecucao(rb), consultarExecucao(), lacoDeExecucao())
+        : resolver(p, rb));
+      botoes.append(rb);
+    }
+
     const c = document.createElement("button");
     c.className = "calar";
     c.title = "Esconder por 24 horas";
@@ -827,10 +998,16 @@ function comandosDe(d){
   const c = [];
 
   // 1. As pendencias primeiro: e a pergunta que o HUB existe para responder.
-  for (const p of d.pendencias || [])
+  for (const p of d.pendencias || []){
     c.push(cmd(p.acao.rotulo + ": " + p.texto, p.projeto || "a máquina",
                p.gravidade === "alta" ? "urgente" : "pendência",
                () => agir(p, null), p.gravidade));
+    // Mesma funcao do botao, nunca uma acao propria da paleta (ver o comentario
+    // do bloco acima): uma porta a mais para a MESMA coisa.
+    if (podeResolver(p))
+      c.push(cmd("Resolver com o Claude: " + p.texto, p.projeto, "resolver",
+                 () => resolver(p, null), p.gravidade));
+  }
 
   // 2. Um projeto = varias portas de entrada. So entram as que EXISTEM: item
   //    que abre nada e pior que item ausente.
@@ -961,7 +1138,38 @@ document.addEventListener("keydown", e => {
   }
 });
 
+/* ------------------------------------------- controles do painel de execucao */
+for (const b of document.querySelectorAll("#execucao [data-fechar]"))
+  b.addEventListener("click", fechaExecucao);
+
+$("#e-parar").addEventListener("click", e => pararExecucao(e.currentTarget));
+
+$("#e-ver").addEventListener("click", () => {
+  // "Ver essa execução": reconecta na que ja esta rodando, sem disparar nada.
+  consultarExecucao(); lacoDeExecucao();
+});
+
+for (const b of document.querySelectorAll("#execucao nav.abas button"))
+  b.addEventListener("click", () => { EXEC_ABA = b.dataset.aba; pintaAbaDoResultado(); });
+
+// Fechar NAO para a execucao no servidor — so para de perguntar por ela. E ao
+// fechar o foco volta para o botao que abriu, que e o que falta hoje na paleta.
+$("#execucao").addEventListener("close", () => {
+  clearInterval(EXEC_TIMER); EXEC_TIMER = null;
+  if (EXEC_BOTAO && document.body.contains(EXEC_BOTAO)) EXEC_BOTAO.focus();
+  EXEC_BOTAO = null;
+});
+
 // Safari ainda nao tem closedby. Sem isto, clicar fora nao fecha la.
+if (!("closedBy" in HTMLDialogElement.prototype)){
+  $("#execucao").addEventListener("click", e => {
+    if (e.target !== $("#execucao")) return;
+    const r = e.target.getBoundingClientRect();
+    const dentro = r.top <= e.clientY && e.clientY <= r.top + r.height
+                && r.left <= e.clientX && e.clientX <= r.left + r.width;
+    if (!dentro) e.target.close();
+  });
+}
 if (!("closedBy" in HTMLDialogElement.prototype)){
   paleta.addEventListener("click", e => {
     if (e.target !== paleta) return;      // clique num filho: nao e o fundo

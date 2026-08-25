@@ -133,7 +133,10 @@ precisa dele. É o `BONUS_NOME` no `index.html`.
 ### O que ela deliberadamente não faz
 
 **A paleta não tem ação própria nenhuma.** Ela encontra e dispara o que já
-existe: mesma função `agir()`, mesma lista branca do `servir.py`. Se pudesse
+existe: mesma função `agir()` (ou `resolver()`, para o botão Resolver), mesma
+lista branca do `servir.py`. Digitar `resolver` acha
+"Resolver com o Claude: …" para cada pendência que pode ser resolvida — é a
+mesma função do botão, não uma segunda porta com regra própria. Se pudesse
 fazer algo que a tela não faz, viraria uma segunda superfície de risco para
 revisar a cada mudança. Um teste amarra isso (`PaletaNaoInventaComando`, no
 `test_servir.py`): ele lê os comandos que o `index.html` manda e exige que cada
@@ -432,6 +435,34 @@ O cano inteiro, em seis passos:
 Só há **uma execução por vez na máquina inteira**. A trava mora no servidor, não
 no navegador: fechar a aba, recarregar a página ou abrir outra não perde nada nem
 libera uma segunda sessão.
+
+### O que se vê na tela
+
+O botão abre um `<dialog>` que mostra, enquanto roda: a **frase de status** em
+português, o **log cru** com carimbo de hora, o **custo** e o botão **Parar**. A
+tela pergunta ao servidor de 1 em 1 segundo, mandando quantas linhas já tem, para
+receber só o que falta.
+
+Quando termina bem: o **link do pedido de alteração** e duas abas —
+**Resumo** (uma frase por arquivo tocado, escrita pela própria sessão) e
+**Diff**. As abas **não fazem requisição nenhuma**: os dois textos já vieram
+juntos no estado final.
+
+Três comportamentos que valem dizer:
+
+- **Fechar não para nada.** `Esc` fecha a janela; a sessão continua no servidor.
+  Enquanto ela roda, o botão daquela pendência vira **"Ver execução"**, e clicar
+  reconecta ao que está acontecendo — inclusive o log inteiro desde o começo.
+- **Os outros botões do painel continuam clicáveis.** O `Resolver` é um segundo
+  executor, ao lado do `agir()` de sempre, e de propósito **não** usa a trava
+  `ocupado` do cliente — essa trava agora é do servidor.
+- **O log não some.** O `recado()` do painel apaga em 4 ou 9 segundos; um log que
+  evapora enquanto o dono lê é pior que log nenhum.
+
+O botão aparece **só onde há o que resolver**: pendência sem projeto (a de cota
+do Actions nasce assim, de propósito) e projeto bloqueado ficam só com a ação de
+sempre. Um botão que existe para dizer "não" é o oposto do invariante "toda
+pendência tem uma ação".
 
 ### O teto de gasto é aproximado, e isso não é força de expressão
 
