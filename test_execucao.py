@@ -324,5 +324,81 @@ class UrlDoPedidoDeAlteracao(unittest.TestCase):
             self.assertIsNone(execucao.url_do_pr(saida), repr(saida))
 
 
+class OndeMoraACopia(unittest.TestCase):
+    """A copia NAO pode nascer dentro de C:\\Users\\Desktop\\source\\repos.
+
+    pastas_de_projeto() (coletar.py) trata toda subpasta daquela raiz como
+    projeto medido. Uma copia isolada criada la dentro apareceria no proprio
+    painel como projeto novo, sujo e sem CI — o painel se auto-poluindo.
+    """
+
+    def test_a_base_fica_fora_da_raiz_dos_projetos(self):
+        import coletar
+        self.assertFalse(str(execucao.BASE_COPIAS).startswith(str(coletar.RAIZ)))
+
+    def test_caminho_junta_base_projeto_e_id(self):
+        caminho = execucao.caminho_da_copia("/tmp/base", "medconsultoria-crm", "a1b2c3d4")
+        partes = str(caminho).replace("\\", "/").split("/")
+        self.assertEqual(partes[-1], "a1b2c3d4")
+        self.assertEqual(partes[-2], "medconsultoria-crm")
+
+    def test_o_id_tem_8_caracteres(self):
+        """Windows para de funcionar perto de 260 caracteres de caminho, e
+        projetos .NET aninhados ja chegam perto sozinhos."""
+        self.assertEqual(len(execucao.id_curto()), 8)
+
+    def test_o_id_e_deterministico_sob_semente(self):
+        self.assertEqual(execucao.id_curto(42), execucao.id_curto(42))
+        self.assertNotEqual(execucao.id_curto(1), execucao.id_curto(2))
+
+    def test_o_id_so_tem_caractere_seguro_em_caminho(self):
+        for c in execucao.id_curto(7):
+            self.assertIn(c, "0123456789abcdef", c)
+
+
+class NomeDoRamo(unittest.TestCase):
+    """Nome de ramo aceita pouca coisa: espaco, acento e `:` quebram o git."""
+
+    def test_formato(self):
+        self.assertEqual(execucao.nome_do_ramo("ci_vermelha", "a1b2c3d4"),
+                         "hub/ci-vermelha-a1b2c3d4")
+
+    def test_sanitiza_o_que_o_git_recusa(self):
+        ramo = execucao.nome_do_ramo("Regra Estranha: ção/../x", "00000000")
+        self.assertTrue(ramo.startswith("hub/"))
+        self.assertNotIn("..", ramo)
+        for proibido in (" ", ":", "ç", "~", "^", "?", "*"):
+            self.assertNotIn(proibido, ramo, proibido)
+
+    def test_regra_vazia_ainda_da_ramo_valido(self):
+        ramo = execucao.nome_do_ramo("", "a1b2c3d4")
+        self.assertTrue(ramo.startswith("hub/"))
+        self.assertNotIn("//", ramo)
+        self.assertFalse(ramo.endswith("/"))
+
+
+class TextoDoCommitEDoPR(unittest.TestCase):
+    """O dono le isto no GitHub semanas depois, sem lembrar da pendencia."""
+
+    def test_commit_tem_tipo_escopo_e_porque(self):
+        msg = execucao.mensagem_de_commit(PENDENCIA)
+        primeira = msg.splitlines()[0]
+        self.assertIn(":", primeira)
+        self.assertLessEqual(len(primeira), 72)
+        self.assertIn("ci_vermelha", msg)
+
+    def test_pr_diz_projeto_e_que_foi_o_painel(self):
+        titulo, corpo = execucao.titulo_e_corpo_do_pr(PENDENCIA)
+        self.assertIn("medconsultoria-crm", titulo + corpo)
+        self.assertIn("painel", corpo.lower())
+        self.assertIn(PENDENCIA["texto"], corpo)
+
+    def test_pr_avisa_que_ninguem_conferiu_ainda(self):
+        """Um PR aberto por maquina sem essa frase e um convite a mesclar no
+        automatico — exatamente o que o "nunca salva na main sozinho" evita."""
+        _, corpo = execucao.titulo_e_corpo_do_pr(PENDENCIA)
+        self.assertIn("Revise antes de mesclar", corpo)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

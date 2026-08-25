@@ -27,6 +27,12 @@ o contrario sem medir de novo:
 from __future__ import annotations
 
 import json
+import os
+import random
+import re
+import subprocess
+import sys
+from pathlib import Path
 
 # Teto por execucao, em dolar. US$ 1 nao daria: medido em 24/08/2026, so LIGAR a
 # sessao custa US$ 0,2256 num turno trivial sem MCP, e US$ 0,4455 herdando os
@@ -285,3 +291,152 @@ def url_do_pr(saida):
         if limpa.startswith("https://"):
             achada = limpa
     return achada
+
+
+# ------------------------------------------------- a copia isolada: nomes puros
+
+
+def id_curto(semente=None) -> str:
+    """8 caracteres hexadecimais. Curto porque caminho no Windows morre em 260."""
+    sorteio = random.Random(semente) if semente is not None else random.SystemRandom()
+    return "%08x" % sorteio.randrange(16 ** 8)
+
+
+def caminho_da_copia(base, projeto: str, id_: str) -> Path:
+    """`base` e parametro para o teste rodar em ubuntu-latest com pasta temporaria."""
+    return Path(base) / _so_o_seguro(projeto) / id_
+
+
+def _so_o_seguro(bruto: str) -> str:
+    """Minusculas, so letra/numero/hifen, sem hifen dobrado nem nas pontas."""
+    limpo = []
+    for c in (bruto or "").lower():
+        limpo.append(c if (c.isascii() and (c.isalnum() or c == "-")) else "-")
+    texto = re.sub(r"-{2,}", "-", "".join(limpo)).strip("-")
+    return texto
+
+
+def nome_do_ramo(regra: str, id_: str) -> str:
+    """`ci_vermelha` + `a1b2c3d4` -> `hub/ci-vermelha-a1b2c3d4`.
+
+    O nome do projeto NAO entra: o ramo ja nasce dentro do repositorio daquele
+    projeto, entao repeti-lo so encompridaria o nome. (O plano da etapa 2 previa
+    um terceiro parametro `projeto`; ele viraria argumento nunca usado.)
+    """
+    miolo = _so_o_seguro(regra) or "pendencia"
+    return "hub/%s-%s" % (miolo, id_)
+
+
+def mensagem_de_commit(pendencia: dict) -> str:
+    """Primeira linha curta com tipo(escopo), corpo com o porque. Em portugues."""
+    regra = pendencia.get("regra", "pendencia")
+    projeto = pendencia.get("projeto", "")
+    titulo = "fix(%s): resolve pendência apontada pelo painel" % _so_o_seguro(regra)
+    return ("%s\n\n"
+            "Correção gerada por uma sessão do Claude Code disparada pelo botão\n"
+            "\"Resolver\" do painel de projetos, numa cópia isolada de %s.\n\n"
+            "Pendência (regra %s): %s\n"
+            % (titulo[:72], projeto, regra, pendencia.get("texto", "")))
+
+
+def titulo_e_corpo_do_pr(pendencia: dict):
+    """O que o dono le no GitHub semanas depois, sem lembrar desta pendencia."""
+    projeto = pendencia.get("projeto", "")
+    regra = pendencia.get("regra", "")
+    titulo = "Resolve: %s (%s)" % (pendencia.get("texto", "")[:60], projeto)
+    corpo = (
+        "Aberto automaticamente pelo **painel de projetos**, a partir da pendência\n"
+        "`%s` detectada em `%s`.\n\n"
+        "**O que o painel viu:** %s\n\n"
+        "**Detalhe:** %s\n\n"
+        "A correção foi escrita por uma sessão do Claude Code rodando numa cópia\n"
+        "isolada do repositório (`git worktree`), com teto de gasto aproximado de\n"
+        "%s. Nenhuma pessoa leu este diff ainda. **Revise antes de mesclar.**\n"
+        % (regra, projeto, pendencia.get("texto", ""),
+           pendencia.get("detalhe", "") or "(sem detalhe)", em_reais(TETO_USD))
+    )
+    return titulo, corpo
+
+
+# -------------------------------------------------- a copia isolada: disco e rede
+
+# Fora de C:\\Users\\Desktop\\source\\repos de proposito: pastas_de_projeto()
+# (coletar.py) trata TODA subpasta daquela raiz como projeto medido, e o painel
+# passaria a medir as proprias copias. Mesmo espirito de CACHE_GRAFO.
+BASE_COPIAS = Path.home() / ".cache" / "hub-worktrees"
+
+
+def _sem_console() -> bool:
+    """Igual a servir.py:60 — sob pythonw.exe cada filho abriria um console."""
+    if not sys.platform.startswith("win"):
+        return False
+    if os.path.basename(sys.executable or "").lower() == "pythonw.exe":
+        return True
+    return sys.stdout is None
+
+
+SEM_JANELA = 0x08000000 if _sem_console() else 0
+
+
+def _rodar(args, cwd=None, limite=180):
+    """Molde de servir.py:148 — (ok, saida cortada em 1200 caracteres)."""
+    try:
+        r = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=limite,
+                           creationflags=SEM_JANELA)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, "não consegui rodar %s: %s" % (args[0], e)
+    saida = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()
+    return r.returncode == 0, saida[-1200:]
+
+
+def criar_copia(caminho_do_projeto, destino, ramo):
+    """git worktree add — a pasta original do projeto nao e tocada."""
+    Path(destino).parent.mkdir(parents=True, exist_ok=True)
+    return _rodar(["git", "-C", str(caminho_do_projeto), "worktree", "add",
+                   "-b", ramo, str(destino), "HEAD"])
+
+
+def remover_copia(caminho_do_projeto, destino):
+    """Sucesso remove a copia; falha preserva (a chamada e de quem decide)."""
+    ok, saida = _rodar(["git", "-C", str(caminho_do_projeto), "worktree",
+                        "remove", "--force", str(destino)])
+    _rodar(["git", "-C", str(caminho_do_projeto), "worktree", "prune"])
+    return ok, saida
+
+
+def houve_mudanca(destino) -> bool:
+    ok, saida = _rodar(["git", "-C", str(destino), "status", "--porcelain"])
+    return bool(ok and saida.strip())
+
+
+def diff_da_copia(destino) -> str:
+    """Texto puro: e exatamente o que a aba "Diff" mostra, sem requisicao nova."""
+    ok, saida = _rodar(["git", "-C", str(destino), "diff", "HEAD"], limite=60)
+    return saida if ok else ""
+
+
+def publicar(destino, ramo, titulo, corpo, mensagem):
+    """add + commit + push + gh pr create. NUNCA push na main, nunca pr merge.
+
+    Devolve (ok, url_ou_None, log). O log volta inteiro para a tela: se o `gh`
+    recusar porque ja existe PR, o dono precisa ver a frase do GitHub, nao um
+    "algo deu errado" nosso.
+    """
+    passos = [
+        (["git", "-C", str(destino), "add", "-A"], 60),
+        (["git", "-C", str(destino), "commit", "-m", mensagem], 120),
+        (["git", "-C", str(destino), "push", "-u", "origin", ramo], 180),
+    ]
+    log = []
+    for args, limite in passos:
+        ok, saida = _rodar(args, limite=limite)
+        log.append(saida)
+        if not ok:
+            return False, None, "\n".join(x for x in log if x)
+
+    ok, saida = _rodar(["gh", "pr", "create", "--title", titulo,
+                        "--body", corpo, "--head", ramo],
+                       cwd=str(destino), limite=180)
+    log.append(saida)
+    return ok, (url_do_pr(saida) if ok else None), "\n".join(x for x in log if x)
