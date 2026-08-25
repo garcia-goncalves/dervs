@@ -8,6 +8,8 @@ teto diario, anti-laco, teste apagado e segredo no arquivo de exemplo de
 ambiente. Nenhuma delas e uma instrucao no texto do pedido: instrucao em texto
 e sugestao, nao trava.
 """
+from datetime import datetime
+
 import execucao
 
 # Regra -> trilho. Lista BRANCA: regra fora daqui nao chega ao motor.
@@ -27,6 +29,38 @@ REGRAS_MECANICAS = {
 # Mesma ordem de `regras.ORDEM`. Nao importamos de la para a fila nao depender
 # do motor de deteccao: sao dois assuntos, e o acoplamento so custaria.
 ORDEM = {"alta": 0, "media": 1, "baixa": 2}
+
+
+# O freio da fila desacompanhada. Decisao do dono em 25/08/2026: comecar
+# apertado e afrouxar depois e mais facil que o contrario.
+TETO_DIARIO_BRL = 50.00
+
+
+def hoje_local() -> str:
+    """A data de HOJE para o dono, nao para o servidor.
+
+    O resto do banco carimba em UTC. O teto, nao: em UTC-3, as 21h de terca ja
+    e quarta em UTC, e o teto zeraria tres horas cedo.
+    """
+    return datetime.now().astimezone().strftime("%Y-%m-%d")
+
+
+def cabe_no_teto(gasto_usd: float) -> bool:
+    """Ha espaco para comecar mais um item hoje? No ponto exato, ja nao ha."""
+    try:
+        gasto_brl = float(gasto_usd) * execucao.USD_BRL
+    except (TypeError, ValueError):
+        gasto_brl = 0.0
+    return gasto_brl < TETO_DIARIO_BRL
+
+
+def quanto_falta(gasto_usd: float) -> float:
+    """Quantos reais ainda cabem hoje. Nunca negativo — a tela nao mostra divida."""
+    try:
+        gasto_brl = float(gasto_usd) * execucao.USD_BRL
+    except (TypeError, ValueError):
+        gasto_brl = 0.0
+    return max(0.0, TETO_DIARIO_BRL - gasto_brl)
 
 
 def trilho_de(pendencia: dict) -> str:

@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import banco
+import execucao
 
 
 class BancoTemporario(unittest.TestCase):
@@ -128,6 +129,35 @@ class Elegibilidade(unittest.TestCase):
         entrada = [self._p("memoria_crlf")]
         fila.elegiveis(entrada)
         self.assertNotIn("trilho", entrada[0])
+
+
+class TetoDiario(unittest.TestCase):
+
+    def test_sem_gasto_cabe(self):
+        self.assertTrue(fila.cabe_no_teto(0.0))
+
+    def test_vespera_do_teto_ainda_cabe(self):
+        quase = (fila.TETO_DIARIO_BRL - 0.01) / execucao.USD_BRL
+        self.assertTrue(fila.cabe_no_teto(quase))
+
+    def test_exatamente_no_teto_nao_cabe(self):
+        no_ponto = fila.TETO_DIARIO_BRL / execucao.USD_BRL
+        self.assertFalse(fila.cabe_no_teto(no_ponto))
+
+    def test_passou_do_teto_nao_cabe(self):
+        self.assertFalse(fila.cabe_no_teto(fila.TETO_DIARIO_BRL))
+
+    def test_quanto_falta_nunca_e_negativo(self):
+        self.assertEqual(fila.quanto_falta(999.0), 0.0)
+
+    def test_quanto_falta_sem_gasto_e_o_teto_inteiro(self):
+        self.assertAlmostEqual(fila.quanto_falta(0.0), fila.TETO_DIARIO_BRL, places=2)
+
+    def test_hoje_local_tem_formato_de_data(self):
+        hoje = fila.hoje_local()
+        self.assertEqual(len(hoje), 10)
+        self.assertEqual(hoje[4], "-")
+        self.assertEqual(hoje[7], "-")
 
 
 if __name__ == "__main__":
