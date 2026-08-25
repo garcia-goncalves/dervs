@@ -35,6 +35,7 @@ from regras import ORDEM
 JANELA_NOVA_H = 24        # abaixo disso a pendencia recebe o selo "nova"
 JANELA_SEMANA_D = 7       # o "voce fechou N" olha para esta janela
 PONTOS_SERIE = 60         # retratos devolvidos para o grafico da tela
+BATIMENTO_H = 1           # ate sem novidade, um retrato por hora
 
 GRAVIDADES = ("alta", "media", "baixa")
 
@@ -53,8 +54,18 @@ def _agora(agora_iso=None) -> str:
 
 
 # ---------------------------------------------------------------- escrita
-def registrar(pendencias, con, agora_iso=None) -> dict:
+def registrar(pendencias, con, agora_iso=None, medicao_valida=True) -> dict:
     """Atualiza a vida de cada pendencia e grava o retrato numerico do momento.
+
+    `medicao_valida=False` faz a funcao NAO TOCAR EM NADA. O chamador usa isso
+    quando a coleta terminou bem mas nao enxergou projeto nenhum — a pasta de
+    repositorios ficou indisponivel por um instante, por exemplo. Sem esta
+    guarda, uma lista vazia significaria "o dono resolveu tudo": as 27
+    pendencias seriam marcadas como fechadas, renasceriam com selo de "nova" na
+    coleta seguinte, e o briefing anunciaria "voce fechou 27 nos ultimos 7 dias".
+    Entre elas estariam `vulnerabilidade` e `site_fora`. Nao e um erro de
+    contagem: e o painel mentindo sobre seguranca, que e o unico defeito que
+    mata este projeto.
 
     Tres movimentos, nesta ordem:
       - quem apareceu agora e nao tinha linha aberta ganha `visto_em`;
@@ -65,6 +76,9 @@ def registrar(pendencias, con, agora_iso=None) -> dict:
     grafo que envelheceu de novo tres semanas depois nao e o mesmo problema de
     antes, e mostra-lo com "aberto ha 30 dias" seria mentira.
     """
+    if not medicao_valida:
+        return {"abertas": {}, "fechadas_agora": 0, "ignorado": True}
+
     ts = _agora(agora_iso)
     vivos = {p["id"]: p for p in pendencias}
 
@@ -95,20 +109,55 @@ def registrar(pendencias, con, agora_iso=None) -> dict:
     conta = {g: sum(1 for p in pendencias if p.get("gravidade") == g)
              for g in GRAVIDADES}
     conta["total"] = len(pendencias)
+    gravou = _retrato(con, conta, ts)
+    con.commit()
+    return {"abertas": conta, "fechadas_agora": len(sumiram), "retrato": gravou}
+
+
+def _retrato(con, conta, ts) -> bool:
+    """Grava o retrato numerico — mas so quando ele diz algo novo.
+
+    A coleta roda de 60 em 60 s. Gravar quatro linhas por minuto para sempre sao
+    5.760 linhas por dia, 2 milhoes por ano, quase todas identicas a anterior —
+    e um grafico de semana feito de 10 mil pontos iguais nao mostra forma
+    nenhuma. Entao: grava quando o numero MUDA, ou quando o ultimo retrato ja
+    tem mais de uma hora (o batimento que garante pontos num dia parado).
+    """
+    ultimo = con.execute(
+        "SELECT medido_em, valor FROM historico WHERE chave='abertas_total' "
+        "ORDER BY medido_em DESC LIMIT 1").fetchone()
+    if ultimo:
+        mudou = float(ultimo["valor"]) != float(conta["total"])
+        quando = _dt(ultimo["medido_em"])
+        agora_dt = _dt(ts)
+        velho = (not quando or not agora_dt
+                 or (agora_dt - quando) >= timedelta(hours=BATIMENTO_H))
+        if not mudou and not velho:
+            return False
     for chave, valor in conta.items():
         con.execute("INSERT INTO historico (medido_em, chave, valor) VALUES (?,?,?)",
                     (ts, "abertas_" + chave, float(valor)))
-    con.commit()
-    return {"abertas": conta, "fechadas_agora": len(sumiram)}
+    return True
 
 
-def vidas(con) -> dict:
-    """{id: {visto_em, ultimo_em, fechada_em, gravidade}} — abertas e fechadas."""
+def vidas(con, so_abertas=True) -> dict:
+    """{id: {visto_em, ultimo_em, fechada_em, gravidade}}.
+
+    So as ABERTAS por padrao, e isso importa para o custo: esta funcao roda no
+    caminho de leitura do /api/dados, que a tela chama de 15 em 15 s por aba, e
+    `pendencia_vida` nunca e podada. Trazer as fechadas junto seria uma varredura
+    da tabela inteira, crescendo para sempre, para descartar quase tudo —
+    `decorar()` so usa as que estao abertas agora. O indice ix_vida_aberta cobre
+    exatamente este filtro.
+
+    `so_abertas=False` existe para quem precisa auditar o historico (e para o
+    teste conferir que a pendencia sumida foi mesmo marcada como fechada).
+    """
+    sql = ("SELECT id, visto_em, ultimo_em, fechada_em, gravidade FROM pendencia_vida"
+           + (" WHERE fechada_em IS NULL" if so_abertas else ""))
     return {l["id"]: {"visto_em": l["visto_em"], "ultimo_em": l["ultimo_em"],
                       "fechada_em": l["fechada_em"], "gravidade": l["gravidade"]}
-            for l in con.execute(
-                "SELECT id, visto_em, ultimo_em, fechada_em, gravidade "
-                "FROM pendencia_vida")}
+            for l in con.execute(sql)}
 
 
 # ---------------------------------------------------------------- leitura

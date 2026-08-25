@@ -26,6 +26,12 @@
   --bg:#f6f7f9; --painel:#fff; --borda:#e2e5ea; --texto:#12151a; --fraco:#5f6672;
   --fraquinho:#8b93a1; --acento:#3b6ef5; --ok:#1a8a52; --alerta:#b8720b; --erro:#c8382f;
   --grade:#eceff3; --sombra:0 1px 2px rgba(16,20,28,.06),0 4px 14px rgba(16,20,28,.05);
+  /* Tres tokens SO para texto pequeno sobre fundo claro. Os tons de cima foram
+     escolhidos para preencher area e borda, e medem 4,44:1 (--acento), 3,85:1
+     (--alerta) e 3,09:1 (--fraquinho) — abaixo dos 4,5:1 que a WCAG exige para
+     texto normal. Este projeto ja tinha aprendido isso uma vez, no link do PR. */
+  --selo-fundo:#2f57c4; --selo-texto:#fff;   /* 6,4:1  */
+  --alerta-texto:#8a5408;                    /* 6,26:1 */
   --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
   --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
 }
@@ -33,11 +39,19 @@
   --bg:#0d1014; --painel:#151a21; --borda:#252c36; --texto:#e6eaf0; --fraco:#98a1af;
   --fraquinho:#6b7482; --acento:#6f97ff; --ok:#3fbb7a; --alerta:#e0a038; --erro:#ef6b60;
   --grade:#1c222b; --sombra:0 1px 2px rgba(0,0,0,.4),0 6px 18px rgba(0,0,0,.28);
+  /* No escuro o selo inverte: fundo claro, texto escuro (6,85:1). Branco
+     sobre --acento aqui mediria 2,78:1 — reprovacao franca. */
+  --selo-fundo:#6f97ff; --selo-texto:#0d1014;
+  --alerta-texto:#e0a038;    /* 7,7:1 sobre --painel, ja passava */
 }}
 :root[data-theme="dark"]{
   --bg:#0d1014; --painel:#151a21; --borda:#252c36; --texto:#e6eaf0; --fraco:#98a1af;
   --fraquinho:#6b7482; --acento:#6f97ff; --ok:#3fbb7a; --alerta:#e0a038; --erro:#ef6b60;
   --grade:#1c222b; --sombra:0 1px 2px rgba(0,0,0,.4),0 6px 18px rgba(0,0,0,.28);
+  /* No escuro o selo inverte: fundo claro, texto escuro (6,85:1). Branco
+     sobre --acento aqui mediria 2,78:1 — reprovacao franca. */
+  --selo-fundo:#6f97ff; --selo-texto:#0d1014;
+  --alerta-texto:#e0a038;    /* 7,7:1 sobre --painel, ja passava */
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--texto);font-family:var(--sans);
@@ -79,12 +93,16 @@ nav.abas button:focus-visible{outline:2px solid var(--acento);outline-offset:-2p
 .briefing{background:var(--painel);border:1px solid var(--borda);border-radius:11px;
   padding:15px 17px;margin-bottom:16px;box-shadow:var(--sombra);
   display:flex;gap:16px;align-items:center;flex-wrap:wrap}
-.briefing .frase{flex:1;min-width:min(100%,260px);font-size:15px;line-height:1.45}
+.briefing .frase{flex:1;min-width:min(100%,260px);font-size:16px;font-weight:500;
+  line-height:1.45}
 .briefing.urgente{border-left:3px solid var(--erro)}
 .briefing.calmo{border-left:3px solid var(--ok)}
 .placar{display:flex;gap:14px;align-items:center;flex-shrink:0}
-.placar .n{font-family:var(--mono);font-size:19px;font-weight:650;line-height:1.1}
-.placar .r{font-size:10.5px;color:var(--fraquinho);text-transform:uppercase;
+/* Menor e mais leve que a frase de proposito: o placar apoia, nao compete. */
+.placar .n{font-family:var(--mono);font-size:17px;font-weight:600;line-height:1.1}
+/* --fraco, nao --fraquinho: este rotulo e para LER (3,09:1 nao passa). O tom
+   mais claro fica reservado a borda e enfeite, como no resto do arquivo. */
+.placar .r{font-size:10.5px;color:var(--fraco);text-transform:uppercase;
   letter-spacing:.05em;white-space:nowrap}
 .placar .peca{text-align:center}
 .placar .peca.mal .n{color:var(--erro)}
@@ -93,6 +111,14 @@ nav.abas button:focus-visible{outline:2px solid var(--acento);outline-offset:-2p
 .seta{font-size:11px;font-family:var(--mono)}
 .seta.piorando{color:var(--erro)} .seta.melhorando{color:var(--ok)}
 .seta.estavel{color:var(--fraquinho)}
+/* Em 360px sobram ~282px uteis dentro do .briefing. O placar tem 2-3 pecas mais
+   96px de sparkline, tudo flex-shrink:0 — sem isto ele estoura a caixa e leva a
+   pagina inteira para a rolagem horizontal. O sparkline e o primeiro a sair:
+   e o que menos perde ao sumir, porque a seta ao lado diz a mesma direcao. */
+@media (max-width:420px){
+  .placar{flex-wrap:wrap;width:100%;gap:12px;justify-content:flex-start}
+  .linha-tendencia{display:none}
+}
 
 /* ---------------------------------------------------------------- a caixa */
 h2.secao{font-size:12px;text-transform:uppercase;letter-spacing:.09em;
@@ -100,10 +126,10 @@ h2.secao{font-size:12px;text-transform:uppercase;letter-spacing:.09em;
 /* O selo de "nova" e a idade. Sem eles, uma coisa nascida ha uma hora e outra
    aberta ha 23 dias ocupavam a mesma linha, do mesmo tamanho, na mesma cor. */
 .selo{font-size:10px;font-weight:650;text-transform:uppercase;letter-spacing:.05em;
-  background:var(--acento);color:#fff;padding:1px 6px;border-radius:4px;
+  background:var(--selo-fundo);color:var(--selo-texto);padding:1px 6px;border-radius:4px;
   margin-left:7px;vertical-align:1px}
 .idade{color:var(--fraquinho)}
-.idade.velha{color:var(--alerta)}
+.idade.velha{color:var(--alerta-texto)}
 /* O grupo: 3+ pendencias da mesma regra numa linha so. Herda o .item para nao
    inventar um segundo vocabulario visual na mesma lista. */
 details.grupo{background:var(--painel);border:1px solid var(--borda);
@@ -364,9 +390,16 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
   </nav>
 
   <div id="aba-painel" role="tabpanel" aria-labelledby="aba-btn-painel" tabindex="0">
-  <!-- aria-live polite: a frase muda sozinha a cada 15 s. Quem usa leitor de
-       tela ouve a mudanca sem ter de sair procurando o que mudou. -->
-  <div class="briefing" id="briefing" aria-live="polite"></div>
+  <!-- A regiao viva e SO a frase, e ela so e reescrita quando o texto muda de
+       verdade. O bloco inteiro com aria-live, redesenhado a cada 15 s, faria o
+       leitor de tela reanunciar frase, placar e seta em todo ciclo, tenha
+       mudado algo ou nao — isso e ruido constante, nao aviso. O placar fica
+       fora da regiao viva de proposito: ele repete em numero o que a frase ja
+       disse em portugues. -->
+  <div class="briefing" id="briefing">
+    <div class="frase" id="briefing-frase" aria-live="polite"></div>
+    <div class="placar" id="briefing-placar"></div>
+  </div>
 
   <h2 class="secao">Precisa de você agora</h2>
   <div class="caixa" id="caixa"></div>
@@ -767,20 +800,25 @@ function sparkline(serie){
   return svg;
 }
 
+let ULTIMO_BRIEFING = null;      // assinatura do que ja esta na tela
+
 function desenhaBriefing(d){
-  const cx = $("#briefing");
-  cx.textContent = "";
   const t = d.tendencia || {abertas:{}};
   const ab = t.abertas || {};
 
-  const frase = document.createElement("div");
-  frase.className = "frase";
-  frase.textContent = d.briefing || "";
-  cx.append(frase);
-  cx.className = "briefing " + (ab.alta ? "urgente" : "calmo");
+  // Assinatura do conteudo. Sem ela, cada ciclo de 15 s reescreveria o mesmo
+  // texto: DOM a toa, e um aria-live reanunciando o que ninguem mudou.
+  const chave = JSON.stringify([d.briefing, ab.alta, t.novas_24h,
+                                t.resolvidas_7d, t.direcao,
+                                (t.serie || []).length]);
+  if (chave === ULTIMO_BRIEFING) return;
+  ULTIMO_BRIEFING = chave;
 
-  const placar = document.createElement("div");
-  placar.className = "placar";
+  $("#briefing").className = "briefing " + (ab.alta ? "urgente" : "calmo");
+  $("#briefing-frase").textContent = d.briefing || "";
+
+  const placar = $("#briefing-placar");
+  placar.textContent = "";
   placar.append(pecaDoPlacar(ab.alta || 0, "urgentes", ab.alta ? "mal" : "bem"));
   if (t.novas_24h) placar.append(pecaDoPlacar(t.novas_24h, "novas hoje"));
   // So aparece quando ha o que comemorar. Um "0 fechadas" permanente no topo da
@@ -792,12 +830,13 @@ function desenhaBriefing(d){
   if (linha){
     const seta = document.createElement("span");
     seta.className = "seta " + (t.direcao || "estavel");
+    // Decorativa: o aria-label do sparkline ao lado ja diz a mesma tendencia em
+    // palavras, e `title` nao e lido de forma confiavel nem existe no toque.
+    seta.setAttribute("aria-hidden", "true");
     seta.textContent = t.direcao === "piorando" ? "▲"
                      : t.direcao === "melhorando" ? "▼" : "—";
-    seta.title = "A lista está " + (t.direcao || "estável");
     placar.append(linha, seta);
   }
-  cx.append(placar);
 }
 
 /* ------------------------------------------------------------------ a caixa */

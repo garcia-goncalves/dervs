@@ -70,8 +70,16 @@ class Registrar(unittest.TestCase):
     def test_pendencia_que_sumiu_e_marcada_como_fechada(self):
         memoria.registrar([pend()], self.con, atras(days=2))
         memoria.registrar([], self.con, iso(AGORA))
-        v = memoria.vidas(self.con)["grafo_velho:exemplo"]
+        v = memoria.vidas(self.con, so_abertas=False)["grafo_velho:exemplo"]
         self.assertEqual(v["fechada_em"], iso(AGORA))
+
+    def test_a_leitura_do_painel_nao_arrasta_as_fechadas(self):
+        """Custo: vidas() roda a cada 15 s por aba, e a tabela nunca e podada."""
+        memoria.registrar([pend(projeto="a"), pend(projeto="b")],
+                          self.con, atras(days=2))
+        memoria.registrar([pend(projeto="a")], self.con, iso(AGORA))
+        self.assertEqual(sorted(memoria.vidas(self.con)), ["grafo_velho:a"])
+        self.assertEqual(len(memoria.vidas(self.con, so_abertas=False)), 2)
 
     def test_pendencia_que_volta_reabre_com_data_nova(self):
         """Voltou depois de fechada e uma pendencia NOVA, nao a velha de antes."""
@@ -95,6 +103,53 @@ class Registrar(unittest.TestCase):
     def test_registrar_nao_estoura_com_lista_vazia(self):
         memoria.registrar([], self.con, iso(AGORA))
         self.assertEqual(memoria.vidas(self.con), {})
+
+    def test_medicao_invalida_nao_fecha_nada(self):
+        """Coleta que nao viu projeto nenhum NAO e 'o dono resolveu tudo'.
+
+        Sem esta guarda, uma pasta de repositorios indisponivel por um instante
+        fecharia as 27 pendencias de uma vez — incluindo as de seguranca — e no
+        minuto seguinte o briefing se gabaria de ter fechado 27. Achado da
+        revisao de seguranca de 25/08/2026.
+        """
+        memoria.registrar([pend(projeto="a"), pend(projeto="b")],
+                          self.con, atras(days=1))
+        r = memoria.registrar([], self.con, iso(AGORA), medicao_valida=False)
+        self.assertTrue(r.get("ignorado"))
+        self.assertEqual(len(memoria.vidas(self.con)), 2)      # continuam ABERTAS
+        self.assertEqual(memoria.tendencia(self.con, iso(AGORA))["resolvidas_7d"], 0)
+
+    def test_retrato_repetido_nao_vira_linha_nova(self):
+        """4 linhas por minuto para sempre sao 2 milhoes por ano, quase todas
+        iguais — e grafico feito de 10 mil pontos identicos nao mostra forma."""
+        memoria.registrar([pend()], self.con, atras(minutes=30))
+        n1 = self.con.execute("SELECT COUNT(*) FROM historico").fetchone()[0]
+        r = memoria.registrar([pend()], self.con, atras(minutes=29))
+        n2 = self.con.execute("SELECT COUNT(*) FROM historico").fetchone()[0]
+        self.assertEqual(n1, n2)
+        self.assertFalse(r["retrato"])
+
+    def test_numero_que_muda_grava_na_hora(self):
+        memoria.registrar([pend()], self.con, atras(minutes=30))
+        n1 = self.con.execute("SELECT COUNT(*) FROM historico").fetchone()[0]
+        r = memoria.registrar([pend(), pend(projeto="b")], self.con, atras(minutes=29))
+        n2 = self.con.execute("SELECT COUNT(*) FROM historico").fetchone()[0]
+        self.assertGreater(n2, n1)
+        self.assertTrue(r["retrato"])
+
+    def test_uma_hora_parada_ainda_deixa_batimento(self):
+        """Sem isto, um dia inteiro sem novidade viraria um ponto so e o
+        sparkline sumiria — 'nada mudou' tambem e informacao a desenhar."""
+        memoria.registrar([pend()], self.con, atras(hours=3))
+        r = memoria.registrar([pend()], self.con, atras(hours=1))
+        self.assertTrue(r["retrato"])
+
+    def test_medicao_invalida_nao_grava_retrato_falso_no_historico(self):
+        memoria.registrar([pend(projeto="a")], self.con, atras(days=1))
+        antes = self.con.execute("SELECT COUNT(*) FROM historico").fetchone()[0]
+        memoria.registrar([], self.con, iso(AGORA), medicao_valida=False)
+        depois = self.con.execute("SELECT COUNT(*) FROM historico").fetchone()[0]
+        self.assertEqual(antes, depois)
 
 
 # -------------------------------------------------------------------- decorar
@@ -354,6 +409,29 @@ class Agrupar(unittest.TestCase):
 
     def test_lista_vazia_devolve_lista_vazia(self):
         self.assertEqual(regras.agrupar([]), [])
+
+    def test_toda_regra_do_motor_tem_rotulo_em_portugues(self):
+        """A trava que impede o grupo de cair no texto generico caladamente.
+
+        Sem este teste, uma regra nova entrava no motor e o card do grupo dizia
+        "3 projetos com a mesma pendencia" — sem erro, sem aviso, so pior. Ja
+        aconteceu: `so_no_disco` e `sem_descricao` estavam no dicionario, mas os
+        ids reais eram `nao_enviado` e `caso_vazio`.
+        """
+        import re
+        fonte = open("regras.py", encoding="utf-8").read()
+        ids = {m.group(1) for m in re.finditer(r'_p\(\s*\n?\s*"([a-z_]+)"', fonte)}
+        self.assertTrue(ids, "nao achei regra nenhuma na fonte")
+        self.assertEqual(ids - set(regras.ROTULO_REGRA), set(),
+                         "regra sem rótulo: o grupo cairia no texto genérico")
+        self.assertEqual(set(regras.ROTULO_REGRA) - ids, set(),
+                         "rótulo órfão: aponta para uma regra que não existe")
+
+    def test_o_texto_do_grupo_usa_o_rotulo_certo(self):
+        g = regras.agrupar([pend(regra="nao_enviado", projeto=n, gravidade="alta")
+                            for n in "abc"])[0]
+        self.assertIn("GitHub", g["texto"])
+        self.assertNotIn("mesma pendência", g["texto"])
 
     def test_a_contagem_visivel_cai_com_os_dados_de_hoje(self):
         """27 pendencias reais de 25/08: 10 grafo_velho + 4 vulnerabilidade + 13 soltas."""

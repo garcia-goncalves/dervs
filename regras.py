@@ -289,7 +289,7 @@ ROTULO_REGRA = {
     "container_caido": "com contêiner caído",
     "vulnerabilidade": "com alertas de segurança abertos",
     "nao_commitado": "com trabalho sem salvar no histórico",
-    "so_no_disco": "com commit que não foi para o GitHub",
+    "nao_enviado": "com commit que não foi para o GitHub",
     "memoria_crlf": "com memória em quebra de linha do Windows",
     "cota_actions": "com a cota do GitHub estourando",
     "grafo_velho": "com o mapa de código velho",
@@ -298,7 +298,7 @@ ROTULO_REGRA = {
     "env_drift": "com o exemplo de variáveis desatualizado",
     "abandonado": "sem commit há muito tempo",
     "sem_remoto": "sem cópia no GitHub",
-    "sem_descricao": "sem descrição escrita",
+    "caso_vazio": "sem descrição escrita",
     "site_fora": "com o site fora do ar",
     "nao_publicado": "com trabalho pronto e não publicado",
 }

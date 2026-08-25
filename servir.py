@@ -157,7 +157,12 @@ def _anotar_a_vida(camada: str) -> None:
             e = banco.montar_estado(con)
             pend = regras.avaliar(e["projetos"], quota=e["quota"],
                                   silenciadas=banco.silenciadas(con))
-            memoria.registrar(pend, con)
+            # Coleta que terminou bem mas nao enxergou projeto nenhum NAO e "o
+            # dono resolveu tudo": e a pasta de repositorios indisponivel por um
+            # instante. Sem esta guarda, o painel fecharia as 27 pendencias de
+            # uma vez — inclusive as de seguranca — e no minuto seguinte se
+            # gabaria de ter fechado 27. Achado da revisao de seguranca.
+            memoria.registrar(pend, con, medicao_valida=bool(e["projetos"]))
         finally:
             con.close()
     except Exception as erro:                       # noqa: BLE001 — ver acima

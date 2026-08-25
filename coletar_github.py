@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import os
 import socket
 import subprocess
@@ -46,7 +47,12 @@ AGORA = datetime.now(timezone.utc)
 # aqui apaga a regra 15 da tela e nao muda mais nada.
 MEDIR_SITE = True
 TETO_SITE = 8                # segundos ate desistir de um site
-AGENTE = "HUB-do-dev/1.0 (monitor local; +http://localhost:4777)"
+TENTATIVAS_SITE = 2          # uma falha nao vira alarme: ver mede_site()
+PAUSA_ENTRE_TENTATIVAS = 1.5
+# Sem endereco no User-Agent: ele e lido por todo servidor medido e por todo
+# intermediario no caminho. Anunciar "ha um painel local na 4777" e informacao
+# de graca para quem registrar um dominio que o dono deixou expirar.
+AGENTE = "HUB-do-dev/1.0 (monitor)"
 
 # Nomes de workflow que contam como "publicar". Repositorio sem nenhum deles
 # fica CALADO na regra 16 — nao saber nao e o mesmo que estar atrasado.
@@ -111,9 +117,39 @@ class _SemRedirecionar(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _uma_batida(url: str) -> dict:
+    """Uma tentativa. codigo=0 e erro preenchido significam 'nem respondeu'."""
+    r = {"codigo": 0, "erro": "", "ms": 0}
+    pedido = urllib.request.Request(url, method="GET",
+                                    headers={"User-Agent": AGENTE})
+    abridor = urllib.request.build_opener(_SemRedirecionar)
+    inicio = time.time()
+    try:
+        with abridor.open(pedido, timeout=TETO_SITE) as resp:
+            r["codigo"] = resp.status
+    except urllib.error.HTTPError as e:
+        r["codigo"] = e.code                # 3xx/4xx/5xx chegam aqui
+    except Exception as e:                  # noqa: BLE001 — timeout, DNS, TLS, socket
+        r["erro"] = type(e).__name__
+    r["ms"] = int((time.time() - inicio) * 1000)
+    return r
+
+
 def mede_site(url: str) -> dict:
-    """GET na raiz. 5xx e ausencia de resposta = fora do ar; o resto = vivo."""
-    fora = {"url": url, "ok": None, "codigo": 0, "erro": "", "ms": 0}
+    """GET na raiz. 5xx e ausencia de resposta = fora do ar; o resto = vivo.
+
+    DUAS TENTATIVAS antes de acusar. Uma unica falha nao vira alarme de gravidade
+    alta: um piscar da internet DELE — nao do servidor — bastaria para a tela
+    dizer "site de producao fora do ar" com toda a cara de certo, que e o pior
+    defeito possivel neste painel. A segunda batida so acontece quando a
+    primeira foi mal, entao o caminho normal continua sendo uma requisicao so.
+
+    Confirmar aqui, e nao esperando a proxima coleta, e deliberado: em 20 minutos
+    de espera um apagao de verdade fica invisivel: o dobro do tempo em que o
+    cliente ja ligou.
+    """
+    fora = {"url": url, "ok": None, "codigo": 0, "erro": "", "ms": 0,
+            "tentativas": 0}
     if not MEDIR_SITE or not url_segura(url):
         return fora
     if not host_publico(urlsplit(url).hostname):
@@ -121,19 +157,17 @@ def mede_site(url: str) -> dict:
         # medir — e "nao da para medir" NAO e "esta fora do ar" (invariante 2).
         fora["erro"] = "nao_resolveu"
         return fora
-    pedido = urllib.request.Request(url, method="GET",
-                                    headers={"User-Agent": AGENTE})
-    abridor = urllib.request.build_opener(_SemRedirecionar)
-    inicio = time.time()
-    try:
-        with abridor.open(pedido, timeout=TETO_SITE) as r:
-            fora["codigo"] = r.status
-    except urllib.error.HTTPError as e:
-        fora["codigo"] = e.code             # 3xx/4xx/5xx chegam aqui
-    except Exception as e:                  # noqa: BLE001 — timeout, DNS, TLS, socket
-        fora["erro"] = type(e).__name__
-    fora["ms"] = int((time.time() - inicio) * 1000)
-    fora["ok"] = bool(fora["codigo"]) and fora["codigo"] < 500
+
+    for tentativa in range(1, TENTATIVAS_SITE + 1):
+        r = _uma_batida(url)
+        fora.update(r, tentativas=tentativa)
+        vivo = bool(r["codigo"]) and r["codigo"] < 500
+        if vivo:
+            fora["ok"] = True
+            return fora
+        if tentativa < TENTATIVAS_SITE:
+            time.sleep(PAUSA_ENTRE_TENTATIVAS)
+    fora["ok"] = False
     return fora
 
 
@@ -250,6 +284,13 @@ def mede_deploy(slug: str, branch: str) -> dict:
     if not sha:
         return {}
 
+    # Defesa em profundidade: o sha vem da API do GitHub e vai para o `detalhe`
+    # da pendencia, campo que entra no prompt do botao "Resolver". Doze
+    # caracteres nao injetam nada e a etiqueta de dado nao-confiavel cobre — mas
+    # conferir que e mesmo hexadecimal custa uma linha.
+    if not re.fullmatch(r"[0-9a-f]{7,40}", sha):
+        return {}
+
     comp = _gh_json("repos/%s/compare/%s...%s" % (slug, sha, branch))
     atras = atras_de(comp)
     if atras is None:
@@ -349,10 +390,12 @@ def main():
                 antes = ((tudo.get(nome) or {}).get("github") or {})
                 novo["vulns"] = (antes.get("dados") or {}).get("vulns") or {}
                 novo["vulns_medido_em"] = antes.get("medido_em")
-            # Producao: so para quem declarou endereco no casos.json.
             local = ((tudo.get(nome) or {}).get("local") or {}).get("dados") or {}
-            url_prod = local.get("url_prod") or ""
             antes_gh = ((tudo.get(nome) or {}).get("github") or {}).get("dados") or {}
+
+            # O SITE: so para quem declarou endereco no casos.json. Projeto sem
+            # endereco nao tem site para estar fora do ar.
+            url_prod = local.get("url_prod") or ""
             if url_prod:
                 site = mede_site(url_prod)
                 if site.get("ok") is None:
@@ -365,8 +408,15 @@ def main():
                         novo["site"] = anterior
                 else:
                     novo["site"] = site
-                dep = mede_deploy(novo["slug"], novo["branch_padrao"] or "main")
-                novo["deploy"] = dep or antes_gh.get("deploy") or {}
+
+            # A PUBLICACAO: para TODO repositorio, nao so os com endereco de site.
+            # Amarrar as duas coisas foi erro meu, achado rodando: o `dents` tem
+            # workflow de deploy, tinha 4 commits publicados a menos que a main —
+            # e ficava invisivel por nao ter `url_prod` escrito no casos.json.
+            # A primeira chamada e barata e a maioria dos repositorios para nela
+            # (sem workflow de publicacao, `mede_deploy` devolve {} e sai).
+            dep = mede_deploy(novo["slug"], novo["branch_padrao"] or "main")
+            novo["deploy"] = dep or antes_gh.get("deploy") or {}
 
             banco.gravar(nome, "github", novo, con)
             gravados += 1
