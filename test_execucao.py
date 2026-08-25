@@ -247,6 +247,24 @@ class ClassificacaoDaFalha(unittest.TestCase):
             is_error=True, terminal_reason="max_turns"))
         self.assertEqual(manchete, "Falhou: não terminou a tempo")
 
+    def test_o_evento_real_de_limite_de_turnos(self):
+        """Copia literal do evento medido em 25/08/2026 com --max-turns 1.
+
+        Repare em `result: None` — o campo do texto vem VAZIO nesse caso, e um
+        classificador que fizesse .lower() nele direto quebraria a thread
+        leitora e congelaria a tela. E repare que subtype diz 'error_max_turns'
+        enquanto terminal_reason diz 'max_turns': quem manda e o segundo.
+        """
+        real = {"type": "result", "subtype": "error_max_turns", "is_error": True,
+                "terminal_reason": "max_turns", "result": None,
+                "total_cost_usd": 0.2034095}
+        self.assertEqual(execucao.avancar("rodando", real), "falha")
+        manchete, corpo = execucao.classificar_falha(real)
+        self.assertEqual(manchete, "Falhou: não terminou a tempo")
+        self.assertTrue(corpo)
+        self.assertEqual(execucao.em_reais(execucao.custo_do_evento(real, 0.0)),
+                         "R$ 1,05")
+
     def test_causa_desconhecida_nao_mente(self):
         """Nenhuma das 4 manchetes do design cobre api_error. Inventar uma seria
         mentir com autoridade — a quinta manchete diz o motivo cru."""

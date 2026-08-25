@@ -436,7 +436,7 @@ def _rodar(args, cwd=None, limite=180, corte=1200):
     except (OSError, subprocess.SubprocessError) as e:
         return False, "não consegui rodar %s: %s" % (args[0], e)
     saida = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()
-    return r.returncode == 0, saida[-1200:]
+    return r.returncode == 0, saida[-corte:]
 
 
 def criar_copia(caminho_do_projeto, destino, ramo):

@@ -30,7 +30,7 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `banco.py` | O SQLite (`hub.db`): uma linha por (projeto, camada), com carimbo de tempo. |
 | `regras.py` | O motor das 14 pendências. Puro: entra dicionário, sai lista. |
 | `execucao.py` | O botão **Resolver**: dispara uma sessão do Claude Code numa cópia isolada e abre o pedido de alteração. Seção própria abaixo. |
-| `test_execucao.py` | 67 testes das decisões do Resolver. `python test_execucao.py`. |
+| `test_execucao.py` | 72 testes das decisões do Resolver. `python test_execucao.py`. |
 | `test_regras.py` | 30 testes do motor. `python test_regras.py`. |
 | `test_servir.py` | 43 testes do proxy do grafo e da superfície do Resolver. `python test_servir.py`. |
 | `coletar.py` | Camada **local**: git, Docker, portas, grafo, memória, variáveis. |
@@ -477,6 +477,26 @@ O custo aparece em reais, por uma cotação constante no código
 (`execucao.USD_BRL`, R$ 5,14, fechamento de 21/08/2026). E ele **fica parado até
 a sessão terminar**: foi medido que só o evento final traz o custo. Inventar uma
 tabela de preços por token daria um número que se mexe e está errado.
+
+### Quando o pedido de alteração NÃO abre
+
+Três casos, cada um com uma tela própria — nenhum deles diz "algo deu errado":
+
+- **A sessão não mexeu em nada.** A tela diz "Terminou sem alterar nenhum
+  arquivo", e não finge que abriu pedido.
+- **O projeto não tem cópia no GitHub.** Sem `origin` não há para onde enviar. A
+  correção e o ramo ficam preservados no projeto, e a tela diz isso.
+  (Medido: o `medconsultoria-crm` está nesse caso.)
+- **O envio falhou.** A cópia é preservada com a mudança dentro, e o log cru do
+  `git`/`gh` aparece na tela.
+
+**Um detalhe que custou caro descobrir:** a sessão filha **commita por conta
+própria**. O prompt proíbe `push` e pull request, não commit. Por isso o painel
+não pergunta apenas "há arquivo alterado?" — ele compara o commit atual da cópia
+com o commit de onde ela partiu. Sem isso, uma correção já commitada era lida
+como "nada mudou", a cópia era descartada e a tela anunciava um pedido que nunca
+existiu. Achado na prova de aceitação de 25/08/2026, com uma execução real de
+R$ 10,37, e travado por teste (`HaOQuePublicar`).
 
 ### O que este recurso NÃO isola
 
