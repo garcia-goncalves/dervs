@@ -154,3 +154,33 @@ def diff_mexeu_em_teste(diff: str) -> str:
             if marcador in seco:
                 return "desligou um teste com `%s`" % marcador
     return ""
+CHAVE_COM_VALOR = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]{0,63})\s*=\s*(\S.*)$")
+
+
+def env_example_tem_valor(diff: str) -> str:
+    """Alguma linha NOVA do .env.example levaria valor? Estrito de proposito.
+
+    Um espaco reservado que parece inofensivo passa a ser recusado junto. O
+    custo de errar para o lado frouxo e um segredo no historico do git, e
+    rotacionar segredo e varredura no repositorio inteiro.
+    """
+    for linha in (diff or "").splitlines():
+        if not linha.startswith("+") or linha.startswith("+++"):
+            continue
+        seco = linha[1:].strip()
+        if not seco or seco.startswith("#"):
+            continue
+        achou = CHAVE_COM_VALOR.match(seco)
+        if achou:
+            return "a linha `%s` do .env.example levaria um valor" % achou.group(1)
+    return ""
+
+
+def reprovar(diff: str, regra: str) -> str:
+    """Aplica as travas de diff que valem para esta regra. "" e aprovado."""
+    motivo = diff_mexeu_em_teste(diff)
+    if motivo:
+        return motivo
+    if regra == "env_drift":
+        return env_example_tem_valor(diff)
+    return ""

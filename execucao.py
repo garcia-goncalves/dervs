@@ -565,7 +565,8 @@ _proc = None
 
 def _zerado() -> dict:
     return {
-        "estado": "parada", "projeto": "", "pendencia_id": "", "frase": "",
+        "estado": "parada", "projeto": "", "regra": "", "pendencia_id": "",
+        "frase": "",
         "custo_usd": 0.0, "linhas": [], "pr_url": None, "resumo": "",
         "diff": "", "manchete": "", "corpo": "", "copia": "", "ramo": "", "base_sha": "",
         "projeto_caminho": "",
@@ -631,6 +632,7 @@ def iniciar(pendencia: dict, caminho_do_projeto: str):
         _execucao.update(_zerado())
         _execucao.update({
             "estado": "rodando", "projeto": projeto,
+            "regra": pendencia.get("regra", ""),
             "pendencia_id": pendencia.get("id", ""),
             "frase": FRASE_COPIA % projeto, "ramo": ramo,
             "copia": str(destino), "projeto_caminho": str(caminho_do_projeto),
@@ -811,6 +813,23 @@ def _fechar_com_pedido_de_alteracao(evento: dict) -> None:
         return
 
     _execucao["diff"] = diff_da_copia(destino, base)
+
+    # As travas de diff. Ficam AQUI, no ultimo instante antes de publicar,
+    # porque e o unico ponto por onde todo caminho passa — botao, paleta e fila.
+    #
+    # `import` dentro da funcao de proposito: fila.py importa execucao.py, e no
+    # topo isto seria importacao circular.
+    import fila
+    motivo = fila.reprovar(_execucao.get("diff") or "", _execucao.get("regra") or "")
+    if motivo:
+        _anotar("Reprovado antes de publicar: " + motivo)
+        _execucao["estado"] = "falha"
+        _execucao["frase"] = "Reprovado: " + motivo
+        _execucao["manchete"] = "Reprovado antes de publicar"
+        _execucao["corpo"] = ("A sessao produziu uma mudanca que uma das travas "
+                              "recusou: %s. Nada foi enviado ao GitHub." % motivo)
+        remover_copia(_execucao.get("projeto_caminho"), _execucao.get("copia"))
+        return
 
     if not tem_remoto(projeto_caminho):
         _execucao.update({

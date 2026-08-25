@@ -293,5 +293,53 @@ class TesteApagado(unittest.TestCase):
         self.assertEqual(fila.diff_mexeu_em_teste(None), "")
 
 
+class SegredoNoEnvExample(unittest.TestCase):
+
+    def test_chave_vazia_passa(self):
+        self.assertEqual(fila.env_example_tem_valor("+DATABASE_URL=\n"), "")
+
+    def test_chave_com_valor_reprova(self):
+        motivo = fila.env_example_tem_valor("+DATABASE_URL=postgres://a:b@c/d\n")
+        self.assertIn("DATABASE_URL", motivo)
+
+    def test_espaco_reservado_tambem_reprova(self):
+        self.assertIn("API_KEY", fila.env_example_tem_valor("+API_KEY=troque-aqui\n"))
+
+    def test_comentario_passa(self):
+        self.assertEqual(fila.env_example_tem_valor("+# banco de dados\n"), "")
+
+    def test_linha_em_branco_passa(self):
+        self.assertEqual(fila.env_example_tem_valor("+\n"), "")
+
+    def test_linha_removida_nao_e_avaliada(self):
+        self.assertEqual(fila.env_example_tem_valor("-SENHA=abc123\n"), "")
+
+    def test_cabecalho_do_diff_nao_e_avaliado(self):
+        self.assertEqual(fila.env_example_tem_valor("+++ b/.env.example\n"), "")
+
+    def test_linha_sem_igual_passa(self):
+        self.assertEqual(fila.env_example_tem_valor("+apenas texto\n"), "")
+
+
+class Reprovar(unittest.TestCase):
+
+    def test_env_drift_checa_as_duas_travas(self):
+        self.assertIn("DATABASE_URL",
+                      fila.reprovar("+DATABASE_URL=segredo\n", "env_drift"))
+
+    def test_dependencia_nao_checa_a_trava_do_env(self):
+        """So o env_drift toca o arquivo de exemplo. Cobrar dos outros seria ruido."""
+        self.assertEqual(fila.reprovar("+DATABASE_URL=segredo\n",
+                                       "dependencia_insegura"), "")
+
+    def test_trava_do_teste_vale_para_toda_regra(self):
+        diff = "--- a/test_x.py\n+++ /dev/null\n"
+        self.assertIn("test_x.py", fila.reprovar(diff, "dependencia_insegura"))
+        self.assertIn("test_x.py", fila.reprovar(diff, "env_drift"))
+
+    def test_diff_limpo_aprova(self):
+        self.assertEqual(fila.reprovar("+print('oi')\n", "env_drift"), "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
