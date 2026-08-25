@@ -314,12 +314,19 @@ porque as partes puras aqui são as que decidem **qual comando roda na máquina*
 
 ## duvidas_para_o_dono
 
-Três, em lote, cada uma com recomendação marcada. A quarta que o Diretor levantou
-(autorização para despachar subagentes) já foi respondida pelo dono na abertura
-desta sessão e não volta.
+**Todas respondidas em 24/08/2026, na mesma sessão. Nenhuma continua aberta.**
+
+| Dúvida | Decisão |
+|---|---|
+| `Ajudei-Saude` entra na entrega 1? | **Não.** Resposta do dono no portão de risco. O botão nasce desligado só nesse projeto; volta na entrega 2 com o revisor `healthcare` no fluxo. |
+| Teto de gasto por execução | **US$ 1** (cerca de R$ 5). Decidido por mim, por ser constante reversível. |
+| Cotação do dólar | **Constante no código**, num lugar só. Decidido por mim, por ser constante reversível. |
+| Autorização para despachar subagentes | **Concedida** pelo dono na abertura desta sessão. |
+
+O registro original de cada uma, com a recomendação que foi dada:
 
 1. **O `Ajudei-Saude` entra no botão "Resolver" já nesta primeira entrega?**
-   **Recomendo: não.** Desligar o botão só nesse projeto custa uma linha, e tira
+   **Recomendei: não. → O dono decidiu: não.** Desligar o botão só nesse projeto custa uma linha, e tira
    o único repositório com prontuário sob LGPD do caminho de uma sessão autônoma
    antes de o cano estar provado. Volta na entrega 2, com o revisor `healthcare`
    no fluxo. *Nota técnica favorável:* o Git **não copia arquivos ignorados** para
@@ -328,7 +335,7 @@ desta sessão e não volta.
    no banco.
 
 2. **Qual o teto de gasto por execução?**
-   **Recomendo: US$ 1 (cerca de R$ 5).** A sessão para sozinha ao atingir, e o
+   **Recomendei, e decidi por ser constante reversivel: US$ 1 (cerca de R$ 5).** A sessão para sozinha ao atingir, e o
    painel avisa. É alto o bastante para uma CI vermelha de verdade e baixo o
    bastante para um laço não custar uma noite. É uma constante no código: mudar
    depois é uma linha.
