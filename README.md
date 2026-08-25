@@ -65,7 +65,7 @@ medida e esmaece quando envelhece — se o painel mentir uma vez, o hábito morr
 |---|---|---|---|
 | 1 | CI vermelha | alta | abrir o que falhou |
 | 2 | Container que devia estar no ar e caiu | alta | subir |
-| 3 | Alerta de segurança aberto (Dependabot) | alta | ver os alertas |
+| 3 | Alerta de segurança aberto (Dependabot) | alta se houver crítico ou alto, senão média | ver os alertas |
 | 4 | Trabalho não commitado há mais de 1 dia | alta | abrir no VS Code |
 | 5 | Commit só no disco | alta | enviar ao GitHub |
 | 6 | Memória do projeto em CRLF | alta | converter |
@@ -649,6 +649,14 @@ dono a ignorar a caixa inteira, inclusive o alarme que importava.
 só, com a contagem, a idade da mais velha e os projetos dentro. Com os dados
 daquele dia, 27 pendências viraram **10 linhas**.
 
+**Com uma exceção, em `NAO_AGRUPAR`: alerta de segurança nunca se dobra.** Dez
+"grafo velho" são dez linhas dizendo a mesma coisa, com a mesma ação. Quatro
+projetos com alerta de segurança não são: em 25/08/2026 iam de 6 críticos em 19
+alertas a 93 alertas com 11 baixos. *"4 projetos com alertas de segurança
+abertos"* é verdade e não ajuda — apaga justamente o número que diz por onde
+começar. Medido no painel: o agrupamento entrega **14 linhas** em vez de 11, e
+vale a troca.
+
 **É uma visão, não um substituto.** O `/api/dados` continua mandando a lista
 achatada em `pendencias`, e o agrupamento vai à parte, em `grupos`. O motivo é
 concreto: o botão "Resolver" recalcula a pendência pelo `id` no servidor — e é
@@ -705,6 +713,78 @@ máquina dele.
 **Falha de medição não apaga medição boa.** `ok=None` é "não medi"; `ok=False` é
 "caiu". Um blip de rede às 20h não pode fazer "site no ar" virar "site fora" —
 mesmo cuidado que os alertas de segurança já tinham.
+
+## 203 alertas eram 32 pacotes: contagem não é risco
+
+Até 25/08/2026 a linha de segurança dizia uma coisa só: *"93 alerta(s) de
+segurança aberto(s) em medconsultoria."* Verdade, e mesmo assim enganava. Os 203
+alertas dos quatro projetos foram baixados um a um com `gh api` naquele dia, e o
+que apareceu foi isto:
+
+| Projeto | Alertas | Críticos | Altos | Pacotes | Defeitos distintos |
+|---|---|---|---|---|---|
+| medconsultoria | 93 | 2 | 44 | 24 | 85 |
+| odontologia-pericia | 71 | 1 | 40 | 13 | 62 |
+| investrix | 20 | 0 | 12 | 9 | 17 |
+| workspace-medconsultoria | 19 | **6** | 7 | 7 | 12 |
+
+O projeto com **mais** alertas não é o mais perigoso, e o mais perigoso era o que
+a tela mostrava como menor. Três leituras erradas saíam de um número certo:
+
+1. **Contagem não é tamanho do trabalho.** 203 alertas, 32 pacotes distintos no
+   total. Boa parte é dependência transitiva que sai num `npm update`.
+2. **Contagem não é gravidade.** Os 11 alertas *baixos* do `medconsultoria`
+   pesavam na tela igual aos 6 *críticos* do `workspace-medconsultoria`.
+3. **O mesmo defeito era contado várias vezes.** Os 6 críticos do
+   `workspace-medconsultoria` são **dois CVEs de `vitest`** (CVE-2025-24964 e
+   CVE-2026-47429) repetidos por três manifestos. Três tarefas onde havia uma.
+
+Hoje a mesma consulta GraphQL — **sem uma ida a mais na rede** — traz
+`severity`, `package`, `ghsaId` e `dependencyScope` de até 100 alertas, e
+`_resume_alertas()` devolve severidade, pacotes distintos, defeitos distintos e
+escopo. A frase virou *"6 crítico(s) e 7 alto(s) entre 19 alerta(s) de segurança
+em workspace-medconsultoria, em 7 pacote(s)"*, e o detalhe embaixo abre o resto.
+
+### A tentação que foi medida e recusada
+
+O GitHub diz, por alerta, se a dependência é `RUNTIME` ou `DEVELOPMENT`. A
+tentação óbvia é rebaixar tudo que é `DEVELOPMENT` — *"vitest é ferramenta de
+teste, não vai para produção"*. **Não dá, e isso foi medido, não suposto:** no
+próprio `workspace-medconsultoria` o **mesmo `vitest`** volta `DEVELOPMENT` num
+manifesto e **`RUNTIME` noutro**, porque num `package.json` ele está declarado
+fora de `devDependencies`.
+
+Rebaixar por escopo esconderia um crítico real de produção. O escopo entra na
+tela como **fato**, na linha de detalhe, e `gravidade_alerta()` não olha para ele.
+
+### Não saber não é o mesmo que estar seguro
+
+A gravidade caiu para **média** quando não há nenhum crítico nem alto. Duas
+situações sobem de volta para **alta**, de propósito:
+
+- **Sem severidade medida** — coleta antiga no banco, ou permissão que concedeu
+  o `totalCount` e recusou o detalhe.
+- **Amostra** — o GraphQL lê 100 alertas por consulta. Repositório com mais que
+  isso devolve amostra, o crítico pode estar justamente entre os que não vieram,
+  e a frase passa a dizer *"pelo menos"* em vez de afirmar a distribuição.
+
+Rebaixar por falta de medição seria mais uma forma de o painel mentir com número
+certo — a mesma família dos quatro casos da seção de segurança.
+
+### A ordem da lista também mentia
+
+Consertar a frase resolveu metade. Com a severidade já no texto, as quatro linhas
+ainda saíam `investrix` (12 altos, zero crítico) **antes** de
+`workspace-medconsultoria` (6 críticos) — porque `i` vem antes de `w` no alfabeto.
+
+`risco_alerta()` dá **100 por crítico e 1 por alto**, e esse peso desempata dentro
+da gravidade. Um crítico ganha de qualquer número plausível de altos: são coisas
+diferentes, não a mesma moeda. Moderado e baixo valem **zero** — são 47 dos 203
+alertas reais e, se contassem, seriam eles a decidir o desempate.
+
+O peso nunca atravessa gravidades: uma pendência média com risco alto continua
+atrás de qualquer alta. Regra que não mede risco fica em zero e ordena pelo nome,
+como sempre.
 
 ## O que ainda não existe
 

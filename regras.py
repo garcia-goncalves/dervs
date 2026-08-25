@@ -37,7 +37,13 @@ DIAS_ABANDONO = 30     # projeto sem commit
 PCT_COTA = 80          # cota de minutos do Actions
 
 
-def _p(regra, gravidade, projeto, texto, acao, detalhe=""):
+def _p(regra, gravidade, projeto, texto, acao, detalhe="", risco=0):
+    """`risco` desempata DENTRO da gravidade; nunca atravessa gravidades.
+
+    Regra que nao sabe medir risco deixa em zero e ordena pelo nome, como
+    sempre. So a de alerta de seguranca preenche hoje, e por um motivo medido:
+    ver `risco_alerta`.
+    """
     return {
         "id": "%s:%s" % (regra, projeto),
         "regra": regra,
@@ -46,6 +52,7 @@ def _p(regra, gravidade, projeto, texto, acao, detalhe=""):
         "texto": texto,
         "detalhe": detalhe,
         "acao": acao,
+        "risco": risco,
     }
 
 
@@ -90,9 +97,9 @@ def _do_projeto(p: dict) -> list:
     v = (gh or {}).get("vulns") or {}
     if v.get("total"):
         itens.append(_p(
-            "vulnerabilidade", "alta", nome,
-            "%d alerta(s) de segurança aberto(s) em %s." % (v["total"], nome),
-            {"tipo": "abrir_url", "rotulo": "Ver os alertas", "url": v.get("url", "")}))
+            "vulnerabilidade", gravidade_alerta(v), nome, frase_alerta(nome, v),
+            {"tipo": "abrir_url", "rotulo": "Ver os alertas", "url": v.get("url", "")},
+            detalhe=detalhe_alerta(v), risco=risco_alerta(v)))
 
     # 4. Trabalho nao commitado ha mais de um dia
     dias_sujo = g.get("sujos_dias")
@@ -257,6 +264,97 @@ def _do_projeto(p: dict) -> list:
     return itens
 
 
+def risco_alerta(v: dict) -> int:
+    """Peso para desempatar quatro linhas que sao todas "alta".
+
+    POR QUE EXISTE: medido no painel em 25/08/2026, com a severidade ja na
+    frase, as quatro linhas sairam `investrix` (12 altos, zero critico) ANTES de
+    `workspace-medconsultoria` (6 criticos) — porque `i` vem antes de `w`. A
+    frase dizia a verdade e a ordem mandava o dono para o lugar errado. Consertar
+    o texto sem consertar a ordem resolve metade do problema.
+
+    Critico vale 100 e alto vale 1, entao UM critico ganha de qualquer numero
+    plausivel de altos: sao coisas diferentes, nao a mesma moeda em quantidades
+    diferentes. Moderado e baixo valem ZERO de proposito — sao 47 dos 203
+    alertas reais, e se contassem seriam eles a decidir o desempate.
+
+    Severidade nao medida da zero. Aqui isso e so ordem; quem impede o rebaixamento
+    de quem nao foi medido e `gravidade_alerta`, que devolve "alta" nesse caso.
+    """
+    sev = v.get("sev") or {}
+    return (sev.get("critical") or 0) * 100 + (sev.get("high") or 0)
+
+
+def gravidade_alerta(v: dict) -> str:
+    """Alta so quando ha critico ou alto — com DUAS excecoes que sobem de volta.
+
+    Ordenar por contagem inverte o risco: medido em 25/08/2026, o
+    medconsultoria tinha 93 alertas (11 baixos) e o workspace-medconsultoria 19,
+    dos quais 6 CRITICOS. A tela mandava o dono comecar pelo lado errado.
+
+    As excecoes existem porque NAO SABER nao e o mesmo que SER SEGURO:
+
+      sem `sev`   coleta antiga no banco, ou permissao que so deu o total.
+      `amostra`   o GraphQL le 100 alertas por vez; o critico pode estar
+                  justamente entre os que nao vieram.
+
+    Nos dois casos fica alta. Rebaixar por falta de medicao seria mais uma forma
+    de o painel mentir com numero certo.
+    """
+    sev = v.get("sev")
+    if not sev or v.get("amostra"):
+        return "alta"
+    return "alta" if (sev.get("critical") or sev.get("high")) else "media"
+
+
+def frase_alerta(nome: str, v: dict) -> str:
+    total = v["total"]
+    sev = v.get("sev")
+    if not sev:
+        return "%d alerta(s) de segurança aberto(s) em %s." % (total, nome)
+    if v.get("amostra"):
+        # Com amostra a distribuicao vista NAO descreve o conjunto. A frase so
+        # pode dar um piso, e tem de dizer que e piso.
+        return ("%d alerta(s) de segurança aberto(s) em %s — mais do que cabe "
+                "numa leitura só, então isto é o que deu para ver: pelo menos "
+                "%d pacote(s) distinto(s)." % (total, nome, v.get("pacotes") or 0))
+
+    graves = []
+    if sev.get("critical"):
+        graves.append("%d crítico(s)" % sev["critical"])
+    if sev.get("high"):
+        graves.append("%d alto(s)" % sev["high"])
+    pacotes = v.get("pacotes") or 0
+    if graves:
+        return ("%s entre %d alerta(s) de segurança em %s, em %d pacote(s)."
+                % (" e ".join(graves), total, nome, pacotes))
+    # Sem grave nenhum a palavra "crítico" nao aparece: dizer "nenhum crítico"
+    # planta na tela justamente a palavra que a linha existe para nao gritar.
+    return ("%d alerta(s) de segurança em %s, todos moderados ou baixos, "
+            "em %d pacote(s)." % (total, nome, pacotes))
+
+
+def detalhe_alerta(v: dict) -> str:
+    """O escopo aparece aqui como FATO, e so aqui.
+
+    Ele nunca entra em `gravidade_alerta`: medido no workspace-medconsultoria
+    que o mesmo `vitest` volta DEVELOPMENT num manifesto e RUNTIME noutro, entao
+    "é só ferramenta de teste" esconderia um critico de producao.
+    """
+    sev = v.get("sev")
+    if not sev:
+        return ""
+    partes = ["%d %s" % (sev[k], r) for k, r in
+              (("critical", "crítico"), ("high", "alto"),
+               ("moderate", "moderado"), ("low", "baixo")) if sev.get(k)]
+    if v.get("defeitos"):
+        partes.append("%d defeito(s) distinto(s)" % v["defeitos"])
+    escopo = v.get("escopo") or {}
+    if escopo.get("runtime"):
+        partes.append("%d em dependência de produção" % escopo["runtime"])
+    return " · ".join(partes)
+
+
 def avaliar(projetos, quota=None, silenciadas=None) -> list:
     """Retrato dos projetos -> lista de pendencias, mais grave primeiro."""
     itens = []
@@ -281,6 +379,20 @@ def avaliar(projetos, quota=None, silenciadas=None) -> list:
 
 # ----------------------------------------------------------------- agrupar
 MIN_GRUPO = 3             # abaixo disso, repetir e mais claro que resumir
+
+# Regra que NUNCA se dobra, por mais que se repita.
+#
+# Agrupar existe para matar ruido: dez "grafo velho" com a mesma acao manual sao
+# dez linhas dizendo a mesma coisa. Alerta de seguranca nao e isso. Medido em
+# 25/08/2026, os quatro projetos com alerta eram muito diferentes entre si — o
+# workspace-medconsultoria com 6 CRITICOS em 19 alertas, e o medconsultoria com
+# 93 alertas dos quais 11 baixos. "4 projetos com alertas de seguranca abertos"
+# e verdade e nao ajuda: apaga justamente o numero que diz por onde comecar.
+#
+# Isto e o mesmo defeito que a coleta por severidade consertou um andar abaixo,
+# reaparecendo aqui em cima. O ganho do agrupamento (31 pendencias -> 11 linhas)
+# cai para 14 linhas, e vale a troca.
+NAO_AGRUPAR = {"vulnerabilidade"}
 
 # Rotulo curto por regra, para a linha do grupo. Sem isto o grupo diria
 # "10 x grafo_velho", que e nome de variavel, nao portugues.
@@ -328,7 +440,7 @@ def agrupar(pendencias) -> list:
 
     fora = []
     for regra, itens in por_regra.items():
-        if len(itens) < MIN_GRUPO:
+        if len(itens) < MIN_GRUPO or regra in NAO_AGRUPAR:
             fora.extend({"tipo": "item", "pendencia": p} for p in itens)
             continue
 
@@ -361,7 +473,10 @@ def agrupar(pendencias) -> list:
         g = x["gravidade"] if x["tipo"] == "grupo" else x["pendencia"]["gravidade"]
         r = x["regra"] if x["tipo"] == "grupo" else x["pendencia"]["regra"]
         proj = "" if x["tipo"] == "grupo" else (x["pendencia"].get("projeto") or "")
-        return (ORDEM.get(g, 9), r, proj)
+        # O risco entra DEPOIS da gravidade: uma media com risco alto continua
+        # atras de qualquer alta. Ele so desempata quem ja empatou.
+        risco = 0 if x["tipo"] == "grupo" else (x["pendencia"].get("risco") or 0)
+        return (ORDEM.get(g, 9), r, -risco, proj)
 
     fora.sort(key=chave)
     return fora

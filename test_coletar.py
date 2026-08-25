@@ -600,5 +600,100 @@ class MedeSite(unittest.TestCase):
             coletar_github.MEDIR_SITE = antes
 
 
+class AlertaTemSeveridadeNaoSoContagem(unittest.TestCase):
+    """"93 alertas" nao diz se sao 93 baixos ou 2 criticos.
+
+    Medido em 25/08/2026: os 203 alertas dos quatro projetos vinham de 32
+    pacotes, e os 6 "criticos" do workspace-medconsultoria eram DOIS CVEs de
+    vitest repetidos por tres manifestos. Contagem bruta inverte a ordem do
+    risco na tela.
+    """
+
+    def _no(self, alertas, total=None):
+        return {"nameWithOwner": "o/r", "url": "https://g/o/r",
+                "defaultBranchRef": {"name": "main", "target": {}},
+                "pullRequests": {"nodes": []},
+                "vulnerabilityAlerts": {
+                    "totalCount": len(alertas) if total is None else total,
+                    "nodes": alertas}}
+
+    @staticmethod
+    def _a(sev, pacote, ghsa, escopo="RUNTIME"):
+        return {"dependencyScope": escopo,
+                "securityAdvisory": {"ghsaId": ghsa},
+                "securityVulnerability": {
+                    "severity": sev,
+                    "package": {"name": pacote, "ecosystem": "NPM"}}}
+
+    def test_conta_por_severidade(self):
+        no = self._no([self._a("CRITICAL", "vitest", "GHSA-1"),
+                       self._a("CRITICAL", "vitest", "GHSA-2"),
+                       self._a("HIGH", "next", "GHSA-3"),
+                       self._a("MODERATE", "vite", "GHSA-4"),
+                       self._a("LOW", "esbuild", "GHSA-5")])
+        sev = coletar_github.traduz(no, True)["vulns"]["sev"]
+        self.assertEqual(sev, {"critical": 2, "high": 1, "moderate": 1, "low": 1})
+
+    def test_pacotes_distintos_e_o_tamanho_real_do_trabalho(self):
+        """Tres alertas do mesmo pacote sao UM `npm update`, nao tres tarefas."""
+        no = self._no([self._a("HIGH", "brace-expansion", "GHSA-1"),
+                       self._a("HIGH", "brace-expansion", "GHSA-1"),
+                       self._a("HIGH", "brace-expansion", "GHSA-1")])
+        v = coletar_github.traduz(no, True)["vulns"]
+        self.assertEqual(v["total"], 3)
+        self.assertEqual(v["pacotes"], 1)
+        self.assertEqual(v["defeitos"], 1)
+
+    def test_mesmo_pacote_com_avisos_diferentes_sao_defeitos_diferentes(self):
+        no = self._no([self._a("CRITICAL", "vitest", "GHSA-1"),
+                       self._a("CRITICAL", "vitest", "GHSA-2")])
+        v = coletar_github.traduz(no, True)["vulns"]
+        self.assertEqual((v["pacotes"], v["defeitos"]), (1, 2))
+
+    def test_escopo_e_exibido_como_fato_nunca_usado_para_rebaixar(self):
+        """MEDIDO: o mesmo vitest volta DEVELOPMENT num manifesto e RUNTIME noutro.
+
+        Rebaixar "e so ferramenta de teste" esconderia um critico de producao.
+        O escopo entra no banco como numero, e a gravidade NAO olha para ele.
+        """
+        no = self._no([self._a("CRITICAL", "vitest", "GHSA-1", "DEVELOPMENT"),
+                       self._a("CRITICAL", "vitest", "GHSA-1", "RUNTIME")])
+        v = coletar_github.traduz(no, True)["vulns"]
+        self.assertEqual(v["escopo"], {"runtime": 1, "development": 1})
+        self.assertEqual(v["sev"]["critical"], 2)
+
+    def test_severidade_desconhecida_nao_vira_baixa(self):
+        """Campo que o GitHub nao mandou nao pode virar "moderado" por omissao."""
+        no = self._no([{"dependencyScope": None, "securityAdvisory": {},
+                        "securityVulnerability": {}}])
+        v = coletar_github.traduz(no, True)["vulns"]
+        self.assertEqual(v["total"], 1)
+        self.assertEqual(sum(v["sev"].values()), 0)
+
+    def test_sem_nodes_o_total_sobrevive_sozinho(self):
+        """A permissao pode dar totalCount e recusar os nodes. O total vale.
+
+        Sem esta trava, um degrau novo de permissao apagaria da tela um numero
+        que hoje funciona.
+        """
+        no = {"nameWithOwner": "o/r", "url": "https://g/o/r",
+              "defaultBranchRef": {"name": "main", "target": {}},
+              "pullRequests": {"nodes": []},
+              "vulnerabilityAlerts": {"totalCount": 93}}
+        v = coletar_github.traduz(no, True)["vulns"]
+        self.assertEqual(v["total"], 93)
+        self.assertNotIn("sev", v)
+
+    def test_nodes_truncados_nao_mentem_sobre_o_total(self):
+        """O GraphQL traz no maximo 100 nos; 203 alertas nao cabem.
+
+        Se os nos forem menos que o total, a soma das severidades NAO fecha e a
+        tela nao pode dizer "6 criticos de 19" com base numa amostra.
+        """
+        no = self._no([self._a("HIGH", "next", "GHSA-1")], total=93)
+        v = coletar_github.traduz(no, True)["vulns"]
+        self.assertEqual(v["total"], 93)
+        self.assertTrue(v["amostra"], "deveria marcar que a contagem e parcial")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

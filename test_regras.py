@@ -308,5 +308,173 @@ class MotorInteiro(unittest.TestCase):
             self.assertTrue(i["texto"], i["regra"])
 
 
+class AlertaOrdenadoPorRiscoNaoPorContagem(unittest.TestCase):
+    """93 alertas baixos nao sao mais urgentes que 6 criticos.
+
+    Ordenar por contagem manda o dono comecar pelo projeto errado.
+    """
+
+    @staticmethod
+    def _com(vulns):
+        return projeto(github={"ci": {"conclusao": "success", "url": "u", "quando": ""},
+                               "prs": [], "vulns": dict(vulns, url="https://alerts")})
+
+    def test_a_frase_diz_a_severidade_nao_so_o_total(self):
+        """Caso real do workspace-medconsultoria em 25/08/2026."""
+        p = self._com({"total": 19, "sev": {"critical": 6, "high": 7,
+                                            "moderate": 3, "low": 3},
+                       "pacotes": 12, "defeitos": 14})
+        (item,) = so(regras.avaliar([p], quota=None), "vulnerabilidade")
+        self.assertIn("6 crítico", item["texto"])
+        self.assertEqual(item["gravidade"], "alta")
+
+    def test_a_frase_diz_o_tamanho_real_do_trabalho(self):
+        """Os 93 do medconsultoria eram 17 pacotes. A tela precisa dizer isso."""
+        p = self._com({"total": 93, "sev": {"critical": 2, "high": 44,
+                                            "moderate": 36, "low": 11},
+                       "pacotes": 17, "defeitos": 30})
+        (item,) = so(regras.avaliar([p], quota=None), "vulnerabilidade")
+        self.assertIn("17 pacote", item["texto"])
+
+    def test_so_moderado_e_baixo_nao_e_alta(self):
+        p = self._com({"total": 8, "sev": {"critical": 0, "high": 0,
+                                           "moderate": 5, "low": 3},
+                       "pacotes": 4, "defeitos": 6})
+        (item,) = so(regras.avaliar([p], quota=None), "vulnerabilidade")
+        self.assertEqual(item["gravidade"], "media")
+        self.assertNotIn("crítico", item["texto"])
+
+    def test_um_critico_sozinho_ja_e_alta(self):
+        p = self._com({"total": 1, "sev": {"critical": 1, "high": 0,
+                                           "moderate": 0, "low": 0},
+                       "pacotes": 1, "defeitos": 1})
+        (item,) = so(regras.avaliar([p], quota=None), "vulnerabilidade")
+        self.assertEqual(item["gravidade"], "alta")
+
+    def test_severidade_nao_medida_continua_alta(self):
+        """NAO SABER a severidade nao e o mesmo que ela ser baixa.
+
+        Coleta antiga no banco, ou permissao que so deu totalCount, cai aqui.
+        Rebaixar por falta de dado seria a quinta forma de o painel mentir.
+        """
+        p = self._com({"total": 3})
+        (item,) = so(regras.avaliar([p], quota=None), "vulnerabilidade")
+        self.assertEqual(item["gravidade"], "alta")
+        self.assertIn("3", item["texto"])
+
+    def test_amostra_parcial_nao_afirma_o_que_nao_mediu(self):
+        """203 alertas nao cabem nos 100 nos do GraphQL.
+
+        Com amostra, a frase nao pode dizer "6 criticos de 203" â€” ela so pode
+        dizer "pelo menos 6". E a gravidade nao pode cair, porque o critico pode
+        estar justamente na parte que nao veio.
+        """
+        p = self._com({"total": 203, "sev": {"critical": 0, "high": 0,
+                                             "moderate": 2, "low": 1},
+                       "pacotes": 3, "defeitos": 3, "amostra": True})
+        (item,) = so(regras.avaliar([p], quota=None), "vulnerabilidade")
+        self.assertEqual(item["gravidade"], "alta")
+        self.assertIn("pelo menos", item["texto"])
+
+    def test_zero_alerta_continua_sem_pendencia(self):
+        p = self._com({"total": 0, "sev": {"critical": 0, "high": 0,
+                                           "moderate": 0, "low": 0},
+                       "pacotes": 0, "defeitos": 0})
+        self.assertEqual(so(regras.avaliar([p], quota=None), "vulnerabilidade"), [])
+
+class AlertaDeSegurancaNaoSeDobra(unittest.TestCase):
+    """Agrupar mata ruido; alerta de seguranca NAO e ruido.
+
+    Os quatro projetos com alerta em 25/08/2026 tinham gravidades muito
+    diferentes: workspace-medconsultoria com 6 criticos e medconsultoria com 93
+    alertas dos quais 11 baixos. Dobrar isso em "4 projetos com alertas de
+    seguranca abertos" apaga exatamente o numero que diz por onde comecar — o
+    mesmo defeito que a coleta por severidade acabou de consertar, reaparecendo
+    um andar acima.
+    """
+
+    @staticmethod
+    def _v(projeto, texto):
+        return {"id": "vulnerabilidade:" + projeto, "regra": "vulnerabilidade",
+                "gravidade": "alta", "projeto": projeto, "texto": texto,
+                "detalhe": "", "acao": {}, "dias": 3}
+
+    def test_quatro_projetos_com_alerta_continuam_quatro_linhas(self):
+        ps = [self._v("p%d" % i, "%d crítico(s)" % i) for i in range(4)]
+        saida = regras.agrupar(ps)
+        self.assertEqual([x["tipo"] for x in saida], ["item"] * 4)
+
+    def test_a_severidade_de_cada_projeto_sobrevive_na_tela(self):
+        ps = [self._v("ws", "6 crítico(s) e 7 alto(s) entre 19"),
+              self._v("med", "2 crítico(s) e 44 alto(s) entre 93"),
+              self._v("inv", "12 alto(s) entre 20"),
+              self._v("odo", "1 crítico(s) e 40 alto(s) entre 71")]
+        textos = " | ".join(x["pendencia"]["texto"] for x in regras.agrupar(ps))
+        self.assertIn("6 crítico", textos)
+        self.assertIn("12 alto", textos)
+
+    def test_as_outras_regras_continuam_agrupando(self):
+        """A trava e so para seguranca; o fim do ruido nao pode ser desfeito."""
+        ps = [{"id": "grafo_velho:p%d" % i, "regra": "grafo_velho",
+               "gravidade": "media", "projeto": "p%d" % i, "texto": "t",
+               "detalhe": "", "acao": {}, "dias": 2} for i in range(4)]
+        (g,) = regras.agrupar(ps)
+        self.assertEqual(g["tipo"], "grupo")
+        self.assertEqual(g["n"], 4)
+
+class OMaisPerigosoVemPrimeiro(unittest.TestCase):
+    """Empate de gravidade nao pode ser desempatado pelo alfabeto.
+
+    Medido no painel em 25/08/2026, ja com a severidade na frase: as quatro
+    linhas de alerta sairam `investrix` (12 altos, zero critico) ANTES de
+    `workspace-medconsultoria` (6 criticos), porque `i` vem antes de `w`. A
+    frase dizia a verdade e a ordem ainda mandava o dono para o lugar errado.
+    """
+
+    @staticmethod
+    def _v(projeto, critico, alto):
+        return regras._p(
+            "vulnerabilidade", "alta", projeto, "t",
+            {"tipo": "abrir_url", "rotulo": "Ver os alertas", "url": "u"},
+            risco=regras.risco_alerta({"sev": {"critical": critico, "high": alto}}))
+
+    def test_seis_criticos_vem_antes_de_doze_altos(self):
+        ps = [self._v("investrix", 0, 12), self._v("workspace", 6, 7)]
+        ordem = [x["pendencia"]["projeto"] for x in regras.agrupar(ps)]
+        self.assertEqual(ordem, ["workspace", "investrix"])
+
+    def test_sem_critico_desempata_pelo_numero_de_altos(self):
+        ps = [self._v("a", 0, 5), self._v("b", 0, 40)]
+        ordem = [x["pendencia"]["projeto"] for x in regras.agrupar(ps)]
+        self.assertEqual(ordem, ["b", "a"])
+
+    def test_um_critico_ganha_de_qualquer_quantidade_de_altos(self):
+        """Critico e alto nao sao a mesma moeda: 1 critico > 40 altos."""
+        ps = [self._v("muitos_altos", 0, 40), self._v("um_critico", 1, 0)]
+        ordem = [x["pendencia"]["projeto"] for x in regras.agrupar(ps)]
+        self.assertEqual(ordem, ["um_critico", "muitos_altos"])
+
+    def test_risco_nao_atropela_a_gravidade(self):
+        """Uma media com 99 de risco continua depois de qualquer alta."""
+        alta = regras._p("nao_enviado", "alta", "z", "t", {}, risco=0)
+        media = regras._p("vulnerabilidade", "media", "a", "t", {}, risco=99)
+        ordem = [x["pendencia"]["gravidade"] for x in regras.agrupar([media, alta])]
+        self.assertEqual(ordem, ["alta", "media"])
+
+    def test_pendencia_sem_risco_declarado_nao_quebra_a_ordem(self):
+        """Toda regra que nao mede risco fica em zero e ordena como sempre."""
+        ps = [regras._p("abandonado", "baixa", p, "t", {}) for p in ("b", "a")]
+        ordem = [x["pendencia"]["projeto"] for x in regras.agrupar(ps)]
+        self.assertEqual(ordem, ["a", "b"])
+
+    def test_o_risco_ignora_moderado_e_baixo(self):
+        """Sao 47 dos 203 alertas reais; se contassem, virariam o desempate."""
+        self.assertEqual(
+            regras.risco_alerta({"sev": {"critical": 0, "high": 0,
+                                         "moderate": 99, "low": 99}}), 0)
+
+    def test_sem_severidade_medida_o_risco_e_zero_e_nao_um_chute(self):
+        self.assertEqual(regras.risco_alerta({"total": 93}), 0)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
