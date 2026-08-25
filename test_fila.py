@@ -81,5 +81,54 @@ class GastoDoDia(BancoTemporario):
         self.assertEqual(banco.gasto_do_dia("2026-08-25"), 0.0)
 
 
+import fila
+
+
+class Elegibilidade(unittest.TestCase):
+
+    def _p(self, regra, projeto="dents"):
+        return {"id": "%s:%s" % (regra, projeto), "regra": regra,
+                "projeto": projeto, "gravidade": "media", "risco": 0}
+
+    def test_memoria_crlf_vai_pelo_trilho_mecanico(self):
+        self.assertEqual(fila.trilho_de(self._p("memoria_crlf")), "mecanico")
+
+    def test_env_drift_vai_pelo_claude(self):
+        self.assertEqual(fila.trilho_de(self._p("env_drift")), "claude")
+
+    def test_dependencia_insegura_vai_pelo_claude(self):
+        self.assertEqual(fila.trilho_de(self._p("dependencia_insegura")), "claude")
+
+    def test_ci_vermelha_fica_de_fora(self):
+        self.assertEqual(fila.trilho_de(self._p("ci_vermelha")), "")
+
+    def test_grafo_velho_fica_de_fora(self):
+        self.assertEqual(fila.trilho_de(self._p("grafo_velho")), "")
+
+    def test_sem_remoto_fica_de_fora(self):
+        self.assertEqual(fila.trilho_de(self._p("sem_remoto")), "")
+
+    def test_projeto_bloqueado_nao_entra_nem_com_regra_aceita(self):
+        bloqueado = sorted(fila.execucao.PROJETOS_BLOQUEADOS)[0]
+        self.assertEqual(fila.trilho_de(self._p("memoria_crlf", bloqueado)), "")
+
+    def test_bloqueio_ignora_caixa_alta(self):
+        bloqueado = sorted(fila.execucao.PROJETOS_BLOQUEADOS)[0].upper()
+        self.assertEqual(fila.trilho_de(self._p("memoria_crlf", bloqueado)), "")
+
+    def test_pendencia_sem_projeto_nao_tem_onde_agir(self):
+        self.assertEqual(fila.trilho_de(self._p("memoria_crlf", "")), "")
+
+    def test_elegiveis_carimba_o_trilho(self):
+        saida = fila.elegiveis([self._p("memoria_crlf"), self._p("ci_vermelha")])
+        self.assertEqual(len(saida), 1)
+        self.assertEqual(saida[0]["trilho"], "mecanico")
+
+    def test_elegiveis_nao_altera_a_lista_recebida(self):
+        entrada = [self._p("memoria_crlf")]
+        fila.elegiveis(entrada)
+        self.assertNotIn("trilho", entrada[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
