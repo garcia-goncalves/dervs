@@ -195,9 +195,13 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
 .aviso.neutro{border-color:var(--acento);color:var(--texto)}
 
 /* ------------------------------------------------ o painel de execucao */
+/* max-height e o mesmo padrao do #paleta. Sem ele o dialogo crescia com o
+   conteudo: no estado "ok" o log (38vh) e o resultado (30vh) aparecem juntos e,
+   em janela baixa, o rodape com o botao "Fechar" saia da tela. */
 #execucao{width:min(640px,92vw);padding:0;border:none;border-radius:13px;
   background:var(--painel);color:var(--texto);
-  box-shadow:0 18px 60px rgba(0,0,0,.28);margin:8vh auto auto}
+  box-shadow:0 18px 60px rgba(0,0,0,.28);margin:8vh auto auto;
+  max-height:min(84vh,760px);overflow-y:auto}
 #execucao::backdrop{background:rgba(0,0,0,.42)}
 #execucao .e-topo{display:flex;align-items:center;gap:10px;padding:13px 16px;
   border-bottom:1px solid var(--borda)}
@@ -206,7 +210,7 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
 #execucao h2:focus-visible{outline:2px solid var(--acento);outline-offset:3px;
   border-radius:5px}
 #execucao .e-fechar{background:none;border:none;color:var(--fraco);cursor:pointer;
-  font-size:19px;line-height:1;padding:2px 6px;border-radius:6px}
+  font-size:19px;line-height:1;padding:4px 8px;border-radius:6px}
 #execucao .e-fechar:hover{color:var(--texto);background:var(--grade)}
 #execucao .e-corpo{padding:14px 16px}
 #execucao .e-rodape{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
@@ -244,8 +248,11 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
   overflow-x:auto;background:var(--grade);border-radius:9px;padding:10px 12px}
 
 /* Correcao 1 do juiz: --acento mede 4,44:1, abaixo dos 4,5:1 exigidos. Peso e
-   sublinhado permanentes fazem o link nao depender so da cor. */
-#e-pr{display:inline-block;margin-bottom:12px;color:var(--acento);
+   sublinhado permanentes fazem o link nao depender so da cor (WCAG 1.4.1) —
+   mas nao consertam o contraste em si (1.4.3). Por isso a cor aqui e um acento
+   escurecido, so para texto: #2f57c4 sobre --painel mede 6,1:1. O --acento
+   original segue valendo para botao e borda, onde a regra e mais folgada. */
+#e-pr{display:inline-block;margin-bottom:12px;color:#2f57c4;
   font-weight:600;text-decoration:underline;font-size:13.5px}
 
 #execucao .e-acoes{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
@@ -406,11 +413,14 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
     <a id="e-pr" data-so="ok" href="#" target="_blank"
        rel="noopener noreferrer">Ver o pedido de alteração ↗</a>
 
-    <nav class="abas" data-so="ok" aria-label="Resultado da execução">
-      <button type="button" role="tab" aria-selected="true" data-aba="resumo">Resumo</button>
-      <button type="button" role="tab" aria-selected="false" data-aba="diff">Diff</button>
+    <nav class="abas" role="tablist" data-so="ok" aria-label="Resultado da execução">
+      <button type="button" role="tab" id="e-aba-resumo" aria-controls="e-resultado"
+              aria-selected="true" tabindex="0" data-aba="resumo">Resumo</button>
+      <button type="button" role="tab" id="e-aba-diff" aria-controls="e-resultado"
+              aria-selected="false" tabindex="-1" data-aba="diff">Diff</button>
     </nav>
-    <p id="e-resultado" data-so="ok"></p>
+    <p id="e-resultado" role="tabpanel" tabindex="0"
+       aria-labelledby="e-aba-resumo" data-so="ok"></p>
 
     <pre id="e-log" role="log" aria-label="Saída bruta da execução"
          data-so="rodando ok falha parada_pelo_dono"></pre>
@@ -635,8 +645,12 @@ function pintaAbaDoResultado(){
   const alvo = $("#e-resultado");
   alvo.textContent = EXEC_TEXTOS[EXEC_ABA] || "";
   alvo.classList.toggle("diff", EXEC_ABA === "diff");
-  for (const b of document.querySelectorAll("#execucao nav.abas button"))
-    b.setAttribute("aria-selected", b.dataset.aba === EXEC_ABA ? "true" : "false");
+  for (const b of document.querySelectorAll("#execucao nav.abas button")){
+    const ativa = b.dataset.aba === EXEC_ABA;
+    b.setAttribute("aria-selected", ativa ? "true" : "false");
+    b.tabIndex = ativa ? 0 : -1;          // uma parada de Tab por grupo de abas
+    if (ativa) alvo.setAttribute("aria-labelledby", b.id);
+  }
 }
 
 async function pararExecucao(botao){
@@ -1149,8 +1163,24 @@ $("#e-ver").addEventListener("click", () => {
   consultarExecucao(); lacoDeExecucao();
 });
 
-for (const b of document.querySelectorAll("#execucao nav.abas button"))
-  b.addEventListener("click", () => { EXEC_ABA = b.dataset.aba; pintaAbaDoResultado(); });
+/* Mesmo contrato das abas Painel/Grafo: clique troca, seta anda e leva o foco. */
+{
+  const ABAS_EXEC = [...document.querySelectorAll("#execucao nav.abas button")];
+  const trocaExec = (b, focar) => {
+    EXEC_ABA = b.dataset.aba; pintaAbaDoResultado();
+    if (focar) b.focus();
+  };
+  for (const b of ABAS_EXEC){
+    b.addEventListener("click", () => trocaExec(b, false));
+    b.addEventListener("keydown", ev => {
+      const i = ABAS_EXEC.indexOf(b);
+      if (ev.key === "ArrowRight") trocaExec(ABAS_EXEC[(i + 1) % ABAS_EXEC.length], true);
+      else if (ev.key === "ArrowLeft") trocaExec(ABAS_EXEC[(i - 1 + ABAS_EXEC.length) % ABAS_EXEC.length], true);
+      else return;
+      ev.preventDefault();
+    });
+  }
+}
 
 // Fechar NAO para a execucao no servidor — so para de perguntar por ela. E ao
 // fechar o foco volta para o botao que abriu, que e o que falta hoje na paleta.
