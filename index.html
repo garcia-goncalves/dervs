@@ -189,6 +189,92 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
   display:flex;gap:16px;flex-wrap:wrap;font-family:var(--mono)}
 .aviso{margin-top:14px;background:var(--painel);border:1px solid var(--erro);
   border-radius:9px;padding:10px 13px;font-size:12.5px;color:var(--erro)}
+/* Correcao 2 do juiz de design (24/08/2026): troca SO a cor da borda. O aviso
+   do proprio painel-projetos nao e erro nenhum — e informacao — e pintar de
+   vermelho o que nao e problema ensina o dono a ignorar vermelho. */
+.aviso.neutro{border-color:var(--acento);color:var(--texto)}
+
+/* ------------------------------------------------ o painel de execucao */
+#execucao{width:min(640px,92vw);padding:0;border:none;border-radius:13px;
+  background:var(--painel);color:var(--texto);
+  box-shadow:0 18px 60px rgba(0,0,0,.28);margin:8vh auto auto}
+#execucao::backdrop{background:rgba(0,0,0,.42)}
+#execucao .e-topo{display:flex;align-items:center;gap:10px;padding:13px 16px;
+  border-bottom:1px solid var(--borda)}
+#execucao h2{margin:0;font-size:15px;font-weight:600;flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#execucao h2:focus-visible{outline:2px solid var(--acento);outline-offset:3px;
+  border-radius:5px}
+#execucao .e-fechar{background:none;border:none;color:var(--fraco);cursor:pointer;
+  font-size:19px;line-height:1;padding:2px 6px;border-radius:6px}
+#execucao .e-fechar:hover{color:var(--texto);background:var(--grade)}
+#execucao .e-corpo{padding:14px 16px}
+#execucao .e-rodape{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:10px 16px;border-top:1px solid var(--borda);font-size:11.5px;
+  color:var(--fraquinho)}
+#execucao .e-rodape .e-nota{flex-basis:100%;margin:0;font-size:11px}
+#e-custo{font-family:var(--mono);color:var(--texto);font-size:12.5px}
+
+/* A linha de status. O ponto e o indicador NAO textual: --acento, --ok e
+   --alerta nunca viram cor de palavra neste painel; a palavra fica em
+   --texto, e so --erro pode colorir texto ("Falhou"). */
+#e-status{display:flex;align-items:baseline;gap:9px;font-size:14px;margin:0 0 12px}
+#e-status .ponto{flex:none;font-size:11px;line-height:1.4}
+#execucao[data-estado="rodando"] #e-status .ponto{color:var(--acento)}
+#execucao[data-estado="ok"] #e-status .ponto{color:var(--ok)}
+#execucao[data-estado="parada_pelo_dono"] #e-status .ponto{color:var(--alerta)}
+#execucao[data-estado="falha"] #e-status .ponto{color:var(--erro)}
+
+#e-manchete{margin:0 0 6px;font-size:14.5px;font-weight:600}
+#execucao[data-estado="falha"] #e-manchete{color:var(--erro)}
+#e-corpo-falha{margin:0 0 12px;font-size:13px;color:var(--fraco);line-height:1.5}
+
+/* O log NAO some. Nada de setTimeout aqui: o molde do #recado apaga em 9 s, e
+   um log que evapora enquanto o dono le e pior que log nenhum. */
+#e-log{margin:0;padding:10px 12px;background:var(--grade);border-radius:9px;
+  font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--fraco);
+  max-height:38vh;overflow-y:auto;overflow-x:auto;white-space:pre;
+  overscroll-behavior:contain}
+#e-log:empty::before{content:"Iniciando…";color:var(--fraquinho)}
+
+#execucao nav.abas{margin:0 0 12px}
+#e-resultado{margin:0;font-size:13px;line-height:1.6;white-space:pre-wrap;
+  max-height:30vh;overflow-y:auto}
+#e-resultado.diff{font-family:var(--mono);font-size:11.5px;white-space:pre;
+  overflow-x:auto;background:var(--grade);border-radius:9px;padding:10px 12px}
+
+/* Correcao 1 do juiz: --acento mede 4,44:1, abaixo dos 4,5:1 exigidos. Peso e
+   sublinhado permanentes fazem o link nao depender so da cor. */
+#e-pr{display:inline-block;margin-bottom:12px;color:var(--acento);
+  font-weight:600;text-decoration:underline;font-size:13.5px}
+
+#execucao .e-acoes{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+
+/* Os cinco estados: cada um mostra so o que e dele. `hidden` nao basta porque
+   display:flex de .e-status venceria o hidden do navegador. */
+#execucao [data-so]{display:none}
+#execucao[data-estado="rodando"] [data-so~="rodando"],
+#execucao[data-estado="ok"] [data-so~="ok"],
+#execucao[data-estado="falha"] [data-so~="falha"],
+#execucao[data-estado="parada_pelo_dono"] [data-so~="parada_pelo_dono"],
+#execucao[data-estado="recusada"] [data-so~="recusada"]{display:revert}
+#execucao[data-estado="rodando"] #e-status,
+#execucao[data-estado="ok"] #e-status,
+#execucao[data-estado="falha"] #e-status,
+#execucao[data-estado="parada_pelo_dono"] #e-status{display:flex}
+#execucao[data-estado="ok"] .e-acoes,
+#execucao[data-estado="falha"] .e-acoes,
+#execucao[data-estado="recusada"] .e-acoes{display:flex}
+
+@media (max-width:420px){
+  #execucao{width:96vw;margin:4vh auto auto}
+  #execucao .e-topo,#execucao .e-corpo,#execucao .e-rodape{padding-left:12px;
+    padding-right:12px}
+  #e-log{max-height:32vh}
+}
+@media (prefers-reduced-motion:no-preference){
+  #execucao[open]{animation:sobe .13s ease-out}
+}
 #recado{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);
   background:var(--texto);color:var(--bg);padding:9px 16px;border-radius:8px;
   font-size:13px;max-width:min(680px,90vw);box-shadow:var(--sombra);
@@ -269,6 +355,78 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
     <span><kbd>Enter</kbd> fazer</span>
     <span><kbd>Esc</kbd> fechar</span>
     <span id="p-conta"></span>
+  </div>
+</dialog>
+<!-- --------------------------------------------------- painel de execucao ----
+     O que o botao "Resolver" abre. Mesmo molde da paleta: closedby="any" +
+     showModal(), que dao de graca foco preso, Esc, clique fora e camada.
+
+     QUAL ESTADO APARECE e decidido por data-estado no proprio <dialog>, com os
+     valores: rodando · ok · falha · parada_pelo_dono · recusada. Da para
+     desfilar os cinco pelo console, sem rede:
+         execucao.showModal(); execucao.dataset.estado = "falha";
+
+     OS ids QUE O JAVASCRIPT PREENCHE (contrato desta tela; se mudar aqui, muda
+     no <script> junto):
+       #e-titulo        h2 do cabecalho — "Resolvendo: {projeto}"
+       #e-frase         a frase de status em portugues (aria-live)
+       #e-log           o log cru, uma linha por <div>; NUNCA some sozinho
+       #e-custo         "≈ R$ 0,00 · estimativa, ainda rodando"
+       #e-manchete      a manchete de falha/parada/recusa
+       #e-corpo-falha   o paragrafo que explica a manchete
+       #e-pr            o link do pedido de alteracao
+       #e-resultado     o miolo das abas (Resumo ou Diff)
+       #e-aviso         o aviso `ℹ` de estar resolvendo o proprio painel
+       #e-parar         o botao Parar
+       #e-ver           o botao "Ver essa execução" do estado recusada
+     Todo texto visivel aqui e literal do design.md, secao `textos`. -->
+<dialog id="execucao" closedby="any" aria-labelledby="e-titulo" data-estado="rodando">
+  <div class="e-topo">
+    <h2 id="e-titulo" tabindex="-1">Resolvendo: —</h2>
+    <button class="e-fechar" type="button" data-fechar
+            aria-label="Fechar o painel de execução">×</button>
+  </div>
+
+  <div class="e-corpo">
+    <p id="e-status" role="status" aria-live="polite"
+       data-so="rodando ok falha parada_pelo_dono">
+      <span class="ponto" aria-hidden="true">●</span>
+      <span id="e-frase">Preparando uma cópia isolada</span>
+    </p>
+
+    <p id="e-manchete" data-so="falha parada_pelo_dono recusada"></p>
+    <p id="e-corpo-falha" data-so="falha parada_pelo_dono recusada"></p>
+
+    <div id="e-aviso" class="aviso neutro" data-so="rodando ok falha" hidden>
+      ℹ Você está resolvendo o próprio painel. A mudança só aparece na tela
+      depois que o painel for reiniciado — o servidor que está te mostrando
+      esta execução é o mesmo que ela está tentando alterar.
+    </div>
+
+    <a id="e-pr" data-so="ok" href="#" target="_blank"
+       rel="noopener noreferrer">Ver o pedido de alteração ↗</a>
+
+    <nav class="abas" data-so="ok" aria-label="Resultado da execução">
+      <button type="button" role="tab" aria-selected="true" data-aba="resumo">Resumo</button>
+      <button type="button" role="tab" aria-selected="false" data-aba="diff">Diff</button>
+    </nav>
+    <p id="e-resultado" data-so="ok"></p>
+
+    <pre id="e-log" role="log" aria-label="Saída bruta da execução"
+         data-so="rodando ok falha parada_pelo_dono"></pre>
+
+    <div class="e-acoes">
+      <button id="e-ver" class="btn" type="button" data-so="recusada">Ver essa execução</button>
+      <button class="btn" type="button" data-fechar data-so="ok falha parada_pelo_dono recusada">Fechar</button>
+    </div>
+  </div>
+
+  <div class="e-rodape">
+    <button id="e-parar" class="btn" type="button" data-so="rodando">Parar</button>
+    <span id="e-custo">≈ R$ 0,00 · estimativa, ainda rodando</span>
+    <p class="e-nota">Estimativa calculada pelo próprio Claude Code, não é a
+      fatura. O teto por execução é aproximado: já foi medido estourar em
+      4,5×.</p>
   </div>
 </dialog>
 <div id="recado" role="status" aria-live="polite"></div>
