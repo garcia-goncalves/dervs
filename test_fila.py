@@ -341,5 +341,88 @@ class Reprovar(unittest.TestCase):
         self.assertEqual(fila.reprovar("+print('oi')\n", "env_drift"), "")
 
 
+class Lacar(BancoTemporario):
+
+    def _pendencia(self, regra="memoria_crlf", projeto="dents", gravidade="alta"):
+        return {"id": "%s:%s" % (regra, projeto), "regra": regra,
+                "projeto": projeto, "gravidade": gravidade, "risco": 0}
+
+    def _executores(self, resultado=(True, 0.0, "", "")):
+        self.chamadas = []
+
+        def fingir(item):
+            self.chamadas.append(item["id"])
+            return resultado
+
+        return {"mecanico": fingir, "claude": fingir}
+
+    def test_fila_vazia_relata_zero(self):
+        rel = fila.trabalhar([], self._executores())
+        self.assertEqual(rel["feitos"], 0)
+        self.assertEqual(rel["motivo_da_parada"], "nada na fila")
+
+    def test_um_item_mecanico_e_feito(self):
+        rel = fila.trabalhar([self._pendencia()], self._executores())
+        self.assertEqual(rel["feitos"], 1)
+        self.assertEqual(self.chamadas, ["memoria_crlf:dents"])
+
+    def test_pendencia_nao_elegivel_nao_entra(self):
+        rel = fila.trabalhar([self._pendencia("ci_vermelha")], self._executores())
+        self.assertEqual(rel["feitos"], 0)
+        self.assertEqual(self.chamadas, [])
+
+    def test_item_feito_fica_ok_e_sai_da_fila_aberta(self):
+        fila.trabalhar([self._pendencia()], self._executores())
+        self.assertEqual(banco.fila_aberta(), [])
+
+    def test_falha_conta_tentativa_e_guarda_o_erro(self):
+        exec_ = self._executores((False, 0.10, "", "o teste continuou vermelho"))
+        rel = fila.trabalhar([self._pendencia()], exec_)
+        self.assertEqual(rel["falhas"], 1)
+        item = banco.fila_aberta()[0]
+        self.assertEqual(item["estado"], "falha")
+        self.assertEqual(item["tentativas"], 1)
+        self.assertIn("vermelho", item["erro"])
+
+    def test_falha_nao_e_retentada_no_mesmo_laco(self):
+        exec_ = self._executores((False, 0.0, "", "quebrou"))
+        fila.trabalhar([self._pendencia()], exec_)
+        self.assertEqual(len(self.chamadas), 1)
+
+    def test_teto_estourado_para_o_laco_com_motivo(self):
+        exec_ = self._executores((True, 999.0, "", ""))
+        rel = fila.trabalhar(
+            [self._pendencia(projeto="a"), self._pendencia(projeto="b")], exec_)
+        self.assertEqual(rel["feitos"], 1)
+        self.assertIn("teto", rel["motivo_da_parada"])
+
+    def test_o_dono_mandando_parar_interrompe(self):
+        exec_ = self._executores()
+        rel = fila.trabalhar(
+            [self._pendencia(projeto="a"), self._pendencia(projeto="b")],
+            exec_, parar_agora=lambda: True)
+        self.assertEqual(rel["feitos"], 0)
+        self.assertIn("parou", rel["motivo_da_parada"])
+
+    def test_o_grave_e_atendido_primeiro(self):
+        exec_ = self._executores()
+        fila.trabalhar([self._pendencia("env_drift", "zz", "media"),
+                        self._pendencia("memoria_crlf", "aa", "alta")], exec_)
+        self.assertEqual(self.chamadas[0], "memoria_crlf:aa")
+
+    def test_pr_url_e_guardado(self):
+        exec_ = self._executores((True, 1.0, "https://github.com/x/y/pull/9", ""))
+        fila.trabalhar([self._pendencia("env_drift")], exec_)
+        con = banco.conectar()
+        linha = con.execute("SELECT pr_url FROM fila WHERE id = 'env_drift:dents'").fetchone()
+        con.close()
+        self.assertEqual(linha["pr_url"], "https://github.com/x/y/pull/9")
+
+    def test_trilho_errado_no_executor_e_erro_visivel(self):
+        rel = fila.trabalhar([self._pendencia()], {"claude": lambda i: (True, 0, "", "")})
+        self.assertEqual(rel["falhas"], 1)
+        self.assertIn("sem executor", banco.fila_aberta()[0]["erro"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

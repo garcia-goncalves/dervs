@@ -11,6 +11,7 @@ e sugestao, nao trava.
 import re
 from datetime import datetime
 
+import banco
 import execucao
 
 # Regra -> trilho. Lista BRANCA: regra fora daqui nao chega ao motor.
@@ -184,3 +185,66 @@ def reprovar(diff: str, regra: str) -> str:
     if regra == "env_drift":
         return env_example_tem_valor(diff)
     return ""
+def trabalhar(pendencias: list, executores: dict, parar_agora=None) -> dict:
+    """Enfileira o que e elegivel e trabalha ate acabar servico, dinheiro ou paciencia.
+
+    `executores` chega por parametro, nao por import: assim fila.py nao importa
+    servir.py (que importaria fila.py de volta) e o teste roda sem servidor,
+    sem rede e sem gastar um centavo.
+
+    Cada executor recebe o item e devolve (deu_certo, custo_usd, pr_url, erro).
+    """
+    hoje = hoje_local()
+    banco.enfileirar(elegiveis(pendencias))
+    relatorio = {"feitos": 0, "falhas": 0, "gasto_usd": 0.0, "motivo_da_parada": ""}
+
+    while True:
+        if parar_agora and parar_agora():
+            relatorio["motivo_da_parada"] = "voce parou a fila"
+            break
+
+        gasto = banco.gasto_do_dia(hoje)
+        relatorio["gasto_usd"] = gasto
+        item = proximo(banco.fila_aberta(), gasto, hoje)
+
+        if item is None:
+            if not cabe_no_teto(gasto):
+                relatorio["motivo_da_parada"] = (
+                    "teto de %s do dia atingido" % execucao.em_reais(
+                        TETO_DIARIO_BRL / execucao.USD_BRL))
+            elif relatorio["feitos"] or relatorio["falhas"]:
+                relatorio["motivo_da_parada"] = "acabou o servico"
+            else:
+                relatorio["motivo_da_parada"] = "nada na fila"
+            break
+
+        banco.marcar_fila(item["id"], estado="rodando", iniciado_em=banco.agora(),
+                          tentativas=int(item.get("tentativas") or 0) + 1)
+
+        executor = executores.get(item.get("trilho") or "")
+        if executor is None:
+            banco.marcar_fila(item["id"], estado="falha", terminado_em=banco.agora(),
+                              erro="sem executor para o trilho %r" % item.get("trilho"))
+            relatorio["falhas"] += 1
+            continue
+
+        try:
+            deu_certo, custo, pr_url, erro = executor(item)
+        except Exception as e:                      # noqa: BLE001 — o laco nao morre por um item
+            deu_certo, custo, pr_url, erro = False, 0.0, "", "%s: %s" % (type(e).__name__, e)
+
+        banco.marcar_fila(
+            item["id"],
+            estado="ok" if deu_certo else "falha",
+            terminado_em=banco.agora(),
+            custo_usd=float(custo or 0.0),
+            pr_url=pr_url or None,
+            erro=None if deu_certo else (erro or "falhou sem dizer por que"))
+
+        if deu_certo:
+            relatorio["feitos"] += 1
+        else:
+            relatorio["falhas"] += 1
+
+    relatorio["gasto_usd"] = banco.gasto_do_dia(hoje)
+    return relatorio
