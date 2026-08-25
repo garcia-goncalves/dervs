@@ -69,6 +69,31 @@ CREATE TABLE IF NOT EXISTS pendencia_vida (
     fechada_em TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_vida_aberta ON pendencia_vida (fechada_em, visto_em);
+
+-- A fila do que o painel conserta sozinho. O `id` e o mesmo id estavel da
+-- pendencia (regra:projeto): e o que faz um item reentrar sem duplicar e o
+-- que amarra a fila ao "esconder por 24 h" que ja existe.
+--
+-- `terminado_em` fica em UTC como todo o resto. O TETO DIARIO, nao: ele usa a
+-- data local (fila.hoje_local). Em UTC-3, as 21h de terca ja e quarta em UTC —
+-- o teto zeraria tres horas cedo e ninguem entenderia por que.
+CREATE TABLE IF NOT EXISTS fila (
+    id           TEXT PRIMARY KEY,
+    projeto      TEXT NOT NULL DEFAULT '',
+    regra        TEXT NOT NULL DEFAULT '',
+    gravidade    TEXT NOT NULL DEFAULT 'media',
+    risco        REAL NOT NULL DEFAULT 0,
+    trilho       TEXT NOT NULL DEFAULT '',
+    estado       TEXT NOT NULL DEFAULT 'esperando',
+    tentativas   INTEGER NOT NULL DEFAULT 0,
+    criado_em    TEXT NOT NULL,
+    iniciado_em  TEXT,
+    terminado_em TEXT,
+    custo_usd    REAL NOT NULL DEFAULT 0.0,
+    pr_url       TEXT,
+    erro         TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_fila_dia ON fila (terminado_em);
 """
 
 
@@ -192,6 +217,77 @@ def silenciar(pid: str, ate_iso: str, con=None) -> None:
             "anotado_em=excluded.anotado_em",
             (pid, ate_iso, agora()))
         con.commit()
+    finally:
+        if fechar:
+            con.close()
+COLUNAS_FILA = ("projeto", "regra", "gravidade", "risco", "trilho", "estado",
+                "tentativas", "iniciado_em", "terminado_em", "custo_usd",
+                "pr_url", "erro")
+
+
+def enfileirar(pendencias: list, con=None) -> int:
+    """Insere as pendencias que ainda nao estao na fila. Devolve quantas entraram."""
+    fechar = con is None
+    con = con or conectar()
+    entraram = 0
+    try:
+        for p in pendencias or []:
+            cur = con.execute(
+                "INSERT OR IGNORE INTO fila (id, projeto, regra, gravidade, risco,"
+                " trilho, criado_em) VALUES (?,?,?,?,?,?,?)",
+                (p.get("id") or "", p.get("projeto") or "", p.get("regra") or "",
+                 p.get("gravidade") or "media", float(p.get("risco") or 0),
+                 p.get("trilho") or "", agora()))
+            entraram += cur.rowcount or 0
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+    return entraram
+
+
+def fila_aberta(con=None) -> list:
+    """Tudo que ainda nao terminou em `ok`, do mais grave para o menos."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        linhas = con.execute(
+            "SELECT * FROM fila WHERE estado <> 'ok' ORDER BY criado_em").fetchall()
+        return [dict(l) for l in linhas]
+    finally:
+        if fechar:
+            con.close()
+
+
+def marcar_fila(id_: str, con=None, **campos) -> None:
+    """Atualiza colunas nomeadas de um item. Coluna desconhecida e erro, nao silencio."""
+    desconhecidas = set(campos) - set(COLUNAS_FILA)
+    if desconhecidas:
+        raise ValueError("coluna de fila desconhecida: %s" % ", ".join(sorted(desconhecidas)))
+    if not campos:
+        return
+    fechar = con is None
+    con = con or conectar()
+    try:
+        pedaco = ", ".join("%s = ?" % c for c in campos)
+        con.execute("UPDATE fila SET %s WHERE id = ?" % pedaco,
+                    list(campos.values()) + [id_])
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def gasto_do_dia(dia: str, con=None) -> float:
+    """Soma o custo dos itens TERMINADOS no dia (AAAA-MM-DD, comparado em UTC)."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        linha = con.execute(
+            "SELECT COALESCE(SUM(custo_usd), 0.0) AS total FROM fila"
+            " WHERE terminado_em IS NOT NULL AND substr(terminado_em, 1, 10) = ?",
+            (dia,)).fetchone()
+        return float(linha["total"] or 0.0)
     finally:
         if fechar:
             con.close()
