@@ -413,8 +413,22 @@ SEM_JANELA = 0x08000000 if _sem_console() else 0
 GRUPO_PROPRIO = 0x00000200
 
 
-def _rodar(args, cwd=None, limite=180):
-    """Molde de servir.py:148 — (ok, saida cortada em 1200 caracteres)."""
+def tem_remoto(caminho_do_projeto) -> bool:
+    """Sem `origin` nao existe pull request para abrir. Medido em 25/08/2026:
+    o medconsultoria-crm nao tem copia no GitHub, e o `git push` morria com um
+    "fatal: 'origin' does not appear to be a git repository" que so quem
+    entende de git decifra."""
+    ok, saida = _rodar(["git", "-C", str(caminho_do_projeto),
+                        "remote", "get-url", "origin"], limite=30)
+    return bool(ok and saida.strip())
+
+
+def _rodar(args, cwd=None, limite=180, corte=1200):
+    """Molde de servir.py:148 — (ok, saida cortada).
+
+    O corte e para SAIDA DE COMANDO. O diff nao passa por ele: diff cortado em
+    1200 caracteres e uma aba "Diff" que mente por omissao.
+    """
     try:
         r = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=limite,
@@ -440,14 +454,40 @@ def remover_copia(caminho_do_projeto, destino):
     return ok, saida
 
 
-def houve_mudanca(destino) -> bool:
+def ha_o_que_publicar(status: str, head: str, base: str) -> bool:
+    """Decisao pura. MEDIDO EM 25/08/2026, e foi este o defeito:
+
+    a sessao filha COMMITA por conta propria (o prompt proibe push e PR, nao
+    commit). Perguntar so `git status --porcelain` devolvia "limpo", o painel
+    concluia "nenhum arquivo mudou", descartava a copia e ainda anunciava
+    "Pedido de alteração aberto" sem ter aberto nada. A correcao existia, num
+    commit, e a tela mentia. Agora olha os dois: arquivo solto E commit novo.
+    """
+    if (status or "").strip():
+        return True
+    return bool(head and base and head != base)
+
+
+def sha_da_copia(destino) -> str:
+    ok, saida = _rodar(["git", "-C", str(destino), "rev-parse", "HEAD"], limite=30)
+    return saida.strip().splitlines()[0] if (ok and saida.strip()) else ""
+
+
+def houve_mudanca(destino, base="") -> bool:
     ok, saida = _rodar(["git", "-C", str(destino), "status", "--porcelain"])
-    return bool(ok and saida.strip())
+    return ha_o_que_publicar(saida if ok else "", sha_da_copia(destino), base)
 
 
-def diff_da_copia(destino) -> str:
-    """Texto puro: e exatamente o que a aba "Diff" mostra, sem requisicao nova."""
-    ok, saida = _rodar(["git", "-C", str(destino), "diff", "HEAD"], limite=60)
+def diff_da_copia(destino, base="") -> str:
+    """Texto puro: e exatamente o que a aba "Diff" mostra, sem requisicao nova.
+
+    Comparado com o commit BASE, e nao com HEAD: o que a sessao ja commitou
+    tambem e mudança, e comparar com HEAD esconderia justamente ela.
+    """
+    alvo = base or "HEAD"
+    # 200 KB: o diff e conteudo, nao saida de comando (ver _rodar).
+    ok, saida = _rodar(["git", "-C", str(destino), "diff", alvo],
+                       limite=60, corte=200_000)
     return saida if ok else ""
 
 
@@ -458,11 +498,14 @@ def publicar(destino, ramo, titulo, corpo, mensagem):
     recusar porque ja existe PR, o dono precisa ver a frase do GitHub, nao um
     "algo deu errado" nosso.
     """
-    passos = [
-        (["git", "-C", str(destino), "add", "-A"], 60),
-        (["git", "-C", str(destino), "commit", "-m", mensagem], 120),
-        (["git", "-C", str(destino), "push", "-u", "origin", ramo], 180),
-    ]
+    passos = []
+    # `git commit` sem nada para commitar sai com codigo 1 e derrubaria o
+    # envio inteiro. A sessao filha costuma ja ter commitado sozinha.
+    ok_status, status = _rodar(["git", "-C", str(destino), "status", "--porcelain"])
+    if ok_status and status.strip():
+        passos.append((["git", "-C", str(destino), "add", "-A"], 60))
+        passos.append((["git", "-C", str(destino), "commit", "-m", mensagem], 120))
+    passos.append((["git", "-C", str(destino), "push", "-u", "origin", ramo], 180))
     log = []
     for args, limite in passos:
         ok, saida = _rodar(args, limite=limite)
@@ -492,7 +535,7 @@ def _zerado() -> dict:
     return {
         "estado": "parada", "projeto": "", "pendencia_id": "", "frase": "",
         "custo_usd": 0.0, "linhas": [], "pr_url": None, "resumo": "",
-        "diff": "", "manchete": "", "corpo": "", "copia": "", "ramo": "",
+        "diff": "", "manchete": "", "corpo": "", "copia": "", "ramo": "", "base_sha": "",
         "projeto_caminho": "",
     }
 
@@ -567,6 +610,10 @@ def iniciar(pendencia: dict, caminho_do_projeto: str):
                          "tem a saída crua do git." % destino,
             })
             return "iniciar"
+
+        # O commit de onde a copia partiu. E a regua para saber, no fim, se a
+        # sessao mexeu em alguma coisa — inclusive se ela mesma commitou.
+        _execucao["base_sha"] = sha_da_copia(destino)
 
         argv = montar_comando()
         # Nesta maquina `claude` e um .CMD, e o CreateProcess do Windows nao
@@ -679,14 +726,32 @@ def _fechar_com_pedido_de_alteracao(evento: dict) -> None:
         "detalhe": "",
     }
 
-    if not houve_mudanca(destino):
+    base = _execucao.get("base_sha", "")
+    if not houve_mudanca(destino, base):
         _execucao["resumo"] = _execucao.get("resumo") or \
             "A sessão terminou sem alterar nenhum arquivo."
+        # A frase NAO pode ficar em "Pedido de alteração aberto" aqui: nao houve
+        # pedido nenhum. Foi exatamente assim que a tela mentiu em 25/08/2026.
+        _execucao["frase"] = "Terminou sem alterar nenhum arquivo"
         _anotar("nenhum arquivo mudou; nada a enviar ao GitHub")
         remover_copia(projeto_caminho, destino)
         return
 
-    _execucao["diff"] = diff_da_copia(destino)
+    _execucao["diff"] = diff_da_copia(destino, base)
+
+    if not tem_remoto(projeto_caminho):
+        _execucao.update({
+            "estado": "falha",
+            "manchete": "Falhou: este projeto não tem cópia no GitHub",
+            "corpo": "A correção ficou pronta, mas não há para onde enviá-la: o "
+                     "%s não tem repositório remoto configurado. A cópia com a "
+                     "mudança foi preservada em %s, e o ramo %s ficou no "
+                     "projeto — nada se perdeu."
+                     % (_execucao.get("projeto"), destino, _execucao.get("ramo")),
+        })
+        _anotar("o projeto não tem remoto no GitHub; a cópia foi preservada")
+        return
+
     _execucao["frase"] = FRASE_ABRINDO_PR
     titulo, corpo = titulo_e_corpo_do_pr(pendencia)
     ok, url, log = publicar(destino, _execucao.get("ramo"), titulo, corpo,

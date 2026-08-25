@@ -368,6 +368,33 @@ class OndeMoraACopia(unittest.TestCase):
             self.assertIn(c, "0123456789abcdef", c)
 
 
+class HaOQuePublicar(unittest.TestCase):
+    """O defeito de 25/08/2026, encontrado na prova de aceitacao.
+
+    A sessao filha COMMITA por conta propria — o prompt proibe push e pull
+    request, nao commit. O painel perguntava so `git status --porcelain`, ouvia
+    "limpo", concluia "nenhum arquivo mudou", descartava a copia e ainda
+    anunciava na tela "Pedido de alteração aberto" sem ter aberto nada. A
+    correcao existia, dentro de um commit, e a tela mentia. Custou R$ 10,37
+    para aparecer; nao pode voltar.
+    """
+
+    def test_arquivo_solto_conta(self):
+        self.assertTrue(execucao.ha_o_que_publicar(" M src/x.py\n", "aaa", "aaa"))
+
+    def test_commit_novo_conta_mesmo_com_a_arvore_limpa(self):
+        self.assertTrue(execucao.ha_o_que_publicar("", "bbb", "aaa"))
+
+    def test_nada_mudou_e_nada_mesmo(self):
+        self.assertFalse(execucao.ha_o_que_publicar("", "aaa", "aaa"))
+        self.assertFalse(execucao.ha_o_que_publicar("   \n", "aaa", "aaa"))
+
+    def test_sem_base_conhecida_nao_inventa_mudanca(self):
+        """Se o sha base nao foi lido, so o arquivo solto decide — chutar que
+        houve mudanca abriria pull request vazio."""
+        self.assertFalse(execucao.ha_o_que_publicar("", "bbb", ""))
+
+
 class NomeDoRamo(unittest.TestCase):
     """Nome de ramo aceita pouca coisa: espaco, acento e `:` quebram o git."""
 
