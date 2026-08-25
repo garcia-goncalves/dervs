@@ -49,6 +49,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import banco
+import execucao
 import regras
 
 
@@ -145,6 +146,33 @@ def _projetos_por_nome() -> dict:
     return {p["nome"]: p for p in banco.montar_estado()["projetos"]}
 
 
+def _resumo_da_execucao() -> dict:
+    """So o cabecalho da execucao, para o /api/dados nao carregar o log inteiro."""
+    e = execucao.estado(10 ** 9)          # `desde` alto de proposito: log vazio
+    return {"estado": e["estado"], "projeto": e["projeto"],
+            "pendencia_id": e["pendencia_id"]}
+
+
+def _pendencia_por_id(pid: str):
+    """A pendencia RECALCULADA aqui dentro, nunca a que veio do navegador.
+
+    O cliente manda so o id. Se o servidor confiasse no resto do corpo, o texto
+    da pendencia — que vai dentro do prompt da sessao do Claude — passaria a ser
+    escolhido por quem faz o POST. Recalcular e o que mantem o prompt fechado.
+    """
+    con = banco.conectar()
+    try:
+        e = banco.montar_estado(con)
+        pend = regras.avaliar(e["projetos"], quota=e["quota"],
+                              silenciadas=banco.silenciadas(con))
+    finally:
+        con.close()
+    for p in pend:
+        if p.get("id") == pid:
+            return p
+    return None
+
+
 def _rodar(args, cwd=None, shell=False, limite=180):
     r = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
                        encoding="utf-8", errors="replace", timeout=limite,
@@ -222,6 +250,37 @@ def executar_acao(corpo: dict):
 
     if comando == "grafo_ligar":
         return acao_grafo_ligar()
+
+    if comando == "resolver":
+        pid = corpo.get("id")
+        if not pid:
+            return False, "faltou o id da pendência."
+        pend = _pendencia_por_id(pid)
+        if not pend:
+            return False, "pendência desconhecida."
+        # Barreira DURA do lado do servidor. A tela tambem esconde o botao, mas
+        # esconder e conveniencia; quem recusa de verdade e esta linha.
+        if not execucao.pode_resolver(pend):
+            return False, "esta pendência não pode ser resolvida automaticamente."
+        p = _projetos_por_nome().get(pend.get("projeto") or "")
+        if not p or not p.get("caminho"):
+            return False, "projeto desconhecido."
+        try:
+            decisao = execucao.iniciar(pend, p["caminho"])
+        except Exception as e:                   # nunca derrubar o servidor
+            return False, "falhou ao iniciar: %s" % e
+        if decisao == "recusada":
+            return False, "já há uma execução em andamento."
+        return True, decisao
+
+    if comando == "parar":
+        try:
+            confirmou = execucao.parar()
+        except Exception as e:
+            return False, "falhou ao parar: %s" % e
+        if confirmou:
+            return True, "parada."
+        return False, "não consegui confirmar que parou."
 
     if comando not in ACOES:
         return False, "comando não permitido."
@@ -537,6 +596,28 @@ class Hub(SimpleHTTPRequestHandler):
         if self.path == "/api/grafo":
             return self._json(200, grafo_estado())
 
+        # Consulta do painel de execucao, de 1 em 1 segundo enquanto roda.
+        #
+        # NAO exija Origin aqui. O navegador nao manda Origin em GET de mesma
+        # origem — a rota responderia 403 sempre, e o log ficaria parado para
+        # sempre na cara do dono. O par certo para GET e Sec-Fetch-Site, que e
+        # o mesmo que o proxy do grafo usa, exatamente por este motivo. O token
+        # continua obrigatorio: e ele que separa esta pagina de outra aba.
+        if self.path.startswith("/api/execucao"):
+            if not origem_aceita(self.headers.get("Sec-Fetch-Site")):
+                return self._json(403, {"erro": "origem não permitida"})
+            if not secrets.compare_digest(self.headers.get("X-Token") or "", TOKEN):
+                return self._json(403, {"erro": "recarregue a página (token vencido)"})
+            desde = 0
+            if "?" in self.path:
+                for par in self.path.split("?", 1)[1].split("&"):
+                    if par.startswith("desde="):
+                        try:
+                            desde = max(0, int(par[len("desde="):]))
+                        except ValueError:
+                            desde = 0
+            return self._json(200, execucao.estado(desde))
+
         alvo = caminho_do_grafo(self.path)
         if alvo is not None:
             return self._proxy_grafo("GET", alvo)
@@ -560,6 +641,12 @@ class Hub(SimpleHTTPRequestHandler):
             "quota": e["quota"],
             "grafo_ui": grafo_estado(),
             "falhas_de_coleta": dict(_ultima_falha),   # copia: o vivo muda em outra thread
+            # Resumo leve da execucao: e o que faz o botao virar "Ver execução"
+            # sem a tela precisar de uma segunda consulta. O log NAO vem aqui.
+            "execucao": _resumo_da_execucao(),
+            # A regra de quem pode ser resolvido mora no servidor; a tela so a
+            # repete para esconder o botao. Duas copias da regra divergem.
+            "resolver_bloqueado": sorted(execucao.PROJETOS_BLOQUEADOS),
         }
 
     def _pagina(self):

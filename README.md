@@ -26,11 +26,13 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | Arquivo | Papel |
 |---|---|
 | `index.html` | A tela. Recarrega sozinha a cada 15 s. |
-| `servir.py` | Serve a página, o `/api/dados` e o `/api/acao`. Agenda as três coletas. |
+| `servir.py` | Serve a página, o `/api/dados`, o `/api/acao` e o `/api/execucao`. Agenda as três coletas. |
 | `banco.py` | O SQLite (`hub.db`): uma linha por (projeto, camada), com carimbo de tempo. |
 | `regras.py` | O motor das 14 pendências. Puro: entra dicionário, sai lista. |
+| `execucao.py` | O botão **Resolver**: dispara uma sessão do Claude Code numa cópia isolada e abre o pedido de alteração. Seção própria abaixo. |
+| `test_execucao.py` | 67 testes das decisões do Resolver. `python test_execucao.py`. |
 | `test_regras.py` | 30 testes do motor. `python test_regras.py`. |
-| `test_servir.py` | 35 testes do proxy do grafo. `python test_servir.py`. |
+| `test_servir.py` | 43 testes do proxy do grafo e da superfície do Resolver. `python test_servir.py`. |
 | `coletar.py` | Camada **local**: git, Docker, portas, grafo, memória, variáveis. |
 | `coletar_github.py` | Camada **github**: CI, PRs, alertas. Uma consulta GraphQL em lote. |
 | `coletar_pesado.py` | Camada **pesado**: cota do Actions e `npm audit`. |
@@ -316,6 +318,26 @@ padrão e revelava existência, tamanho e data de qualquer arquivo da pasta — 
 variáveis só para extrair **nomes** de variável. Quem autentica no GitHub é o
 `gh` que o dono já logou.
 
+### A rota do botão "Resolver" (`/api/execucao`)
+
+`resolver` e `parar` entram pelo **mesmo** `/api/acao` de sempre, e portanto pela
+mesma cadeia de três checagens acima — nada foi afrouxado para eles. Quem recusa
+uma pendência que não pode ser resolvida é o **servidor**, não a tela: esconder o
+botão é conveniência, a barreira é `execucao.pode_resolver`.
+
+A consulta do progresso é um **GET** (`/api/execucao?desde=N`), e aí há uma
+diferença que precisa ser dita, senão parece um afrouxamento: o navegador **não
+manda `Origin` em GET de mesma origem**. Uma rota GET que exigisse `Origin`
+responderia 403 para sempre. Ela exige, em vez disso, `Host` de `localhost`, o
+**token** (igual ao POST) e `Sec-Fetch-Site` de mesma origem — exatamente o par
+que o proxy do grafo já usa, e pelo mesmo motivo.
+
+**O que este recurso acrescenta de superfície, dito sem maquiagem:** o servidor
+passa a executar `claude`, `git push` de um ramo novo e `gh pr create`. O prompt
+vai por **entrada padrão**, nunca pela linha de comando — nesta máquina `claude`
+é um `.CMD`, e todo argumento de um `.CMD` passa pelo interpretador do Windows.
+E a sessão filha herda os hooks do dono: ver "O que este recurso NÃO isola".
+
 ### O preço de embutir o grafo na mesma origem
 
 Mesma origem faz sumir de uma vez o `SameSite` dos cookies e o CORS, mas cobra:
@@ -381,6 +403,59 @@ o ganho ficou pequeno o bastante para não pagar o preço agora.
   próprio vigia grava em `~/.claude/state/vigia`: mesma verdade, zero execução.
 - **Nome de repositório remoto** é validado contra o alfabeto do GitHub antes de
   entrar na consulta GraphQL.
+
+## O botão "Resolver" — o Claude dentro do painel
+
+Cada pendência que tem projeto ganha, **ao lado** da ação de sempre, um botão
+`Resolver`. Ele dispara uma sessão do Claude Code que tenta corrigir a causa da
+pendência e termina abrindo um **pedido de alteração** (pull request) no GitHub.
+
+O cano inteiro, em seis passos:
+
+1. O navegador manda **só o `id`** da pendência. O servidor **recalcula** a
+   pendência a partir do banco (`_pendencia_por_id`) e ignora todo o resto do
+   corpo. É isso que mantém o prompt fechado: nenhum texto vindo do navegador
+   entra no que o Claude lê.
+2. O painel cria uma **cópia isolada** do repositório com `git worktree`, em
+   `~/.cache/hub-worktrees/<projeto>/<8 caracteres>` — de propósito **fora** de
+   `source\repos`, porque toda subpasta daquela raiz vira projeto medido e o
+   painel passaria a medir as próprias cópias.
+3. A sessão roda **dentro da cópia**. A pasta original do projeto não é tocada,
+   e `git status` nela continua vazio durante e depois.
+4. O painel lê a saída linha a linha e mostra o progresso ao vivo: uma frase em
+   português, o log cru com carimbo de hora, e o custo.
+5. Terminou bem: commit na cópia, `git push` de um ramo `hub/...` e
+   `gh pr create`. **Nunca** `push` na `main`, **nunca** `gh pr merge`.
+6. Sucesso **descarta** a cópia; falha **preserva** a cópia em disco, para o
+   dono poder olhar o que aconteceu.
+
+Só há **uma execução por vez na máquina inteira**. A trava mora no servidor, não
+no navegador: fechar a aba, recarregar a página ou abrir outra não perde nada nem
+libera uma segunda sessão.
+
+### O teto de gasto é aproximado, e isso não é força de expressão
+
+Medido nesta máquina em 24/08/2026: com `--max-budget-usd 0.10`, a execução
+terminou custando **US$ 0,44548** — estouro de 4,5×. A flag não é uma cerca; é
+um pedido. O teto adotado é **US$ 3** por execução, e a única garantia real de
+parar é o botão **Parar**, que mata a árvore de processos e espera 5 segundos
+pela confirmação. Se não confirmar, a tela diz que **não** confirmou — não finge
+que parou.
+
+O custo aparece em reais, por uma cotação constante no código
+(`execucao.USD_BRL`, R$ 5,14, fechamento de 21/08/2026). E ele **fica parado até
+a sessão terminar**: foi medido que só o evento final traz o custo. Inventar uma
+tabela de preços por token daria um número que se mexe e está errado.
+
+### O que este recurso NÃO isola
+
+A sessão filha **roda os hooks** do `~/.claude` do dono e o
+`.claude/settings.json` versionado do projeto-alvo. Medido: seis hooks
+`SessionStart` dispararam dentro dela. A forma de evitar isso seria `--bare`, que
+**não funciona** com o login por assinatura desta máquina (responde
+`Not logged in`; `--bare` só aceita chave de API). Isso é **risco declarado, não
+resolvido** — se um hook do dono abortar a sessão filha, o sintoma é a sessão
+terminar sem tocar em arquivo nenhum, e o log cru da tela mostra o motivo.
 
 ## O que ainda não existe
 
