@@ -340,5 +340,26 @@ class SuperficieDoBotaoResolver(unittest.TestCase):
         self.assertFalse(servir.origem_aceita("cross-site"))
 
 
+class ExecutoresDaFila(unittest.TestCase):
+
+    def test_mecanico_devolve_a_tupla_de_quatro(self):
+        saida = servir.executor_mecanico(
+            {"id": "memoria_crlf:inexistente", "projeto": "inexistente",
+             "regra": "memoria_crlf"})
+        self.assertEqual(len(saida), 4)
+        deu_certo, custo, pr_url, erro = saida
+        self.assertIsInstance(deu_certo, bool)
+        self.assertEqual(custo, 0.0)
+
+    def test_mecanico_nunca_cobra(self):
+        _, custo, _, _ = servir.executor_mecanico(
+            {"id": "memoria_crlf:x", "projeto": "x", "regra": "memoria_crlf"})
+        self.assertEqual(custo, 0.0)
+
+    def test_os_dois_comandos_da_fila_existem(self):
+        self.assertIn("fila_comecar", servir.ACOES)
+        self.assertIn("fila_parar", servir.ACOES)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

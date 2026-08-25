@@ -235,6 +235,13 @@ def coleta_memoria_crlf(repo: Path) -> list:
         return []
     fora = []
     for md in sorted(pasta.glob("*.md")):
+        # MEMORY.md fica de fora. O motivo da regra e "em CRLF o harness ignora
+        # o frontmatter e a memoria nunca carrega" — e este arquivo, por
+        # especificacao, NAO TEM frontmatter: e o indice, uma linha por memoria.
+        # Nao ha cabecalho para ser ignorado, logo nao ha falha a apontar.
+        # Conferido em 25/08/2026: dos 13 .md desta pasta, e o unico sem `---`.
+        if md.name == "MEMORY.md":
+            continue
         try:
             if b"\r\n" in md.read_bytes()[:4096]:
                 fora.append(md.name)

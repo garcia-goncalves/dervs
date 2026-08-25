@@ -10,6 +10,7 @@ tem teste proprio, e nenhum deles toca disco ou rede.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import unittest
 import unittest.mock
@@ -92,6 +93,92 @@ class MontagemDoComando(unittest.TestCase):
     def test_nao_proibe_e_permite_a_mesma_ferramenta(self):
         cruzamento = set(execucao.FERRAMENTAS_OK) & set(execucao.FERRAMENTAS_PROIBIDAS)
         self.assertEqual(cruzamento, set())
+
+
+class AsBarreirasDaSessaoDesacompanhada(unittest.TestCase):
+    """As tres decisoes que separam o botao "Resolver" da fila sem vigia.
+
+    Cada teste aqui guarda uma delas. Se alguem tirar uma flag achando que
+    "simplifica", e aqui que o aviso aparece — e nao no dia do estrago.
+    """
+
+    def test_a_filha_nao_carrega_configuracao_de_arquivo_nenhum(self):
+        """`--setting-sources ""` derruba os hooks do dono E, o que importa
+        mais, o `.claude/settings.json` do repositorio sendo consertado, que e
+        conteudo escrito por estranho e podia definir hook proprio."""
+        argv = execucao.montar_comando(3.0, 40)
+        self.assertIn("--setting-sources", argv)
+        self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
+
+    def test_a_barreira_entra_pelo_settings_explicito(self):
+        argv = execucao.montar_comando(3.0, 40)
+        self.assertIn("--settings", argv)
+        ajuste = json.loads(argv[argv.index("--settings") + 1])
+        grupos = ajuste["hooks"]["PreToolUse"]
+        self.assertIn("Bash", [g["matcher"] for g in grupos])
+        for grupo in grupos:
+            self.assertIn("barreira.py", grupo["hooks"][0]["command"])
+
+    def test_o_settings_nao_leva_metacaractere_do_windows(self):
+        """MEDIDO EM 25/08/2026, e foi assim que a sessao filha morreu:
+
+        com `"matcher": "Bash|Write|Edit"` o processo saiu com codigo 255 e a
+        mensagem `'Write' nao e reconhecido como um comando interno`. Nesta
+        maquina `claude` e um .CMD, e todo argumento de um .CMD passa pelo
+        interpretador do Windows, que le `|` como cano de shell. Por isso o
+        matcher virou uma entrada por ferramenta. Este teste guarda a lição —
+        e vale para qualquer coisa que alguem acrescente ao settings depois.
+        """
+        texto = execucao.settings_da_barreira(python="C:/py.exe", script="C:/x.py")
+        for caractere in execucao.METACARACTERES_DO_CMD:
+            self.assertNotIn(caractere, texto, caractere)
+
+    def test_o_settings_e_json_valido_de_uma_linha_so(self):
+        """Ele viaja como ARGUMENTO de linha de comando: quebra de linha ali
+        vira dois argumentos e o `claude` recusa o ajuste inteiro."""
+        texto = execucao.settings_da_barreira()
+        self.assertNotIn("\n", texto)
+        self.assertIsInstance(json.loads(texto), dict)
+
+    def test_o_hook_nao_roda_no_pythonw(self):
+        """pythonw.exe existe para NAO ter console; o hook conversa por stdin."""
+        self.assertNotIn("pythonw", execucao.settings_da_barreira(
+            python="C:/Python312/pythonw.exe", script="x.py"))
+
+    def test_o_caminho_do_hook_vai_em_barra_normal(self):
+        """A `command` do hook passa por um shell, e barra invertida dentro de
+        aspas e caractere de escape."""
+        texto = execucao.settings_da_barreira(python="C:/py.exe", script="C:/x.py")
+        self.assertNotIn("\\\\", texto)
+
+
+class APonteDeMaoUnica(unittest.TestCase):
+    """A copia nao tem `origin`: o push sai do PROJETO, e so depois das travas."""
+
+    def test_publicar_sem_o_caminho_do_projeto_recusa(self):
+        ok, url, log = execucao.publicar("/copia", "ramo", "t", "c", "m")
+        self.assertFalse(ok)
+        self.assertIsNone(url)
+        self.assertIn("caminho do projeto", log)
+
+    def test_o_push_sai_do_projeto_e_nao_da_copia(self):
+        """Este teste existe porque o contrario era o furo: enquanto o push
+        saia da copia, ele saia da sessao do Claude."""
+        chamadas = []
+
+        def espiao(args, cwd=None, limite=180, corte=1200):
+            chamadas.append((args, cwd))
+            return True, "" if "status" not in args else ""
+
+        with unittest.mock.patch.object(execucao, "_rodar", espiao):
+            execucao.publicar("/copia", "ramo", "t", "c", "m", "/projeto")
+
+        push = [a for a, _ in chamadas if "push" in a]
+        self.assertTrue(push, "nenhum push aconteceu")
+        self.assertEqual(push[0][:3], ["git", "-C", "/projeto"])
+        fetch = [a for a, _ in chamadas if "fetch" in a]
+        self.assertEqual(fetch[0][:3], ["git", "-C", "/projeto"])
+        self.assertIn("/copia", fetch[0])
 
 
 class MontagemDoPrompt(unittest.TestCase):
@@ -656,6 +743,47 @@ class _StdoutQueExplode:
 
     def close(self):
         pass
+
+
+class OSegredoNaoVaiJuntoComASessao(unittest.TestCase):
+    """Achado do revisor de seguranca em 25/08/2026.
+
+    O Popen da filha nao passava `env=`: ela herdava o ambiente inteiro do
+    painel. O repo-alvo e conteudo de estranho e a sessao roda a suite dele —
+    um `conftest.py` plantado le `os.environ` e manda embora por socket. A
+    barreira barra `curl` pelo nome e NAO contem rede. A defesa possivel e nao
+    ter o segredo ao alcance.
+    """
+
+    BASE = {
+        "PATH": "/bin", "USERPROFILE": "C:/u", "NPM_CONFIG_REGISTRY": "r",
+        "GH_TOKEN": "ghp_x", "GITHUB_TOKEN": "y", "AWS_SECRET_ACCESS_KEY": "z",
+        "MINHA_SENHA": "p", "DB_PASSWORD": "q", "STRIPE_API_KEY": "sk_live",
+        "SESSION_COOKIE": "c", "ANTHROPIC_API_KEY": "sk-ant",
+    }
+
+    def test_token_do_github_nao_passa(self):
+        """Com GH_TOKEN a sessao alcanca o GitHub sem `git push` nenhum."""
+        limpo = execucao.ambiente_da_filha(self.BASE)
+        for proibido in ("GH_TOKEN", "GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY",
+                         "MINHA_SENHA", "DB_PASSWORD", "STRIPE_API_KEY",
+                         "SESSION_COOKIE"):
+            self.assertNotIn(proibido, limpo)
+
+    def test_o_que_a_sessao_precisa_continua(self):
+        limpo = execucao.ambiente_da_filha(self.BASE)
+        for preciso in ("PATH", "USERPROFILE", "NPM_CONFIG_REGISTRY"):
+            self.assertIn(preciso, limpo)
+
+    def test_a_chave_da_anthropic_vai_junto_de_proposito(self):
+        """E segredo, e sem ela a sessao nao roda. Testado para ninguem
+        descobrir isso por acidente depois."""
+        self.assertIn("ANTHROPIC_API_KEY",
+                      execucao.ambiente_da_filha(self.BASE))
+
+    def test_o_ambiente_de_verdade_nao_explode(self):
+        self.assertIn("PATH", {k.upper(): v
+                               for k, v in execucao.ambiente_da_filha().items()})
 
 
 if __name__ == "__main__":

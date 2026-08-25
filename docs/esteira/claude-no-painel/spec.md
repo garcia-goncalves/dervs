@@ -51,7 +51,10 @@ descartadas com motivo:
    `parada · rodando · ok · falha · parada_pelo_dono`. **Uma execução por vez na
    máquina inteira**, com trava global. O estado mora no servidor, não no
    navegador — recarregar a página não perde nada.
-2. **Cópia isolada em `git worktree`**, criada em
+2. **Cópia isolada em `git worktree`** *(superado em 25/08/2026: virou um
+   `git clone` local sem `origin`, porque o worktree compartilhava o `.git` e o
+   remoto autenticado do projeto real — ver `README.md`, "O que este recurso NÃO
+   isola")*, criada em
    `~/.cache/hub-worktrees/<projeto>/<id-curto>`. **Fora de
    `C:\Users\Desktop\source\repos`**, obrigatoriamente — ver contradição 4.
    Removida com `git worktree remove` no sucesso; **preservada na falha**, para
