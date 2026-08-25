@@ -152,7 +152,15 @@ def _do_projeto(p: dict) -> list:
                 "O pedido de alteração #%s do %s está parado há %d dias."
                 % (pr.get("numero"), nome, pr["dias"]),
                 {"tipo": "abrir_url", "rotulo": "Abrir", "url": pr.get("url", "")},
-                detalhe=pr.get("titulo", "")))
+                detalhe="pedido #%s, parado ha %d dias"
+                        % (pr.get("numero"), pr["dias"])))
+                # SEGURANCA: o `detalhe` desta pendencia ja foi `pr["titulo"]`, e
+                # esse titulo e texto CRU da API do GitHub — qualquer um que abra
+                # um PR num repositorio do dono escolhe o que vai escrito ali. O
+                # `detalhe` entra no prompt da sessao do botao "Resolver", que roda
+                # com Bash auto-aprovado; era injecao de prompt virando execucao de
+                # comando na maquina. Aqui so entra numero e dias, calculados por
+                # nos. O titulo continua a um clique, no botao "Abrir".
             break          # um item por projeto: a caixa e para agir, nao para listar
 
     # 10. Dependencia com correcao de seguranca disponivel

@@ -417,8 +417,9 @@ O cano inteiro, em seis passos:
 
 1. O navegador manda **só o `id`** da pendência. O servidor **recalcula** a
    pendência a partir do banco (`_pendencia_por_id`) e ignora todo o resto do
-   corpo. É isso que mantém o prompt fechado: nenhum texto vindo do navegador
-   entra no que o Claude lê.
+   corpo. Isso fecha o prompt para o navegador — mas **não** para o mundo: o
+   banco guarda o que o coletor leu da API do GitHub, e ali há texto que
+   estranhos escreveram. Ver "O texto de estranho que quase virou comando".
 2. O painel cria uma **cópia isolada** do repositório com `git worktree`, em
    `~/.cache/hub-worktrees/<projeto>/<8 caracteres>` — de propósito **fora** de
    `source\repos`, porque toda subpasta daquela raiz vira projeto medido e o
@@ -429,6 +430,13 @@ O cano inteiro, em seis passos:
    português, o log cru com carimbo de hora, e o custo.
 5. Terminou bem: commit na cópia, `git push` de um ramo `hub/...` e
    `gh pr create`. **Nunca** `push` na `main`, **nunca** `gh pr merge`.
+5b. **Parar sem confirmação não libera a vez.** Se o `Parar` pede a morte e o
+   processo não responde em 5 segundos, o painel **guarda** a referência dele em
+   vez de descartá-la, e recusa um novo `Resolver` enquanto aquele processo
+   respirar. A versão anterior largava a referência: o `claude` seguia vivo
+   cobrando na API, sem ninguém para matá-lo, e um segundo clique subia uma
+   sessão paralela cobrando junto. Pela mesma razão, se a leitura da saída morre
+   no meio, o painel mata a árvore do processo antes de marcar falha.
 6. Sucesso **descarta** a cópia; falha **preserva** a cópia em disco, para o
    dono poder olhar o que aconteceu.
 
@@ -498,7 +506,46 @@ como "nada mudou", a cópia era descartada e a tela anunciava um pedido que nunc
 existiu. Achado na prova de aceitação de 25/08/2026, com uma execução real de
 R$ 10,37, e travado por teste (`HaOQuePublicar`).
 
+### O texto de estranho que quase virou comando
+
+Achado da revisão de segurança de 25/08/2026, corrigido antes de a entrega ser
+mesclada. Vale registrar inteiro, porque o desenho parecia seguro e não era.
+
+O prompt da sessão filha é um gabarito fechado com quatro campos. Um deles, o
+`detalhe` da pendência `pr_parado`, era o **título do pedido de alteração**,
+copiado cru da API do GitHub (`coletar_github.py`). Título de PR é escolhido por
+quem abre o PR — colaborador, fork de repositório público, automação de terceiro.
+
+O ataque completo, em quatro passos: a pessoa abre um PR com um título que é uma
+ordem disfarçada; espera sete dias, até a regra `pr_parado` acender no painel; o
+dono clica em `Resolver` naquela pendência; o texto dela entra no prompt de uma
+sessão que roda com `Bash`, `Write` e `Edit` **auto-aprovados**, com o login e os
+hooks do dono. Ou seja: comando arbitrário nesta máquina, com o `gh` já
+autenticado ao lado.
+
+Duas barreiras foram postas, e a primeira sozinha já fecha o buraco:
+
+1. **Campo de origem externa não entra no prompt.** O `detalhe` de `pr_parado`
+   passou a ser `pedido #N, parado ha D dias` — número e dias, calculados aqui.
+   O título continua a um clique de distância, no botão `Abrir`.
+2. **Defesa em profundidade, para a próxima regra que alguém escrever.** Os
+   campos `texto` e `detalhe` agora vão dentro de um bloco
+   `<dados-coletados-nao-confiaveis>`, com aviso explícito de que são dados e não
+   instruções, e passam por `so_dado()`, que neutraliza a etiqueta de fechamento
+   caso o próprio dado tente escrevê-la para sair do bloco.
+
+**A lição, que vale além deste recurso:** "o servidor recalcula do banco" não é
+sinônimo de "o dado é confiável". Recalcular só descarta o que o *navegador*
+mandou. O que veio da internet e foi guardado continua vindo da internet.
+
 ### O que este recurso NÃO isola
+
+`Bash` está na lista branca e **não** fica preso à cópia. O shell não conhece
+fronteira de pasta, e a cópia é um `git worktree`, que compartilha o `.git` do
+projeto de verdade e o remoto já autenticado: um `git push --force` saído de lá
+alcança o repositório real. `Bash` fica porque sem ele a sessão não roda teste
+nem commita — e aí o recurso não existe. O que protege não é a lista de
+ferramentas; é não deixar texto de estranho chegar ao prompt (seção acima).
 
 A sessão filha **roda os hooks** do `~/.claude` do dono e o
 `.claude/settings.json` versionado do projeto-alvo. Medido: seis hooks

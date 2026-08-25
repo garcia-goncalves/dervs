@@ -10,7 +10,9 @@ tem teste proprio, e nenhum deles toca disco ou rede.
 """
 from __future__ import annotations
 
+import subprocess
 import unittest
+import unittest.mock
 
 import execucao
 
@@ -532,6 +534,128 @@ class EstadoDeFora(unittest.TestCase):
 
     def test_custo_ja_vem_em_reais_prontos_para_a_tela(self):
         self.assertTrue(execucao.estado(0)["custo_brl"].startswith("R$ "))
+
+
+class ProcessoFalso:
+    """Um Popen de mentira: nao roda nada, mas mente na hora certa."""
+
+    def __init__(self, pid=4242, morre=True, saida=()):
+        self.pid = pid
+        self._morre = morre
+        self.matou = False
+        self.stdout = iter(saida)
+        self.stdin = None
+        self._codigo = None
+
+    def wait(self, timeout=None):
+        if self._morre:
+            self._codigo = 0
+            return 0
+        raise subprocess.TimeoutExpired("claude", timeout or 0)
+
+    def poll(self):
+        return self._codigo
+
+    def kill(self):
+        self.matou = True
+        self._codigo = -9
+
+
+class ParadaQueNaoConfirma(unittest.TestCase):
+    """O caso que custa dinheiro: pedi para parar e o processo nao morreu."""
+
+    def setUp(self):
+        self._proc_antigo = execucao._proc
+        self._estado_antigo = dict(execucao._execucao)
+
+    def tearDown(self):
+        execucao._proc = self._proc_antigo
+        execucao._execucao.clear()
+        execucao._execucao.update(self._estado_antigo)
+
+    def _armar(self, morre):
+        proc = ProcessoFalso(morre=morre)
+        execucao._proc = proc
+        execucao._execucao.clear()
+        execucao._execucao.update(execucao._zerado())
+        execucao._execucao.update({
+            "estado": "rodando", "projeto": "alvo", "ramo": "hub/x-1",
+        })
+        return proc
+
+    def test_sem_confirmar_a_morte_a_referencia_do_processo_NAO_e_perdida(self):
+        # Perder _proc aqui e perder a unica alca para matar um processo que
+        # continua gastando dinheiro na API.
+        proc = self._armar(morre=False)
+        with unittest.mock.patch.object(execucao, "_rodar", return_value=(True, "")):
+            self.assertFalse(execucao.parar())
+        self.assertIs(execucao._proc, proc)
+
+    def test_confirmando_a_morte_a_referencia_e_descartada(self):
+        self._armar(morre=True)
+        with unittest.mock.patch.object(execucao, "_rodar", return_value=(True, "")), \
+             unittest.mock.patch.object(execucao, "remover_copia", return_value=(True, "")):
+            self.assertTrue(execucao.parar())
+        self.assertIsNone(execucao._proc)
+
+    def test_com_processo_orfao_vivo_um_novo_Resolver_e_recusado(self):
+        # Sem isto, duas sessoes do Claude rodam ao mesmo tempo cobrando junto.
+        self._armar(morre=False)
+        with unittest.mock.patch.object(execucao, "_rodar", return_value=(True, "")):
+            execucao.parar()
+        self.assertEqual(execucao.iniciar(PENDENCIA, "C:/qualquer"), "orfa")
+
+    def test_processo_antigo_ja_morto_nao_bloqueia_o_proximo_Resolver(self):
+        proc = ProcessoFalso(morre=False)
+        proc._codigo = 0                      # ja morreu por conta propria
+        execucao._proc = proc
+        execucao._execucao.clear()
+        execucao._execucao.update(execucao._zerado())
+        with unittest.mock.patch.object(execucao, "criar_copia",
+                                        return_value=(False, "chega ate aqui")):
+            self.assertNotEqual(execucao.iniciar(PENDENCIA, "C:/qualquer"), "orfa")
+
+
+class LeituraQueMorreDeixaProcessoVivo(unittest.TestCase):
+    """Se a leitura falha, o processo tem de morrer junto — ou segue cobrando."""
+
+    def setUp(self):
+        self._estado_antigo = dict(execucao._execucao)
+
+    def tearDown(self):
+        execucao._execucao.clear()
+        execucao._execucao.update(self._estado_antigo)
+
+    def test_erro_na_leitura_mata_a_arvore_do_processo(self):
+        proc = ProcessoFalso(morre=False, saida=[])
+        proc.stdout = _StdoutQueExplode()
+        execucao._execucao.clear()
+        execucao._execucao.update(execucao._zerado())
+        execucao._execucao.update({"estado": "rodando", "ramo": "hub/x-1"})
+        with unittest.mock.patch.object(execucao, "_rodar", return_value=(True, "")) as rodar:
+            execucao._ler(proc, PENDENCIA, "hub/x-1")
+        self.assertEqual(execucao._execucao["estado"], "falha")
+        self.assertTrue(rodar.called or proc.matou,
+                        "a leitura falhou e ninguem matou o processo")
+
+    def test_thread_de_sessao_antiga_nao_escreve_na_sessao_nova(self):
+        proc = ProcessoFalso(morre=False)
+        proc.stdout = _StdoutQueExplode()
+        execucao._execucao.clear()
+        execucao._execucao.update(execucao._zerado())
+        execucao._execucao.update({"estado": "rodando", "ramo": "hub/NOVA-2"})
+        with unittest.mock.patch.object(execucao, "_rodar", return_value=(True, "")):
+            execucao._ler(proc, PENDENCIA, "hub/VELHA-1")
+        self.assertEqual(execucao._execucao["estado"], "rodando")
+        self.assertEqual(execucao._execucao["linhas"], [])
+
+
+class _StdoutQueExplode:
+    def __iter__(self):
+        raise OSError("o cano quebrou")
+
+    def close(self):
+        pass
 
 
 if __name__ == "__main__":

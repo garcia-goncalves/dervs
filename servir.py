@@ -271,6 +271,13 @@ def executar_acao(corpo: dict):
             return False, "falhou ao iniciar: %s" % e
         if decisao == "recusada":
             return False, "já há uma execução em andamento."
+        if decisao == "orfa":
+            # A execucao anterior nao confirmou que morreu. Comecar outra aqui
+            # poria duas sessoes do Claude cobrando ao mesmo tempo.
+            return False, ("a execução anterior pediu para parar mas não "
+                           "confirmou que parou. Ela pode ainda estar rodando: "
+                           "feche o painel, confira no Gerenciador de Tarefas se "
+                           "sobrou um processo `claude`, e tente de novo.")
         return True, decisao
 
     if comando == "parar":
