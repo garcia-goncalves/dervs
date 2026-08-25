@@ -189,6 +189,99 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
   display:flex;gap:16px;flex-wrap:wrap;font-family:var(--mono)}
 .aviso{margin-top:14px;background:var(--painel);border:1px solid var(--erro);
   border-radius:9px;padding:10px 13px;font-size:12.5px;color:var(--erro)}
+/* Correcao 2 do juiz de design (24/08/2026): troca SO a cor da borda. O aviso
+   do proprio painel-projetos nao e erro nenhum — e informacao — e pintar de
+   vermelho o que nao e problema ensina o dono a ignorar vermelho. */
+.aviso.neutro{border-color:var(--acento);color:var(--texto)}
+
+/* ------------------------------------------------ o painel de execucao */
+/* max-height e o mesmo padrao do #paleta. Sem ele o dialogo crescia com o
+   conteudo: no estado "ok" o log (38vh) e o resultado (30vh) aparecem juntos e,
+   em janela baixa, o rodape com o botao "Fechar" saia da tela. */
+#execucao{width:min(640px,92vw);padding:0;border:none;border-radius:13px;
+  background:var(--painel);color:var(--texto);
+  box-shadow:0 18px 60px rgba(0,0,0,.28);margin:8vh auto auto;
+  max-height:min(84vh,760px);overflow-y:auto}
+#execucao::backdrop{background:rgba(0,0,0,.42)}
+#execucao .e-topo{display:flex;align-items:center;gap:10px;padding:13px 16px;
+  border-bottom:1px solid var(--borda)}
+#execucao h2{margin:0;font-size:15px;font-weight:600;flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#execucao h2:focus-visible{outline:2px solid var(--acento);outline-offset:3px;
+  border-radius:5px}
+#execucao .e-fechar{background:none;border:none;color:var(--fraco);cursor:pointer;
+  font-size:19px;line-height:1;padding:4px 8px;border-radius:6px}
+#execucao .e-fechar:hover{color:var(--texto);background:var(--grade)}
+#execucao .e-corpo{padding:14px 16px}
+#execucao .e-rodape{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:10px 16px;border-top:1px solid var(--borda);font-size:11.5px;
+  color:var(--fraquinho)}
+#execucao .e-rodape .e-nota{flex-basis:100%;margin:0;font-size:11px}
+#e-custo{font-family:var(--mono);color:var(--texto);font-size:12.5px}
+
+/* A linha de status. O ponto e o indicador NAO textual: --acento, --ok e
+   --alerta nunca viram cor de palavra neste painel; a palavra fica em
+   --texto, e so --erro pode colorir texto ("Falhou"). */
+#e-status{display:flex;align-items:baseline;gap:9px;font-size:14px;margin:0 0 12px}
+#e-status .ponto{flex:none;font-size:11px;line-height:1.4}
+#execucao[data-estado="rodando"] #e-status .ponto{color:var(--acento)}
+#execucao[data-estado="ok"] #e-status .ponto{color:var(--ok)}
+#execucao[data-estado="parada_pelo_dono"] #e-status .ponto{color:var(--alerta)}
+#execucao[data-estado="falha"] #e-status .ponto{color:var(--erro)}
+
+#e-manchete{margin:0 0 6px;font-size:14.5px;font-weight:600}
+#execucao[data-estado="falha"] #e-manchete{color:var(--erro)}
+#e-corpo-falha{margin:0 0 12px;font-size:13px;color:var(--fraco);line-height:1.5}
+
+/* O log NAO some. Nada de setTimeout aqui: o molde do #recado apaga em 9 s, e
+   um log que evapora enquanto o dono le e pior que log nenhum. */
+#e-log{margin:0;padding:10px 12px;background:var(--grade);border-radius:9px;
+  font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--fraco);
+  max-height:38vh;overflow-y:auto;overflow-x:auto;white-space:pre;
+  overscroll-behavior:contain}
+#e-log:empty::before{content:"Iniciando…";color:var(--fraquinho)}
+
+#execucao nav.abas{margin:0 0 12px}
+#e-resultado{margin:0;font-size:13px;line-height:1.6;white-space:pre-wrap;
+  max-height:30vh;overflow-y:auto}
+#e-resultado.diff{font-family:var(--mono);font-size:11.5px;white-space:pre;
+  overflow-x:auto;background:var(--grade);border-radius:9px;padding:10px 12px}
+
+/* Correcao 1 do juiz: --acento mede 4,44:1, abaixo dos 4,5:1 exigidos. Peso e
+   sublinhado permanentes fazem o link nao depender so da cor (WCAG 1.4.1) —
+   mas nao consertam o contraste em si (1.4.3). Por isso a cor aqui e um acento
+   escurecido, so para texto: #2f57c4 sobre --painel mede 6,1:1. O --acento
+   original segue valendo para botao e borda, onde a regra e mais folgada. */
+#e-pr{display:inline-block;margin-bottom:12px;color:#2f57c4;
+  font-weight:600;text-decoration:underline;font-size:13.5px}
+
+#execucao .e-acoes{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+
+/* Os cinco estados: cada um mostra so o que e dele. `hidden` nao basta porque
+   display:flex de .e-status venceria o hidden do navegador. */
+#execucao [data-so]{display:none}
+#execucao[data-estado="rodando"] [data-so~="rodando"],
+#execucao[data-estado="ok"] [data-so~="ok"],
+#execucao[data-estado="falha"] [data-so~="falha"],
+#execucao[data-estado="parada_pelo_dono"] [data-so~="parada_pelo_dono"],
+#execucao[data-estado="recusada"] [data-so~="recusada"]{display:revert}
+#execucao[data-estado="rodando"] #e-status,
+#execucao[data-estado="ok"] #e-status,
+#execucao[data-estado="falha"] #e-status,
+#execucao[data-estado="parada_pelo_dono"] #e-status{display:flex}
+#execucao[data-estado="ok"] .e-acoes,
+#execucao[data-estado="falha"] .e-acoes,
+#execucao[data-estado="recusada"] .e-acoes{display:flex}
+
+@media (max-width:420px){
+  #execucao{width:96vw;margin:4vh auto auto}
+  #execucao .e-topo,#execucao .e-corpo,#execucao .e-rodape{padding-left:12px;
+    padding-right:12px}
+  #e-log{max-height:32vh}
+}
+@media (prefers-reduced-motion:no-preference){
+  #execucao[open]{animation:sobe .13s ease-out}
+}
 #recado{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);
   background:var(--texto);color:var(--bg);padding:9px 16px;border-radius:8px;
   font-size:13px;max-width:min(680px,90vw);box-shadow:var(--sombra);
@@ -271,6 +364,81 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
     <span id="p-conta"></span>
   </div>
 </dialog>
+<!-- --------------------------------------------------- painel de execucao ----
+     O que o botao "Resolver" abre. Mesmo molde da paleta: closedby="any" +
+     showModal(), que dao de graca foco preso, Esc, clique fora e camada.
+
+     QUAL ESTADO APARECE e decidido por data-estado no proprio <dialog>, com os
+     valores: rodando · ok · falha · parada_pelo_dono · recusada. Da para
+     desfilar os cinco pelo console, sem rede:
+         execucao.showModal(); execucao.dataset.estado = "falha";
+
+     OS ids QUE O JAVASCRIPT PREENCHE (contrato desta tela; se mudar aqui, muda
+     no <script> junto):
+       #e-titulo        h2 do cabecalho — "Resolvendo: {projeto}"
+       #e-frase         a frase de status em portugues (aria-live)
+       #e-log           o log cru, uma linha por <div>; NUNCA some sozinho
+       #e-custo         "≈ R$ 0,00 · estimativa, ainda rodando"
+       #e-manchete      a manchete de falha/parada/recusa
+       #e-corpo-falha   o paragrafo que explica a manchete
+       #e-pr            o link do pedido de alteracao
+       #e-resultado     o miolo das abas (Resumo ou Diff)
+       #e-aviso         o aviso `ℹ` de estar resolvendo o proprio painel
+       #e-parar         o botao Parar
+       #e-ver           o botao "Ver essa execução" do estado recusada
+     Todo texto visivel aqui e literal do design.md, secao `textos`. -->
+<dialog id="execucao" closedby="any" aria-labelledby="e-titulo" data-estado="rodando">
+  <div class="e-topo">
+    <h2 id="e-titulo" tabindex="-1">Resolvendo: —</h2>
+    <button class="e-fechar" type="button" data-fechar
+            aria-label="Fechar o painel de execução">×</button>
+  </div>
+
+  <div class="e-corpo">
+    <p id="e-status" role="status" aria-live="polite"
+       data-so="rodando ok falha parada_pelo_dono">
+      <span class="ponto" aria-hidden="true">●</span>
+      <span id="e-frase">Preparando uma cópia isolada</span>
+    </p>
+
+    <p id="e-manchete" data-so="falha parada_pelo_dono recusada"></p>
+    <p id="e-corpo-falha" data-so="falha parada_pelo_dono recusada"></p>
+
+    <div id="e-aviso" class="aviso neutro" data-so="rodando ok falha" hidden>
+      ℹ Você está resolvendo o próprio painel. A mudança só aparece na tela
+      depois que o painel for reiniciado — o servidor que está te mostrando
+      esta execução é o mesmo que ela está tentando alterar.
+    </div>
+
+    <a id="e-pr" data-so="ok" href="#" target="_blank"
+       rel="noopener noreferrer">Ver o pedido de alteração ↗</a>
+
+    <nav class="abas" role="tablist" data-so="ok" aria-label="Resultado da execução">
+      <button type="button" role="tab" id="e-aba-resumo" aria-controls="e-resultado"
+              aria-selected="true" tabindex="0" data-aba="resumo">Resumo</button>
+      <button type="button" role="tab" id="e-aba-diff" aria-controls="e-resultado"
+              aria-selected="false" tabindex="-1" data-aba="diff">Diff</button>
+    </nav>
+    <p id="e-resultado" role="tabpanel" tabindex="0"
+       aria-labelledby="e-aba-resumo" data-so="ok"></p>
+
+    <pre id="e-log" role="log" aria-label="Saída bruta da execução"
+         data-so="rodando ok falha parada_pelo_dono"></pre>
+
+    <div class="e-acoes">
+      <button id="e-ver" class="btn" type="button" data-so="recusada">Ver essa execução</button>
+      <button class="btn" type="button" data-fechar data-so="ok falha parada_pelo_dono recusada">Fechar</button>
+    </div>
+  </div>
+
+  <div class="e-rodape">
+    <button id="e-parar" class="btn" type="button" data-so="rodando">Parar</button>
+    <span id="e-custo">≈ R$ 0,00 · estimativa, ainda rodando</span>
+    <p class="e-nota">Estimativa calculada pelo próprio Claude Code, não é a
+      fatura. O teto por execução é aproximado: já foi medido estourar em
+      4,5×.</p>
+  </div>
+</dialog>
 <div id="recado" role="status" aria-live="polite"></div>
 
 <script>
@@ -343,6 +511,163 @@ async function agir(pend, botao){
   }
 }
 
+/* ------------------------------------------------------ o botao "Resolver"
+   Segundo executor, ao lado de agir(), e NAO uma reforma dela: agir() e o
+   executor de acao unica e e onde vive a trava `ocupado` global. O Resolver
+   nao usa `ocupado` de proposito — a trava de execucao mora no SERVIDOR
+   agora, e os outros botoes do painel seguem clicaveis enquanto o Claude
+   trabalha. Duas travas para a mesma coisa divergem no primeiro erro. */
+let EXEC_TIMER = null, EXEC_LINHAS = 0, EXEC_BOTAO = null, EXEC_ABA = "resumo";
+let EXEC_TEXTOS = {resumo: "", diff: ""};
+
+function podeResolver(p){
+  if (!p.projeto) return false;
+  // A regra mora no servidor; aqui e so a copia que esconde o botao. Quem
+  // recusa de verdade e execucao.pode_resolver(), do outro lado.
+  const bloqueados = (ESTADO && ESTADO.resolver_bloqueado) || [];
+  return !bloqueados.includes(p.projeto.toLowerCase());
+}
+
+function rodandoAgora(){
+  const e = ESTADO && ESTADO.execucao;
+  return e && e.estado === "rodando" ? e : null;
+}
+
+function abreExecucao(botao){
+  const d = $("#execucao");
+  if (botao) EXEC_BOTAO = botao;
+  if (!d.open) d.showModal();
+  $("#e-titulo").focus();          // o h2, e nao o "Parar": abrir a tela nao
+}                                   // pode convidar a interromper por engano
+
+function fechaExecucao(){
+  const d = $("#execucao");
+  if (d.open) d.close();
+}
+
+async function resolver(pend, botao){
+  const d = $("#execucao");
+  abreExecucao(botao);
+  d.dataset.estado = "rodando";
+  $("#e-titulo").textContent = "Resolvendo: " + pend.projeto;
+  $("#e-frase").textContent = "Preparando uma cópia isolada de " + pend.projeto;
+  $("#e-log").textContent = "";
+  $("#e-custo").textContent = "≈ R$ 0,00 · estimativa, ainda rodando";
+  $("#e-aviso").hidden = pend.projeto !== "painel-projetos";
+  EXEC_LINHAS = 0;
+  EXEC_TEXTOS = {resumo: "", diff: ""};
+
+  try{
+    const r = await mandar({comando: "resolver", id: pend.id});
+    if (!r.ok){
+      if ((r.saida || "").indexOf("já há uma execução") >= 0) return telaRecusada();
+      return telaDeFalha("Falhou: o painel não conseguiu começar",
+                         r.saida || r.erro || "O servidor recusou sem explicar.");
+    }
+  } catch(e){
+    return telaDeFalha("Falhou: não consegui falar com o servidor", e.message);
+  }
+  await consultarExecucao();
+  lacoDeExecucao();
+}
+
+function telaRecusada(){
+  const d = $("#execucao"), emCurso = rodandoAgora();
+  d.dataset.estado = "recusada";
+  $("#e-titulo").textContent = "Resolver: " + (emCurso ? emCurso.projeto : "—");
+  $("#e-manchete").textContent = "Já há uma execução em andamento";
+  $("#e-corpo-falha").textContent =
+    "Só é possível rodar uma correção por vez nesta máquina. Agora mesmo o "
+    + "Claude está trabalhando em " + (emCurso ? emCurso.projeto : "outro projeto") + ".";
+}
+
+function telaDeFalha(manchete, corpo){
+  const d = $("#execucao");
+  d.dataset.estado = "falha";
+  $("#e-manchete").textContent = manchete;
+  $("#e-corpo-falha").textContent = corpo;
+}
+
+/* De 1 em 1 segundo, e so enquanto roda. `desde` = quantas linhas ja temos,
+   para o servidor mandar so o que falta em vez do log inteiro toda vez. */
+function lacoDeExecucao(){
+  clearInterval(EXEC_TIMER);
+  EXEC_TIMER = setInterval(async () => {
+    const e = await consultarExecucao();
+    if (!e || e.estado !== "rodando"){ clearInterval(EXEC_TIMER); EXEC_TIMER = null; carregar(); }
+  }, 1000);
+}
+
+async function consultarExecucao(){
+  try{
+    // O GET manda o token a mao: `mandar()` so serve o POST de /api/acao.
+    const r = await fetch("/api/execucao?desde=" + EXEC_LINHAS,
+                          {headers: {"X-Token": TOKEN}});
+    if (!r.ok) return null;
+    const e = await r.json();
+    pintaExecucao(e);
+    return e;
+  } catch(err){ return null; }
+}
+
+function pintaExecucao(e){
+  const d = $("#execucao");
+  if (e.estado !== "parada") d.dataset.estado = e.estado;
+  if (e.projeto) $("#e-titulo").textContent =
+    (e.estado === "rodando" ? "Resolvendo: " : "Resolver: ") + e.projeto;
+  if (e.frase) $("#e-frase").textContent = e.frase;
+
+  for (const linha of e.linhas || []){
+    $("#e-log").append(linha + "\n");
+    EXEC_LINHAS++;
+  }
+  if (typeof e.total_de_linhas === "number") EXEC_LINHAS = e.total_de_linhas;
+  const log = $("#e-log");
+  log.scrollTop = log.scrollHeight;
+
+  $("#e-custo").textContent = e.estado === "rodando"
+    ? "≈ " + e.custo_brl + " · estimativa, ainda rodando"
+    : e.custo_brl + " · estimativa";
+
+  if (e.manchete) $("#e-manchete").textContent = e.manchete;
+  if (e.corpo) $("#e-corpo-falha").textContent = e.corpo;
+  if (e.pr_url) $("#e-pr").href = e.pr_url;
+
+  EXEC_TEXTOS = {
+    resumo: e.resumo || "A sessão terminou sem alterar nenhum arquivo.",
+    diff: e.diff || "Nenhuma diferença registrada.",
+  };
+  pintaAbaDoResultado();
+}
+
+/* As abas NAO fazem requisicao: os dois textos ja vieram no mesmo estado. */
+function pintaAbaDoResultado(){
+  const alvo = $("#e-resultado");
+  alvo.textContent = EXEC_TEXTOS[EXEC_ABA] || "";
+  alvo.classList.toggle("diff", EXEC_ABA === "diff");
+  for (const b of document.querySelectorAll("#execucao nav.abas button")){
+    const ativa = b.dataset.aba === EXEC_ABA;
+    b.setAttribute("aria-selected", ativa ? "true" : "false");
+    b.tabIndex = ativa ? 0 : -1;          // uma parada de Tab por grupo de abas
+    if (ativa) alvo.setAttribute("aria-labelledby", b.id);
+  }
+}
+
+async function pararExecucao(botao){
+  const antes = botao.textContent;
+  botao.disabled = true; botao.textContent = "Parando…";
+  try{
+    const r = await mandar({comando: "parar"});
+    if (!r.ok) recado(r.saida || "Não consegui confirmar que parou.", true);
+  } catch(e){ recado("Não consegui falar com o servidor: " + e.message, true); }
+  finally{
+    botao.disabled = false; botao.textContent = antes;
+    clearInterval(EXEC_TIMER); EXEC_TIMER = null;
+    await consultarExecucao();
+    carregar();
+  }
+}
+
 async function calar(pend){
   const r = await mandar({comando:"silenciar", id: pend.id, horas: 24});
   recado(r.ok ? "Escondida por 24 h." : "Não deu certo.", !r.ok);
@@ -411,6 +736,24 @@ function itensEm(caixa, pend){
     b.textContent = p.acao.rotulo;
     b.addEventListener("click", () => agir(p, b));
     botoes.append(b);
+
+    // O "Resolver" entra AO LADO da acao de sempre, nunca no lugar dela: a
+    // acao continua sendo a resposta rapida, e esta e a demorada. So aparece
+    // onde ha o que resolver — pendencia sem projeto (cota_actions) e projeto
+    // bloqueado ficam so com a acao. Botao que existe para dizer "nao" e o
+    // oposto do invariante "toda pendencia tem uma acao".
+    if (podeResolver(p)){
+      const emCurso = rodandoAgora();
+      const rb = document.createElement("button");
+      rb.className = "btn";
+      const vendo = emCurso && emCurso.projeto === p.projeto;
+      rb.textContent = vendo ? "Ver execução" : "Resolver";
+      rb.addEventListener("click", () => vendo
+        ? (abreExecucao(rb), consultarExecucao(), lacoDeExecucao())
+        : resolver(p, rb));
+      botoes.append(rb);
+    }
+
     const c = document.createElement("button");
     c.className = "calar";
     c.title = "Esconder por 24 horas";
@@ -669,10 +1012,16 @@ function comandosDe(d){
   const c = [];
 
   // 1. As pendencias primeiro: e a pergunta que o HUB existe para responder.
-  for (const p of d.pendencias || [])
+  for (const p of d.pendencias || []){
     c.push(cmd(p.acao.rotulo + ": " + p.texto, p.projeto || "a máquina",
                p.gravidade === "alta" ? "urgente" : "pendência",
                () => agir(p, null), p.gravidade));
+    // Mesma funcao do botao, nunca uma acao propria da paleta (ver o comentario
+    // do bloco acima): uma porta a mais para a MESMA coisa.
+    if (podeResolver(p))
+      c.push(cmd("Resolver com o Claude: " + p.texto, p.projeto, "resolver",
+                 () => resolver(p, null), p.gravidade));
+  }
 
   // 2. Um projeto = varias portas de entrada. So entram as que EXISTEM: item
   //    que abre nada e pior que item ausente.
@@ -803,7 +1152,54 @@ document.addEventListener("keydown", e => {
   }
 });
 
+/* ------------------------------------------- controles do painel de execucao */
+for (const b of document.querySelectorAll("#execucao [data-fechar]"))
+  b.addEventListener("click", fechaExecucao);
+
+$("#e-parar").addEventListener("click", e => pararExecucao(e.currentTarget));
+
+$("#e-ver").addEventListener("click", () => {
+  // "Ver essa execução": reconecta na que ja esta rodando, sem disparar nada.
+  consultarExecucao(); lacoDeExecucao();
+});
+
+/* Mesmo contrato das abas Painel/Grafo: clique troca, seta anda e leva o foco. */
+{
+  const ABAS_EXEC = [...document.querySelectorAll("#execucao nav.abas button")];
+  const trocaExec = (b, focar) => {
+    EXEC_ABA = b.dataset.aba; pintaAbaDoResultado();
+    if (focar) b.focus();
+  };
+  for (const b of ABAS_EXEC){
+    b.addEventListener("click", () => trocaExec(b, false));
+    b.addEventListener("keydown", ev => {
+      const i = ABAS_EXEC.indexOf(b);
+      if (ev.key === "ArrowRight") trocaExec(ABAS_EXEC[(i + 1) % ABAS_EXEC.length], true);
+      else if (ev.key === "ArrowLeft") trocaExec(ABAS_EXEC[(i - 1 + ABAS_EXEC.length) % ABAS_EXEC.length], true);
+      else return;
+      ev.preventDefault();
+    });
+  }
+}
+
+// Fechar NAO para a execucao no servidor — so para de perguntar por ela. E ao
+// fechar o foco volta para o botao que abriu, que e o que falta hoje na paleta.
+$("#execucao").addEventListener("close", () => {
+  clearInterval(EXEC_TIMER); EXEC_TIMER = null;
+  if (EXEC_BOTAO && document.body.contains(EXEC_BOTAO)) EXEC_BOTAO.focus();
+  EXEC_BOTAO = null;
+});
+
 // Safari ainda nao tem closedby. Sem isto, clicar fora nao fecha la.
+if (!("closedBy" in HTMLDialogElement.prototype)){
+  $("#execucao").addEventListener("click", e => {
+    if (e.target !== $("#execucao")) return;
+    const r = e.target.getBoundingClientRect();
+    const dentro = r.top <= e.clientY && e.clientY <= r.top + r.height
+                && r.left <= e.clientX && e.clientX <= r.left + r.width;
+    if (!dentro) e.target.close();
+  });
+}
 if (!("closedBy" in HTMLDialogElement.prototype)){
   paleta.addEventListener("click", e => {
     if (e.target !== paleta) return;      // clique num filho: nao e o fundo

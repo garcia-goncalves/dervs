@@ -26,11 +26,13 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | Arquivo | Papel |
 |---|---|
 | `index.html` | A tela. Recarrega sozinha a cada 15 s. |
-| `servir.py` | Serve a página, o `/api/dados` e o `/api/acao`. Agenda as três coletas. |
+| `servir.py` | Serve a página, o `/api/dados`, o `/api/acao` e o `/api/execucao`. Agenda as três coletas. |
 | `banco.py` | O SQLite (`hub.db`): uma linha por (projeto, camada), com carimbo de tempo. |
 | `regras.py` | O motor das 14 pendências. Puro: entra dicionário, sai lista. |
+| `execucao.py` | O botão **Resolver**: dispara uma sessão do Claude Code numa cópia isolada e abre o pedido de alteração. Seção própria abaixo. |
+| `test_execucao.py` | 72 testes das decisões do Resolver. `python test_execucao.py`. |
 | `test_regras.py` | 30 testes do motor. `python test_regras.py`. |
-| `test_servir.py` | 35 testes do proxy do grafo. `python test_servir.py`. |
+| `test_servir.py` | 43 testes do proxy do grafo e da superfície do Resolver. `python test_servir.py`. |
 | `coletar.py` | Camada **local**: git, Docker, portas, grafo, memória, variáveis. |
 | `coletar_github.py` | Camada **github**: CI, PRs, alertas. Uma consulta GraphQL em lote. |
 | `coletar_pesado.py` | Camada **pesado**: cota do Actions e `npm audit`. |
@@ -131,7 +133,10 @@ precisa dele. É o `BONUS_NOME` no `index.html`.
 ### O que ela deliberadamente não faz
 
 **A paleta não tem ação própria nenhuma.** Ela encontra e dispara o que já
-existe: mesma função `agir()`, mesma lista branca do `servir.py`. Se pudesse
+existe: mesma função `agir()` (ou `resolver()`, para o botão Resolver), mesma
+lista branca do `servir.py`. Digitar `resolver` acha
+"Resolver com o Claude: …" para cada pendência que pode ser resolvida — é a
+mesma função do botão, não uma segunda porta com regra própria. Se pudesse
 fazer algo que a tela não faz, viraria uma segunda superfície de risco para
 revisar a cada mudança. Um teste amarra isso (`PaletaNaoInventaComando`, no
 `test_servir.py`): ele lê os comandos que o `index.html` manda e exige que cada
@@ -316,6 +321,26 @@ padrão e revelava existência, tamanho e data de qualquer arquivo da pasta — 
 variáveis só para extrair **nomes** de variável. Quem autentica no GitHub é o
 `gh` que o dono já logou.
 
+### A rota do botão "Resolver" (`/api/execucao`)
+
+`resolver` e `parar` entram pelo **mesmo** `/api/acao` de sempre, e portanto pela
+mesma cadeia de três checagens acima — nada foi afrouxado para eles. Quem recusa
+uma pendência que não pode ser resolvida é o **servidor**, não a tela: esconder o
+botão é conveniência, a barreira é `execucao.pode_resolver`.
+
+A consulta do progresso é um **GET** (`/api/execucao?desde=N`), e aí há uma
+diferença que precisa ser dita, senão parece um afrouxamento: o navegador **não
+manda `Origin` em GET de mesma origem**. Uma rota GET que exigisse `Origin`
+responderia 403 para sempre. Ela exige, em vez disso, `Host` de `localhost`, o
+**token** (igual ao POST) e `Sec-Fetch-Site` de mesma origem — exatamente o par
+que o proxy do grafo já usa, e pelo mesmo motivo.
+
+**O que este recurso acrescenta de superfície, dito sem maquiagem:** o servidor
+passa a executar `claude`, `git push` de um ramo novo e `gh pr create`. O prompt
+vai por **entrada padrão**, nunca pela linha de comando — nesta máquina `claude`
+é um `.CMD`, e todo argumento de um `.CMD` passa pelo interpretador do Windows.
+E a sessão filha herda os hooks do dono: ver "O que este recurso NÃO isola".
+
 ### O preço de embutir o grafo na mesma origem
 
 Mesma origem faz sumir de uma vez o `SameSite` dos cookies e o CORS, mas cobra:
@@ -381,6 +406,154 @@ o ganho ficou pequeno o bastante para não pagar o preço agora.
   próprio vigia grava em `~/.claude/state/vigia`: mesma verdade, zero execução.
 - **Nome de repositório remoto** é validado contra o alfabeto do GitHub antes de
   entrar na consulta GraphQL.
+
+## O botão "Resolver" — o Claude dentro do painel
+
+Cada pendência que tem projeto ganha, **ao lado** da ação de sempre, um botão
+`Resolver`. Ele dispara uma sessão do Claude Code que tenta corrigir a causa da
+pendência e termina abrindo um **pedido de alteração** (pull request) no GitHub.
+
+O cano inteiro, em seis passos:
+
+1. O navegador manda **só o `id`** da pendência. O servidor **recalcula** a
+   pendência a partir do banco (`_pendencia_por_id`) e ignora todo o resto do
+   corpo. Isso fecha o prompt para o navegador — mas **não** para o mundo: o
+   banco guarda o que o coletor leu da API do GitHub, e ali há texto que
+   estranhos escreveram. Ver "O texto de estranho que quase virou comando".
+2. O painel cria uma **cópia isolada** do repositório com `git worktree`, em
+   `~/.cache/hub-worktrees/<projeto>/<8 caracteres>` — de propósito **fora** de
+   `source\repos`, porque toda subpasta daquela raiz vira projeto medido e o
+   painel passaria a medir as próprias cópias.
+3. A sessão roda **dentro da cópia**. A pasta original do projeto não é tocada,
+   e `git status` nela continua vazio durante e depois.
+4. O painel lê a saída linha a linha e mostra o progresso ao vivo: uma frase em
+   português, o log cru com carimbo de hora, e o custo.
+5. Terminou bem: commit na cópia, `git push` de um ramo `hub/...` e
+   `gh pr create`. **Nunca** `push` na `main`, **nunca** `gh pr merge`.
+5b. **Parar sem confirmação não libera a vez.** Se o `Parar` pede a morte e o
+   processo não responde em 5 segundos, o painel **guarda** a referência dele em
+   vez de descartá-la, e recusa um novo `Resolver` enquanto aquele processo
+   respirar. A versão anterior largava a referência: o `claude` seguia vivo
+   cobrando na API, sem ninguém para matá-lo, e um segundo clique subia uma
+   sessão paralela cobrando junto. Pela mesma razão, se a leitura da saída morre
+   no meio, o painel mata a árvore do processo antes de marcar falha.
+6. Sucesso **descarta** a cópia; falha **preserva** a cópia em disco, para o
+   dono poder olhar o que aconteceu.
+
+Só há **uma execução por vez na máquina inteira**. A trava mora no servidor, não
+no navegador: fechar a aba, recarregar a página ou abrir outra não perde nada nem
+libera uma segunda sessão.
+
+### O que se vê na tela
+
+O botão abre um `<dialog>` que mostra, enquanto roda: a **frase de status** em
+português, o **log cru** com carimbo de hora, o **custo** e o botão **Parar**. A
+tela pergunta ao servidor de 1 em 1 segundo, mandando quantas linhas já tem, para
+receber só o que falta.
+
+Quando termina bem: o **link do pedido de alteração** e duas abas —
+**Resumo** (uma frase por arquivo tocado, escrita pela própria sessão) e
+**Diff**. As abas **não fazem requisição nenhuma**: os dois textos já vieram
+juntos no estado final.
+
+Três comportamentos que valem dizer:
+
+- **Fechar não para nada.** `Esc` fecha a janela; a sessão continua no servidor.
+  Enquanto ela roda, o botão daquela pendência vira **"Ver execução"**, e clicar
+  reconecta ao que está acontecendo — inclusive o log inteiro desde o começo.
+- **Os outros botões do painel continuam clicáveis.** O `Resolver` é um segundo
+  executor, ao lado do `agir()` de sempre, e de propósito **não** usa a trava
+  `ocupado` do cliente — essa trava agora é do servidor.
+- **O log não some.** O `recado()` do painel apaga em 4 ou 9 segundos; um log que
+  evapora enquanto o dono lê é pior que log nenhum.
+
+O botão aparece **só onde há o que resolver**: pendência sem projeto (a de cota
+do Actions nasce assim, de propósito) e projeto bloqueado ficam só com a ação de
+sempre. Um botão que existe para dizer "não" é o oposto do invariante "toda
+pendência tem uma ação".
+
+### O teto de gasto é aproximado, e isso não é força de expressão
+
+Medido nesta máquina em 24/08/2026: com `--max-budget-usd 0.10`, a execução
+terminou custando **US$ 0,44548** — estouro de 4,5×. A flag não é uma cerca; é
+um pedido. O teto adotado é **US$ 3** por execução, e a única garantia real de
+parar é o botão **Parar**, que mata a árvore de processos e espera 5 segundos
+pela confirmação. Se não confirmar, a tela diz que **não** confirmou — não finge
+que parou.
+
+O custo aparece em reais, por uma cotação constante no código
+(`execucao.USD_BRL`, R$ 5,14, fechamento de 21/08/2026). E ele **fica parado até
+a sessão terminar**: foi medido que só o evento final traz o custo. Inventar uma
+tabela de preços por token daria um número que se mexe e está errado.
+
+### Quando o pedido de alteração NÃO abre
+
+Três casos, cada um com uma tela própria — nenhum deles diz "algo deu errado":
+
+- **A sessão não mexeu em nada.** A tela diz "Terminou sem alterar nenhum
+  arquivo", e não finge que abriu pedido.
+- **O projeto não tem cópia no GitHub.** Sem `origin` não há para onde enviar. A
+  correção e o ramo ficam preservados no projeto, e a tela diz isso.
+  (Medido: o `medconsultoria-crm` está nesse caso.)
+- **O envio falhou.** A cópia é preservada com a mudança dentro, e o log cru do
+  `git`/`gh` aparece na tela.
+
+**Um detalhe que custou caro descobrir:** a sessão filha **commita por conta
+própria**. O prompt proíbe `push` e pull request, não commit. Por isso o painel
+não pergunta apenas "há arquivo alterado?" — ele compara o commit atual da cópia
+com o commit de onde ela partiu. Sem isso, uma correção já commitada era lida
+como "nada mudou", a cópia era descartada e a tela anunciava um pedido que nunca
+existiu. Achado na prova de aceitação de 25/08/2026, com uma execução real de
+R$ 10,37, e travado por teste (`HaOQuePublicar`).
+
+### O texto de estranho que quase virou comando
+
+Achado da revisão de segurança de 25/08/2026, corrigido antes de a entrega ser
+mesclada. Vale registrar inteiro, porque o desenho parecia seguro e não era.
+
+O prompt da sessão filha é um gabarito fechado com quatro campos. Um deles, o
+`detalhe` da pendência `pr_parado`, era o **título do pedido de alteração**,
+copiado cru da API do GitHub (`coletar_github.py`). Título de PR é escolhido por
+quem abre o PR — colaborador, fork de repositório público, automação de terceiro.
+
+O ataque completo, em quatro passos: a pessoa abre um PR com um título que é uma
+ordem disfarçada; espera sete dias, até a regra `pr_parado` acender no painel; o
+dono clica em `Resolver` naquela pendência; o texto dela entra no prompt de uma
+sessão que roda com `Bash`, `Write` e `Edit` **auto-aprovados**, com o login e os
+hooks do dono. Ou seja: comando arbitrário nesta máquina, com o `gh` já
+autenticado ao lado.
+
+Duas barreiras foram postas, e a primeira sozinha já fecha o buraco:
+
+1. **Campo de origem externa não entra no prompt.** O `detalhe` de `pr_parado`
+   passou a ser `pedido #N, parado ha D dias` — número e dias, calculados aqui.
+   O título continua a um clique de distância, no botão `Abrir`.
+2. **Defesa em profundidade, para a próxima regra que alguém escrever.** Os
+   campos `texto` e `detalhe` agora vão dentro de um bloco
+   `<dados-coletados-nao-confiaveis>`, com aviso explícito de que são dados e não
+   instruções, e passam por `so_dado()`, que neutraliza a etiqueta de fechamento
+   caso o próprio dado tente escrevê-la para sair do bloco.
+
+**A lição, que vale além deste recurso:** "o servidor recalcula do banco" não é
+sinônimo de "o dado é confiável". Recalcular só descarta o que o *navegador*
+mandou. O que veio da internet e foi guardado continua vindo da internet.
+
+### O que este recurso NÃO isola
+
+`Bash` está na lista branca e **não** fica preso à cópia. O shell não conhece
+fronteira de pasta, e a cópia é um `git worktree`, que compartilha o `.git` do
+projeto de verdade e o remoto já autenticado: um `git push --force` saído de lá
+alcança o repositório real. `Bash` fica porque sem ele a sessão não roda teste
+nem commita — e aí o recurso não existe. O que protege não é a lista de
+ferramentas; é não deixar texto de estranho chegar ao prompt (seção acima).
+
+A sessão filha **roda os hooks** do `~/.claude` do dono e o
+`.claude/settings.json` versionado do projeto-alvo. Medido: seis hooks
+`SessionStart` dispararam dentro dela. A forma de evitar isso seria `--bare`, que
+**não funciona** com o login por assinatura desta máquina (responde
+`Not logged in`; `--bare` só aceita chave de API). Isso é **risco declarado, não
+resolvido** — se um hook do dono abortar a sessão filha, o sintoma é a sessão
+terminar sem tocar em arquivo nenhum, e o log cru da tela mostra o motivo.
 
 ## O que ainda não existe
 
