@@ -160,5 +160,78 @@ class TetoDiario(unittest.TestCase):
         self.assertEqual(hoje[7], "-")
 
 
+class AntiLaco(unittest.TestCase):
+
+    def _item(self, **campos):
+        base = {"id": "env_drift:dents", "projeto": "dents", "regra": "env_drift",
+                "gravidade": "media", "risco": 0, "trilho": "claude",
+                "estado": "esperando", "tentativas": 0, "terminado_em": None}
+        base.update(campos)
+        return base
+
+    def test_primeira_tentativa_pode(self):
+        self.assertTrue(fila.pode_tentar(self._item(tentativas=0), "2026-08-25"))
+
+    def test_segunda_tentativa_pode(self):
+        self.assertTrue(fila.pode_tentar(self._item(tentativas=1), "2026-08-25"))
+
+    def test_terceira_tentativa_nao_pode(self):
+        self.assertFalse(fila.pode_tentar(self._item(tentativas=2), "2026-08-25"))
+
+    def test_falha_de_hoje_nao_volta_hoje(self):
+        item = self._item(estado="falha", tentativas=1,
+                          terminado_em="2026-08-25T14:00:00+00:00")
+        self.assertFalse(fila.pode_tentar(item, "2026-08-25"))
+
+    def test_falha_de_ontem_volta_hoje(self):
+        item = self._item(estado="falha", tentativas=1,
+                          terminado_em="2026-08-24T14:00:00+00:00")
+        self.assertTrue(fila.pode_tentar(item, "2026-08-25"))
+
+
+class Proximo(unittest.TestCase):
+
+    def _item(self, id_, gravidade="media", risco=0, **campos):
+        base = {"id": id_, "projeto": id_.split(":")[-1], "regra": "env_drift",
+                "gravidade": gravidade, "risco": risco, "trilho": "claude",
+                "estado": "esperando", "tentativas": 0, "terminado_em": None}
+        base.update(campos)
+        return base
+
+    def test_fila_vazia_devolve_nada(self):
+        self.assertIsNone(fila.proximo([], 0.0, "2026-08-25"))
+
+    def test_grave_vem_antes(self):
+        itens = [self._item("a:zz", "baixa"), self._item("b:aa", "alta")]
+        self.assertEqual(fila.proximo(itens, 0.0, "2026-08-25")["id"], "b:aa")
+
+    def test_dentro_da_gravidade_o_risco_desempata(self):
+        itens = [self._item("a:aa", "alta", risco=0),
+                 self._item("b:zz", "alta", risco=100)]
+        self.assertEqual(fila.proximo(itens, 0.0, "2026-08-25")["id"], "b:zz")
+
+    def test_risco_nao_atravessa_gravidade(self):
+        itens = [self._item("a:aa", "media", risco=100),
+                 self._item("b:zz", "alta", risco=0)]
+        self.assertEqual(fila.proximo(itens, 0.0, "2026-08-25")["id"], "b:zz")
+
+    def test_empate_total_ordena_pelo_projeto(self):
+        itens = [self._item("a:zz", "alta"), self._item("b:aa", "alta")]
+        self.assertEqual(fila.proximo(itens, 0.0, "2026-08-25")["projeto"], "aa")
+
+    def test_teto_estourado_devolve_nada_mesmo_com_fila_cheia(self):
+        itens = [self._item("a:aa", "alta")]
+        self.assertIsNone(fila.proximo(itens, 999.0, "2026-08-25"))
+
+    def test_item_rodando_nao_e_escolhido_de_novo(self):
+        itens = [self._item("a:aa", "alta", estado="rodando")]
+        self.assertIsNone(fila.proximo(itens, 0.0, "2026-08-25"))
+
+    def test_item_esgotado_e_pulado_e_o_seguinte_entra(self):
+        itens = [self._item("a:aa", "alta", tentativas=2),
+                 self._item("b:bb", "baixa")]
+        self.assertEqual(fila.proximo(itens, 0.0, "2026-08-25")["id"], "b:bb")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

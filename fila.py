@@ -86,3 +86,35 @@ def elegiveis(pendencias: list) -> list:
             copia["trilho"] = trilho
             saida.append(copia)
     return saida
+# Duas tentativas. A terceira nunca consertou nada que a segunda nao tenha
+# consertado — e uma correcao que nao pega vira torneira aberta.
+MAX_TENTATIVAS = 2
+
+
+def pode_tentar(item: dict, hoje: str) -> bool:
+    """Este item ainda merece uma chance hoje?"""
+    if int(item.get("tentativas") or 0) >= MAX_TENTATIVAS:
+        return False
+    if item.get("estado") == "falha":
+        terminou = (item.get("terminado_em") or "")[:10]
+        if terminou == hoje:
+            return False
+    return True
+
+
+def proximo(itens: list, gasto_usd: float, hoje: str):
+    """O proximo item a trabalhar, ou None. NAO inicia nada: so escolhe.
+
+    Separar escolher de fazer e o que torna a ordem testavel sem processo,
+    sem rede e sem gastar um centavo.
+    """
+    if not cabe_no_teto(gasto_usd):
+        return None
+    espera = [i for i in (itens or [])
+              if i.get("estado") in ("esperando", "falha") and pode_tentar(i, hoje)]
+    if not espera:
+        return None
+    espera.sort(key=lambda i: (ORDEM.get(i.get("gravidade"), 9),
+                               -float(i.get("risco") or 0),
+                               (i.get("projeto") or "").lower()))
+    return espera[0]
