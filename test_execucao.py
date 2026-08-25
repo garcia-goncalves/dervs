@@ -10,6 +10,7 @@ tem teste proprio, e nenhum deles toca disco ou rede.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import unittest
 import unittest.mock
@@ -92,6 +93,77 @@ class MontagemDoComando(unittest.TestCase):
     def test_nao_proibe_e_permite_a_mesma_ferramenta(self):
         cruzamento = set(execucao.FERRAMENTAS_OK) & set(execucao.FERRAMENTAS_PROIBIDAS)
         self.assertEqual(cruzamento, set())
+
+
+class AsBarreirasDaSessaoDesacompanhada(unittest.TestCase):
+    """As tres decisoes que separam o botao "Resolver" da fila sem vigia.
+
+    Cada teste aqui guarda uma delas. Se alguem tirar uma flag achando que
+    "simplifica", e aqui que o aviso aparece — e nao no dia do estrago.
+    """
+
+    def test_a_filha_nao_carrega_configuracao_de_arquivo_nenhum(self):
+        """`--setting-sources ""` derruba os hooks do dono E, o que importa
+        mais, o `.claude/settings.json` do repositorio sendo consertado, que e
+        conteudo escrito por estranho e podia definir hook proprio."""
+        argv = execucao.montar_comando(3.0, 40)
+        self.assertIn("--setting-sources", argv)
+        self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
+
+    def test_a_barreira_entra_pelo_settings_explicito(self):
+        argv = execucao.montar_comando(3.0, 40)
+        self.assertIn("--settings", argv)
+        ajuste = json.loads(argv[argv.index("--settings") + 1])
+        gancho = ajuste["hooks"]["PreToolUse"][0]
+        self.assertIn("Bash", gancho["matcher"])
+        self.assertIn("barreira.py", gancho["hooks"][0]["command"])
+
+    def test_o_settings_e_json_valido_de_uma_linha_so(self):
+        """Ele viaja como ARGUMENTO de linha de comando: quebra de linha ali
+        vira dois argumentos e o `claude` recusa o ajuste inteiro."""
+        texto = execucao.settings_da_barreira()
+        self.assertNotIn("\n", texto)
+        self.assertIsInstance(json.loads(texto), dict)
+
+    def test_o_hook_nao_roda_no_pythonw(self):
+        """pythonw.exe existe para NAO ter console; o hook conversa por stdin."""
+        self.assertNotIn("pythonw", execucao.settings_da_barreira(
+            python="C:/Python312/pythonw.exe", script="x.py"))
+
+    def test_o_caminho_do_hook_vai_em_barra_normal(self):
+        """A `command` do hook passa por um shell, e barra invertida dentro de
+        aspas e caractere de escape."""
+        texto = execucao.settings_da_barreira(python="C:/py.exe", script="C:/x.py")
+        self.assertNotIn("\\\\", texto)
+
+
+class APonteDeMaoUnica(unittest.TestCase):
+    """A copia nao tem `origin`: o push sai do PROJETO, e so depois das travas."""
+
+    def test_publicar_sem_o_caminho_do_projeto_recusa(self):
+        ok, url, log = execucao.publicar("/copia", "ramo", "t", "c", "m")
+        self.assertFalse(ok)
+        self.assertIsNone(url)
+        self.assertIn("caminho do projeto", log)
+
+    def test_o_push_sai_do_projeto_e_nao_da_copia(self):
+        """Este teste existe porque o contrario era o furo: enquanto o push
+        saia da copia, ele saia da sessao do Claude."""
+        chamadas = []
+
+        def espiao(args, cwd=None, limite=180, corte=1200):
+            chamadas.append((args, cwd))
+            return True, "" if "status" not in args else ""
+
+        with unittest.mock.patch.object(execucao, "_rodar", espiao):
+            execucao.publicar("/copia", "ramo", "t", "c", "m", "/projeto")
+
+        push = [a for a, _ in chamadas if "push" in a]
+        self.assertTrue(push, "nenhum push aconteceu")
+        self.assertEqual(push[0][:3], ["git", "-C", "/projeto"])
+        fetch = [a for a, _ in chamadas if "fetch" in a]
+        self.assertEqual(fetch[0][:3], ["git", "-C", "/projeto"])
+        self.assertIn("/copia", fetch[0])
 
 
 class MontagemDoPrompt(unittest.TestCase):

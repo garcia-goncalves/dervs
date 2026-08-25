@@ -34,9 +34,19 @@ E mais duas, medidas em 25/08/2026 na etapa 3:
      ate a sessao acabar, e a tela tem de dizer isso — nao ha como calcular
      custo ao vivo sem inventar tabela de precos.
 
-E um risco confirmado, nao resolvido: os hooks do ~/.claude do dono RODAM
-dentro da sessao filha (seis SessionStart apareceram na medicao). Sem --bare
-nao ha como isolar, e --bare nao funciona com este login.
+E uma sexta, medida em 25/08/2026 (claude 2.1.245), que derrubou o que estava
+escrito aqui: a linha antiga dizia que os hooks do ~/.claude do dono rodam
+dentro da sessao filha e que "sem --bare nao ha como isolar". Ha: a CLI aceita
+`--setting-sources ""`, que corta TODA configuracao vinda de arquivo, e o
+`--settings` explicito sobrevive ao corte. Foi assim que a barreira entrou (ver
+`settings_da_barreira`). O corte vale para os hooks do dono e — este era o furo
+que ninguem tinha visto — tambem para o `.claude/settings.json` do repositorio
+sendo consertado, que e conteudo escrito por estranho.
+
+O QUE AINDA NAO FOI MEDIDO, e precisa ser antes da primeira corrida de verdade:
+uma sessao filha completa com esses dois parametros, para ver o hook barrando em
+producao. O classificador de seguranca desta maquina impede uma sessao do Claude
+de disparar outra, entao essa medicao depende da mao do dono (ver README).
 """
 from __future__ import annotations
 
@@ -68,13 +78,17 @@ MAX_TURNOS = 40
 
 # Lista branca: o que a sessao filha pode fazer sozinha, sem perguntar.
 #
-# NAO diga que isto e isolado, porque nao e — o comentario antigo dizia e estava
-# errado. `Edit` e `Write` de fato nao saem da copia. `Bash`, sim: o shell nao
-# esta preso ao cwd, e a copia e um `git worktree`, que COMPARTILHA o .git do
-# projeto de verdade e o remoto ja autenticado. Um `git push --force` saido dali
-# alcanca o repositorio real. Bash fica porque sem ele a sessao nao roda teste
-# nem commita, e ai o recurso nao existe; o que protege nao e a lista, e nao
-# deixar texto de estranho chegar ao prompt (ver GABARITO e regras.py).
+# `Bash` continua aqui porque sem ele a sessao nao roda teste nem commita, e ai
+# o recurso nao existe. O que mudou em 25/08/2026 foi o que ha do outro lado do
+# Bash: a copia deixou de ser um `git worktree` (que COMPARTILHAVA o .git do
+# projeto e o remoto ja autenticado, e de onde um `git push --force` alcancava o
+# repositorio real) e passou a ser um clone sem `origin` (ver criar_copia). Alem
+# disso, todo comando passa antes pela lista de `barreira.py`.
+#
+# Ainda assim, nao chame isto de isolado: rodar teste E rodar codigo arbitrario,
+# e a suite do projeto e codigo de terceiro. O que protege e a soma — copia sem
+# remoto, barreira no comando, e nao deixar texto de estranho chegar ao prompt
+# (ver GABARITO e regras.py).
 FERRAMENTAS_OK = ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "TodoWrite"]
 
 # Lista negra: vence a branca no `claude`. Sessao filha nao despacha sessao neta
@@ -142,7 +156,8 @@ Se você não tocou em arquivo nenhum, diga isso em uma linha."""
 # ---------------------------------------------------------------- parte pura
 
 
-def montar_comando(teto_usd: float = TETO_USD, turnos: int = MAX_TURNOS) -> list:
+def montar_comando(teto_usd: float = TETO_USD, turnos: int = MAX_TURNOS,
+                   settings: str = "") -> list:
     """O argv da sessao filha. O PROMPT NAO ESTA AQUI — ele vai por stdin.
 
     NAO acrescente --bare: foi medido e falha com "Not logged in" (ver topo).
@@ -164,11 +179,56 @@ def montar_comando(teto_usd: float = TETO_USD, turnos: int = MAX_TURNOS) -> list
         "--verbose",
         "--strict-mcp-config",
         "--mcp-config", '{"mcpServers":{}}',
+        "--setting-sources", "",
+        "--settings", settings or settings_da_barreira(),
         "--max-budget-usd", "%.2f" % teto_usd,
         "--max-turns", str(int(turnos)),
         "--allowedTools", ",".join(FERRAMENTAS_OK),
         "--disallowedTools", ",".join(FERRAMENTAS_PROIBIDAS),
     ]
+
+
+# As ferramentas que o hook da barreira precisa vigiar. `Bash` e o motivo de
+# tudo; os outros entram porque `file_path` tambem e caminho.
+VIGIADAS = "Bash|Write|Edit|MultiEdit|NotebookEdit"
+
+
+def _python_com_console(caminho: str = "") -> str:
+    """O interpretador para o hook. Sob pythonw.exe, troca para python.exe.
+
+    O hook conversa por stdin/stderr com o `claude`; pythonw.exe existe
+    justamente para nao ter console, e ja custou uma telinha piscando na cara
+    do dono em outro ponto deste arquivo. python.exe redirecionado nao abre
+    janela (SEM_JANELA cuida disso no processo pai).
+    """
+    alvo = Path(caminho or sys.executable or "python")
+    if alvo.name.lower() == "pythonw.exe":
+        alvo = alvo.with_name("python.exe")
+    return alvo.as_posix()
+
+
+def settings_da_barreira(python: str = "", script: str = "") -> str:
+    """O `--settings` da sessao filha: um hook PreToolUse, e mais nada.
+
+    Vem junto de `--setting-sources ""`, e o par e que faz sentido:
+
+      * `--setting-sources ""` derruba TODA configuracao de arquivo. Some o
+        `~/.claude` do dono (seis hooks SessionStart rodavam dentro da sessao
+        filha, medido em 24/08/2026) e some tambem o `.claude/settings.json`
+        DO REPOSITORIO SENDO CONSERTADO — que e conteudo escrito por estranho
+        e podia definir hook proprio. Este era o furo que ninguem tinha visto.
+      * `--settings` nao e fonte de arquivo: e ajuste explicito desta chamada,
+        e por isso sobrevive ao corte. E dele que a barreira entra.
+
+    Caminho em barra normal de proposito: a `command` do hook passa por um
+    shell, e barra invertida dentro de aspas e caractere de escape.
+    """
+    python = _python_com_console(python)
+    script = script or Path(__file__).with_name("barreira.py").as_posix()
+    return json.dumps({"hooks": {"PreToolUse": [{
+        "matcher": VIGIADAS,
+        "hooks": [{"type": "command", "command": '"%s" "%s"' % (python, script)}],
+    }]}}, ensure_ascii=True)
 
 
 # A etiqueta que separa dado de instrucao dentro do prompt. Se o proprio dado
@@ -409,8 +469,10 @@ def titulo_e_corpo_do_pr(pendencia: dict):
         "**O que o painel viu:** %s\n\n"
         "**Detalhe:** %s\n\n"
         "A correção foi escrita por uma sessão do Claude Code rodando numa cópia\n"
-        "isolada do repositório (`git worktree`), com teto de gasto aproximado de\n"
-        "%s. Nenhuma pessoa leu este diff ainda. **Revise antes de mesclar.**\n"
+        "do repositório sem acesso ao GitHub (um clone local com o `origin`\n"
+        "removido), com os comandos filtrados por uma lista e teto de gasto\n"
+        "aproximado de %s. Nenhuma pessoa leu este diff ainda.\n"
+        "**Revise antes de mesclar.**\n"
         % (regra, projeto, pendencia.get("texto", ""),
            pendencia.get("detalhe", "") or "(sem detalhe)", em_reais(TETO_USD))
     )
@@ -472,18 +534,77 @@ def _rodar(args, cwd=None, limite=180, corte=1200):
 
 
 def criar_copia(caminho_do_projeto, destino, ramo):
-    """git worktree add — a pasta original do projeto nao e tocada."""
+    """Clone local SEM remoto — a copia nao alcanca o GitHub. Devolve (ok, saida).
+
+    ERA `git worktree add`, e essa era a primeira barreira que faltava. Um
+    worktree COMPARTILHA o `.git` do projeto de verdade e, com ele, o `origin`
+    ja autenticado: um `git push --force` saido da copia chegava ao repositorio
+    real. Com uma pessoa olhando a tela isso era um risco vigiado; na fila, que
+    roda desacompanhada, era um risco sem vigia.
+
+    O clone custa disco e segundos (o maior dos 17 projetos tem 342 MB de
+    `.git`, medido em 25/08/2026) e paga com uma propriedade que nenhuma lista
+    de comandos daria: dali nao ha caminho ate o GitHub, nem que a sessao
+    invente um. Quem atravessa essa ponte e o painel, depois, em `publicar`, e
+    so com o diff ja aprovado pelas travas.
+
+      --no-hardlinks  sem isto o git LIGA os arquivos de objeto do clone aos do
+                      original: escrever num escreveria no outro.
+      remote remove   tira o `origin` herdado do clone.
+      core.hooksPath  aponta para pasta vazia: hook de git e codigo que roda
+                      sozinho no proximo commit.
+    """
+    origem, destino = str(caminho_do_projeto), str(destino)
     Path(destino).parent.mkdir(parents=True, exist_ok=True)
-    return _rodar(["git", "-C", str(caminho_do_projeto), "worktree", "add",
-                   "-b", ramo, str(destino), "HEAD"])
+
+    # O commit exato de onde partir. Sem isto, projeto em HEAD solto vira clone
+    # sem ramo nenhum e o `checkout -b` falharia com uma mensagem de git.
+    ok, sha = _rodar(["git", "-C", origem, "rev-parse", "HEAD"], limite=30)
+    if not ok or not sha.strip():
+        return False, sha or "não consegui ler o HEAD de %s" % origem
+
+    ok, saida = _rodar(["git", "clone", "--no-hardlinks", "--quiet",
+                        origem, destino], limite=900)
+    if not ok:
+        return False, saida
+
+    sem_hooks = Path(BASE_COPIAS) / "sem-hooks"
+    sem_hooks.mkdir(parents=True, exist_ok=True)
+    for args in (["git", "-C", destino, "remote", "remove", "origin"],
+                 ["git", "-C", destino, "config", "core.hooksPath",
+                  sem_hooks.as_posix()],
+                 ["git", "-C", destino, "checkout", "-b", ramo,
+                  sha.strip().splitlines()[0]]):
+        ok, saida = _rodar(args, limite=120)
+        if not ok:
+            return False, saida
+    return True, ""
+
+
+def _forcar_escrita(funcao, caminho, _erro):
+    """Windows deixa os objetos do `.git` somente-leitura e o rmtree para."""
+    try:
+        os.chmod(caminho, 0o700)
+        funcao(caminho)
+    except OSError:
+        pass
 
 
 def remover_copia(caminho_do_projeto, destino):
-    """Sucesso remove a copia; falha preserva (a chamada e de quem decide)."""
-    ok, saida = _rodar(["git", "-C", str(caminho_do_projeto), "worktree",
-                        "remove", "--force", str(destino)])
-    _rodar(["git", "-C", str(caminho_do_projeto), "worktree", "prune"])
-    return ok, saida
+    """Sucesso remove a copia; falha preserva (a chamada e de quem decide).
+
+    Agora a copia e pasta comum, e nao worktree: apagar e apagar. O primeiro
+    parametro ficou sem uso e ficou no lugar de proposito — ele aparece em
+    quatro chamadas neste arquivo, e mexer nelas nao e o assunto desta mudanca.
+    """
+    alvo = Path(str(destino))
+    if not alvo.exists():
+        return True, ""
+    try:
+        shutil.rmtree(alvo, onerror=_forcar_escrita)
+    except OSError as e:
+        return False, "%s" % e
+    return (True, "") if not alvo.exists() else (False, "a pasta continuou lá")
 
 
 def ha_o_que_publicar(status: str, head: str, base: str) -> bool:
@@ -557,13 +678,24 @@ def diff_para_a_trava(destino, base=""):
     return True, saida
 
 
-def publicar(destino, ramo, titulo, corpo, mensagem):
-    """add + commit + push + gh pr create. NUNCA push na main, nunca pr merge.
+def publicar(destino, ramo, titulo, corpo, mensagem, projeto_caminho=""):
+    """add + commit na copia, traz o ramo para o projeto, push + gh pr create.
 
     Devolve (ok, url_ou_None, log). O log volta inteiro para a tela: se o `gh`
     recusar porque ja existe PR, o dono precisa ver a frase do GitHub, nao um
     "algo deu errado" nosso.
+
+    A COPIA NAO TEM MAIS `origin` (ver criar_copia), e por isso o push nao sai
+    mais de dentro dela. Esta funcao E a ponte, e ela e de mao unica e vigiada:
+    quem a atravessa e o painel, com o diff ja aprovado pelas travas, e nunca a
+    sessao do Claude. O `git fetch` puxa o ramo da copia para o projeto de
+    verdade, e so entao ha um push — feito por este processo, e nao por ela.
     """
+    projeto = str(projeto_caminho or "").strip()
+    if not projeto:
+        return False, None, ("sem o caminho do projeto não há para onde trazer "
+                             "o ramo %s" % ramo)
+
     passos = []
     # `git commit` sem nada para commitar sai com codigo 1 e derrubaria o
     # envio inteiro. A sessao filha costuma ja ter commitado sozinha.
@@ -571,7 +703,11 @@ def publicar(destino, ramo, titulo, corpo, mensagem):
     if ok_status and status.strip():
         passos.append((["git", "-C", str(destino), "add", "-A"], 60))
         passos.append((["git", "-C", str(destino), "commit", "-m", mensagem], 120))
-    passos.append((["git", "-C", str(destino), "push", "-u", "origin", ramo], 180))
+    # `+` na frente: o nome do ramo carrega um id sorteado e nao deveria
+    # colidir, mas fetch recusado por ramo existente pararia a entrega no fim.
+    passos.append((["git", "-C", projeto, "fetch", str(destino),
+                    "+%s:%s" % (ramo, ramo)], 300))
+    passos.append((["git", "-C", projeto, "push", "-u", "origin", ramo], 180))
     log = []
     for args, limite in passos:
         ok, saida = _rodar(args, limite=limite)
@@ -581,7 +717,7 @@ def publicar(destino, ramo, titulo, corpo, mensagem):
 
     ok, saida = _rodar(["gh", "pr", "create", "--title", titulo,
                         "--body", corpo, "--head", ramo],
-                       cwd=str(destino), limite=180)
+                       cwd=projeto, limite=180)
     log.append(saida)
     return ok, (url_do_pr(saida) if ok else None), "\n".join(x for x in log if x)
 
@@ -886,7 +1022,7 @@ def _fechar_com_pedido_de_alteracao(evento: dict) -> None:
     _execucao["frase"] = FRASE_ABRINDO_PR
     titulo, corpo = titulo_e_corpo_do_pr(pendencia)
     ok, url, log = publicar(destino, _execucao.get("ramo"), titulo, corpo,
-                            mensagem_de_commit(pendencia))
+                            mensagem_de_commit(pendencia), projeto_caminho)
     for linha in (log or "").splitlines():
         if linha.strip():
             _anotar(linha.strip()[:300])

@@ -192,12 +192,12 @@ o que **continua aberto**.
   travas. Mexer no runner também (`pytest.ini`, `"test": "exit 0"`,
   `norecursedirs`). A trava 3 cobre apagar, desligar e renomear — não cobre
   esvaziar nem desviar.
-- **A sessão roda com `Bash` liberado** num worktree que compartilha o `.git` e
-  o remoto autenticado do projeto real. Isso já valia para o botão manual, mas
-  ali havia alguém olhando a tela. Desacompanhada, a superfície de injeção é o
-  **conteúdo dos 17 repositórios**: um arquivo hostil pode instruir a sessão a
-  fazer coisa que a trava — que só lê o diff no fim — não pega. Antes de rodar
-  a fila de verdade, isto precisa de uma barreira de comando ou de rede.
+- ~~**A sessão roda com `Bash` liberado** num worktree que compartilha o `.git`
+  e o remoto autenticado do projeto real.~~ **Endereçado em 25/08/2026** — ver
+  "As três barreiras" no fim deste documento. A cópia deixou de ser worktree, a
+  sessão deixou de carregar configuração de arquivo, e todo comando passa por
+  uma lista. O que **continua** valendo: rodar teste é rodar código arbitrário,
+  e não há isolamento de rede.
 - **O teto é conferido antes de começar o item**, e o próprio código mede que o
   limite de gasto da sessão estoura até 4,5×: um único item pode custar ~R$ 69
   contra um teto de R$ 50.
@@ -220,3 +220,43 @@ cliquei no botão. Ele respondia *"projeto desconhecido."* e a fila jamais
 começava — o que também quer dizer que **nenhuma das quatro travas foi
 exercitada de ponta a ponta**. Elas estão provadas em teste unitário, não em
 corrida real.
+
+## As três barreiras (25/08/2026)
+
+O item acima bloqueava a fila: sem vigia humana, `Bash` liberado num worktree
+com o remoto autenticado é um programa solto na máquina do dono. Três barreiras
+foram postas, em ordem de importância — a primeira é a que carrega o peso.
+
+| # | Barreira | Onde | Prova |
+|---|---|---|---|
+| 1 | A cópia não alcança o GitHub: `git clone --no-hardlinks` com `origin` removido e `core.hooksPath` vazio | `execucao.criar_copia` | corrida real: `remote -v` vazio, ramo certo, 0,5 s |
+| 2 | A sessão não carrega configuração de arquivo: `--setting-sources ""` mais `--settings` explícito | `execucao.settings_da_barreira` | a CLI 2.1.245 aceita a flag (código 0); 5 testes |
+| 3 | Todo comando passa por uma lista antes de rodar | `barreira.py`, hook `PreToolUse` | hook rodado como processo real: `git push` → código 2 com a frase; `python -m pytest` → código 0; 29 testes |
+
+E a ponte que substituiu o push da sessão: `execucao.publicar` traz o ramo da
+cópia para o projeto com `git fetch` e faz o push **do projeto**. Provado numa
+corrida real com um projeto de mentira — o ramo atravessou e o commit chegou.
+
+### O furo que ninguém tinha visto
+
+A barreira 2 não foi feita para os hooks do dono. Ela existe porque a sessão
+filha também carregava o **`.claude/settings.json` do repositório sendo
+consertado** — isto é, um arquivo escrito por estranho, versionado no repositório
+que a fila ia visitar, podendo definir hook próprio. O `--setting-sources ""`
+fecha os dois de uma vez.
+
+Isso também derruba o que estava escrito no README e no topo de `execucao.py`:
+que só `--bare` isolaria, e que `--bare` não serve com este login. A segunda
+metade continua verdadeira; a primeira estava errada.
+
+### O que continua NÃO provado, e é o próximo passo
+
+**Nenhuma sessão filha completa foi rodada com as barreiras ligadas.** O hook
+foi exercitado como processo isolado, e a cópia e a ponte foram exercitadas de
+verdade — mas ninguém viu ainda o `claude` carregar o `--settings` e barrar um
+comando dentro de uma sessão de verdade. Falta porque o classificador de
+segurança desta máquina impede uma sessão do Claude de disparar outra: a
+medição depende da mão do dono.
+
+Enquanto isso não for feito, o estado honesto é: **as peças foram provadas
+separadas, a montagem não.**

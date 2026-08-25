@@ -32,7 +32,9 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `memoria.py` | A memória do tempo: idade de cada pendência, tendência da semana e o briefing. |
 | `test_memoria.py` | 38 testes da memória. `python test_memoria.py`. |
 | `execucao.py` | O botão **Resolver**: dispara uma sessão do Claude Code numa cópia isolada e abre o pedido de alteração. Seção própria abaixo. |
-| `test_execucao.py` | 78 testes das decisões do Resolver. `python test_execucao.py`. |
+| `test_execucao.py` | 85 testes das decisões do Resolver e das barreiras. `python test_execucao.py`. |
+| `barreira.py` | O porteiro do `Bash` da sessão desacompanhada: roda como hook do `claude` e barra o comando **antes** dele rodar. |
+| `test_barreira.py` | 29 testes da barreira — cada um é um ataque concreto ou um comando honesto. `python test_barreira.py`. |
 | `test_regras.py` | 40 testes do motor. `python test_regras.py`. |
 | `test_servir.py` | 43 testes do proxy do grafo e da superfície do Resolver. `python test_servir.py`. |
 | `coletar.py` | Camada **local**: git, Docker, portas, grafo, memória, variáveis. |
@@ -114,11 +116,17 @@ até acabar serviço, dinheiro ou paciência. Ela só começa quando você apert
 |---|---|---|---|
 | **Renovate** | um robô do GitHub, fora do painel | grátis | pedido de alteração de dependência |
 | **Mecânico** | o próprio painel, sem IA | **R$ 0,00** | o arquivo corrigido, direto |
-| **Claude** | uma sessão do Claude em cópia isolada | pago, teto de US$ 3 por item | pedido de alteração |
+| **Claude** | uma sessão do Claude em cópia sem acesso ao GitHub | pago, teto de US$ 3 por item | pedido de alteração |
 
 Só **três** das 16 regras entram na fila: `memoria_crlf` (mecânico),
 `env_drift` e `dependencia_insegura` (Claude). É lista **branca**: regra que não
 está lá não chega ao motor, nem por engano.
+
+**A fila só existe porque as barreiras existem.** Sem ninguém olhando a tela, a
+sessão do Claude deixa de ser uma ferramenta vigiada e passa a ser um programa
+solto na sua máquina. As três barreiras — cópia sem acesso ao GitHub, sessão sem
+configuração de arquivo, e lista de comandos — estão descritas em "O que este
+recurso NÃO isola", inclusive no que elas **não** cobrem.
 
 **`ci_vermelha` fica de fora de propósito.** É o caso mais valioso e o único em
 que *apagar o teste parece uma correção*. Enquanto a trava do teste apagado não
@@ -497,16 +505,21 @@ O cano inteiro, em seis passos:
    corpo. Isso fecha o prompt para o navegador — mas **não** para o mundo: o
    banco guarda o que o coletor leu da API do GitHub, e ali há texto que
    estranhos escreveram. Ver "O texto de estranho que quase virou comando".
-2. O painel cria uma **cópia isolada** do repositório com `git worktree`, em
-   `~/.cache/hub-worktrees/<projeto>/<8 caracteres>` — de propósito **fora** de
+2. O painel cria uma **cópia isolada** do repositório — um `git clone` local
+   com o `origin` **removido** — em
+   `~/.cache/hub-worktrees/<projeto>/<8 caracteres>`, de propósito **fora** de
    `source\repos`, porque toda subpasta daquela raiz vira projeto medido e o
-   painel passaria a medir as próprias cópias.
+   painel passaria a medir as próprias cópias. Até 25/08/2026 isso era um
+   `git worktree`, e a diferença não é de detalhe: ver
+   "O que este recurso NÃO isola".
 3. A sessão roda **dentro da cópia**. A pasta original do projeto não é tocada,
    e `git status` nela continua vazio durante e depois.
 4. O painel lê a saída linha a linha e mostra o progresso ao vivo: uma frase em
    português, o log cru com carimbo de hora, e o custo.
-5. Terminou bem: commit na cópia, `git push` de um ramo `hub/...` e
-   `gh pr create`. **Nunca** `push` na `main`, **nunca** `gh pr merge`.
+5. Terminou bem: commit **na cópia**; o painel traz o ramo para o projeto de
+   verdade com `git fetch`, e só então faz `git push` de um ramo `hub/...` e
+   `gh pr create`. O push sai do **painel**, nunca da sessão — a cópia não tem
+   para onde empurrar. **Nunca** `push` na `main`, **nunca** `gh pr merge`.
 5b. **Parar sem confirmação não libera a vez.** Se o `Parar` pede a morte e o
    processo não responde em 5 segundos, o painel **guarda** a referência dele em
    vez de descartá-la, e recusa um novo `Resolver` enquanto aquele processo
@@ -617,20 +630,50 @@ mandou. O que veio da internet e foi guardado continua vindo da internet.
 
 ### O que este recurso NÃO isola
 
-`Bash` está na lista branca e **não** fica preso à cópia. O shell não conhece
-fronteira de pasta, e a cópia é um `git worktree`, que compartilha o `.git` do
-projeto de verdade e o remoto já autenticado: um `git push --force` saído de lá
-alcança o repositório real. `Bash` fica porque sem ele a sessão não roda teste
-nem commita — e aí o recurso não existe. O que protege não é a lista de
-ferramentas; é não deixar texto de estranho chegar ao prompt (seção acima).
+`Bash` está na lista branca e **não** fica preso à cópia: o shell não conhece
+fronteira de pasta. `Bash` fica porque sem ele a sessão não roda teste nem
+commita — e aí o recurso não existe.
 
-A sessão filha **roda os hooks** do `~/.claude` do dono e o
-`.claude/settings.json` versionado do projeto-alvo. Medido: seis hooks
-`SessionStart` dispararam dentro dela. A forma de evitar isso seria `--bare`, que
-**não funciona** com o login por assinatura desta máquina (responde
-`Not logged in`; `--bare` só aceita chave de API). Isso é **risco declarado, não
-resolvido** — se um hook do dono abortar a sessão filha, o sintoma é a sessão
-terminar sem tocar em arquivo nenhum, e o log cru da tela mostra o motivo.
+Enquanto havia uma pessoa olhando a tela, isso era um risco vigiado. A fila
+(`fila.py`) roda **desacompanhada**, e um risco sem vigia é outro risco. Três
+barreiras foram postas em 25/08/2026, em ordem de importância:
+
+1. **A cópia não alcança o GitHub.** Ela era um `git worktree`, que compartilha
+   o `.git` do projeto de verdade e, com ele, o `origin` já autenticado: um
+   `git push --force` saído de lá chegava ao repositório real. Passou a ser um
+   `git clone --no-hardlinks` com o `origin` removido e `core.hooksPath` numa
+   pasta vazia. Custa disco e meio segundo (medido: 0,5 s neste repositório; o
+   maior dos 17 tem 342 MB de `.git`) e paga com uma propriedade que nenhuma
+   lista de comandos daria — dali não há caminho até o GitHub. Quem atravessa
+   essa ponte é o painel, depois, com o diff já aprovado pelas travas.
+2. **A sessão filha não carrega configuração de arquivo nenhum.**
+   `--setting-sources ""` corta tudo o que vem de arquivo, e o `--settings`
+   explicito sobrevive ao corte (medido em 25/08/2026, `claude` 2.1.245 — a
+   versão anterior deste README dizia que só `--bare` isolaria, e estava
+   errado). Some o `~/.claude` do dono, que rodava seis hooks `SessionStart`
+   dentro da filha; e some o `.claude/settings.json` **do repositório sendo
+   consertado**, que é conteúdo escrito por estranho e podia definir hook
+   próprio. Este segundo era o furo que ninguém tinha visto.
+3. **Todo comando passa por uma lista antes de rodar** (`barreira.py`, um hook
+   `PreToolUse`). Lista branca de programas, `git push`/`remote`/`config`
+   barrados por nome, nada que fale com a rede, nada que vire interpretador de
+   texto solto (`python -c`, `node -e`, `bash -c`), nenhum caminho absoluto ou
+   com `..`, e `.git/` intocável. Recusa sai com código 2 e a frase em
+   português chega à sessão.
+
+**E o que continua não sendo isolado, dito sem enfeite:** rodar teste É rodar
+código arbitrário — a suíte do projeto é código de terceiro executando com todos
+os poderes do usuário desta máquina. A barreira encarece e estreita o caminho;
+ela não transforma a máquina num cofre. Não há isolamento de rede: o Claude Code
+desta versão não tem modo `sandbox` no Windows, e uma cerca de firewall por
+processo exigiria administrador. O que impede o estrago de **sair da cópia** são
+as barreiras 1 e 2; a 3 é o que impede o caminho fácil.
+
+**Consequência prática, e ela incomoda:** `npm install`, `pip install` e afins
+estão barrados. Um item de `dependencia_insegura` num projeto JavaScript que
+precise baixar dependência vai **falhar com motivo claro** em vez de baixar
+pacote sem ninguém olhando. É a troca escolhida; afrouxar depois é mais fácil
+que o contrário.
 
 ## A memória do tempo — o painel passa a lembrar de ontem
 
