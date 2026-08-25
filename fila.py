@@ -8,6 +8,7 @@ teto diario, anti-laco, teste apagado e segredo no arquivo de exemplo de
 ambiente. Nenhuma delas e uma instrucao no texto do pedido: instrucao em texto
 e sugestao, nao trava.
 """
+import re
 from datetime import datetime
 
 import execucao
@@ -118,3 +119,38 @@ def proximo(itens: list, gasto_usd: float, hoje: str):
                                -float(i.get("risco") or 0),
                                (i.get("projeto") or "").lower()))
     return espera[0]
+# Nome de arquivo de teste nas quatro convencoes que os 17 projetos usam.
+NOME_DE_TESTE = re.compile(
+    r"(^|/)(test_[^/]+\.py|[^/]+_test\.[A-Za-z0-9]+"
+    r"|[^/]+\.test\.[A-Za-z0-9]+|[^/]+\.spec\.[A-Za-z0-9]+)$")
+
+# Marcadores de teste desligado. Cada um ja apareceu em algum destes projetos.
+MARCADORES_SKIP = (
+    "@unittest.skip", "pytest.mark.skip", "@skip",
+    "it.skip(", "xit(", "test.skip(", "describe.skip(", "xdescribe(",
+)
+
+
+def diff_mexeu_em_teste(diff: str) -> str:
+    """"" se o diff esta limpo; senao o motivo, pronto para a tela.
+
+    Esta e a unica coisa entre 'consertar o teste' e 'apagar o teste'. Ela vive
+    em codigo e nao no texto do pedido: instrucao em texto e sugestao.
+    """
+    linhas = (diff or "").splitlines()
+    for i, linha in enumerate(linhas):
+        if not linha.startswith("--- a/"):
+            continue
+        if i + 1 >= len(linhas) or not linhas[i + 1].startswith("+++ /dev/null"):
+            continue
+        caminho = linha[len("--- a/"):].strip()
+        if NOME_DE_TESTE.search(caminho):
+            return "apagou o arquivo de teste %s" % caminho
+    for linha in linhas:
+        if not linha.startswith("+") or linha.startswith("+++"):
+            continue
+        seco = linha[1:]
+        for marcador in MARCADORES_SKIP:
+            if marcador in seco:
+                return "desligou um teste com `%s`" % marcador
+    return ""

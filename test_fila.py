@@ -233,5 +233,65 @@ class Proximo(unittest.TestCase):
         self.assertEqual(fila.proximo(itens, 0.0, "2026-08-25")["id"], "b:bb")
 
 
+class TesteApagado(unittest.TestCase):
+
+    def test_diff_limpo_passa(self):
+        diff = ("diff --git a/regras.py b/regras.py\n"
+                "--- a/regras.py\n+++ b/regras.py\n"
+                "@@ -1,2 +1,2 @@\n-antigo\n+novo\n")
+        self.assertEqual(fila.diff_mexeu_em_teste(diff), "")
+
+    def test_apagar_test_py_reprova(self):
+        diff = ("diff --git a/test_regras.py b/test_regras.py\n"
+                "deleted file mode 100644\n"
+                "--- a/test_regras.py\n+++ /dev/null\n")
+        self.assertIn("test_regras.py", fila.diff_mexeu_em_teste(diff))
+
+    def test_apagar_spec_ts_reprova(self):
+        diff = ("--- a/src/login.spec.ts\n+++ /dev/null\n")
+        self.assertIn("login.spec.ts", fila.diff_mexeu_em_teste(diff))
+
+    def test_apagar_dot_test_js_reprova(self):
+        diff = ("--- a/src/soma.test.js\n+++ /dev/null\n")
+        self.assertIn("soma.test.js", fila.diff_mexeu_em_teste(diff))
+
+    def test_apagar_arquivo_comum_passa(self):
+        diff = ("--- a/README.md\n+++ /dev/null\n")
+        self.assertEqual(fila.diff_mexeu_em_teste(diff), "")
+
+    def test_adicionar_arquivo_de_teste_passa(self):
+        diff = ("--- /dev/null\n+++ b/test_novo.py\n+def test_x(): pass\n")
+        self.assertEqual(fila.diff_mexeu_em_teste(diff), "")
+
+    def test_unittest_skip_reprova(self):
+        diff = "+    @unittest.skip('quebrado')\n"
+        self.assertIn("unittest.skip", fila.diff_mexeu_em_teste(diff))
+
+    def test_pytest_mark_skip_reprova(self):
+        diff = "+@pytest.mark.skip\n"
+        self.assertIn("pytest.mark.skip", fila.diff_mexeu_em_teste(diff))
+
+    def test_it_skip_reprova(self):
+        diff = "+  it.skip('faz coisa', () => {})\n"
+        self.assertIn("it.skip(", fila.diff_mexeu_em_teste(diff))
+
+    def test_xit_reprova(self):
+        diff = "+  xit('faz coisa', () => {})\n"
+        self.assertIn("xit(", fila.diff_mexeu_em_teste(diff))
+
+    def test_skip_em_linha_REMOVIDA_passa(self):
+        """Tirar um skip e o oposto de burlar: e religar o teste."""
+        diff = "-    @unittest.skip('quebrado')\n"
+        self.assertEqual(fila.diff_mexeu_em_teste(diff), "")
+
+    def test_cabecalho_mais_mais_mais_nao_e_linha_adicionada(self):
+        diff = "+++ b/it.skip(coisa).py\n"
+        self.assertEqual(fila.diff_mexeu_em_teste(diff), "")
+
+    def test_diff_vazio_passa(self):
+        self.assertEqual(fila.diff_mexeu_em_teste(""), "")
+        self.assertEqual(fila.diff_mexeu_em_teste(None), "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
