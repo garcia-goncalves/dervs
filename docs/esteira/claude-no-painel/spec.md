@@ -56,9 +56,11 @@ descartadas com motivo:
    `C:\Users\Desktop\source\repos`**, obrigatoriamente — ver contradição 4.
    Removida com `git worktree remove` no sucesso; **preservada na falha**, para
    diagnóstico.
-3. **O processo filho**: `claude -p --bare --output-format stream-json --verbose
-   --max-budget-usd <teto> --allowedTools <lista branca> --max-turns <limite>`,
-   com `creationflags=CREATE_NEW_PROCESS_GROUP`, `cwd` no worktree. O prompt é
+3. **O processo filho**: `claude -p --output-format stream-json --verbose
+   --max-budget-usd 3 --strict-mcp-config --mcp-config '{"mcpServers":{}}'
+   --allowedTools <lista branca> --max-turns <limite>`, com
+   `creationflags=CREATE_NEW_PROCESS_GROUP`, `cwd` no worktree. **Sem
+   `--bare`** — ele quebra a autenticação nesta máquina, ver contradição 9. O prompt é
    montado **inteiramente no servidor**, a partir de gabarito fechado — nenhum
    texto vindo do navegador entra nele. O cliente manda só o `id` da pendência,
    como já manda só o nome do projeto hoje (`servir.py:29-30`).
@@ -309,8 +311,74 @@ porque as partes puras aqui são as que decidem **qual comando roda na máquina*
    sendo lidos, isso é uma porta de entrada de execução não intencional — é o
    risco 2 do briefing (injeção vinda do repositório medido) com um vetor
    concreto.
-   **Decidido: `--bare` sempre**, e o que a sessão precisa saber entra
-   explicitamente pelo prompt e pelas flags.
+   **Decidido na fase 2: `--bare` sempre.**
+
+   **REVERTIDO NA MESMA SESSÃO, POR MEDIÇÃO — ver contradição 9.**
+
+9. **`--bare` é impossível nesta máquina. Medido, não suposto.**
+   Antes de mandar o plano ser escrito, rodei o `claude` de verdade aqui
+   (versão **2.1.243**, confirmada). Resultado:
+
+   ```
+   claude -p "..." --bare --output-format stream-json --verbose
+   → is_error=True  terminal_reason='api_error'
+     result='Not logged in · Please run /login'  total_cost_usd=0
+   ```
+
+   Reproduz com o ambiente limpo de todas as variáveis `CLAUDE_*`, então
+   não é efeito de estar sendo chamado de dentro de outra sessão. O próprio
+   `--help` explica o motivo: com `--bare`, *"Anthropic auth is strictly
+   `ANTHROPIC_API_KEY` or `apiKeyHelper` via `--settings` (OAuth and keychain
+   are never read)"*. O dono autentica por **OAuth de assinatura** e não tem
+   chave de API — e comprar uma é decisão de custo dele, que não foi tomada.
+
+   **Substituição, confirmada funcionando:**
+   `--strict-mcp-config --mcp-config '{"mcpServers":{}}'` (zero servidores MCP
+   na sessão filha) mais `--allowedTools` com lista branca e
+   `--disallowedTools` para o proibido. Com essas flags a sessão autentica,
+   responde, e devolve `is_error=False`, `terminal_reason='completed'`.
+
+   **O que fica SEM mitigação, e vai escrito para não se perder:** sem
+   `--bare`, os hooks do `.claude/settings.json` do projeto-alvo — que é
+   versionado, e portanto viaja junto na cópia isolada — **vão rodar** na
+   sessão filha. Isso é o risco 2 do briefing sem defesa técnica completa. O
+   que resta é: os 17 repositórios são do próprio dono, e o vetor realista é
+   injeção vinda de README e log de CI, não hook malicioso. Fica declarado
+   como risco aceito, não como problema resolvido.
+
+10. **Os números de custo, medidos, e o teto que subiu.**
+
+    | Cenário, um turno trivial ("responda ok") | Custo |
+    |---|---|
+    | Sessão sem MCP, como o painel vai lançá-la | **US$ 0,2256** |
+    | A mesma coisa herdando os MCPs desta máquina | **US$ 0,4455** |
+
+    O turno trivial já escreve **21.471 tokens de cache** — esse é o custo
+    fixo de simplesmente ligar a sessão, antes de ela fazer qualquer coisa.
+    O teto de US$ 1 que eu havia fixado paga cerca de **quatro turnos
+    triviais**, e o primeiro sozinho come um quarto dele. Um teto assim
+    produz o pior resultado possível: gasta o dinheiro e não termina nada.
+    **Teto elevado para US$ 3** (uns R$ 16).
+
+11. **`--max-budget-usd` não é um limite duro antes do gasto.**
+    Medido: com `--max-budget-usd 0.10`, a execução terminou com
+    `total_cost_usd=0.44548` e `terminal_reason='budget_exhausted'` —
+    **estourou 4,5 vezes o teto** antes de parar. A tela precisa dizer que o
+    teto é aproximado, e o **botão "Parar" continua sendo a única garantia
+    real** contra gasto. Isso reforça o critério 6 como intocável.
+
+12. **O formato do fluxo, confirmado ao vivo**, e uma armadilha.
+    Três linhas para um turno trivial:
+    `{"type":"system","subtype":"init"}` → `{"type":"assistant"}` →
+    `{"type":"result","subtype":"success"}`.
+    O evento `result` traz `is_error`, `terminal_reason`
+    (`'completed'` | `'api_error'` | `'budget_exhausted'`), `result` (o texto
+    final ou a mensagem de erro), `total_cost_usd`, `usage`, `session_id`,
+    `num_turns`, `permission_denials`, `duration_ms`.
+    **A armadilha:** medi um caso com `subtype:'success'` **e**
+    `is_error:True` ao mesmo tempo. `subtype` **não é confiável**. A máquina
+    de estados lê `is_error` mais `terminal_reason`, e nunca faz parsing do
+    texto da resposta.
 
 ## duvidas_para_o_dono
 
@@ -319,7 +387,7 @@ porque as partes puras aqui são as que decidem **qual comando roda na máquina*
 | Dúvida | Decisão |
 |---|---|
 | `Ajudei-Saude` entra na entrega 1? | **Não.** Resposta do dono no portão de risco. O botão nasce desligado só nesse projeto; volta na entrega 2 com o revisor `healthcare` no fluxo. |
-| Teto de gasto por execução | **US$ 1** (cerca de R$ 5). Decidido por mim, por ser constante reversível. |
+| Teto de gasto por execução | **US$ 3** (cerca de R$ 16). Comecei em US$ 1; a medição da contradição 10 mostrou que US$ 1 paga ~4 turnos triviais e não termina nada. |
 | Cotação do dólar | **Constante no código**, num lugar só. Decidido por mim, por ser constante reversível. |
 | Autorização para despachar subagentes | **Concedida** pelo dono na abertura desta sessão. |
 
@@ -335,7 +403,7 @@ O registro original de cada uma, com a recomendação que foi dada:
    no banco.
 
 2. **Qual o teto de gasto por execução?**
-   **Recomendei, e decidi por ser constante reversivel: US$ 1 (cerca de R$ 5).** A sessão para sozinha ao atingir, e o
+   **Recomendei US$ 1; a medicao me obrigou a subir para US$ 3 (cerca de R$ 16).** A sessão para sozinha ao atingir, e o
    painel avisa. É alto o bastante para uma CI vermelha de verdade e baixo o
    bastante para um laço não custar uma noite. É uma constante no código: mudar
    depois é uma linha.
