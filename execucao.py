@@ -545,6 +545,46 @@ def _rodar(args, cwd=None, limite=180, corte=1200):
     return r.returncode == 0, saida[-corte:]
 
 
+# Nome de variavel que carrega segredo. Achado do revisor de seguranca em
+# 25/08/2026: o Popen da sessao filha nao passava `env=`, entao ela herdava o
+# ambiente INTEIRO do painel. O repo-alvo e conteudo de estranho e a sessao e
+# instruida a rodar a suite: um `conftest.py` plantado le `os.environ` e manda
+# tudo embora por socket. A barreira barra `curl` pelo NOME, e nao contem rede
+# — socket de python passa. Entao a defesa que existe e nao dar o segredo.
+SEGREDO_NO_NOME = ("token", "secret", "password", "passwd", "senha", "apikey",
+                   "api_key", "credential", "auth", "_key", "key_", "private",
+                   "session", "cookie", "signature", "webhook")
+
+# A excecao honesta: se o dono autentica o Claude Code por chave de API, ela
+# vem do ambiente e SEM ela a sessao nao roda. E segredo, e vai junto — esta
+# escrito aqui para ninguem descobrir isso por acidente depois.
+SEGREDO_QUE_A_SESSAO_PRECISA = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                                "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
+                                "CLAUDE_CODE_USE_VERTEX")
+
+
+def ambiente_da_filha(base=None) -> dict:
+    """O ambiente do painel MENOS o que abre porta em outro lugar.
+
+    Nao e isolamento — e reducao de dano. Sem isolamento de rede (o Claude Code
+    desta versao nao tem sandbox no Windows), rodar teste de terceiro E rodar
+    codigo arbitrario; o que da para fazer e nao deixar credencial ao alcance
+    dele. GH_TOKEN e GITHUB_TOKEN sao os que mais importam: com eles, a sessao
+    alcanca o GitHub sem precisar de `git push` nenhum.
+    """
+    base = os.environ if base is None else base
+    limpo = {}
+    for nome, valor in base.items():
+        if nome.upper() in SEGREDO_QUE_A_SESSAO_PRECISA:
+            limpo[nome] = valor
+            continue
+        baixo = nome.lower()
+        if any(marca in baixo for marca in SEGREDO_NO_NOME):
+            continue
+        limpo[nome] = valor
+    return limpo
+
+
 def criar_copia(caminho_do_projeto, destino, ramo):
     """Clone local SEM remoto — a copia nao alcanca o GitHub. Devolve (ok, saida).
 
@@ -824,10 +864,14 @@ def iniciar(pendencia: dict, caminho_do_projeto: str):
         ok, saida = criar_copia(caminho_do_projeto, destino, ramo)
         if not ok:
             _anotar(saida or "o git não explicou o erro")
+            # O clone pode ter dado certo e o passo seguinte falhado — e ai
+            # sobra em disco um clone INTEIRO (342 MB no maior dos projetos).
+            # A fila roda todo dia; sem esta linha o disco enche devagar.
+            remover_copia(caminho_do_projeto, destino)
             _execucao.update({
                 "estado": "falha",
                 "manchete": "Falhou: não consegui preparar a cópia isolada",
-                "corpo": "O `git worktree add` recusou criar a cópia em %s. "
+                "corpo": "O `git clone` recusou criar a cópia em %s. "
                          "Nada foi alterado no projeto original; o log abaixo "
                          "tem a saída crua do git." % destino,
             })
@@ -846,16 +890,19 @@ def iniciar(pendencia: dict, caminho_do_projeto: str):
                 argv, cwd=str(destino), stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                errors="replace", bufsize=1,
+                errors="replace", bufsize=1, env=ambiente_da_filha(),
                 creationflags=(SEM_JANELA | GRUPO_PROPRIO) if sys.platform.startswith("win") else 0,
                 start_new_session=not sys.platform.startswith("win"))
         except OSError as e:
             _anotar("não consegui iniciar o Claude Code: %s" % e)
+            # A cópia ja existe e a sessao nunca comecou: nao ha o que preservar.
+            remover_copia(caminho_do_projeto, destino)
             _execucao.update({
                 "estado": "falha",
                 "manchete": "Falhou: não consegui iniciar o Claude Code",
                 "corpo": "O programa `claude` não pôde ser executado nesta "
-                         "máquina. A cópia isolada continua em %s." % destino,
+                         "máquina. A cópia isolada foi apagada; nada ficou "
+                         "para trás em %s." % destino,
             })
             return "iniciar"
 

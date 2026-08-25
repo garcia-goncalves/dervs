@@ -745,5 +745,46 @@ class _StdoutQueExplode:
         pass
 
 
+class OSegredoNaoVaiJuntoComASessao(unittest.TestCase):
+    """Achado do revisor de seguranca em 25/08/2026.
+
+    O Popen da filha nao passava `env=`: ela herdava o ambiente inteiro do
+    painel. O repo-alvo e conteudo de estranho e a sessao roda a suite dele —
+    um `conftest.py` plantado le `os.environ` e manda embora por socket. A
+    barreira barra `curl` pelo nome e NAO contem rede. A defesa possivel e nao
+    ter o segredo ao alcance.
+    """
+
+    BASE = {
+        "PATH": "/bin", "USERPROFILE": "C:/u", "NPM_CONFIG_REGISTRY": "r",
+        "GH_TOKEN": "ghp_x", "GITHUB_TOKEN": "y", "AWS_SECRET_ACCESS_KEY": "z",
+        "MINHA_SENHA": "p", "DB_PASSWORD": "q", "STRIPE_API_KEY": "sk_live",
+        "SESSION_COOKIE": "c", "ANTHROPIC_API_KEY": "sk-ant",
+    }
+
+    def test_token_do_github_nao_passa(self):
+        """Com GH_TOKEN a sessao alcanca o GitHub sem `git push` nenhum."""
+        limpo = execucao.ambiente_da_filha(self.BASE)
+        for proibido in ("GH_TOKEN", "GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY",
+                         "MINHA_SENHA", "DB_PASSWORD", "STRIPE_API_KEY",
+                         "SESSION_COOKIE"):
+            self.assertNotIn(proibido, limpo)
+
+    def test_o_que_a_sessao_precisa_continua(self):
+        limpo = execucao.ambiente_da_filha(self.BASE)
+        for preciso in ("PATH", "USERPROFILE", "NPM_CONFIG_REGISTRY"):
+            self.assertIn(preciso, limpo)
+
+    def test_a_chave_da_anthropic_vai_junto_de_proposito(self):
+        """E segredo, e sem ela a sessao nao roda. Testado para ninguem
+        descobrir isso por acidente depois."""
+        self.assertIn("ANTHROPIC_API_KEY",
+                      execucao.ambiente_da_filha(self.BASE))
+
+    def test_o_ambiente_de_verdade_nao_explode(self):
+        self.assertIn("PATH", {k.upper(): v
+                               for k, v in execucao.ambiente_da_filha().items()})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
