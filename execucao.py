@@ -523,6 +523,40 @@ def diff_da_copia(destino, base="") -> str:
     return saida if ok else ""
 
 
+CORTE_DIFF_TRAVA = 400_000
+
+
+def diff_para_a_trava(destino, base=""):
+    """O diff que as TRAVAS leem. Devolve (confiavel, texto).
+
+    Diferente de `diff_da_copia`, que existe para a tela. Aqui:
+
+    * `-c diff.noprefix=false -c core.quotepath=false -c diff.mnemonicPrefix=false`
+      porque a sessao roda com Bash num worktree que compartilha o `.git` do
+      projeto: um `git config diff.noprefix true` cegaria a trava para sempre,
+      e caminho com acento sai citado e nao casa `--- a/`.
+    * `--no-renames`: renomear `test_x.py` para `x.bak` apaga o teste na pratica
+      e nao produz uma linha `+++ /dev/null` nenhuma.
+    * `git add -A` antes: arquivo novo NAO commitado nao aparece no diff, mas
+      `publicar` faz `git add -A` — sairia publicado sem passar por trava.
+
+    `confiavel` e False se o git falhou ou se o texto veio no corte. Trava que
+    nao conseguiu ler o diff tem de RECUSAR, nunca aprovar por omissao.
+    """
+    _rodar(["git", "-C", str(destino), "add", "-A"], limite=60)
+    ok, saida = _rodar(
+        ["git", "-C", str(destino),
+         "-c", "diff.noprefix=false", "-c", "core.quotepath=false",
+         "-c", "diff.mnemonicPrefix=false",
+         "diff", "--cached", "--no-renames", base or "HEAD"],
+        limite=60, corte=CORTE_DIFF_TRAVA)
+    if not ok:
+        return False, ""
+    if len(saida) >= CORTE_DIFF_TRAVA:
+        return False, saida
+    return True, saida
+
+
 def publicar(destino, ramo, titulo, corpo, mensagem):
     """add + commit + push + gh pr create. NUNCA push na main, nunca pr merge.
 
@@ -820,7 +854,12 @@ def _fechar_com_pedido_de_alteracao(evento: dict) -> None:
     # `import` dentro da funcao de proposito: fila.py importa execucao.py, e no
     # topo isto seria importacao circular.
     import fila
-    motivo = fila.reprovar(_execucao.get("diff") or "", _execucao.get("regra") or "")
+    confiavel, bruto = diff_para_a_trava(destino, base)
+    if not confiavel:
+        motivo = ("nao consegui ler o diff inteiro para conferir as travas "
+                  "(o git falhou ou a mudanca passou de 400 KB)")
+    else:
+        motivo = fila.reprovar(bruto, _execucao.get("regra") or "")
     if motivo:
         _anotar("Reprovado antes de publicar: " + motivo)
         _execucao["estado"] = "falha"

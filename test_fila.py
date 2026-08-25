@@ -479,5 +479,22 @@ class FusoDoTeto(BancoTemporario):
             banco.gasto_entre(*fila.janela_local_em_utc("2026-08-25")), 0.0)
 
 
+class RenomearTeste(unittest.TestCase):
+    """Renomear apaga o teste na pratica e nao produz `+++ /dev/null`."""
+
+    def test_renomear_arquivo_de_teste_reprova(self):
+        diff = ("diff --git a/test_x.py b/x.bak\nsimilarity index 100%\n"
+                "rename from test_x.py\nrename to x.bak\n")
+        self.assertIn("test_x.py", fila.diff_mexeu_em_teste(diff))
+
+    def test_renomear_arquivo_comum_passa(self):
+        diff = ("rename from leiame.md\nrename to README.md\n")
+        self.assertEqual(fila.diff_mexeu_em_teste(diff), "")
+
+    def test_renomear_spec_ts_reprova(self):
+        diff = "rename from src/login.spec.ts\nrename to src/login.velho\n"
+        self.assertIn("login.spec.ts", fila.diff_mexeu_em_teste(diff))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

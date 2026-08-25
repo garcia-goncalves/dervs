@@ -163,3 +163,60 @@ outros arquivos.
 Cinco atendidos, um parcial, dois em aberto. Os três que faltam dependem de duas
 coisas que não são minhas: a aprovação do Renovate no navegador e o aceite de
 gastar dinheiro numa corrida real.
+
+---
+
+# Revisão especialista — 25/08/2026
+
+Dois revisores rodaram antes de mesclar (`python-reviewer`, `security-reviewer`).
+Ambos deram **"corrija antes de mesclar"**. O que segue é o que foi corrigido e
+o que **continua aberto**.
+
+## Corrigido nesta branch
+
+| # | Achado | Onde |
+|---|---|---|
+| 1 | Teto não fechava entre 21h e meia-noite (data local × UTC) | `banco.gasto_entre`, `fila.janela_local_em_utc`, `fila.dia_local_de` |
+| 2 | Dois cliques iniciavam duas filas | `servir._fila_trava` |
+| 3 | **O botão nunca funcionava** — `executar_acao` exigia `projeto` | `servir.ACOES_SEM_PROJETO` |
+| 4 | Trava falhava **aberta**: diff vazio ou cortado era aprovado | `execucao.diff_para_a_trava` devolve `confiavel` |
+| 5 | Arquivo novo não commitado escapava da trava (`publicar` faz `git add -A`) | `git add -A` antes de tirar o diff da trava |
+| 6 | `git config diff.noprefix true` cegava a trava para sempre | diff da trava roda com `-c diff.noprefix=false -c core.quotepath=false` |
+| 7 | Renomear `test_x.py` para `x.bak` passava | `diff_mexeu_em_teste` barra `rename from` |
+| 8 | `executor_claude` ignorava a recusa de `iniciar()` e herdava o `pr_url` de outra execução | checa a decisão antes de esperar |
+| 9 | Projeto bloqueado depois do enfileiramento continuava sendo trabalhado | `executor_claude` reavalia `trilho_de` |
+
+## Continua ABERTO — não mesclar sem decidir
+
+- **Esvaziar um teste sem apagar o arquivo** (só linhas `-`) passa por todas as
+  travas. Mexer no runner também (`pytest.ini`, `"test": "exit 0"`,
+  `norecursedirs`). A trava 3 cobre apagar, desligar e renomear — não cobre
+  esvaziar nem desviar.
+- **A sessão roda com `Bash` liberado** num worktree que compartilha o `.git` e
+  o remoto autenticado do projeto real. Isso já valia para o botão manual, mas
+  ali havia alguém olhando a tela. Desacompanhada, a superfície de injeção é o
+  **conteúdo dos 17 repositórios**: um arquivo hostil pode instruir a sessão a
+  fazer coisa que a trava — que só lê o diff no fim — não pega. Antes de rodar
+  a fila de verdade, isto precisa de uma barreira de comando ou de rede.
+- **O teto é conferido antes de começar o item**, e o próprio código mede que o
+  limite de gasto da sessão estoura até 4,5×: um único item pode custar ~R$ 69
+  contra um teto de R$ 50.
+- **Execuções pelo botão "Resolver" não entram na tabela `fila`** e portanto não
+  contam para o teto do dia.
+- **`env_example_tem_valor` varre o diff inteiro**, não o trecho do arquivo de
+  exemplo: reprova por engano uma linha legítima como `TETO = 50`, e não olha
+  segredo em nenhum outro arquivo nem sob as outras regras.
+- **Dinheiro em `float`**, não `Decimal`. O erro nesta escala é bilhões de vezes
+  menor que um centavo — dívida registrada, não defeito.
+- **A trava contra o duplo clique não tem teste.** Testar corrida de threads de
+  forma confiável exige aparato que este projeto não tem, e teste intermitente é
+  pior que teste nenhum.
+
+## O que isto significa
+
+O item 3 é o mais importante e é uma falha da minha verificação: eu confirmei no
+navegador que a **faixa aparece** e afirmei que estava "funcionando". Nunca
+cliquei no botão. Ele respondia *"projeto desconhecido."* e a fila jamais
+começava — o que também quer dizer que **nenhuma das quatro travas foi
+exercitada de ponta a ponta**. Elas estão provadas em teste unitário, não em
+corrida real.

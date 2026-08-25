@@ -175,6 +175,14 @@ def diff_mexeu_em_teste(diff: str) -> str:
         caminho = linha[len("--- a/"):].strip()
         if NOME_DE_TESTE.search(caminho):
             return "apagou o arquivo de teste %s" % caminho
+    # Renomear `test_x.py` para `x.bak` apaga o teste na pratica e nao produz
+    # `+++ /dev/null` nenhum. O diff da trava vem com --no-renames, mas um
+    # `rename from` ainda pode chegar por outro caminho: barramos os dois.
+    for linha in linhas:
+        if linha.startswith("rename from "):
+            caminho = linha[len("rename from "):].strip().strip('"')
+            if NOME_DE_TESTE.search(caminho):
+                return "renomeou o arquivo de teste %s" % caminho
     for linha in linhas:
         if not linha.startswith("+") or linha.startswith("+++"):
             continue

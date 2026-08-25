@@ -303,7 +303,16 @@ def executor_claude(item):
     caminho = (_projetos_por_nome().get(item.get("projeto")) or {}).get("caminho")
     if not caminho:
         return False, 0.0, "", "nao sei onde fica o projeto %s" % item.get("projeto")
-    execucao.iniciar(item, caminho)
+    # A lista de projetos bloqueados e reavaliada AQUI, nao so na entrada da
+    # fila: o trilho fica gravado na tabela, e um projeto acrescentado a lista
+    # depois nao impediria as linhas ja enfileiradas de rodar.
+    if not fila.trilho_de(item):
+        return False, 0.0, "", "%s nao pode mais ser trabalhado pela fila" % item.get("projeto")
+    decisao = execucao.iniciar(item, caminho)
+    if decisao != "iniciar":
+        # Sem isto, `esperar_terminar` leria o retrato da execucao ANTERIOR e o
+        # item herdaria o pr_url e o custo de outra coisa.
+        return False, 0.0, "", "a execucao nao comecou (%s)" % decisao
     final = execucao.esperar_terminar()
     custo = float(final.get("custo_usd") or 0.0)
     if final.get("estado") == "ok":
@@ -378,6 +387,9 @@ ACOES = {
     "fila_parar": acao_fila_parar,
 }
 
+# Os comandos que NAO recebem um projeto: a fila decide sozinha onde mexer.
+ACOES_SEM_PROJETO = frozenset({"fila_comecar", "fila_parar"})
+
 
 def executar_acao(corpo: dict):
     comando = corpo.get("comando")
@@ -444,6 +456,15 @@ def executar_acao(corpo: dict):
 
     if comando not in ACOES:
         return False, "comando não permitido."
+
+    # A fila e da MAQUINA, nao de um projeto: ela mesma escolhe em quais
+    # projetos mexer. Exigir `projeto` aqui fazia os dois comandos responderem
+    # "projeto desconhecido." e a fila nunca comecar.
+    if comando in ACOES_SEM_PROJETO:
+        try:
+            return ACOES[comando](None)
+        except Exception as e:                      # noqa: BLE001
+            return False, "%s: %s" % (type(e).__name__, e)
 
     p = _projetos_por_nome().get(corpo.get("projeto") or "")
     if not p:
