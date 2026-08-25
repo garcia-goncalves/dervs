@@ -352,7 +352,7 @@ def agrupar(pendencias) -> list:
             # "expandir" nao entra em ACOES: aquilo e o contrato das acoes de
             # PENDENCIA, e um grupo nao e uma pendencia. A acao de verdade
             # continua uma por item, dentro.
-            "acao": {"tipo": "expandir", "rotulo": "Ver %d" % len(itens)},
+            "acao": {"tipo": "expandir", "rotulo": "Ver"},
             "itens": sorted(itens, key=lambda p: (-(p.get("dias") or 0),
                                                   p.get("projeto") or "")),
         })

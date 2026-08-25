@@ -146,8 +146,15 @@ def decorar(pendencias, vida_por_id, agora_iso=None, desde=None):
             horas = (ref - nasceu).total_seconds() / 3600.0
             dias, nova, do_inicio = (int(max(0.0, horas) // 24),
                                      horas < JANELA_NOVA_H, False)
+        # Nao saber a idade exata nao e nao saber nada: a memoria sabe ha quanto
+        # tempo ELA existe, e a pendencia que ja estava aqui na estreia tem no
+        # minimo essa idade. "Aberta ha mais de 9 dias" prioriza; "ha mais tempo
+        # do que eu lembro" so ocupa a linha.
+        piso = 0
+        if do_inicio and inicio and ref:
+            piso = int(max(0.0, (ref - inicio).total_seconds() / 86400.0))
         fora.append(dict(p, visto_em=v.get("visto_em"), dias=dias, nova=nova,
-                         desde_o_inicio=do_inicio))
+                         desde_o_inicio=do_inicio, dias_min=piso))
     return fora
 
 
@@ -224,7 +231,9 @@ def _pior(pendencias):
 def _idade(p) -> str:
     d = p.get("dias")
     if d is None:
-        return " (há mais tempo do que eu lembro)" if p.get("desde_o_inicio") else ""
+        piso = p.get("dias_min") or 0
+        return (" (aberta há mais de %d dia%s)" % (piso, "" if piso == 1 else "s")
+                if piso else "")
     if d == 0:
         return " (de hoje)"
     return " (aberta há %d dia%s)" % (d, "" if d == 1 else "s")

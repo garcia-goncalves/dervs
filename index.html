@@ -72,9 +72,55 @@ nav.abas button:focus-visible{outline:2px solid var(--acento);outline-offset:-2p
 .cartao-grafo h3{margin:0 0 8px;font-size:15px;font-weight:600}
 .cartao-grafo p{margin:0 auto 16px;color:var(--fraco);font-size:13px;max-width:56ch}
 
+/* ------------------------------------------------------------- o briefing */
+/* A primeira coisa que o olho pega. Uma frase, escrita a partir do dado — se
+   ela nao mudar quando o dado muda, e decoracao, e decoracao no topo de um
+   painel operacional ensina a nao ler o topo. */
+.briefing{background:var(--painel);border:1px solid var(--borda);border-radius:11px;
+  padding:15px 17px;margin-bottom:16px;box-shadow:var(--sombra);
+  display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.briefing .frase{flex:1;min-width:min(100%,260px);font-size:15px;line-height:1.45}
+.briefing.urgente{border-left:3px solid var(--erro)}
+.briefing.calmo{border-left:3px solid var(--ok)}
+.placar{display:flex;gap:14px;align-items:center;flex-shrink:0}
+.placar .n{font-family:var(--mono);font-size:19px;font-weight:650;line-height:1.1}
+.placar .r{font-size:10.5px;color:var(--fraquinho);text-transform:uppercase;
+  letter-spacing:.05em;white-space:nowrap}
+.placar .peca{text-align:center}
+.placar .peca.mal .n{color:var(--erro)}
+.placar .peca.bem .n{color:var(--ok)}
+.linha-tendencia{display:block;flex-shrink:0}
+.seta{font-size:11px;font-family:var(--mono)}
+.seta.piorando{color:var(--erro)} .seta.melhorando{color:var(--ok)}
+.seta.estavel{color:var(--fraquinho)}
+
 /* ---------------------------------------------------------------- a caixa */
 h2.secao{font-size:12px;text-transform:uppercase;letter-spacing:.09em;
   color:var(--fraco);font-weight:650;margin:0 0 10px}
+/* O selo de "nova" e a idade. Sem eles, uma coisa nascida ha uma hora e outra
+   aberta ha 23 dias ocupavam a mesma linha, do mesmo tamanho, na mesma cor. */
+.selo{font-size:10px;font-weight:650;text-transform:uppercase;letter-spacing:.05em;
+  background:var(--acento);color:#fff;padding:1px 6px;border-radius:4px;
+  margin-left:7px;vertical-align:1px}
+.idade{color:var(--fraquinho)}
+.idade.velha{color:var(--alerta)}
+/* O grupo: 3+ pendencias da mesma regra numa linha so. Herda o .item para nao
+   inventar um segundo vocabulario visual na mesma lista. */
+details.grupo{background:var(--painel);border:1px solid var(--borda);
+  border-left:3px solid var(--fraquinho);border-radius:9px;box-shadow:var(--sombra)}
+details.grupo.alta{border-left-color:var(--erro)}
+details.grupo.media{border-left-color:var(--alerta)}
+details.grupo.baixa{border-left-color:var(--fraquinho)}
+details.grupo>summary{cursor:pointer;padding:10px 13px;font-size:13.5px;
+  list-style:none;display:flex;align-items:center;gap:11px}
+details.grupo>summary::-webkit-details-marker{display:none}
+details.grupo>summary:hover{background:var(--grade);border-radius:7px}
+details.grupo>summary .conta-txt{flex:1;min-width:0}
+details.grupo>summary .abre{color:var(--fraquinho);font-size:11px;flex-shrink:0}
+details.grupo[open]>summary .abre::after{content:"▴"}
+details.grupo>summary .abre::after{content:"▾"}
+details.grupo .dentro{padding:0 10px 10px;display:flex;flex-direction:column;gap:6px}
+details.grupo .dentro .item{box-shadow:none;background:var(--bg)}
 .caixa{display:flex;flex-direction:column;gap:7px;margin-bottom:26px}
 .item{display:flex;gap:11px;align-items:center;background:var(--painel);
   border:1px solid var(--borda);border-left:3px solid var(--fraquinho);
@@ -318,6 +364,10 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
   </nav>
 
   <div id="aba-painel" role="tabpanel" aria-labelledby="aba-btn-painel" tabindex="0">
+  <!-- aria-live polite: a frase muda sozinha a cada 15 s. Quem usa leitor de
+       tela ouve a mudanca sem ter de sair procurando o que mudou. -->
+  <div class="briefing" id="briefing" aria-live="polite"></div>
+
   <h2 class="secao">Precisa de você agora</h2>
   <div class="caixa" id="caixa"></div>
 
@@ -674,39 +724,171 @@ async function calar(pend){
   carregar();
 }
 
+/* --------------------------------------------------------------- o briefing */
+function pecaDoPlacar(n, rotulo, classe){
+  const d = document.createElement("div");
+  d.className = "peca" + (classe ? " " + classe : "");
+  const a = document.createElement("div");
+  a.className = "n"; a.textContent = String(n);
+  const b = document.createElement("div");
+  b.className = "r"; b.textContent = rotulo;
+  d.append(a, b);
+  return d;
+}
+
+/* Sparkline em SVG puro: 60 pontos, sem biblioteca e sem requisicao. Diz a
+   FORMA da semana — subindo, descendo, plana — que e o que um numero sozinho
+   nao diz. Menos de dois pontos nao tem forma nenhuma: nao desenha. */
+function sparkline(serie){
+  const pts = (serie || []).map(x => x.valor);
+  if (pts.length < 2) return null;
+  const L = 96, A = 26, min = Math.min(...pts), max = Math.max(...pts);
+  const faixa = (max - min) || 1;
+  const x = i => (i / (pts.length - 1)) * (L - 2) + 1;
+  const y = v => A - 3 - ((v - min) / faixa) * (A - 6);
+  const d = pts.map((v, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1))
+                .join(" ");
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 " + L + " " + A);
+  svg.setAttribute("width", L); svg.setAttribute("height", A);
+  svg.setAttribute("class", "linha-tendencia");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label",
+    "Pendências abertas nos últimos 7 dias: de " + pts[0] + " para " + pts[pts.length-1]);
+  const p = document.createElementNS(svg.namespaceURI, "path");
+  p.setAttribute("d", d);
+  p.setAttribute("fill", "none");
+  p.setAttribute("stroke", "currentColor");
+  p.setAttribute("stroke-width", "1.5");
+  p.setAttribute("stroke-linejoin", "round");
+  p.setAttribute("stroke-linecap", "round");
+  p.setAttribute("opacity", ".55");
+  svg.append(p);
+  return svg;
+}
+
+function desenhaBriefing(d){
+  const cx = $("#briefing");
+  cx.textContent = "";
+  const t = d.tendencia || {abertas:{}};
+  const ab = t.abertas || {};
+
+  const frase = document.createElement("div");
+  frase.className = "frase";
+  frase.textContent = d.briefing || "";
+  cx.append(frase);
+  cx.className = "briefing " + (ab.alta ? "urgente" : "calmo");
+
+  const placar = document.createElement("div");
+  placar.className = "placar";
+  placar.append(pecaDoPlacar(ab.alta || 0, "urgentes", ab.alta ? "mal" : "bem"));
+  if (t.novas_24h) placar.append(pecaDoPlacar(t.novas_24h, "novas hoje"));
+  // So aparece quando ha o que comemorar. Um "0 fechadas" permanente no topo da
+  // tela e uma repreensao diaria, nao uma informacao.
+  if (t.resolvidas_7d)
+    placar.append(pecaDoPlacar(t.resolvidas_7d, "fechadas · 7d", "bem"));
+
+  const linha = sparkline(t.serie);
+  if (linha){
+    const seta = document.createElement("span");
+    seta.className = "seta " + (t.direcao || "estavel");
+    seta.textContent = t.direcao === "piorando" ? "▲"
+                     : t.direcao === "melhorando" ? "▼" : "—";
+    seta.title = "A lista está " + (t.direcao || "estável");
+    placar.append(linha, seta);
+  }
+  cx.append(placar);
+}
+
 /* ------------------------------------------------------------------ a caixa */
-function desenhaCaixa(pend){
+/* A idade em portugues. Silencio quando nao se sabe — nunca "0 dias", que e um
+   numero, e numero errado num painel custa mais caro que numero ausente. */
+function idadeEmTexto(p){
+  if (p.dias === null || p.dias === undefined){
+    // Idade exata desconhecida, mas a memoria sabe ha quanto tempo ELA existe:
+    // a pendencia que ja estava aqui na estreia tem no minimo essa idade.
+    const piso = p.dias_min || 0;
+    return piso ? "aberta há mais de " + piso + (piso === 1 ? " dia" : " dias") : "";
+  }
+  if (p.dias === 0) return "de hoje";
+  return "aberta há " + p.dias + (p.dias === 1 ? " dia" : " dias");
+}
+
+const gravDaLinha = l => l.tipo === "grupo" ? l.gravidade : l.pendencia.gravidade;
+const quantasNaLinha = l => l.tipo === "grupo" ? l.n : 1;
+
+/* Uma linha de grupo: 3+ pendencias da mesma regra dobradas numa so.
+   <details> de proposito, e nao um painel escrito a mao: o Ctrl+F do navegador
+   acha o que esta la dentro sem o dono precisar abrir. */
+function linhaDeGrupo(g){
+  const det = document.createElement("details");
+  det.className = "grupo " + g.gravidade;
+  const s = document.createElement("summary");
+
+  // Sem selo de contagem ao lado: a frase JA comeca com o numero ("10 projetos
+  // com..."). Repetir viraria "10x  10 projetos com...  Ver 10" — tres vezes o
+  // mesmo dado na mesma linha, que e ruido com cara de organizacao.
+  const txt = document.createElement("span");
+  txt.className = "conta-txt";
+  txt.textContent = g.texto;
+
+  const abre = document.createElement("span");
+  abre.className = "abre";
+  abre.textContent = g.acao.rotulo + " ";
+
+  s.append(txt, abre);
+  det.append(s);
+
+  const dentro = document.createElement("div");
+  dentro.className = "dentro";
+  itensEm(dentro, g.itens || []);
+  det.append(dentro);
+  return det;
+}
+
+function linhasEm(caixa, linhas){
+  for (const l of linhas){
+    if (l.tipo === "grupo") caixa.append(linhaDeGrupo(l));
+    else itensEm(caixa, [l.pendencia]);
+  }
+}
+
+function desenhaCaixa(d){
   const caixa = $("#caixa");
   caixa.textContent = "";
-  if (!pend.length){
-    const d = document.createElement("div");
-    d.className = "limpa";
-    d.innerHTML = "<b>Caixa limpa.</b> Nenhum projeto está esperando você agora.";
-    caixa.append(d);
+  const linhas = d.grupos || [];
+  if (!linhas.length){
+    const v = document.createElement("div");
+    v.className = "limpa";
+    v.innerHTML = "<b>Caixa limpa.</b> Nenhum projeto está esperando você agora.";
+    caixa.append(v);
     return;
   }
   // So o urgente fica a vista. O resto entra numa gaveta fechada — 25 itens
   // empilhados sao a rolagem que faz o dono parar de abrir o painel.
-  const altas = pend.filter(p => p.gravidade === "alta");
-  const resto = pend.filter(p => p.gravidade !== "alta");
-  itensEm(caixa, altas);
+  const altas = linhas.filter(l => gravDaLinha(l) === "alta");
+  const resto = linhas.filter(l => gravDaLinha(l) !== "alta");
+  linhasEm(caixa, altas);
   if (!altas.length){
-    const d = document.createElement("div");
-    d.className = "limpa";
-    d.innerHTML = "<b>Nada urgente.</b> O que sobrou pode esperar.";
-    caixa.append(d);
+    const v = document.createElement("div");
+    v.className = "limpa";
+    v.innerHTML = "<b>Nada urgente.</b> O que sobrou pode esperar.";
+    caixa.append(v);
   }
   if (resto.length){
+    // A contagem conta PENDENCIAS, nao linhas: o dono precisa saber que sao 21
+    // coisas ali dentro, mesmo que estejam dobradas em 4 linhas.
+    const quantas = resto.reduce((s, l) => s + quantasNaLinha(l), 0);
     const det = document.createElement("details");
     det.className = "todos gaveta";
     const s = document.createElement("summary");
-    s.append(document.createTextNode(
-      "Mais " + resto.length + " item(ns) que podem esperar"));
+    s.append(document.createTextNode("Mais " + quantas +
+      (quantas === 1 ? " item que pode esperar" : " itens que podem esperar")));
     s.append(document.createElement("span"));
     det.append(s);
     const dentro = document.createElement("div");
     dentro.className = "caixa dentro";
-    itensEm(dentro, resto);
+    linhasEm(dentro, resto);
     det.append(dentro);
     caixa.append(det);
   }
@@ -722,10 +904,29 @@ function itensEm(caixa, pend){
     const txt = document.createElement("div");
     txt.className = "txt";
     txt.textContent = p.texto;
+    // Nasceu nas ultimas 24 h: selo. E o unico jeito de a lista distinguir o
+    // que chegou hoje do que apodrece ha semanas sem obrigar a ler as datas.
+    if (p.nova){
+      const selo = document.createElement("span");
+      selo.className = "selo";
+      selo.textContent = "nova";
+      txt.append(selo);
+    }
     corpo.append(txt);
+
     const meta = document.createElement("div");
     meta.className = "meta";
     meta.textContent = (p.projeto ? p.projeto + " · " : "") + (p.detalhe || p.regra);
+    const quando = idadeEmTexto(p);
+    if (quando){
+      meta.append(document.createTextNode(" · "));
+      const i = document.createElement("span");
+      // Acima de 14 dias a idade muda de cor: nesse ponto ela deixou de ser
+      // informacao e virou a propria pendencia.
+      i.className = "idade" + ((p.dias >= 14 || p.dias_min >= 14) ? " velha" : "");
+      i.textContent = quando;
+      meta.append(i);
+    }
     corpo.append(meta);
     li.append(corpo);
 
@@ -905,7 +1106,8 @@ async function carregar(){
   catch(e){ $("#linhafina").textContent = "servidor fora do ar — " + e.message; return; }
   ESTADO = d;
 
-  desenhaCaixa(d.pendencias);
+  desenhaBriefing(d);
+  desenhaCaixa(d);
   desenhaTabela(d.projetos);
 
   const altas = d.pendencias.filter(p => p.gravidade === "alta").length;

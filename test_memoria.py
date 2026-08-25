@@ -142,6 +142,26 @@ class Decorar(unittest.TestCase):
         self.assertIsNone(d["dias"])
         self.assertTrue(d["desde_o_inicio"])
 
+    def test_idade_desconhecida_vira_um_piso_honesto(self):
+        """Nao saber a idade exata nao e o mesmo que nao saber nada.
+
+        A memoria sabe ha quanto tempo ELA existe. Se a pendencia ja estava aqui
+        quando ela comecou, a idade e no MINIMO essa — e "aberta ha mais de 9
+        dias" e informacao util, enquanto "ha mais tempo do que eu lembro" e
+        uma frase comprida que nao ajuda ninguem a priorizar.
+        """
+        inicio = atras(days=9)
+        v = {"grafo_velho:exemplo": {"visto_em": inicio, "fechada_em": None}}
+        d = memoria.decorar([pend()], v, iso(AGORA), desde=inicio)[0]
+        self.assertEqual(d["dias_min"], 9)
+        self.assertIsNone(d["dias"])
+
+    def test_memoria_com_menos_de_um_dia_nao_da_piso_nenhum(self):
+        inicio = atras(hours=3)
+        v = {"grafo_velho:exemplo": {"visto_em": inicio, "fechada_em": None}}
+        d = memoria.decorar([pend()], v, iso(AGORA), desde=inicio)[0]
+        self.assertEqual(d["dias_min"], 0)
+
     def test_quem_nasceu_depois_do_inicio_da_memoria_e_nova_de_verdade(self):
         v = {"grafo_velho:exemplo": {"visto_em": atras(hours=2), "fechada_em": None}}
         d = memoria.decorar([pend()], v, iso(AGORA), desde=atras(days=9))[0]
