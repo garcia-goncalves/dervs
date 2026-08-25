@@ -278,6 +278,27 @@ def marcar_fila(id_: str, con=None, **campos) -> None:
             con.close()
 
 
+def gasto_entre(inicio_iso: str, fim_iso: str, con=None) -> float:
+    """Soma o custo dos itens terminados na JANELA [inicio, fim) — ambos em UTC.
+
+    Existe porque `gasto_do_dia` compara PREFIXO de data, e o dia do dono nao e
+    o dia do UTC. Em UTC-3, um item terminado as 22h de terca carimba quarta em
+    UTC: o prefixo nao bate, a soma volta zero e o teto NUNCA fecha entre 21h e
+    meia-noite. Quem manda a janela e `fila.janela_local_em_utc`.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        linha = con.execute(
+            "SELECT COALESCE(SUM(custo_usd), 0.0) AS total FROM fila"
+            " WHERE terminado_em IS NOT NULL AND terminado_em >= ?"
+            " AND terminado_em < ?", (inicio_iso, fim_iso)).fetchone()
+        return float(linha["total"] or 0.0)
+    finally:
+        if fechar:
+            con.close()
+
+
 def gasto_do_dia(dia: str, con=None) -> float:
     """Soma o custo dos itens TERMINADOS no dia (AAAA-MM-DD, comparado em UTC)."""
     fechar = con is None

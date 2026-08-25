@@ -9,7 +9,7 @@ ambiente. Nenhuma delas e uma instrucao no texto do pedido: instrucao em texto
 e sugestao, nao trava.
 """
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import banco
 import execucao
@@ -45,6 +45,34 @@ def hoje_local() -> str:
     e quarta em UTC, e o teto zeraria tres horas cedo.
     """
     return datetime.now().astimezone().strftime("%Y-%m-%d")
+
+
+
+def janela_local_em_utc(dia_local: str):
+    """O dia LOCAL `dia_local` (AAAA-MM-DD) como janela [inicio, fim) em UTC.
+
+    E o que permite somar o gasto do dia do DONO num banco que carimba em UTC.
+    """
+    fuso = datetime.now().astimezone().tzinfo
+    inicio = datetime.strptime(dia_local, "%Y-%m-%d").replace(tzinfo=fuso)
+    fim = inicio + timedelta(days=1)
+    return (inicio.astimezone(timezone.utc).isoformat(timespec="seconds"),
+            fim.astimezone(timezone.utc).isoformat(timespec="seconds"))
+
+
+def dia_local_de(carimbo_utc: str) -> str:
+    """A data LOCAL de um carimbo gravado em UTC. "" se nao der para ler.
+
+    Comparar `terminado_em[:10]` (UTC) com `hoje_local()` era errado: das 21h a
+    meia-noite as duas datas divergem, e o "falha de hoje nao volta hoje"
+    deixava o item voltar no mesmo laco.
+    """
+    if not carimbo_utc:
+        return ""
+    try:
+        return datetime.fromisoformat(carimbo_utc).astimezone().strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return ""
 
 
 def cabe_no_teto(gasto_usd: float) -> bool:
@@ -98,7 +126,7 @@ def pode_tentar(item: dict, hoje: str) -> bool:
     if int(item.get("tentativas") or 0) >= MAX_TENTATIVAS:
         return False
     if item.get("estado") == "falha":
-        terminou = (item.get("terminado_em") or "")[:10]
+        terminou = dia_local_de(item.get("terminado_em"))
         if terminou == hoje:
             return False
     return True
@@ -195,6 +223,7 @@ def trabalhar(pendencias: list, executores: dict, parar_agora=None) -> dict:
     Cada executor recebe o item e devolve (deu_certo, custo_usd, pr_url, erro).
     """
     hoje = hoje_local()
+    janela = janela_local_em_utc(hoje)
     banco.enfileirar(elegiveis(pendencias))
     relatorio = {"feitos": 0, "falhas": 0, "gasto_usd": 0.0, "motivo_da_parada": ""}
 
@@ -203,7 +232,7 @@ def trabalhar(pendencias: list, executores: dict, parar_agora=None) -> dict:
             relatorio["motivo_da_parada"] = "voce parou a fila"
             break
 
-        gasto = banco.gasto_do_dia(hoje)
+        gasto = banco.gasto_entre(*janela)
         relatorio["gasto_usd"] = gasto
         item = proximo(banco.fila_aberta(), gasto, hoje)
 
@@ -246,5 +275,5 @@ def trabalhar(pendencias: list, executores: dict, parar_agora=None) -> dict:
         else:
             relatorio["falhas"] += 1
 
-    relatorio["gasto_usd"] = banco.gasto_do_dia(hoje)
+    relatorio["gasto_usd"] = banco.gasto_entre(*janela)
     return relatorio

@@ -190,7 +190,7 @@ def _reais(valor_brl: float) -> str:
 def _dados_da_fila() -> dict:
     """O retrato da fila para a tela. Le o gasto UMA vez, de proposito."""
     hoje = fila.hoje_local()
-    gasto = banco.gasto_do_dia(hoje)
+    gasto = banco.gasto_entre(*fila.janela_local_em_utc(hoje))
     return {
         "itens": banco.fila_aberta(),
         "gasto_hoje_brl": execucao.em_reais(gasto),
@@ -312,6 +312,11 @@ def executor_claude(item):
 
 
 _fila_parar = threading.Event()
+# Sem esta trava, dois cliques no mesmo instante leem `_fila_thread`
+# vazio ao mesmo tempo e iniciam DUAS filas. Duas filas escolhendo
+# itens do mesmo projeto fazem `execucao.iniciar` recusar a segunda,
+# e o resultado da primeira e gravado no item errado.
+_fila_trava = threading.Lock()
 _fila_relatorio = {}
 _fila_thread = None
 
@@ -321,10 +326,10 @@ def _fila_thread_viva() -> bool:
     return bool(_fila_thread and _fila_thread.is_alive())
 
 
-def _rodar_fila(pendencias):
+def _rodar_fila():
     global _fila_relatorio
     _fila_relatorio = fila.trabalhar(
-        pendencias,
+        _pendencias_agora(),
         {"mecanico": executor_mecanico, "claude": executor_claude},
         parar_agora=_fila_parar.is_set)
 
@@ -332,21 +337,30 @@ def _rodar_fila(pendencias):
 def acao_fila_comecar(p):
     """Comeca a fila. Volta na hora; o trabalho segue em thread."""
     global _fila_thread
-    if _fila_thread_viva():
-        return False, "a fila já está trabalhando."
-    _fila_parar.clear()
-    # Mesmo caminho que /api/dados usa (servir.py:672) — nao ha uma segunda
-    # forma de calcular pendencia, e nao pode haver.
+    with _fila_trava:
+        if _fila_thread_viva():
+            return False, "a fila já está trabalhando."
+        _fila_parar.clear()
+        # A thread nasce AQUI dentro, ainda sob a trava, e so depois busca as
+        # pendencias: se buscasse antes, a janela entre o teste e a atribuicao
+        # continuaria aberta pelo tempo da consulta ao banco.
+        _fila_thread = threading.Thread(target=_rodar_fila, daemon=True)
+        _fila_thread.start()
+    return True, "fila iniciada."
+
+
+def _pendencias_agora():
+    """As pendencias, pelo MESMO caminho que /api/dados usa (servir.py:672).
+
+    Nao ha uma segunda forma de calcular pendencia, e nao pode haver.
+    """
     con = banco.conectar()
     try:
         e = banco.montar_estado(con)
-        pendencias = regras.avaliar(e["projetos"], quota=e["quota"],
-                                    silenciadas=banco.silenciadas(con))
+        return regras.avaliar(e["projetos"], quota=e["quota"],
+                              silenciadas=banco.silenciadas(con))
     finally:
         con.close()
-    _fila_thread = threading.Thread(target=_rodar_fila, args=(pendencias,), daemon=True)
-    _fila_thread.start()
-    return True, "fila iniciada."
 
 
 def acao_fila_parar(p):

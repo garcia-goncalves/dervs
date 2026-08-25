@@ -424,5 +424,60 @@ class Lacar(BancoTemporario):
         self.assertIn("sem executor", banco.fila_aberta()[0]["erro"])
 
 
+class FusoDoTeto(BancoTemporario):
+    """A janela das 21h a meia-noite, onde a data local e a UTC divergem."""
+
+    def test_janela_cobre_24_horas(self):
+        ini, fim = fila.janela_local_em_utc("2026-08-25")
+        from datetime import datetime
+        horas = (datetime.fromisoformat(fim) - datetime.fromisoformat(ini)).total_seconds() / 3600
+        self.assertEqual(horas, 24)
+
+    def test_dia_local_de_carimbo_utc_de_madrugada(self):
+        """01h UTC do dia 26 e, em UTC-3, ainda 22h do dia 25."""
+        from datetime import datetime, timedelta, timezone
+        fuso = datetime.now().astimezone().utcoffset()
+        local = datetime(2026, 8, 25, 22, 0, tzinfo=timezone(fuso))
+        utc = local.astimezone(timezone.utc).isoformat(timespec="seconds")
+        self.assertEqual(fila.dia_local_de(utc), "2026-08-25")
+
+    def test_carimbo_ilegivel_nao_explode(self):
+        self.assertEqual(fila.dia_local_de("nao e data"), "")
+        self.assertEqual(fila.dia_local_de(""), "")
+        self.assertEqual(fila.dia_local_de(None), "")
+
+    def test_falha_das_22h_nao_volta_no_mesmo_dia_local(self):
+        """Era aqui que o anti-laco furava: [:10] em UTC dava o dia seguinte."""
+        from datetime import datetime, timezone
+        fuso = datetime.now().astimezone().utcoffset()
+        local = datetime(2026, 8, 25, 22, 0, tzinfo=timezone(fuso))
+        utc = local.astimezone(timezone.utc).isoformat(timespec="seconds")
+        item = {"id": "x:y", "tentativas": 1, "estado": "falha", "terminado_em": utc}
+        self.assertFalse(fila.pode_tentar(item, "2026-08-25"))
+
+    def test_gasto_das_22h_conta_no_dia_local(self):
+        """O teto tem de fechar mesmo com o item terminado apos as 21h."""
+        from datetime import datetime, timezone
+        fuso = datetime.now().astimezone().utcoffset()
+        local = datetime(2026, 8, 25, 22, 0, tzinfo=timezone(fuso))
+        utc = local.astimezone(timezone.utc).isoformat(timespec="seconds")
+        banco.enfileirar([{"id": "x:y", "projeto": "y", "regra": "env_drift",
+                           "gravidade": "media", "risco": 0}])
+        banco.marcar_fila("x:y", estado="ok", custo_usd=7.0, terminado_em=utc)
+        self.assertAlmostEqual(
+            banco.gasto_entre(*fila.janela_local_em_utc("2026-08-25")), 7.0, places=6)
+
+    def test_gasto_de_outro_dia_local_nao_entra(self):
+        from datetime import datetime, timezone
+        fuso = datetime.now().astimezone().utcoffset()
+        local = datetime(2026, 8, 24, 22, 0, tzinfo=timezone(fuso))
+        utc = local.astimezone(timezone.utc).isoformat(timespec="seconds")
+        banco.enfileirar([{"id": "x:y", "projeto": "y", "regra": "env_drift",
+                           "gravidade": "media", "risco": 0}])
+        banco.marcar_fila("x:y", estado="ok", custo_usd=7.0, terminado_em=utc)
+        self.assertEqual(
+            banco.gasto_entre(*fila.janela_local_em_utc("2026-08-25")), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
