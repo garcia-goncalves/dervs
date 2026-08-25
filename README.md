@@ -655,7 +655,9 @@ barreiras foram postas em 25/08/2026, em ordem de importância:
    consertado**, que é conteúdo escrito por estranho e podia definir hook
    próprio. Este segundo era o furo que ninguém tinha visto.
 3. **Todo comando passa por uma lista antes de rodar** (`barreira.py`, um hook
-   `PreToolUse`). Lista branca de programas, `git push`/`remote`/`config`
+   `PreToolUse`). Medido numa sessão de verdade em 25/08/2026, por US$ 0,33:
+   `git push origin main` e `curl http://example.com` **barrados** com a frase
+   em português; `git status --porcelain` rodou. Lista branca de programas, `git push`/`remote`/`config`
    barrados por nome, nada que fale com a rede, nada que vire interpretador de
    texto solto (`python -c`, `node -e`, `bash -c`), nenhum caminho absoluto ou
    com `..`, e `.git/` intocável. Recusa sai com código 2 e a frase em

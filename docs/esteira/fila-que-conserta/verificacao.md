@@ -249,14 +249,44 @@ Isso também derruba o que estava escrito no README e no topo de `execucao.py`:
 que só `--bare` isolaria, e que `--bare` não serve com este login. A segunda
 metade continua verdadeira; a primeira estava errada.
 
-### O que continua NÃO provado, e é o próximo passo
+### A montagem, medida (25/08/2026, US$ 0,33)
 
-**Nenhuma sessão filha completa foi rodada com as barreiras ligadas.** O hook
-foi exercitado como processo isolado, e a cópia e a ponte foram exercitadas de
-verdade — mas ninguém viu ainda o `claude` carregar o `--settings` e barrar um
-comando dentro de uma sessão de verdade. Falta porque o classificador de
-segurança desta máquina impede uma sessão do Claude de disparar outra: a
-medição depende da mão do dono.
+Rodada pelo dono, porque o classificador desta máquina impede uma sessão do
+Claude disparar outra. Uma sessão filha de verdade, com as três barreiras
+ligadas, recebeu ordem de rodar três comandos:
 
-Enquanto isso não for feito, o estado honesto é: **as peças foram provadas
-separadas, a montagem não.**
+| Comando | O que aconteceu |
+|---|---|
+| `git push origin main` | **barrado**, com a frase da barreira em português correto |
+| `curl http://example.com` | **barrado**, com a frase da rede |
+| `git status --porcelain` | **rodou**, saída vazia |
+
+`is_error=False`, `terminal_reason=completed`, custo US$ 0,3254. A cópia nasceu
+sem `origin` na mesma corrida.
+
+**A barreira 2 também deu sinal, indireto mas legível:** nenhum arquivo novo
+apareceu em `~/.claude/handoffs` depois da corrida. O `salvar-contexto.py` do
+dono roda no `SessionEnd` de toda sessão e grava ali; se ele tivesse rodado
+dentro da filha, teria deixado rastro. Não deixou. Os 3 eventos `system` da
+corrida são o próprio hook da barreira, um por comando.
+
+### A primeira medição falhou, e o motivo importa
+
+Antes desta, uma tentativa saiu com **código 255 e zero eventos**:
+
+    'Write' nao e reconhecido como um comando interno ou externo
+
+O `settings` ia com `"matcher": "Bash|Write|Edit|MultiEdit"`, formato válido de
+hook — mas ele viaja como **argumento**, e nesta máquina `claude` é um `.CMD`:
+todo argumento de um `.CMD` passa pelo interpretador do Windows, que lê `|` como
+cano de shell. A armadilha já estava escrita em `montar_comando`, no mesmo
+arquivo, 40 linhas acima. Passei por cima dela.
+
+Corrigido em `d55fcaa`: uma entrada por ferramenta, e um teste que varre o
+settings inteiro atrás de `| & < > ^ %` — não só do caso que quebrou.
+
+**A lição de processo:** as três barreiras estavam com teste unitário verde,
+compilando, com CI verde e documentação escrita quando a barreira 3 **não
+funcionava de jeito nenhum**. Nada disso pega integração com o sistema
+operacional. É o mesmo padrão de 24/08, quando a faixa aparecia e o botão nunca
+disparava.
