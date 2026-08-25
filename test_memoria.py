@@ -198,6 +198,27 @@ class Tendencia(unittest.TestCase):
         memoria.registrar([pend(projeto="a")], self.con, atras(hours=1))
         self.assertEqual(memoria.tendencia(self.con, iso(AGORA))["direcao"], "melhorando")
 
+    def test_a_primeira_coleta_nao_inventa_27_novidades(self):
+        """A armadilha da estreia, do lado da tendencia.
+
+        Na estreia, TODAS as pendencias abertas ganham visto_em=agora. Sem esta
+        trava o briefing anunciaria "27 apareceram nas ultimas 24 h" no primeiro
+        minuto de vida da memoria — e nenhuma delas era nova. Uma frase dessas
+        no topo da tela, no dia da estreia, ensina que o topo da tela mente.
+        """
+        memoria.registrar([pend(projeto="p%d" % i) for i in range(27)],
+                          self.con, iso(AGORA))
+        t = memoria.tendencia(self.con, iso(AGORA))
+        self.assertEqual(t["novas_24h"], 0)
+        self.assertEqual(t["direcao"], "estavel")
+        self.assertEqual(t["abertas"]["total"], 27)   # abertas SIM, novas NAO
+
+    def test_depois_da_estreia_a_novidade_conta_de_verdade(self):
+        memoria.registrar([pend(projeto="velho")], self.con, atras(days=3))
+        memoria.registrar([pend(projeto="velho"), pend(projeto="novo")],
+                          self.con, atras(hours=1))
+        self.assertEqual(memoria.tendencia(self.con, iso(AGORA))["novas_24h"], 1)
+
     def test_banco_vazio_devolve_tendencia_zerada_sem_estourar(self):
         t = memoria.tendencia(self.con, iso(AGORA))
         self.assertEqual(t["novas_24h"], 0)

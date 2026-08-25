@@ -22,15 +22,136 @@ arquivo nao le, nao grava e nao imprime segredo nenhum.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import socket
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 import banco
 
 AGORA = datetime.now(timezone.utc)
+
+# ------------------------------------------------------ o site esta no ar?
+#
+# INTERRUPTOR. Esta e a unica parte do HUB que toca em PRODUCAO. E uma leitura
+# — GET sem credencial, sem cookie, sem seguir redirecionamento — uma vez a cada
+# 20 minutos, nos enderecos que o dono escreveu a mao no casos.json. Desligar
+# aqui apaga a regra 15 da tela e nao muda mais nada.
+MEDIR_SITE = True
+TETO_SITE = 8                # segundos ate desistir de um site
+AGENTE = "HUB-do-dev/1.0 (monitor local; +http://localhost:4777)"
+
+# Nomes de workflow que contam como "publicar". Repositorio sem nenhum deles
+# fica CALADO na regra 16 — nao saber nao e o mesmo que estar atrasado.
+NOMES_DE_DEPLOY = ("deploy", "publicar", "publish", "release")
+
+
+NOMES_LOCAIS = ("localhost", "localhost.localdomain")
+
+
+def _ip_privado(texto: str):
+    """True/False se `texto` e um IP interno; None se nao e IP nenhum."""
+    try:
+        ip = ipaddress.ip_address(texto)
+    except ValueError:
+        return None
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def url_segura(url: str) -> bool:
+    """Checagem de FORMA, sem rede: so http(s), e nada apontando para dentro.
+
+    Hoje o casos.json e escrito so pelo dono e isto e desnecessario. Entra assim
+    mesmo: no dia em que essa lista vier de qualquer outro lugar, um endereco
+    apontando para 127.0.0.1 ou para a rede interna transformaria este coletor
+    numa ferramenta de varredura de dentro da maquina dele.
+
+    Sem DNS aqui, de proposito: funcao pura e testavel offline. A resolucao de
+    nome — que tambem pode apontar para dentro — e conferida em `host_publico`,
+    ja com a rede na mao.
+    """
+    try:
+        u = urlsplit((url or "").strip())
+    except ValueError:
+        return False
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return False
+    h = u.hostname.lower().rstrip(".")
+    if h in NOMES_LOCAIS or h.endswith(".localhost") or h.endswith(".local"):
+        return False
+    return _ip_privado(h) is not True
+
+
+def host_publico(host: str) -> bool:
+    """O nome resolve, e resolve para fora? Nome que nao resolve vira silencio."""
+    try:
+        enderecos = socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError, ValueError):
+        return False
+    return bool(enderecos) and not any(
+        _ip_privado(sa[0]) for _, _, _, _, sa in enderecos)
+
+
+class _SemRedirecionar(urllib.request.HTTPRedirectHandler):
+    """Redirecionamento e resposta do servidor: ele esta VIVO, e isso basta.
+
+    Seguir o pulo levaria a requisicao para um dominio que este painel nao
+    escolheu — e um 301 para outro lugar ja e prova de que o servidor respondeu.
+    """
+
+    def redirect_request(self, *a, **kw):
+        return None
+
+
+def mede_site(url: str) -> dict:
+    """GET na raiz. 5xx e ausencia de resposta = fora do ar; o resto = vivo."""
+    fora = {"url": url, "ok": None, "codigo": 0, "erro": "", "ms": 0}
+    if not MEDIR_SITE or not url_segura(url):
+        return fora
+    if not host_publico(urlsplit(url).hostname):
+        # Nome que nao resolve, ou que resolve para dentro da rede. Nao da para
+        # medir — e "nao da para medir" NAO e "esta fora do ar" (invariante 2).
+        fora["erro"] = "nao_resolveu"
+        return fora
+    pedido = urllib.request.Request(url, method="GET",
+                                    headers={"User-Agent": AGENTE})
+    abridor = urllib.request.build_opener(_SemRedirecionar)
+    inicio = time.time()
+    try:
+        with abridor.open(pedido, timeout=TETO_SITE) as r:
+            fora["codigo"] = r.status
+    except urllib.error.HTTPError as e:
+        fora["codigo"] = e.code             # 3xx/4xx/5xx chegam aqui
+    except Exception as e:                  # noqa: BLE001 — timeout, DNS, TLS, socket
+        fora["erro"] = type(e).__name__
+    fora["ms"] = int((time.time() - inicio) * 1000)
+    fora["ok"] = bool(fora["codigo"]) and fora["codigo"] < 500
+    return fora
+
+
+def escolher_workflow(workflows) -> dict:
+    """O workflow que publica, entre os do repositorio. {} quando nao da para saber."""
+    for w in workflows or []:
+        alvo = ((w.get("path") or "") + " " + (w.get("name") or "")).lower()
+        if any(n in alvo for n in NOMES_DE_DEPLOY):
+            return w
+    return {}
+
+
+def atras_de(comparacao) -> int | None:
+    """Quantos commits a branch padrao esta na frente do ultimo deploy."""
+    if not isinstance(comparacao, dict):
+        return None
+    n = comparacao.get("ahead_by")
+    return n if isinstance(n, int) else None
 
 
 def _sem_console():
@@ -85,6 +206,57 @@ def _gh_graphql(consulta: str):
         return json.loads(r.stdout).get("data") or {}, None
     except ValueError:
         return None, "resposta do gh nao era JSON"
+
+
+def _gh_json(caminho: str, teto=30):
+    """GET na API REST do GitHub pelo `gh` ja autenticado. None quando falha."""
+    try:
+        r = subprocess.run(["gh", "api", caminho], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=teto,
+                           creationflags=SEM_JANELA)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if r.returncode != 0:
+        return None
+    try:
+        return json.loads(r.stdout)
+    except ValueError:
+        return None
+
+
+def mede_deploy(slug: str, branch: str) -> dict:
+    """Ultimo deploy bem-sucedido vs. a ponta da branch padrao.
+
+    Tres chamadas REST por projeto, e so para os que declaram endereco de
+    producao — hoje 5 dos 17. Sao ~45 chamadas por hora contra um limite de
+    5.000: cabe. Fazer isto para os 17 nao caberia no proposito, porque projeto
+    sem endereco de producao nao tem o que estar atrasado em relacao a que.
+
+    Devolve {} quando NAO DA PARA SABER (sem workflow de publicacao, sem
+    execucao bem-sucedida, comparacao que falhou). {} deixa a regra 16 calada,
+    que e o certo: ignorancia nao e alarme.
+    """
+    ws = _gh_json("repos/%s/actions/workflows" % slug)
+    escolhido = escolher_workflow((ws or {}).get("workflows"))
+    if not escolhido:
+        return {}
+
+    runs = _gh_json("repos/%s/actions/workflows/%s/runs?status=success&per_page=1"
+                    % (slug, escolhido.get("id")))
+    corridas = (runs or {}).get("workflow_runs") or []
+    if not corridas:
+        return {}
+    sha = corridas[0].get("head_sha") or ""
+    if not sha:
+        return {}
+
+    comp = _gh_json("repos/%s/compare/%s...%s" % (slug, sha, branch))
+    atras = atras_de(comp)
+    if atras is None:
+        return {}
+    return {"sha": sha, "quando": corridas[0].get("updated_at") or "",
+            "atras": atras, "workflow": escolhido.get("name") or "",
+            "url": "https://github.com/%s/actions" % slug}
 
 
 def _dias(iso: str):
@@ -177,6 +349,25 @@ def main():
                 antes = ((tudo.get(nome) or {}).get("github") or {})
                 novo["vulns"] = (antes.get("dados") or {}).get("vulns") or {}
                 novo["vulns_medido_em"] = antes.get("medido_em")
+            # Producao: so para quem declarou endereco no casos.json.
+            local = ((tudo.get(nome) or {}).get("local") or {}).get("dados") or {}
+            url_prod = local.get("url_prod") or ""
+            antes_gh = ((tudo.get(nome) or {}).get("github") or {}).get("dados") or {}
+            if url_prod:
+                site = mede_site(url_prod)
+                if site.get("ok") is None:
+                    # NAO medimos (interruptor desligado, ou URL que nao passou na
+                    # checagem). Gravar isso apagaria do painel um "fora do ar"
+                    # real que ja estava no banco — o mesmo cuidado que os alertas
+                    # de seguranca ganharam logo abaixo, pelo mesmo motivo.
+                    anterior = antes_gh.get("site")
+                    if anterior:
+                        novo["site"] = anterior
+                else:
+                    novo["site"] = site
+                dep = mede_deploy(novo["slug"], novo["branch_padrao"] or "main")
+                novo["deploy"] = dep or antes_gh.get("deploy") or {}
+
             banco.gravar(nome, "github", novo, con)
             gravados += 1
     finally:

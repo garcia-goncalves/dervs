@@ -442,5 +442,163 @@ class LinhasTestaveis(unittest.TestCase):
         self.assertEqual(coletar.coleta_arquivos(d)["linhas_testaveis"], 0)
 
 
+class UrlSegura(unittest.TestCase):
+    """A checagem que impede o coletor de virar varredor da rede interna.
+
+    Hoje o casos.json e escrito so pelo dono e nada disso e necessario. Existe
+    para o dia em que essa lista vier de outro lugar — e porque em 25/08/2026
+    este projeto ja pagou caro por confiar em texto que vinha de fora.
+    """
+
+    def test_aceita_endereco_publico(self):
+        self.assertTrue(coletar_github.url_segura("https://exemplo.com.br"))
+
+    def test_recusa_localhost(self):
+        self.assertFalse(coletar_github.url_segura("http://localhost:4777/"))
+        self.assertFalse(coletar_github.url_segura("http://127.0.0.1/"))
+
+    def test_recusa_rede_interna(self):
+        self.assertFalse(coletar_github.url_segura("http://192.168.0.1/"))
+        self.assertFalse(coletar_github.url_segura("http://10.0.0.5/"))
+
+    def test_recusa_esquema_que_nao_e_web(self):
+        for u in ("file:///C:/Users/Desktop/.ssh/id_rsa", "ftp://x.com",
+                  "gopher://x.com", "", "nao e url"):
+            self.assertFalse(coletar_github.url_segura(u), u)
+
+    def test_recusa_o_nome_localhost_alem_do_ip(self):
+        for u in ("http://localhost/", "http://meu.localhost/", "http://x.local/"):
+            self.assertFalse(coletar_github.url_segura(u), u)
+
+    def test_e_offline_nao_depende_de_dns(self):
+        """Teste que consulta DNS e teste que falha na CI numa terca-feira.
+
+        A resolucao de nome vive em host_publico(), chamada so por mede_site().
+        """
+        self.assertTrue(coletar_github.url_segura(
+            "https://este-dominio-nao-existe-mesmo-987654.invalid"))
+
+
+class HostPublico(unittest.TestCase):
+    def test_nome_que_nao_resolve_nao_e_publico(self):
+        self.assertFalse(coletar_github.host_publico(
+            "este-dominio-nao-existe-mesmo-987654.invalid"))
+
+    def test_ip_de_dentro_nao_e_publico(self):
+        self.assertFalse(coletar_github.host_publico("127.0.0.1"))
+        self.assertFalse(coletar_github.host_publico("192.168.0.1"))
+
+
+class EscolherWorkflow(unittest.TestCase):
+    def test_acha_pelo_caminho_do_arquivo(self):
+        ws = [{"id": 1, "name": "CI", "path": ".github/workflows/ci.yml"},
+              {"id": 2, "name": "Publicar", "path": ".github/workflows/deploy.yml"}]
+        self.assertEqual(coletar_github.escolher_workflow(ws)["id"], 2)
+
+    def test_acha_pelo_nome_em_portugues(self):
+        ws = [{"id": 7, "name": "Publicar no servidor", "path": ".github/workflows/x.yml"}]
+        self.assertEqual(coletar_github.escolher_workflow(ws)["id"], 7)
+
+    def test_repositorio_sem_publicacao_devolve_vazio(self):
+        ws = [{"id": 1, "name": "CI", "path": ".github/workflows/ci.yml"},
+              {"id": 2, "name": "Testes", "path": ".github/workflows/test.yml"}]
+        self.assertEqual(coletar_github.escolher_workflow(ws), {})
+
+    def test_lista_ausente_nao_estoura(self):
+        self.assertEqual(coletar_github.escolher_workflow(None), {})
+
+
+class AtrasDe(unittest.TestCase):
+    def test_le_o_numero_da_comparacao(self):
+        self.assertEqual(coletar_github.atras_de({"ahead_by": 7}), 7)
+
+    def test_em_dia_e_zero_e_nao_none(self):
+        """Zero e uma medicao; None e 'nao sei'. A regra 16 trata os dois
+        diferente — zero cala por estar em dia, None cala por ignorancia."""
+        self.assertEqual(coletar_github.atras_de({"ahead_by": 0}), 0)
+
+    def test_resposta_estranha_vira_nao_sei(self):
+        for r in (None, {}, {"ahead_by": "sete"}, "erro", []):
+            self.assertIsNone(coletar_github.atras_de(r), repr(r))
+
+
+class MedeSite(unittest.TestCase):
+    """Sobe um servidor de mentira em 127.0.0.1 e mede o classificador.
+
+    Como a url_segura barra loopback de proposito, os testes chamam o
+    classificador por dentro, com MEDIR_SITE ligado e a checagem substituida —
+    a alternativa seria depender de um site real, e teste que depende da
+    internet e teste que vai falhar na CI numa terca-feira qualquer.
+    """
+
+    def _mede(self, codigo):
+        import http.server
+        import threading
+
+        class Mao(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(codigo)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Mao)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        antes = (coletar_github.url_segura, coletar_github.host_publico)
+        coletar_github.url_segura = lambda u: True
+        coletar_github.host_publico = lambda h: True
+        try:
+            return coletar_github.mede_site("http://127.0.0.1:%d/" % srv.server_port)
+        finally:
+            coletar_github.url_segura, coletar_github.host_publico = antes
+            srv.shutdown()
+
+    def test_200_e_site_no_ar(self):
+        r = self._mede(200)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["codigo"], 200)
+
+    def test_redirecionamento_conta_como_vivo_e_nao_e_seguido(self):
+        """301 ja e prova de que o servidor respondeu. Seguir o pulo levaria a
+        requisicao para um dominio que este painel nao escolheu."""
+        r = self._mede(301)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["codigo"], 301)
+
+    def test_404_e_servidor_vivo_com_pagina_errada(self):
+        self.assertTrue(self._mede(404)["ok"])
+
+    def test_500_e_fora_do_ar(self):
+        r = self._mede(503)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["codigo"], 503)
+
+    def test_nao_respondeu_e_fora_do_ar(self):
+        antes = (coletar_github.url_segura, coletar_github.host_publico)
+        coletar_github.url_segura = lambda u: True
+        coletar_github.host_publico = lambda h: True
+        try:
+            r = coletar_github.mede_site("http://127.0.0.1:9/")   # porta descartada
+        finally:
+            coletar_github.url_segura, coletar_github.host_publico = antes
+        self.assertFalse(r["ok"])
+        self.assertTrue(r["erro"])
+
+    def test_url_recusada_devolve_nao_medido_e_nao_fora_do_ar(self):
+        """A diferenca que evita alarme falso: None e 'nao medi', False e 'caiu'."""
+        r = coletar_github.mede_site("http://localhost:1/")
+        self.assertIsNone(r["ok"])
+
+    def test_interruptor_desligado_nao_mede_nada(self):
+        antes = coletar_github.MEDIR_SITE
+        coletar_github.MEDIR_SITE = False
+        try:
+            self.assertIsNone(coletar_github.mede_site("https://exemplo.com.br")["ok"])
+        finally:
+            coletar_github.MEDIR_SITE = antes
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

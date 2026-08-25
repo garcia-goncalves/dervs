@@ -167,8 +167,14 @@ def tendencia(con, agora_iso=None) -> dict:
     def um(sql, *a):
         return (con.execute(sql, a).fetchone() or [0])[0] or 0
 
+    # `visto_em > inicio` e a trava da estreia: na primeira coleta todas as
+    # pendencias nascem com o mesmo carimbo, e nenhuma delas e novidade — elas
+    # ja estavam la, so nao havia quem lembrasse. Contar as 27 como "apareceram
+    # nas ultimas 24 h" seria a primeira mentira da tela, no primeiro minuto.
+    inicio = desde(con) or ""
     novas = um("SELECT COUNT(*) FROM pendencia_vida "
-               "WHERE fechada_em IS NULL AND visto_em >= ?", dia)
+               "WHERE fechada_em IS NULL AND visto_em >= ? AND visto_em > ?",
+               dia, inicio)
     fechadas_24h = um("SELECT COUNT(*) FROM pendencia_vida "
                       "WHERE fechada_em IS NOT NULL AND fechada_em >= ?", dia)
     resolvidas_7d = um("SELECT COUNT(*) FROM pendencia_vida "
@@ -218,18 +224,25 @@ def _pior(pendencias):
 def _idade(p) -> str:
     d = p.get("dias")
     if d is None:
-        return ""
+        return " (há mais tempo do que eu lembro)" if p.get("desde_o_inicio") else ""
     if d == 0:
-        return ", de hoje"
-    return ", aberta há %d dia%s" % (d, "" if d == 1 else "s")
+        return " (de hoje)"
+    return " (aberta há %d dia%s)" % (d, "" if d == 1 else "s")
 
 
 def _alvo(p) -> str:
+    """O nome do projeto mais o texto — sem dizer o nome duas vezes.
+
+    Quase todo texto de pendencia ja cita o projeto ("A CI do dents falhou"),
+    entao prefixar sempre produziria "a pior e dents - A CI do dents falhou".
+    """
     proj = p.get("projeto") or ""
     txt = (p.get("texto") or "").strip().rstrip(".")
     if len(txt) > 90:
         txt = txt[:87].rstrip() + "..."
-    return ("%s — %s" % (proj, txt)) if proj else txt
+    if proj and proj.lower() not in txt.lower():
+        return "%s — %s" % (proj, txt)
+    return txt or proj
 
 
 def briefing(pendencias, tend, hora=None) -> str:
@@ -258,18 +271,18 @@ def briefing(pendencias, tend, hora=None) -> str:
     pior = _pior(pendencias)
 
     if altas:
-        cabeca = ("%s. %d coisa%s pede%s você agora"
+        cabeca = ("%s. %d coisa%s pede%s você agora."
                   % (saud, len(altas), "" if len(altas) == 1 else "s",
                      "" if len(altas) == 1 else "m"))
-        corpo = " — a pior é %s%s." % (_alvo(pior), _idade(pior))
+        corpo = " A mais grave: %s%s." % (_alvo(pior), _idade(pior))
     else:
         n = ab.get("total") or len(pendencias)
-        cabeca = ("%s. Nada urgente: %d coisa%s de menor prioridade esperando"
+        cabeca = ("%s. Nada urgente — %d coisa%s de menor prioridade esperando."
                   % (saud, n, "" if n == 1 else "s"))
-        corpo = " — a mais antiga é %s%s." % (_alvo(pior), _idade(pior))
+        corpo = " A mais antiga: %s%s." % (_alvo(pior), _idade(pior))
 
     aviso = ""
     if novas and (tend or {}).get("direcao") == "piorando":
-        aviso = (" %d apareceu%s nas últimas 24 h."
-                 % (novas, "" if novas == 1 else "ram"))
+        aviso = (" %s nas últimas 24 h."
+                 % ("1 apareceu" if novas == 1 else "%d apareceram" % novas))
     return (cabeca + corpo + aviso + feito).strip()

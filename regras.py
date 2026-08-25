@@ -163,6 +163,43 @@ def _do_projeto(p: dict) -> list:
                 # nos. O titulo continua a um clique, no botao "Abrir".
             break          # um item por projeto: a caixa e para agir, nao para listar
 
+    # 15. O site de producao nao respondeu
+    #
+    # E a unica pendencia desta lista que o CLIENTE percebe antes do dono. Tudo
+    # o mais aqui — CI, grafo, dependencia — e coisa que so machuca o dono.
+    #
+    # O QUE ESTA REGRA NAO GARANTE, e vale repetir onde alguem va ler: responder
+    # 200 na raiz nao e o mesmo que estar funcionando. Banco caido atras de uma
+    # home estatica continua devolvendo 200. Isto pega o apagao, nao a doenca.
+    site = (gh or {}).get("site") or {}
+    if site and site.get("ok") is False:
+        motivo = ("respondeu com erro %s" % site["codigo"]
+                  if site.get("codigo") else "não respondeu")
+        itens.append(_p(
+            "site_fora", "alta", nome,
+            "O site de produção do %s %s." % (nome, motivo),
+            # A URL vai na ACAO, que o navegador trata como endereco. No TEXTO
+            # entra so o nome do projeto e um motivo escrito por nos: texto de
+            # arquivo nao entra cru em string que pode acabar num prompt.
+            {"tipo": "abrir_url", "rotulo": "Abrir o site",
+             "url": site.get("url", "")},
+            detalhe="código %s" % (site.get("codigo") or "sem resposta")))
+
+    # 16. Trabalho pronto no GitHub que nunca foi publicado
+    #
+    # Calado quando o repositorio nao tem workflow de deploy identificavel:
+    # nao saber nao e o mesmo que estar atrasado (invariante 2).
+    dep = (gh or {}).get("deploy") or {}
+    atras = dep.get("atras")
+    if isinstance(atras, int) and atras > 0:
+        itens.append(_p(
+            "nao_publicado", "media", nome,
+            "%d commit(s) do %s estão no GitHub e ainda não foram publicados."
+            % (atras, nome),
+            {"tipo": "abrir_url", "rotulo": "Ver as publicações",
+             "url": dep.get("url", "")},
+            detalhe="último deploy: %s" % (dep.get("sha") or "desconhecido")[:12]))
+
     # 10. Dependencia com correcao de seguranca disponivel
     deps = pesado.get("deps_inseguras") or []
     if deps:
