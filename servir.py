@@ -273,7 +273,7 @@ def acao_crlf_para_lf(p):
     return True, "convertidos: " + ", ".join(convertidos)
 
 
-def executor_mecanico(item):
+def executor_mecanico(item, teto_usd=None):
     """O trilho sem IA: custo zero, sem pedido de alteracao.
 
     Hoje so `memoria_crlf`, e a correcao ja existia — `acao_crlf_para_lf`, que
@@ -294,8 +294,12 @@ def executor_mecanico(item):
     return bool(deu_certo), 0.0, "", "" if deu_certo else mensagem
 
 
-def executor_claude(item):
-    """O trilho com IA: copia isolada, teto de US$ 3, pedido de alteracao no fim.
+def executor_claude(item, teto_usd=None):
+    """O trilho com IA: copia isolada, teto por sessao, pedido de alteracao no fim.
+
+    O teto NAO e mais US$ 3 fixo: vem de `fila.teto_da_sessao`, ja limitado ao
+    que sobra do teto do dia. Com R$ 49 gastos, esta sessao sai com o teto de
+    R$ 1 — e nao com o de R$ 15,42 que levava o dia a R$ 64.
 
     Reaproveita `execucao.iniciar` inteiro. A fila nao ganha um segundo caminho
     para disparar o Claude — um caminho so e uma superficie de risco so.
@@ -308,7 +312,10 @@ def executor_claude(item):
     # depois nao impediria as linhas ja enfileiradas de rodar.
     if not fila.trilho_de(item):
         return False, 0.0, "", "%s nao pode mais ser trabalhado pela fila" % item.get("projeto")
-    decisao = execucao.iniciar(item, caminho)
+    # contabilizar=False: o custo deste item vai para `fila.custo_usd` logo ali
+    # em `fila.trabalhar`. Anotar tambem na tabela `gasto` contaria duas vezes.
+    decisao = execucao.iniciar(item, caminho, teto_usd=teto_usd,
+                               contabilizar=False)
     if decisao != "iniciar":
         # Sem isto, `esperar_terminar` leria o retrato da execucao ANTERIOR e o
         # item herdaria o pr_url e o custo de outra coisa.

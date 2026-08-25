@@ -62,6 +62,10 @@ import threading
 import time
 from pathlib import Path
 
+# `banco` so para anotar o gasto no teto do dia. Nao ha ciclo: banco nao importa
+# ninguem daqui.
+import banco
+
 # Teto por execucao, em dolar. US$ 1 nao daria: medido em 24/08/2026, so LIGAR a
 # sessao custa US$ 0,2256 num turno trivial sem MCP, e US$ 0,4455 herdando os
 # MCPs da maquina. Nao e limite duro (ver medicao 2 no topo) — a tela precisa
@@ -791,7 +795,7 @@ def _zerado() -> dict:
         "frase": "",
         "custo_usd": 0.0, "linhas": [], "pr_url": None, "resumo": "",
         "diff": "", "manchete": "", "corpo": "", "copia": "", "ramo": "", "base_sha": "",
-        "projeto_caminho": "",
+        "projeto_caminho": "", "contabilizar": False,
     }
 
 
@@ -826,11 +830,17 @@ def _anotar(texto: str) -> None:
     _execucao["linhas"].append(carimbar(texto))
 
 
-def iniciar(pendencia: dict, caminho_do_projeto: str):
+def iniciar(pendencia: dict, caminho_do_projeto: str, teto_usd=None,
+            contabilizar: bool = True):
     """Comeca uma sessao. Devolve "iniciar" | "mesma" | "recusada".
 
     Roda inteira sob a trava: e ela que garante o criterio 10 (uma execucao por
     vez) mesmo com dois cliques no mesmo segundo, vindos de duas abas.
+
+    `teto_usd` vem de `fila.teto_da_sessao` quando quem chama e a fila: nao
+    adianta ter teto de dia se cada sessao sai com o teto cheio de US$ 3.
+    `contabilizar=False` diz "meu custo ja vai para a tabela `fila`" — e o que
+    impede o gasto de ser contado duas vezes.
     """
     global _proc
     projeto = pendencia.get("projeto", "")
@@ -858,6 +868,7 @@ def iniciar(pendencia: dict, caminho_do_projeto: str):
             "pendencia_id": pendencia.get("id", ""),
             "frase": FRASE_COPIA % projeto, "ramo": ramo,
             "copia": str(destino), "projeto_caminho": str(caminho_do_projeto),
+            "contabilizar": bool(contabilizar),
         })
         _anotar("preparando uma cópia isolada de %s em %s" % (projeto, destino))
 
@@ -881,7 +892,8 @@ def iniciar(pendencia: dict, caminho_do_projeto: str):
         # sessao mexeu em alguma coisa — inclusive se ela mesma commitou.
         _execucao["base_sha"] = sha_da_copia(destino)
 
-        argv = montar_comando()
+        argv = montar_comando(teto_usd=TETO_USD if teto_usd is None
+                              else max(0.0, float(teto_usd)))
         # Nesta maquina `claude` e um .CMD, e o CreateProcess do Windows nao
         # acha "claude" sozinho: sem isto, WinError 2 na cara do dono.
         argv[0] = shutil.which(argv[0]) or argv[0]
@@ -977,6 +989,17 @@ def _ler(proc, pendencia, ramo) -> None:
                          "A cópia isolada continua em disco para inspeção.",
             })
     finally:
+        # UNICO ponto por onde toda sessao passa ao acabar, de qualquer jeito —
+        # sucesso, falha, morte, parada pelo dono. O dinheiro ja foi gasto nos
+        # quatro casos. Quem veio pela fila nao entra aqui (contabilizar=False):
+        # o custo dele mora em `fila.custo_usd`, e contar duas vezes e pior.
+        if _e_a_sessao(ramo) and _execucao.get("contabilizar"):
+            _execucao["contabilizar"] = False        # nunca duas vezes
+            try:
+                banco.registrar_gasto(_execucao.get("custo_usd", 0.0),
+                                      origem="botao:%s" % (_execucao.get("projeto") or ""))
+            except Exception as e:                              # nunca derrubar
+                _anotar("não consegui anotar o gasto no teto do dia: %s" % e)
         if _e_a_sessao(ramo) and _execucao.get("estado") == "rodando":
             # O processo acabou sem mandar o evento `result`. Isso e falha, e
             # dizer "terminou" aqui seria a mentira mais cara do recurso.

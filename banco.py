@@ -94,6 +94,18 @@ CREATE TABLE IF NOT EXISTS fila (
     erro         TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_fila_dia ON fila (terminado_em);
+
+-- Gasto que NAO passou pela fila. O botao "Resolver" dispara a mesma sessao,
+-- com o mesmo custo, e nao encostava na tabela `fila` — entao o teto do dia
+-- nao o enxergava. Duas sessoes em paralelo (uma da fila, uma do botao)
+-- gastavam sem nenhuma das duas ver a outra. Achado do revisor em 25/08/2026.
+CREATE TABLE IF NOT EXISTS gasto (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    quando       TEXT NOT NULL,
+    origem       TEXT NOT NULL DEFAULT '',
+    custo_usd    REAL NOT NULL DEFAULT 0.0
+);
+CREATE INDEX IF NOT EXISTS ix_gasto_dia ON gasto (quando);
 """
 
 
@@ -293,7 +305,37 @@ def gasto_entre(inicio_iso: str, fim_iso: str, con=None) -> float:
             "SELECT COALESCE(SUM(custo_usd), 0.0) AS total FROM fila"
             " WHERE terminado_em IS NOT NULL AND terminado_em >= ?"
             " AND terminado_em < ?", (inicio_iso, fim_iso)).fetchone()
-        return float(linha["total"] or 0.0)
+        # Mais o que foi gasto FORA da fila, na mesma janela. Sem esta segunda
+        # soma, o botao "Resolver" gastava sem o teto do dia jamais ver.
+        fora = con.execute(
+            "SELECT COALESCE(SUM(custo_usd), 0.0) AS total FROM gasto"
+            " WHERE quando >= ? AND quando < ?",
+            (inicio_iso, fim_iso)).fetchone()
+        return float(linha["total"] or 0.0) + float(fora["total"] or 0.0)
+    finally:
+        if fechar:
+            con.close()
+
+
+def registrar_gasto(custo_usd, origem: str = "", quando: str = "", con=None):
+    """Anota um gasto que nao esta na fila. Zero nao vira linha.
+
+    Quem passa pela fila NAO usa isto: la o custo mora em `fila.custo_usd`, e
+    contar duas vezes seria pior do que nao contar.
+    """
+    try:
+        valor = float(custo_usd or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if valor <= 0:
+        return False
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("INSERT INTO gasto (quando, origem, custo_usd) VALUES (?,?,?)",
+                    (quando or agora(), origem or "", valor))
+        con.commit()
+        return True
     finally:
         if fechar:
             con.close()

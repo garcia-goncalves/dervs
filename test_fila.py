@@ -1,5 +1,6 @@
 """Testes da fila que conserta. `python test_fila.py`."""
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -350,8 +351,11 @@ class Lacar(BancoTemporario):
     def _executores(self, resultado=(True, 0.0, "", "")):
         self.chamadas = []
 
-        def fingir(item):
+        self.tetos = []
+
+        def fingir(item, teto_usd=None):
             self.chamadas.append(item["id"])
+            self.tetos.append(teto_usd)
             return resultado
 
         return {"mecanico": fingir, "claude": fingir}
@@ -419,7 +423,7 @@ class Lacar(BancoTemporario):
         self.assertEqual(linha["pr_url"], "https://github.com/x/y/pull/9")
 
     def test_trilho_errado_no_executor_e_erro_visivel(self):
-        rel = fila.trabalhar([self._pendencia()], {"claude": lambda i: (True, 0, "", "")})
+        rel = fila.trabalhar([self._pendencia()], {"claude": lambda i, teto=None: (True, 0, "", "")})
         self.assertEqual(rel["falhas"], 1)
         self.assertIn("sem executor", banco.fila_aberta()[0]["erro"])
 
@@ -494,6 +498,86 @@ class RenomearTeste(unittest.TestCase):
     def test_renomear_spec_ts_reprova(self):
         diff = "rename from src/login.spec.ts\nrename to src/login.velho\n"
         self.assertIn("login.spec.ts", fila.diff_mexeu_em_teste(diff))
+
+
+class OTetoDoDiaLimitaOTetoDaSessao(unittest.TestCase):
+    """Achado do revisor em 25/08/2026.
+
+    O teto do dia era conferido ANTES do item, e a sessao saia sempre com o
+    teto cheio de US$ 3 (~R$ 15,42). Com R$ 49 gastos de R$ 50, a fila via
+    "cabe" e comecava um item que podia levar o dia a R$ 64 — sem que
+    `cabe_no_teto` jamais tivesse dito que estourou.
+    """
+
+    def test_com_folga_a_sessao_leva_o_teto_cheio(self):
+        self.assertAlmostEqual(fila.teto_da_sessao(0.0), execucao.TETO_USD)
+
+    def test_com_pouca_folga_a_sessao_leva_so_o_que_sobra(self):
+        """R$ 49 gastos de R$ 50: sobra R$ 1, e a sessao sai com R$ 1."""
+        gasto_usd = 49.0 / execucao.USD_BRL
+        teto = fila.teto_da_sessao(gasto_usd)
+        self.assertLess(teto, execucao.TETO_USD)
+        self.assertAlmostEqual(teto * execucao.USD_BRL, 1.0, places=6)
+
+    def test_teto_ja_estourado_nao_da_teto_negativo(self):
+        self.assertEqual(fila.teto_da_sessao(100.0), 0.0)
+
+    def test_o_executor_recebe_o_teto_da_sessao(self):
+        """Nao adianta calcular e nao entregar."""
+        chamadas = []
+
+        def fingir(item, teto_usd=None):
+            chamadas.append(teto_usd)
+            return (True, 0.0, "", "")
+
+        fila.trabalhar([{"id": "memoria_crlf:dents", "regra": "memoria_crlf",
+                         "projeto": "dents", "gravidade": "alta", "risco": 0}],
+                       {"mecanico": fingir, "claude": fingir})
+        self.assertTrue(chamadas)
+        self.assertAlmostEqual(chamadas[0], execucao.TETO_USD)
+
+
+class OBotaoResolverContaParaOTeto(unittest.TestCase):
+    """O botao dispara a mesma sessao, com o mesmo custo, e nao encostava na
+    tabela `fila` — entao o teto do dia nao o enxergava. Duas sessoes em
+    paralelo (uma da fila, uma do botao) gastavam sem ver uma a outra."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.antigo = banco.BANCO
+        banco.BANCO = os.path.join(self.tmp, "teste.db")
+
+    def tearDown(self):
+        banco.BANCO = self.antigo
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_gasto_de_fora_da_fila_entra_na_soma_do_dia(self):
+        quando = "2026-08-25T12:00:00+00:00"
+        banco.registrar_gasto(0.75, origem="botao:dents", quando=quando)
+        total = banco.gasto_entre("2026-08-25T00:00:00+00:00",
+                                  "2026-08-26T00:00:00+00:00")
+        self.assertAlmostEqual(total, 0.75)
+
+    def test_gasto_fora_da_janela_nao_entra(self):
+        banco.registrar_gasto(0.75, origem="botao:dents",
+                              quando="2026-08-24T12:00:00+00:00")
+        total = banco.gasto_entre("2026-08-25T00:00:00+00:00",
+                                  "2026-08-26T00:00:00+00:00")
+        self.assertAlmostEqual(total, 0.0)
+
+    def test_custo_zero_nao_vira_linha(self):
+        self.assertFalse(banco.registrar_gasto(0.0, origem="botao:x"))
+        self.assertFalse(banco.registrar_gasto(None, origem="botao:x"))
+
+    def test_a_soma_junta_a_fila_e_o_botao(self):
+        quando = "2026-08-25T12:00:00+00:00"
+        banco.enfileirar([{"id": "r:p", "regra": "r", "projeto": "p",
+                           "gravidade": "alta", "risco": 0, "trilho": "claude"}])
+        banco.marcar_fila("r:p", estado="ok", terminado_em=quando, custo_usd=0.25)
+        banco.registrar_gasto(0.75, origem="botao:p", quando=quando)
+        total = banco.gasto_entre("2026-08-25T00:00:00+00:00",
+                                  "2026-08-26T00:00:00+00:00")
+        self.assertAlmostEqual(total, 1.00)
 
 
 if __name__ == "__main__":

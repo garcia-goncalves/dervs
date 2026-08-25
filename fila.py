@@ -93,6 +93,19 @@ def quanto_falta(gasto_usd: float) -> float:
     return max(0.0, TETO_DIARIO_BRL - gasto_brl)
 
 
+def teto_da_sessao(gasto_usd) -> float:
+    """Quanto ESTA sessao pode gastar, em dolar. Nunca mais do que sobra hoje.
+
+    Achado do revisor em 25/08/2026: o teto do dia era conferido ANTES do item
+    e a sessao saia sempre com TETO_USD (US$ 3, ~R$ 15,42). Com R$ 49 gastos, a
+    fila via "cabe" e iniciava um item que podia levar o dia a R$ 64 — sem que
+    `cabe_no_teto` jamais tivesse dito que estourou. O teto do dia so vale se o
+    teto da sessao souber quanto falta.
+    """
+    falta_usd = quanto_falta(gasto_usd) / execucao.USD_BRL
+    return max(0.0, min(float(execucao.TETO_USD), falta_usd))
+
+
 def trilho_de(pendencia: dict) -> str:
     """"mecanico" | "claude" | "" (nao elegivel)."""
     projeto = (pendencia.get("projeto") or "").strip()
@@ -228,7 +241,9 @@ def trabalhar(pendencias: list, executores: dict, parar_agora=None) -> dict:
     servir.py (que importaria fila.py de volta) e o teste roda sem servidor,
     sem rede e sem gastar um centavo.
 
-    Cada executor recebe o item e devolve (deu_certo, custo_usd, pr_url, erro).
+    Cada executor recebe (item, teto_usd) e devolve
+    (deu_certo, custo_usd, pr_url, erro). O `teto_usd` e o da SESSAO, ja
+    limitado ao que sobra do teto do dia — ver `teto_da_sessao`.
     """
     hoje = hoje_local()
     janela = janela_local_em_utc(hoje)
@@ -266,7 +281,7 @@ def trabalhar(pendencias: list, executores: dict, parar_agora=None) -> dict:
             continue
 
         try:
-            deu_certo, custo, pr_url, erro = executor(item)
+            deu_certo, custo, pr_url, erro = executor(item, teto_da_sessao(gasto))
         except Exception as e:                      # noqa: BLE001 — o laco nao morre por um item
             deu_certo, custo, pr_url, erro = False, 0.0, "", "%s: %s" % (type(e).__name__, e)
 
