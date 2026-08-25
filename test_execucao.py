@@ -52,17 +52,29 @@ class MontagemDoComando(unittest.TestCase):
     Se alguem reintroduzir --bare achando que isola melhor, este teste avisa.
     """
 
-    def test_comeca_em_claude_e_termina_no_prompt(self):
-        argv = execucao.montar_comando("conserte a CI", 3.0, 40)
+    def test_comeca_em_claude_com_p(self):
+        argv = execucao.montar_comando(3.0, 40)
         self.assertEqual(argv[0], "claude")
-        self.assertEqual(argv[-1], "conserte a CI")
+        self.assertEqual(argv[1], "-p")
+
+    def test_o_prompt_nao_entra_na_linha_de_comando(self):
+        """Medido nas duas formas em 25/08/2026. No fim, como posicional, o
+        claude recusa ("Input must be provided either through stdin or as a
+        prompt argument"). Grudado no -p funciona, mas nesta maquina `claude` e
+        um .CMD e todo argumento dele passa pelo interpretador do Windows —
+        texto de mil caracteres montado do banco nao tem por que ir por ali.
+        Por stdin foi medido funcionando. Este teste guarda essa decisao."""
+        argv = execucao.montar_comando(3.0, 40)
+        for pedaco in argv:
+            self.assertNotIn("Você está no repositório", pedaco)
+        self.assertEqual(argv[-1], ",".join(execucao.FERRAMENTAS_PROIBIDAS))
 
     def test_nao_usa_bare(self):
-        argv = execucao.montar_comando("x", 3.0, 40)
+        argv = execucao.montar_comando(3.0, 40)
         self.assertNotIn("--bare", argv)
 
     def test_traz_as_flags_que_foram_medidas(self):
-        argv = execucao.montar_comando("x", 3.0, 40)
+        argv = execucao.montar_comando(3.0, 40)
         for flag in ("-p", "--output-format", "--verbose", "--strict-mcp-config",
                      "--mcp-config", "--max-budget-usd", "--allowedTools",
                      "--disallowedTools", "--max-turns"):
@@ -71,7 +83,7 @@ class MontagemDoComando(unittest.TestCase):
         self.assertEqual(argv[argv.index("--mcp-config") + 1], '{"mcpServers":{}}')
 
     def test_teto_e_turnos_entram_como_texto(self):
-        argv = execucao.montar_comando("x", 3.0, 12)
+        argv = execucao.montar_comando(3.0, 12)
         self.assertEqual(argv[argv.index("--max-budget-usd") + 1], "3.00")
         self.assertEqual(argv[argv.index("--max-turns") + 1], "12")
 
@@ -398,6 +410,83 @@ class TextoDoCommitEDoPR(unittest.TestCase):
         automatico — exatamente o que o "nunca salva na main sozinho" evita."""
         _, corpo = execucao.titulo_e_corpo_do_pr(PENDENCIA)
         self.assertIn("Revise antes de mesclar", corpo)
+
+
+class ComandoDeMorte(unittest.TestCase):
+    """`taskkill` nao existe em ubuntu-latest: aqui so se testa a MONTAGEM.
+
+    Rodar o comando de verdade dentro da suite quebraria a CI — risco 4 do
+    plano. A plataforma entra como parametro justamente por isso.
+    """
+
+    def test_no_windows_usa_taskkill_com_a_arvore_toda(self):
+        self.assertEqual(execucao.comando_para_matar(4321, windows=True),
+                         ["taskkill", "/PID", "4321", "/T", "/F"])
+
+    def test_fora_do_windows_nao_ha_comando(self):
+        """La o processo morre pelo grupo (os.killpg), nao por comando externo."""
+        self.assertIsNone(execucao.comando_para_matar(4321, windows=False))
+
+    def test_pid_entra_como_numero_e_nao_como_texto_do_usuario(self):
+        self.assertEqual(execucao.comando_para_matar("77", windows=True)[2], "77")
+        with self.assertRaises(ValueError):
+            execucao.comando_para_matar("; rm -rf /", windows=True)
+
+
+class CorteIncrementalDoLog(unittest.TestCase):
+    """A tela pede /api/execucao?desde=N de segundo em segundo.
+
+    Mandar o log inteiro toda vez cresceria sem limite; mandar errado repete ou
+    perde linha na cara do dono.
+    """
+
+    def setUp(self):
+        self.log = ["a", "b", "c"]
+
+    def test_do_zero_vem_tudo(self):
+        self.assertEqual(execucao.linhas_desde(self.log, 0), ["a", "b", "c"])
+
+    def test_do_meio_vem_o_resto(self):
+        self.assertEqual(execucao.linhas_desde(self.log, 2), ["c"])
+
+    def test_ja_em_dia_vem_vazio(self):
+        self.assertEqual(execucao.linhas_desde(self.log, 3), [])
+
+    def test_alem_do_fim_vem_vazio_e_nao_estoura(self):
+        self.assertEqual(execucao.linhas_desde(self.log, 99), [])
+
+    def test_negativo_vem_tudo_e_nao_le_de_tras(self):
+        """Sem o piso em 0, desde=-1 devolveria so a ULTIMA linha e o dono
+        veria o log encolher."""
+        self.assertEqual(execucao.linhas_desde(self.log, -1), ["a", "b", "c"])
+
+
+class CarimboDeHora(unittest.TestCase):
+    """Formato do design: `14:02:03  texto`, com dois espacos."""
+
+    def test_formato(self):
+        self.assertEqual(execucao.carimbar("lendo o repositório", "14:02:03"),
+                         "14:02:03  lendo o repositório")
+
+
+class EstadoDeFora(unittest.TestCase):
+    """O que /api/execucao devolve quando nunca ninguem clicou em Resolver."""
+
+    def test_parada_e_o_estado_de_repouso(self):
+        d = execucao.estado(0)
+        self.assertEqual(d["estado"], "parada")
+        self.assertEqual(d["linhas"], [])
+        self.assertEqual(d["total_de_linhas"], 0)
+
+    def test_traz_as_chaves_que_a_tela_espera(self):
+        d = execucao.estado(0)
+        for chave in ("estado", "projeto", "pendencia_id", "frase", "custo_usd",
+                      "custo_brl", "linhas", "total_de_linhas", "pr_url",
+                      "resumo", "diff", "manchete", "corpo"):
+            self.assertIn(chave, d, chave)
+
+    def test_custo_ja_vem_em_reais_prontos_para_a_tela(self):
+        self.assertTrue(execucao.estado(0)["custo_brl"].startswith("R$ "))
 
 
 if __name__ == "__main__":

@@ -23,6 +23,20 @@ o contrario sem medir de novo:
      0,44548 (estouro de 4,5x). O botao "Parar" e a unica garantia real.
   3. O campo `subtype` do evento result NAO e confiavel: foi visto
      subtype:'success' junto de is_error:True. Leia is_error + terminal_reason.
+
+E mais duas, medidas em 25/08/2026 na etapa 3:
+
+  4. O prompt NAO pode ir no fim como argumento posicional: o claude responde
+     "Input must be provided either through stdin or as a prompt argument" e
+     sai com codigo 1. Ele vai grudado no -p.
+  5. So o evento `result` traz custo. Os eventos `assistant` nao trazem `usage`
+     nem `total_cost_usd`. Consequencia honesta: o numero na tela fica PARADO
+     ate a sessao acabar, e a tela tem de dizer isso — nao ha como calcular
+     custo ao vivo sem inventar tabela de precos.
+
+E um risco confirmado, nao resolvido: os hooks do ~/.claude do dono RODAM
+dentro da sessao filha (seis SessionStart apareceram na medicao). Sem --bare
+nao ha como isolar, e --bare nao funciona com este login.
 """
 from __future__ import annotations
 
@@ -30,8 +44,12 @@ import json
 import os
 import random
 import re
+import shutil
+import signal
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 # Teto por execucao, em dolar. US$ 1 nao daria: medido em 24/08/2026, so LIGAR a
@@ -106,11 +124,21 @@ Se você não tocou em arquivo nenhum, diga isso em uma linha."""
 # ---------------------------------------------------------------- parte pura
 
 
-def montar_comando(prompt: str, teto_usd: float = TETO_USD,
-                   turnos: int = MAX_TURNOS) -> list:
-    """O argv exato da sessao filha. O prompt vai por ultimo, posicional.
+def montar_comando(teto_usd: float = TETO_USD, turnos: int = MAX_TURNOS) -> list:
+    """O argv da sessao filha. O PROMPT NAO ESTA AQUI — ele vai por stdin.
 
     NAO acrescente --bare: foi medido e falha com "Not logged in" (ver topo).
+
+    POR QUE STDIN, e nao um argumento (medido em 25/08/2026, as duas formas):
+      - no fim, como posicional, o claude 2.1.243 simplesmente RECUSA: "Input
+        must be provided either through stdin or as a prompt argument";
+      - grudado no -p funciona, mas nesta maquina `claude` e um
+        C:\\nvm4w\\nodejs\\claude.CMD, e todo argumento de um .CMD passa pelo
+        interpretador de comandos do Windows. Mandar um texto de mil caracteres
+        montado a partir do banco por esse caminho e superficie de risco de
+        graca — e ainda esbarraria no limite de ~32 KB da linha de comando.
+      - por stdin funciona, foi medido (is_error=False, terminal_reason
+        'completed'), e o texto nunca vira linha de comando.
     """
     return [
         "claude", "-p",
@@ -122,7 +150,6 @@ def montar_comando(prompt: str, teto_usd: float = TETO_USD,
         "--max-turns", str(int(turnos)),
         "--allowedTools", ",".join(FERRAMENTAS_OK),
         "--disallowedTools", ",".join(FERRAMENTAS_PROIBIDAS),
-        prompt,
     ]
 
 
@@ -377,6 +404,14 @@ def _sem_console() -> bool:
 
 SEM_JANELA = 0x08000000 if _sem_console() else 0
 
+# CREATE_NEW_PROCESS_GROUP. O molde do grafo (servir.py:481) soma tambem
+# DETACHED_PROCESS (0x8), mas ali o filho e mudo (stdout=DEVNULL) e aqui nos
+# LEMOS o filho: o Windows recusa DETACHED_PROCESS junto de CREATE_NO_WINDOW
+# (ERROR_INVALID_PARAMETER), e sem CREATE_NO_WINDOW volta a telinha piscando na
+# cara do dono. Grupo proprio ja basta — quem mata a arvore aqui e o `taskkill
+# /T`, que anda por parentesco, nao por grupo.
+GRUPO_PROPRIO = 0x00000200
+
 
 def _rodar(args, cwd=None, limite=180):
     """Molde de servir.py:148 — (ok, saida cortada em 1200 caracteres)."""
@@ -440,3 +475,303 @@ def publicar(destino, ramo, titulo, corpo, mensagem):
                        cwd=str(destino), limite=180)
     log.append(saida)
     return ok, (url_do_pr(saida) if ok else None), "\n".join(x for x in log if x)
+
+
+# ------------------------------------------- a sessao viva: processo e vigilancia
+
+# UM recurso na maquina inteira. O estado mora aqui, em memoria, no molde de
+# _grafo_proc/_grafo_trava (servir.py:306-308) — nao ha tabela no banco, nem
+# historico, nem retomada depois de reiniciar o painel. Isso e escopo cortado de
+# proposito, nao esquecimento: fechar a aba nao perde nada porque o estado nunca
+# esteve no navegador.
+_trava = threading.Lock()
+_proc = None
+
+
+def _zerado() -> dict:
+    return {
+        "estado": "parada", "projeto": "", "pendencia_id": "", "frase": "",
+        "custo_usd": 0.0, "linhas": [], "pr_url": None, "resumo": "",
+        "diff": "", "manchete": "", "corpo": "", "copia": "", "ramo": "",
+        "projeto_caminho": "",
+    }
+
+
+_execucao = _zerado()
+
+
+def comando_para_matar(pid, windows=None):
+    """O argv que mata a arvore de processos. Fora do Windows, mata-se o grupo."""
+    numero = int(pid)                     # ValueError de proposito: pid e numero
+    if windows is None:
+        windows = sys.platform.startswith("win")
+    if not windows:
+        return None
+    return ["taskkill", "/PID", str(numero), "/T", "/F"]
+
+
+def linhas_desde(log, desde) -> list:
+    """As linhas que a tela ainda nao tem. Piso em 0: negativo leria de tras."""
+    try:
+        n = max(0, int(desde))
+    except (TypeError, ValueError):
+        n = 0
+    return list(log[n:])
+
+
+def carimbar(texto: str, hora=None) -> str:
+    """`14:02:03  texto` — dois espacos, formato do design."""
+    return "%s  %s" % (hora or time.strftime("%H:%M:%S"), texto)
+
+
+def _anotar(texto: str) -> None:
+    _execucao["linhas"].append(carimbar(texto))
+
+
+def iniciar(pendencia: dict, caminho_do_projeto: str):
+    """Comeca uma sessao. Devolve "iniciar" | "mesma" | "recusada".
+
+    Roda inteira sob a trava: e ela que garante o criterio 10 (uma execucao por
+    vez) mesmo com dois cliques no mesmo segundo, vindos de duas abas.
+    """
+    global _proc
+    projeto = pendencia.get("projeto", "")
+
+    with _trava:
+        decisao = decidir_pedido(_execucao, projeto)
+        if decisao != "iniciar":
+            return decisao
+
+        id_ = id_curto()
+        ramo = nome_do_ramo(pendencia.get("regra", ""), id_)
+        destino = caminho_da_copia(BASE_COPIAS, projeto, id_)
+
+        _execucao.clear()
+        _execucao.update(_zerado())
+        _execucao.update({
+            "estado": "rodando", "projeto": projeto,
+            "pendencia_id": pendencia.get("id", ""),
+            "frase": FRASE_COPIA % projeto, "ramo": ramo,
+            "copia": str(destino), "projeto_caminho": str(caminho_do_projeto),
+        })
+        _anotar("preparando uma cópia isolada de %s em %s" % (projeto, destino))
+
+        ok, saida = criar_copia(caminho_do_projeto, destino, ramo)
+        if not ok:
+            _anotar(saida or "o git não explicou o erro")
+            _execucao.update({
+                "estado": "falha",
+                "manchete": "Falhou: não consegui preparar a cópia isolada",
+                "corpo": "O `git worktree add` recusou criar a cópia em %s. "
+                         "Nada foi alterado no projeto original; o log abaixo "
+                         "tem a saída crua do git." % destino,
+            })
+            return "iniciar"
+
+        argv = montar_comando()
+        # Nesta maquina `claude` e um .CMD, e o CreateProcess do Windows nao
+        # acha "claude" sozinho: sem isto, WinError 2 na cara do dono.
+        argv[0] = shutil.which(argv[0]) or argv[0]
+        try:
+            _proc = subprocess.Popen(
+                argv, cwd=str(destino), stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                errors="replace", bufsize=1,
+                creationflags=(SEM_JANELA | GRUPO_PROPRIO) if sys.platform.startswith("win") else 0,
+                start_new_session=not sys.platform.startswith("win"))
+        except OSError as e:
+            _anotar("não consegui iniciar o Claude Code: %s" % e)
+            _execucao.update({
+                "estado": "falha",
+                "manchete": "Falhou: não consegui iniciar o Claude Code",
+                "corpo": "O programa `claude` não pôde ser executado nesta "
+                         "máquina. A cópia isolada continua em %s." % destino,
+            })
+            return "iniciar"
+
+        # O prompt entra por aqui, e nao pela linha de comando (ver montar_comando).
+        try:
+            _proc.stdin.write(montar_prompt(pendencia))
+            _proc.stdin.close()
+        except (OSError, ValueError) as e:
+            _anotar("não consegui entregar o pedido à sessão: %s" % e)
+
+        threading.Thread(target=_ler, args=(_proc, pendencia), daemon=True).start()
+        return "iniciar"
+
+
+def _ler(proc, pendencia) -> None:
+    """A thread que le o filho linha a linha. Excecao aqui NAO derruba o painel."""
+    try:
+        for bruto in proc.stdout:
+            if _execucao.get("estado") == "parada_pelo_dono":
+                break
+            evento = interpretar_linha(bruto)
+            if evento is None:
+                texto = (bruto or "").strip()
+                if texto:
+                    _anotar(texto[:500])
+                continue
+            _absorver(evento)
+        proc.stdout.close()
+        proc.wait(timeout=10)
+    except Exception as e:                                  # nunca derrubar
+        _anotar("a leitura da sessão parou com erro: %s" % e)
+        if _execucao.get("estado") == "rodando":
+            _execucao.update({
+                "estado": "falha",
+                "manchete": "Falhou: perdi contato com a sessão",
+                "corpo": "A leitura da saída do Claude Code parou antes do fim. "
+                         "A cópia isolada continua em disco para inspeção.",
+            })
+    finally:
+        if _execucao.get("estado") == "rodando":
+            # O processo acabou sem mandar o evento `result`. Isso e falha, e
+            # dizer "terminou" aqui seria a mentira mais cara do recurso.
+            _execucao.update({
+                "estado": "falha",
+                "manchete": "Falhou: a sessão terminou sem se explicar",
+                "corpo": "O Claude Code encerrou sem enviar o evento final. "
+                         "A cópia isolada continua em disco para inspeção.",
+            })
+
+
+def _absorver(evento: dict) -> None:
+    """Um evento -> frase, log, custo e, no fim, o desfecho."""
+    _execucao["frase"] = frase_de_status(evento, _execucao.get("frase", ""))
+    _execucao["custo_usd"] = custo_do_evento(evento, _execucao.get("custo_usd", 0.0))
+
+    tipo = evento.get("type")
+    if tipo == "assistant":
+        for nome, comando in _ferramentas_do_evento(evento):
+            _anotar("%s %s" % (nome, comando[:200]) if comando else nome)
+    elif tipo == "system" and evento.get("subtype") == "init":
+        # So o `init`. Os outros eventos `system` sao os hooks do ~/.claude do
+        # dono entrando (medido: seis por sessao) — anotar todos enchia o log de
+        # "sessão iniciada" repetido antes de a sessao fazer qualquer coisa.
+        _anotar("sessão iniciada")
+
+    if tipo != "result":
+        return
+
+    _execucao["resumo"] = str(evento.get("result") or "")
+    _execucao["estado"] = avancar(_execucao.get("estado", "rodando"), evento)
+    _anotar("sessão encerrada: %s" % (evento.get("terminal_reason") or "sem motivo"))
+
+    if _execucao["estado"] == "falha":
+        manchete, corpo = classificar_falha(evento)
+        _execucao.update({"manchete": manchete, "corpo": corpo})
+        _anotar("a cópia isolada foi preservada em %s" % _execucao.get("copia"))
+        return
+
+    _fechar_com_pedido_de_alteracao(evento)
+
+
+def _fechar_com_pedido_de_alteracao(evento: dict) -> None:
+    """Terminou bem: le o diff, abre o PR, e so entao descarta a copia."""
+    destino = _execucao.get("copia")
+    projeto_caminho = _execucao.get("projeto_caminho")
+    pendencia = {
+        "regra": _execucao.get("pendencia_id", "").split(":")[0],
+        "projeto": _execucao.get("projeto", ""),
+        "texto": _execucao.get("resumo", "")[:200],
+        "detalhe": "",
+    }
+
+    if not houve_mudanca(destino):
+        _execucao["resumo"] = _execucao.get("resumo") or \
+            "A sessão terminou sem alterar nenhum arquivo."
+        _anotar("nenhum arquivo mudou; nada a enviar ao GitHub")
+        remover_copia(projeto_caminho, destino)
+        return
+
+    _execucao["diff"] = diff_da_copia(destino)
+    _execucao["frase"] = FRASE_ABRINDO_PR
+    titulo, corpo = titulo_e_corpo_do_pr(pendencia)
+    ok, url, log = publicar(destino, _execucao.get("ramo"), titulo, corpo,
+                            mensagem_de_commit(pendencia))
+    for linha in (log or "").splitlines():
+        if linha.strip():
+            _anotar(linha.strip()[:300])
+
+    if not ok or not url:
+        _execucao.update({
+            "estado": "falha",
+            "manchete": "Falhou: a correção ficou pronta, mas o pedido não abriu",
+            "corpo": "O Claude terminou a correção, mas o envio ao GitHub não "
+                     "completou. A cópia isolada foi preservada em %s, com a "
+                     "mudança dentro dela." % destino,
+        })
+        return
+
+    _execucao.update({"pr_url": url, "frase": FRASE_PR_ABERTO})
+    remover_copia(projeto_caminho, destino)
+
+
+def parar():
+    """Mata a sessao e espera 5 s. Devolve True so se CONFIRMOU a morte."""
+    global _proc
+    with _trava:
+        proc = _proc
+        if proc is None or _execucao.get("estado") != "rodando":
+            return True
+
+        _execucao["estado"] = "parada_pelo_dono"
+        _anotar("você pediu para parar")
+
+        argv = comando_para_matar(proc.pid)
+        if argv:
+            _rodar(argv, limite=10)
+        else:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (OSError, AttributeError, ProcessLookupError):
+                pass
+
+        try:
+            proc.wait(timeout=5)
+            confirmou = True
+        except subprocess.TimeoutExpired:
+            confirmou = False
+
+        if confirmou:
+            _execucao.update({
+                "manchete": "Parada por você",
+                "corpo": "Você clicou em \"Parar\". Nada foi salvo e nenhum "
+                         "pedido de alteração foi aberto. A cópia isolada foi "
+                         "descartada.",
+            })
+            remover_copia(_execucao.get("projeto_caminho"), _execucao.get("copia"))
+            _anotar("cópia isolada descartada")
+        else:
+            _execucao.update({
+                "manchete": "Não consegui confirmar que parou",
+                "corpo": "Pedi para parar, mas o processo não respondeu em 5 "
+                         "segundos. Ele pode ainda estar rodando — confira "
+                         "antes de tentar de novo.",
+            })
+            _anotar("o processo não confirmou a morte em 5 segundos")
+
+        _proc = None
+        return confirmou
+
+
+def estado(desde=0) -> dict:
+    """O retrato que /api/execucao devolve. `desde` corta o log ja entregue."""
+    log = _execucao.get("linhas", [])
+    return {
+        "estado": _execucao.get("estado", "parada"),
+        "projeto": _execucao.get("projeto", ""),
+        "pendencia_id": _execucao.get("pendencia_id", ""),
+        "frase": _execucao.get("frase", ""),
+        "custo_usd": round(float(_execucao.get("custo_usd", 0.0)), 5),
+        "custo_brl": em_reais(_execucao.get("custo_usd", 0.0)),
+        "linhas": linhas_desde(log, desde),
+        "total_de_linhas": len(log),
+        "pr_url": _execucao.get("pr_url"),
+        "resumo": _execucao.get("resumo", ""),
+        "diff": _execucao.get("diff", ""),
+        "manchete": _execucao.get("manchete", ""),
+        "corpo": _execucao.get("corpo", ""),
+    }
