@@ -50,6 +50,7 @@ from urllib.parse import unquote
 
 import banco
 import execucao
+import fila
 import memoria
 import regras
 
@@ -181,6 +182,25 @@ def _projetos_por_nome() -> dict:
     return {p["nome"]: p for p in banco.montar_estado()["projetos"]}
 
 
+def _reais(valor_brl: float) -> str:
+    """R$ com virgula decimal — o formato que o dono le."""
+    return "R$ " + ("%.2f" % valor_brl).replace(".", ",")
+
+
+def _dados_da_fila() -> dict:
+    """O retrato da fila para a tela. Le o gasto UMA vez, de proposito."""
+    hoje = fila.hoje_local()
+    gasto = banco.gasto_do_dia(hoje)
+    return {
+        "itens": banco.fila_aberta(),
+        "gasto_hoje_brl": execucao.em_reais(gasto),
+        "falta_brl": _reais(fila.quanto_falta(gasto)),
+        "teto_brl": _reais(fila.TETO_DIARIO_BRL),
+        "trabalhando": _fila_thread_viva(),
+        "relatorio": _fila_relatorio,
+    }
+
+
 def _resumo_da_execucao() -> dict:
     """So o cabecalho da execucao, para o /api/dados nao carregar o log inteiro."""
     e = execucao.estado(10 ** 9)          # `desde` alto de proposito: log vazio
@@ -253,11 +273,95 @@ def acao_crlf_para_lf(p):
     return True, "convertidos: " + ", ".join(convertidos)
 
 
+def executor_mecanico(item):
+    """O trilho sem IA: custo zero, sem pedido de alteracao.
+
+    Hoje so `memoria_crlf`, e a correcao ja existia — `acao_crlf_para_lf`, que
+    toca SO os .md listados na medida e nao varre pasta.
+    """
+    if item.get("regra") != "memoria_crlf":
+        return False, 0.0, "", "trilho mecanico nao sabe fazer %r" % item.get("regra")
+    # `_projetos_por_nome` (servir.py:180) e a funcao de MODULO. O `_estado` que
+    # monta /api/dados e metodo do manipulador de requisicao — de dentro de um
+    # executor ele nao existe.
+    medida = _projetos_por_nome().get(item.get("projeto")) or {}
+    if not medida.get("caminho"):
+        return False, 0.0, "", "nao sei onde fica o projeto %s" % item.get("projeto")
+    try:
+        deu_certo, mensagem = acao_crlf_para_lf(medida)
+    except Exception as e:                          # noqa: BLE001
+        return False, 0.0, "", "%s: %s" % (type(e).__name__, e)
+    return bool(deu_certo), 0.0, "", "" if deu_certo else mensagem
+
+
+def executor_claude(item):
+    """O trilho com IA: copia isolada, teto de US$ 3, pedido de alteracao no fim.
+
+    Reaproveita `execucao.iniciar` inteiro. A fila nao ganha um segundo caminho
+    para disparar o Claude — um caminho so e uma superficie de risco so.
+    """
+    caminho = (_projetos_por_nome().get(item.get("projeto")) or {}).get("caminho")
+    if not caminho:
+        return False, 0.0, "", "nao sei onde fica o projeto %s" % item.get("projeto")
+    execucao.iniciar(item, caminho)
+    final = execucao.esperar_terminar()
+    custo = float(final.get("custo_usd") or 0.0)
+    if final.get("estado") == "ok":
+        return True, custo, final.get("pr_url") or "", ""
+    return False, custo, "", final.get("frase") or "falhou sem dizer por que"
+
+
+_fila_parar = threading.Event()
+_fila_relatorio = {}
+_fila_thread = None
+
+
+def _fila_thread_viva() -> bool:
+    """A fila esta trabalhando neste instante?"""
+    return bool(_fila_thread and _fila_thread.is_alive())
+
+
+def _rodar_fila(pendencias):
+    global _fila_relatorio
+    _fila_relatorio = fila.trabalhar(
+        pendencias,
+        {"mecanico": executor_mecanico, "claude": executor_claude},
+        parar_agora=_fila_parar.is_set)
+
+
+def acao_fila_comecar(p):
+    """Comeca a fila. Volta na hora; o trabalho segue em thread."""
+    global _fila_thread
+    if _fila_thread_viva():
+        return False, "a fila já está trabalhando."
+    _fila_parar.clear()
+    # Mesmo caminho que /api/dados usa (servir.py:672) — nao ha uma segunda
+    # forma de calcular pendencia, e nao pode haver.
+    con = banco.conectar()
+    try:
+        e = banco.montar_estado(con)
+        pendencias = regras.avaliar(e["projetos"], quota=e["quota"],
+                                    silenciadas=banco.silenciadas(con))
+    finally:
+        con.close()
+    _fila_thread = threading.Thread(target=_rodar_fila, args=(pendencias,), daemon=True)
+    _fila_thread.start()
+    return True, "fila iniciada."
+
+
+def acao_fila_parar(p):
+    _fila_parar.set()
+    execucao.parar()
+    return True, "pedido de parada enviado."
+
+
 ACOES = {
     "git_push": acao_git_push,
     "docker_up": acao_docker_up,
     "vscode": acao_vscode,
     "crlf_para_lf": acao_crlf_para_lf,
+    "fila_comecar": acao_fila_comecar,
+    "fila_parar": acao_fila_parar,
 }
 
 
@@ -697,6 +801,10 @@ class Hub(SimpleHTTPRequestHandler):
             # Resumo leve da execucao: e o que faz o botao virar "Ver execução"
             # sem a tela precisar de uma segunda consulta. O log NAO vem aqui.
             "execucao": _resumo_da_execucao(),
+            # A fila: o que espera, quanto ja custou hoje e quanto ainda cabe.
+            # O gasto e lido UMA vez — duas leituras poderiam divergir e a tela
+            # mostraria dois numeros que nao fecham.
+            "fila": _dados_da_fila(),
             # A regra de quem pode ser resolvido mora no servidor; a tela so a
             # repete para esconder o botao. Duas copias da regra divergem.
             "resolver_bloqueado": sorted(execucao.PROJETOS_BLOQUEADOS),

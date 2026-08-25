@@ -130,6 +130,16 @@ h2.secao{font-size:12px;text-transform:uppercase;letter-spacing:.09em;
   margin-left:7px;vertical-align:1px}
 .idade{color:var(--fraquinho)}
 .idade.velha{color:var(--alerta-texto)}
+/* A faixa da fila. Mesmo vocabulario visual da caixa — nao inventa um segundo. */
+.faixa-fila{background:var(--painel);border:1px solid var(--borda);border-radius:9px;
+  box-shadow:var(--sombra);padding:11px 13px;margin:0 0 14px}
+.faixa-fila-topo{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.faixa-fila-topo span{font-size:13px;color:var(--fraco)}
+#fila-itens{list-style:none;margin:9px 0 0;padding:0;display:grid;gap:5px}
+#fila-itens li{font-size:12.5px;color:var(--fraco);border-left:3px solid var(--fraquinho);
+  padding:3px 0 3px 9px}
+#fila-itens li[data-estado="rodando"]{border-left-color:var(--alerta)}
+#fila-itens li[data-estado="falha"]{border-left-color:var(--erro)}
 /* O grupo: 3+ pendencias da mesma regra numa linha so. Herda o .item para nao
    inventar um segundo vocabulario visual na mesma lista. */
 details.grupo{background:var(--painel);border:1px solid var(--borda);
@@ -400,6 +410,17 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
     <div class="frase" id="briefing-frase" aria-live="polite"></div>
     <div class="placar" id="briefing-placar"></div>
   </div>
+
+  <!-- A fila. Fica ACIMA da caixa porque e a resposta a pergunta que a caixa
+       faz: o painel deixou de so apontar. So aparece quando ha o que fazer. -->
+  <section id="faixa-fila" class="faixa-fila" hidden>
+    <div class="faixa-fila-topo">
+      <button id="fila-comecar" type="button">Trabalhar na fila</button>
+      <button id="fila-parar" type="button" hidden>Parar</button>
+      <span id="fila-resumo" aria-live="polite"></span>
+    </div>
+    <ul id="fila-itens"></ul>
+  </section>
 
   <h2 class="secao">Precisa de você agora</h2>
   <div class="caixa" id="caixa"></div>
@@ -892,6 +913,43 @@ function linhasEm(caixa, linhas){
   }
 }
 
+/* A fila. Nada de innerHTML com dado do servidor: o projeto mantem essa
+   disciplina e os dois innerHTML existentes sao literais fixos. */
+function desenhaFila(f){
+  const faixa = $("#faixa-fila");
+  if (!f){ faixa.hidden = true; return; }
+  faixa.hidden = false;
+  const espera = f.itens.filter(i => i.estado === "esperando").length;
+  $("#fila-resumo").textContent =
+    espera + (espera === 1 ? " item" : " itens") + " · "
+    + f.gasto_hoje_brl + " de " + f.teto_brl + " hoje";
+  $("#fila-comecar").hidden = f.trabalhando;
+  $("#fila-parar").hidden = !f.trabalhando;
+
+  const lista = $("#fila-itens");
+  lista.textContent = "";
+  for (const i of f.itens){
+    const li = document.createElement("li");
+    li.dataset.estado = i.estado;
+    li.textContent = i.projeto + " — " + i.regra + " — " + i.estado
+      + (i.trilho === "mecanico" ? " — R$ 0,00" : "")
+      + (i.erro ? " — " + i.erro : "");
+    if (i.pr_url){
+      const a = document.createElement("a");
+      a.href = i.pr_url; a.rel = "noopener"; a.target = "_blank";
+      a.textContent = " ver o pedido";
+      li.appendChild(a);
+    }
+    lista.appendChild(li);
+  }
+}
+
+async function comandarFila(comando){
+  const r = await mandar({comando: comando});
+  recado(r.saida || (r.ok ? "feito." : "não deu."), !r.ok);
+  carregar();
+}
+
 function desenhaCaixa(d){
   const caixa = $("#caixa");
   caixa.textContent = "";
@@ -1147,6 +1205,7 @@ async function carregar(){
 
   desenhaBriefing(d);
   desenhaCaixa(d);
+  desenhaFila(d.fila);
   desenhaTabela(d.projetos);
 
   const altas = d.pendencias.filter(p => p.gravidade === "alta").length;
@@ -1593,6 +1652,9 @@ try {
 } catch {}
 
 carregar();
+$("#fila-comecar").addEventListener("click", () => comandarFila("fila_comecar"));
+$("#fila-parar").addEventListener("click", () => comandarFila("fila_parar"));
+
 setInterval(carregar, 15000);
 </script>
 </body>

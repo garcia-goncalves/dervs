@@ -870,6 +870,21 @@ def _fechar_com_pedido_de_alteracao(evento: dict) -> None:
                 % (destino, saida or "o git não explicou"))
 
 
+def esperar_terminar(limite_s=1800):
+    """Bloqueia ate a execucao atual chegar a um estado terminal. Devolve o retrato.
+
+    O laco da fila e sincrono de proposito: um item por vez, e dois worktrees do
+    mesmo repositorio e como quebra.
+    """
+    fim = time.monotonic() + limite_s
+    while time.monotonic() < fim:
+        if _execucao.get("estado") in ESTADOS_TERMINAIS:
+            return dict(_execucao)
+        time.sleep(0.5)
+    parar()
+    return dict(_execucao)
+
+
 def parar():
     """Mata a sessao e espera 5 s. Devolve True so se CONFIRMOU a morte."""
     global _proc
