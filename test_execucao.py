@@ -114,9 +114,24 @@ class AsBarreirasDaSessaoDesacompanhada(unittest.TestCase):
         argv = execucao.montar_comando(3.0, 40)
         self.assertIn("--settings", argv)
         ajuste = json.loads(argv[argv.index("--settings") + 1])
-        gancho = ajuste["hooks"]["PreToolUse"][0]
-        self.assertIn("Bash", gancho["matcher"])
-        self.assertIn("barreira.py", gancho["hooks"][0]["command"])
+        grupos = ajuste["hooks"]["PreToolUse"]
+        self.assertIn("Bash", [g["matcher"] for g in grupos])
+        for grupo in grupos:
+            self.assertIn("barreira.py", grupo["hooks"][0]["command"])
+
+    def test_o_settings_nao_leva_metacaractere_do_windows(self):
+        """MEDIDO EM 25/08/2026, e foi assim que a sessao filha morreu:
+
+        com `"matcher": "Bash|Write|Edit"` o processo saiu com codigo 255 e a
+        mensagem `'Write' nao e reconhecido como um comando interno`. Nesta
+        maquina `claude` e um .CMD, e todo argumento de um .CMD passa pelo
+        interpretador do Windows, que le `|` como cano de shell. Por isso o
+        matcher virou uma entrada por ferramenta. Este teste guarda a lição —
+        e vale para qualquer coisa que alguem acrescente ao settings depois.
+        """
+        texto = execucao.settings_da_barreira(python="C:/py.exe", script="C:/x.py")
+        for caractere in execucao.METACARACTERES_DO_CMD:
+            self.assertNotIn(caractere, texto, caractere)
 
     def test_o_settings_e_json_valido_de_uma_linha_so(self):
         """Ele viaja como ARGUMENTO de linha de comando: quebra de linha ali

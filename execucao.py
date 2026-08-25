@@ -190,7 +190,14 @@ def montar_comando(teto_usd: float = TETO_USD, turnos: int = MAX_TURNOS,
 
 # As ferramentas que o hook da barreira precisa vigiar. `Bash` e o motivo de
 # tudo; os outros entram porque `file_path` tambem e caminho.
-VIGIADAS = "Bash|Write|Edit|MultiEdit|NotebookEdit"
+#
+# UMA ENTRADA POR FERRAMENTA, e nao o `"Bash|Write|Edit"` que o formato do hook
+# aceita. Medido em 25/08/2026: com a barra vertical, a sessao filha morre com
+# codigo 255 e a mensagem `'Write' nao e reconhecido como um comando interno`.
+# O motivo esta 40 linhas acima, em montar_comando: nesta maquina `claude` e um
+# .CMD, e todo argumento de um .CMD passa pelo interpretador do Windows, que le
+# `|` como cano de shell. O JSON e argumento; logo, nao pode ter `|`.
+VIGIADAS = ("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit")
 
 
 def _python_com_console(caminho: str = "") -> str:
@@ -225,10 +232,15 @@ def settings_da_barreira(python: str = "", script: str = "") -> str:
     """
     python = _python_com_console(python)
     script = script or Path(__file__).with_name("barreira.py").as_posix()
-    return json.dumps({"hooks": {"PreToolUse": [{
-        "matcher": VIGIADAS,
-        "hooks": [{"type": "command", "command": '"%s" "%s"' % (python, script)}],
-    }]}}, ensure_ascii=True)
+    gancho = {"type": "command", "command": '"%s" "%s"' % (python, script)}
+    return json.dumps({"hooks": {"PreToolUse": [
+        {"matcher": ferramenta, "hooks": [gancho]} for ferramenta in VIGIADAS
+    ]}}, ensure_ascii=True)
+
+
+# Os caracteres que o interpretador de comandos do Windows rouba de dentro de um
+# argumento de .CMD. Um `|` ja derrubou a sessao filha inteira uma vez.
+METACARACTERES_DO_CMD = ("|", "&", "<", ">", "^", "%")
 
 
 # A etiqueta que separa dado de instrucao dentro do prompt. Se o proprio dado
