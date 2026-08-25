@@ -118,6 +118,16 @@ até acabar serviço, dinheiro ou paciência. Ela só começa quando você apert
 | **Mecânico** | o próprio painel, sem IA | **R$ 0,00** | o arquivo corrigido, direto |
 | **Claude** | uma sessão do Claude em cópia sem acesso ao GitHub | pago, teto de US$ 3 por item — ou menos, se o dia ja gastou | pedido de alteração |
 
+**Estado em 25/08/2026 — o Renovate saiu do papel.** Está instalado em todos
+os repositórios da conta `garcia-goncalves` (plano Community, gratuito), em modo
+`Interactive`, e todo repositório novo entra sozinho. A configuração é **uma
+só** e vive em `garcia-goncalves/renovate-config`; cada repositório carrega
+apenas um `renovate.json` de três linhas apontando para lá. Ela é contida de
+propósito: as atualizações pequenas viram um pedido por semana, versão maior
+espera aprovação, e nada com menos de 24 horas de publicado é adotado — a janela
+em que um pacote comprometido ainda não foi despublicado. O motivo do aperto é a
+cota do GitHub Actions, medida em 88% (2.646 de 3.000 min em 30 dias).
+
 Só **três** das 16 regras entram na fila: `memoria_crlf` (mecânico),
 `env_drift` e `dependencia_insegura` (Claude). É lista **branca**: regra que não
 está lá não chega ao motor, nem por engano.
