@@ -214,6 +214,82 @@ class Comportamento(unittest.TestCase):
         (item,) = so(regras.avaliar([p], quota=None), "nao_enviado")
         self.assertEqual(regras.avaliar([p], quota=None, silenciadas={item["id"]: "9999"}), [])
 
+class SiteDeProducao(unittest.TestCase):
+    """Regra 15 — a unica pendencia desta lista que o CLIENTE percebe primeiro."""
+
+    def gh(self, **site):
+        base = dict(projeto()["github"])
+        base["site"] = dict({"url": "https://exemplo.com.br"}, **site)
+        return base
+
+    def test_site_no_ar_nao_produz_pendencia(self):
+        p = projeto(github=self.gh(ok=True, codigo=200))
+        self.assertEqual(so(regras.avaliar([p]), "site_fora"), [])
+
+    def test_site_que_nao_responde_e_pendencia_alta(self):
+        p = projeto(github=self.gh(ok=False, codigo=0, erro="timeout"))
+        pend = so(regras.avaliar([p]), "site_fora")
+        self.assertEqual(len(pend), 1)
+        self.assertEqual(pend[0]["gravidade"], "alta")
+        self.assertEqual(pend[0]["acao"]["tipo"], "abrir_url")
+        self.assertEqual(pend[0]["acao"]["url"], "https://exemplo.com.br")
+
+    def test_erro_do_servidor_conta_como_fora_do_ar(self):
+        p = projeto(github=self.gh(ok=False, codigo=503))
+        self.assertEqual(len(so(regras.avaliar([p]), "site_fora")), 1)
+
+    def test_projeto_sem_endereco_de_producao_fica_calado(self):
+        """Invariante 2: camada nao medida nao vira alarme."""
+        p = projeto()                       # o github base nao tem 'site'
+        self.assertEqual(so(regras.avaliar([p]), "site_fora"), [])
+
+    def test_camada_github_ausente_fica_calada(self):
+        p = projeto(github=None)
+        self.assertEqual(so(regras.avaliar([p]), "site_fora"), [])
+
+    def test_o_texto_nao_repete_a_url_crua_do_arquivo_do_dono(self):
+        """A URL vai na ACAO, que o navegador trata; o texto e escrito por nos.
+
+        Mesmo vindo de arquivo que so o dono escreve, texto de fora nao entra
+        cru numa string que pode acabar num prompt. Foi assim que o titulo de PR
+        de um estranho quase virou comando, em 25/08/2026."""
+        p = projeto(github=self.gh(ok=False, codigo=500))
+        t = so(regras.avaliar([p]), "site_fora")[0]["texto"]
+        self.assertIn("exemplo", t)         # o NOME do projeto, nao a url
+        self.assertNotIn("https://", t)
+
+
+class TrabalhoNaoPublicado(unittest.TestCase):
+    """Regra 16 — o que esta na main do GitHub e mais novo que o que esta no ar."""
+
+    def gh(self, **deploy):
+        base = dict(projeto()["github"])
+        base["deploy"] = dict({"url": "https://github.com/x/y/actions"}, **deploy)
+        return base
+
+    def test_publicado_em_dia_nao_produz_pendencia(self):
+        p = projeto(github=self.gh(atras=0, sha="abc1234"))
+        self.assertEqual(so(regras.avaliar([p]), "nao_publicado"), [])
+
+    def test_commits_alem_do_ultimo_deploy_viram_pendencia_media(self):
+        p = projeto(github=self.gh(atras=7, sha="abc1234"))
+        pend = so(regras.avaliar([p]), "nao_publicado")
+        self.assertEqual(len(pend), 1)
+        self.assertEqual(pend[0]["gravidade"], "media")
+        self.assertIn("7", pend[0]["texto"])
+        self.assertEqual(pend[0]["acao"]["tipo"], "abrir_url")
+
+    def test_repositorio_sem_workflow_de_deploy_fica_calado(self):
+        """Nao saber nao e o mesmo que estar atrasado."""
+        p = projeto()                       # o github base nao tem 'deploy'
+        self.assertEqual(so(regras.avaliar([p]), "nao_publicado"), [])
+
+    def test_deploy_medido_mas_sem_numero_fica_calado(self):
+        p = projeto(github=self.gh(atras=None, sha=""))
+        self.assertEqual(so(regras.avaliar([p]), "nao_publicado"), [])
+
+
+class MotorInteiro(unittest.TestCase):
     def test_toda_pendencia_tem_acao(self):
         """O principio que impede o painel de virar spam."""
         p = projeto(git={"versionado": False}, grafo={"indexado": False, "dias": None},

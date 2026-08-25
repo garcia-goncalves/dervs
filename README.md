@@ -28,31 +28,38 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `index.html` | A tela. Recarrega sozinha a cada 15 s. |
 | `servir.py` | Serve a página, o `/api/dados`, o `/api/acao` e o `/api/execucao`. Agenda as três coletas. |
 | `banco.py` | O SQLite (`hub.db`): uma linha por (projeto, camada), com carimbo de tempo. |
-| `regras.py` | O motor das 14 pendências. Puro: entra dicionário, sai lista. |
+| `regras.py` | O motor das 16 pendências, mais o agrupamento das repetidas. Puro: entra dicionário, sai lista. |
+| `memoria.py` | A memória do tempo: idade de cada pendência, tendência da semana e o briefing. |
+| `test_memoria.py` | 38 testes da memória. `python test_memoria.py`. |
 | `execucao.py` | O botão **Resolver**: dispara uma sessão do Claude Code numa cópia isolada e abre o pedido de alteração. Seção própria abaixo. |
-| `test_execucao.py` | 72 testes das decisões do Resolver. `python test_execucao.py`. |
-| `test_regras.py` | 30 testes do motor. `python test_regras.py`. |
+| `test_execucao.py` | 78 testes das decisões do Resolver. `python test_execucao.py`. |
+| `test_regras.py` | 40 testes do motor. `python test_regras.py`. |
 | `test_servir.py` | 43 testes do proxy do grafo e da superfície do Resolver. `python test_servir.py`. |
 | `coletar.py` | Camada **local**: git, Docker, portas, grafo, memória, variáveis. |
-| `coletar_github.py` | Camada **github**: CI, PRs, alertas. Uma consulta GraphQL em lote. |
+| `coletar_github.py` | Camada **github**: CI, PRs, alertas, o site no ar e o último deploy. Uma consulta GraphQL em lote. |
+| `test_coletar.py` | 74 testes dos pedaços dos coletores que já erraram. `python test_coletar.py`. |
 | `coletar_pesado.py` | Camada **pesado**: cota do Actions e `npm audit`. |
 | `casos.json` | Camada **curada**, escrita à mão. Nenhum coletor toca aqui. |
 
-`hub.db` é descartável e não é versionado: apagar só custa uma coleta.
+`hub.db` é descartável e não é versionado: apagar só custa uma coleta — e, desde
+25/08/2026, também zera a memória do tempo, que se reconstrói sozinha a partir da
+coleta seguinte.
+
+**273 testes no total**, todos em `unittest` da biblioteca padrão.
 
 ## As três cadências
 
 | Camada | De quanto em quanto | O que mede | Por quê |
 |---|---|---|---|
 | local | 60 s | git, Docker, portas, idade do grafo, memória, variáveis | só disco, é barato |
-| github | 20 min | CI, pedidos de alteração, alertas de segurança | rede e cota — nada disso muda em um minuto |
+| github | 20 min | CI, pedidos de alteração, alertas de segurança, **o site no ar e o que já foi publicado** | rede e cota — nada disso muda em um minuto |
 | pesado | 24 h | cota de minutos do Actions, `npm audit` | caro: várias chamadas e rede por repositório |
 
 **A tela nunca espera coleta.** Lê o último valor do banco, mostra na hora e
 troca o número quando o novo chegar. Cada camada exibe há quanto tempo foi
 medida e esmaece quando envelhece — se o painel mentir uma vez, o hábito morre.
 
-## As 14 pendências
+## As 16 pendências
 
 | # | Regra | Gravidade | Ação |
 |---|---|---|---|
@@ -70,6 +77,8 @@ medida e esmaece quando envelhece — se o painel mentir uma vez, o hábito morr
 | 12 | Sem commit há mais de 30 dias | baixa | abrir e decidir |
 | 13 | Sem cópia no GitHub | baixa | copiar o comando |
 | 14 | Sem descrição no `casos.json` | baixa | escrever |
+| 15 | Site de produção fora do ar | alta | abrir o site |
+| 16 | Trabalho pronto no GitHub e não publicado | média | ver as publicações |
 
 Três invariantes, cobertos por teste:
 
@@ -555,12 +564,156 @@ A sessão filha **roda os hooks** do `~/.claude` do dono e o
 resolvido** — se um hook do dono abortar a sessão filha, o sintoma é a sessão
 terminar sem tocar em arquivo nenhum, e o log cru da tela mostra o motivo.
 
+## A memória do tempo — o painel passa a lembrar de ontem
+
+Até 25/08/2026 o HUB respondia bem "o que precisa de mim agora?" e não respondia
+nada sobre ontem. A tabela `historico` do banco tinha **uma linha**. Faltavam
+três coisas que decidem se uma lista é usada ou ignorada:
+
+1. **Idade.** Uma pendência nascida há uma hora e outra aberta há 23 dias
+   apareciam iguais — mesmo tamanho, mesma cor, mesma linha.
+2. **Progresso.** Lista que só cresce e nunca reconhece o que foi feito é lista
+   que se aprende a fechar.
+3. **Direção.** "Isto está piorando" é informação. "Existem 27 pendências" não é.
+
+### Como funciona
+
+Tabela `pendencia_vida` (`id`, `regra`, `projeto`, `gravidade`, `visto_em`,
+`ultimo_em`, `fechada_em`). A cada coleta **local** bem-sucedida, o servidor
+avalia as regras e atualiza a vida de cada pendência: quem apareceu ganha
+`visto_em`, quem continua tem o `ultimo_em` renovado (**não** rejuvenesce), quem
+sumiu ganha `fechada_em`. No mesmo instante um retrato numérico vai para o
+`historico`.
+
+Fica em tabela separada da `pendencia_estado` de propósito: aquela guarda
+**decisão do dono** (silenciar por 24 h), esta guarda **observação do coletor**.
+Misturar as duas faria uma faxina no banco apagar a escolha dele junto com a
+medição.
+
+**Por que o registro roda no laço de coleta e não no `/api/dados`.** Aquela rota
+é disparada pelo navegador de 15 em 15 segundos. Gravar ali faria a aba dirigir o
+banco — e, pior, com o painel fechado o dia inteiro o histórico ficaria vazio
+justamente no dia em que ele não olhou. Painel que só lembra do que aconteceu
+enquanto estava sendo olhado não tem memória: tem espelho.
+
+Um erro no registro **nunca** derruba a coleta. O número na tela vale mais que o
+registro histórico dele.
+
+### A armadilha da estreia, e como ela foi fechada
+
+Na primeira coleta depois desta mudança, **todas** as pendências abertas ganham
+`visto_em = agora` — inclusive um grafo de código velho há 23 dias. Sem trava, a
+tela estrearia com 27 selos de "nova" mentindo em uníssono, e o dono aprenderia
+na primeira olhada que o selo mente.
+
+Duas travas, uma em cada ponta:
+
+- **`desde_o_inicio`**: quem já estava ali quando a memória começou tem a idade
+  exata *desconhecida*. O campo `dias` vem `None`, nunca zero — zero é um número,
+  e número errado num painel custa mais caro que número ausente.
+- **`novas_24h` só conta quem nasceu depois do início da memória.** Sem isso, o
+  briefing anunciaria "27 apareceram nas últimas 24 h" no primeiro minuto de
+  vida. Nenhuma era nova: elas já estavam lá, só não havia quem lembrasse.
+
+Mas não saber a idade exata não é não saber nada. A memória sabe há quanto tempo
+**ela** existe, e a pendência que já estava aqui na estreia tem no mínimo essa
+idade — daí o campo `dias_min` e o texto "aberta há mais de 9 dias". Enquanto a
+memória tiver menos de um dia, a linha fica calada.
+
+### O briefing matinal
+
+Uma frase no topo, escrita por função pura a partir dos números. Duas regras a
+separam de enfeite:
+
+- **Com pendência alta aberta, ela nunca diz que está tudo certo.**
+- **Nunca é genérica**: sempre cita número e nome de projeto.
+
+Frase que não muda quando o dado muda é decoração, e decoração no topo de um
+painel operacional é pior que espaço vazio — ensina a não ler o topo. Três
+estados de dado produzem três textos diferentes, e isso é coberto por teste.
+
+Ao lado dela, o placar: urgentes, novas hoje, fechadas nos últimos 7 dias, e um
+sparkline em SVG puro da semana. **O placar de "fechadas" só aparece quando há o
+que comemorar** — um "0 fechadas" permanente no topo da tela é uma repreensão
+diária, não uma informação.
+
+## O fim do ruído: dez linhas iguais viram uma
+
+Em 25/08/2026, **10 das 27 pendências abertas eram a mesma regra** — grafo de
+código velho — em dez projetos, cada uma com a mesma ação manual. São 37% da
+caixa de entrada dizendo a mesma coisa: exatamente o mecanismo que o filtro da
+regra 2 existe para evitar. Caixa que nasce com muitos alarmes iguais ensina o
+dono a ignorar a caixa inteira, inclusive o alarme que importava.
+
+`regras.agrupar()` dobra qualquer regra com **3 ou mais** ocorrências numa linha
+só, com a contagem, a idade da mais velha e os projetos dentro. Com os dados
+daquele dia, 27 pendências viraram **10 linhas**.
+
+**É uma visão, não um substituto.** O `/api/dados` continua mandando a lista
+achatada em `pendencias`, e o agrupamento vai à parte, em `grupos`. O motivo é
+concreto: o botão "Resolver" recalcula a pendência pelo `id` no servidor — e é
+isso que mantém o prompt fechado a texto de estranho — e o "×" de esconder por
+24 h também é por `id`. Trocar o formato de `pendencias` quebraria os dois. Aqui
+muda o desenho; a identidade não muda.
+
+O grupo é um `<details>` de verdade, não um painel escrito à mão: o **Ctrl+F do
+navegador acha o que está lá dentro** sem o dono precisar abrir.
+
+## O site está no ar? E o que está lá é o que você escreveu?
+
+O HUB media git, Docker, CI, alertas, cota e grafo — e não media a única coisa
+que **o cliente percebe antes do dono**. Cinco projetos declaram `url_prod` no
+`casos.json`, um deles marcado `criticidade: critica`. Site fora do ar não
+produzia pendência nenhuma nesta tela.
+
+### Regra 15 — o site não respondeu (alta)
+
+`GET` na raiz, sem credencial e sem cookie, na cadência de 20 minutos da camada
+`github`. **5xx ou ausência de resposta = fora do ar**; 3xx e 4xx contam como
+servidor **vivo**, porque um 301 já é prova de que ele respondeu.
+
+**Redirecionamento não é seguido.** Seguir o pulo levaria a requisição para um
+domínio que este painel não escolheu.
+
+> **O que esta regra NÃO garante.** Responder 200 na raiz não é o mesmo que
+> estar funcionando. Banco caído atrás de uma home estática continua devolvendo
+> 200. Isto pega o apagão, não a doença.
+
+### Regra 16 — trabalho pronto e não publicado (média)
+
+Commits na branch padrão do GitHub mais novos que o último deploy bem-sucedido.
+Repositório sem workflow de publicação identificável fica **calado** — não saber
+não é o mesmo que estar atrasado (invariante 2).
+
+### O cuidado com produção
+
+Esta é a única parte do HUB que toca em produção, e por isso ela tem interruptor:
+`MEDIR_SITE` no topo de `coletar_github.py`. Desligar apaga a regra 15 e não muda
+mais nada.
+
+`url_segura()` barra `localhost`, rede interna, `.local` e qualquer esquema que
+não seja web, **sem tocar em DNS** — a resolução de nome fica em `host_publico()`.
+Estão separadas para o teste rodar offline: teste que consulta DNS é teste que
+quebra a CI numa terça-feira qualquer.
+
+Hoje o `casos.json` é escrito só pelo dono e nada disso é necessário. Entra assim
+mesmo, pelo mesmo motivo que o `detalhe` do pedido de alteração virou número em
+25/08: no dia em que essa lista vier de outro lugar, um endereço apontando para
+`127.0.0.1` transformaria este coletor numa ferramenta de varredura de dentro da
+máquina dele.
+
+**Falha de medição não apaga medição boa.** `ok=None` é "não medi"; `ok=False` é
+"caiu". Um blip de rede às 20h não pode fazer "site no ar" virar "site fora" —
+mesmo cuidado que os alertas de segurança já tinham.
+
 ## O que ainda não existe
 
 Fases 3 e 4 da especificação (a **fase 2 está entregue**, seção acima) (`~/.claude/docs/superpowers/plans/2026-08-24-hub-do-dev.md`):
 
-- **Fase 3** — falta o briefing matinal e a detecção de divergência entre local
-  e servidor. Já entregues: a **nota de saúde por projeto** e a **paleta de
-  comandos (`Ctrl+K`)**, ambas com seção própria acima.
+- **Fase 3 — entregue.** O briefing matinal e a divergência entre local e
+  servidor estão nas seções acima, junto com a memória do tempo e o fim do
+  ruído, que não estavam na especificação original e nasceram de medir a lista
+  de verdade. Já eram: a **nota de saúde por projeto** e a **paleta de comandos
+  (`Ctrl+K`)**.
 - **Fase 4** — o `radar.py` do `~/.claude` passa a ler este banco em vez de
   coletar por conta própria, acabando com os dois coletores.

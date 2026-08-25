@@ -3,3 +3,7 @@ hub.db-wal
 hub.db-shm
 __pycache__/
 .playwright-mcp/
+
+# saida de curl usada para inspecionar a API a mao
+d.json
+dados_tmp.json

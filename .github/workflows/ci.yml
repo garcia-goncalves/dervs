@@ -31,13 +31,16 @@ jobs:
           fi
 
       - name: Compila
-        run: python -m py_compile banco.py regras.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py
+        run: python -m py_compile banco.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py
 
       - name: Motor de regras
         run: python test_regras.py
 
       - name: Coletor
         run: python test_coletar.py
+
+      - name: Memória do tempo
+        run: python test_memoria.py
 
       - name: Proxy do grafo
         run: python test_servir.py

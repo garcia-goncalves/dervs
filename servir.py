@@ -50,6 +50,7 @@ from urllib.parse import unquote
 
 import banco
 import execucao
+import memoria
 import regras
 
 
@@ -129,10 +130,44 @@ def coletar(camada: str, motivo: str) -> None:
             _ultima_falha.pop(camada, None)
             print("[%s] %s (%s) em %.1fs — %s"
                   % (marca, camada, motivo, time.time() - inicio, r.stdout.strip()))
+            _anotar_a_vida(camada)
         else:
             _ultima_falha[camada] = (r.stderr or "").strip()[:400]
             print("[%s] FALHA em %s (%s):\n%s" % (marca, camada, motivo,
                                                   _ultima_falha[camada]))
+
+
+def _anotar_a_vida(camada: str) -> None:
+    """Depois de cada coleta LOCAL boa, guarda quem nasceu e quem morreu.
+
+    Aqui, e nao no /api/dados, porque aquela rota e disparada pelo navegador de
+    15 em 15 s: com a aba fechada o dia inteiro, o historico do dia nao existiria
+    — e o dia em que ele nao olha o painel e exatamente o dia em que a memoria
+    precisa ter funcionado sozinha.
+
+    So a camada `local` dispara: ela e a unica que roda a cada 60 s e a unica que
+    define quais projetos existem. Um erro aqui NUNCA pode derrubar a coleta: o
+    numero na tela vale mais que o registro historico dele.
+    """
+    if camada != "local":
+        return
+    try:
+        con = banco.conectar()
+        try:
+            e = banco.montar_estado(con)
+            pend = regras.avaliar(e["projetos"], quota=e["quota"],
+                                  silenciadas=banco.silenciadas(con))
+            # Coleta que terminou bem mas nao enxergou projeto nenhum NAO e "o
+            # dono resolveu tudo": e a pasta de repositorios indisponivel por um
+            # instante. Sem esta guarda, o painel fecharia as 27 pendencias de
+            # uma vez — inclusive as de seguranca — e no minuto seguinte se
+            # gabaria de ter fechado 27. Achado da revisao de seguranca.
+            memoria.registrar(pend, con, medicao_valida=bool(e["projetos"]))
+        finally:
+            con.close()
+    except Exception as erro:                       # noqa: BLE001 — ver acima
+        print("[%s] aviso: nao consegui anotar a memoria do tempo (%s)"
+              % (time.strftime("%H:%M:%S"), erro))
 
 
 def laco(camada: str, intervalo: int):
@@ -637,11 +672,22 @@ class Hub(SimpleHTTPRequestHandler):
             e = banco.montar_estado(con)
             pend = regras.avaliar(e["projetos"], quota=e["quota"],
                                   silenciadas=banco.silenciadas(con))
+            # So LEITURA aqui: quem escreve a vida e o laco de coleta. Ver
+            # _anotar_a_vida() para o motivo.
+            agora_iso = banco.agora()
+            pend = memoria.decorar(pend, memoria.vidas(con), agora_iso,
+                                   desde=memoria.desde(con))
+            tend = memoria.tendencia(con, agora_iso)
         finally:
             con.close()
         return {
-            "agora": banco.agora(),
+            "agora": agora_iso,
             "pendencias": pend,
+            # A lista achatada acima continua sendo o contrato (o "Resolver" e o
+            # "x" acham a pendencia pelo id). `grupos` e so o desenho da tela.
+            "grupos": regras.agrupar(pend),
+            "tendencia": tend,
+            "briefing": memoria.briefing(pend, tend),
             "projetos": e["projetos"],
             "infra": e["infra"],
             "infra_medido_em": e["infra_medido_em"],

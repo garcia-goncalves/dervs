@@ -51,6 +51,24 @@ CREATE TABLE IF NOT EXISTS pendencia_estado (
     silenciada_ate TEXT,
     anotado_em     TEXT NOT NULL
 );
+
+-- A vida de cada pendencia: quando nasceu, quando foi vista pela ultima vez e
+-- quando sumiu. E o que permite a tela dizer "aberta ha 23 dias" e "voce fechou
+-- 6 esta semana" — sem isto o painel acorda todo dia sem lembrar de ontem.
+--
+-- Tabela SEPARADA da pendencia_estado de proposito: aquela guarda decisao do
+-- dono (silenciar), esta guarda observacao do coletor. Misturar as duas faria
+-- um `DELETE` de faxina apagar a escolha dele junto com a medicao.
+CREATE TABLE IF NOT EXISTS pendencia_vida (
+    id         TEXT PRIMARY KEY,
+    regra      TEXT NOT NULL DEFAULT '',
+    projeto    TEXT NOT NULL DEFAULT '',
+    gravidade  TEXT NOT NULL DEFAULT 'media',
+    visto_em   TEXT NOT NULL,
+    ultimo_em  TEXT NOT NULL,
+    fechada_em TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_vida_aberta ON pendencia_vida (fechada_em, visto_em);
 """
 
 
