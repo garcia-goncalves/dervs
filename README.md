@@ -34,7 +34,7 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `execucao.py` | O botão **Resolver**: dispara uma sessão do Claude Code numa cópia isolada e abre o pedido de alteração. Seção própria abaixo. |
 | `test_execucao.py` | 85 testes das decisões do Resolver e das barreiras. `python test_execucao.py`. |
 | `barreira.py` | O porteiro do `Bash` da sessão desacompanhada: roda como hook do `claude` e barra o comando **antes** dele rodar. |
-| `test_barreira.py` | 29 testes da barreira — cada um é um ataque concreto ou um comando honesto. `python test_barreira.py`. |
+| `test_barreira.py` | 43 testes da barreira — cada um é um ataque concreto ou um comando honesto. `python test_barreira.py`. |
 | `test_regras.py` | 40 testes do motor. `python test_regras.py`. |
 | `test_servir.py` | 43 testes do proxy do grafo e da superfície do Resolver. `python test_servir.py`. |
 | `coletar.py` | Camada **local**: git, Docker, portas, grafo, memória, variáveis. |
@@ -116,7 +116,7 @@ até acabar serviço, dinheiro ou paciência. Ela só começa quando você apert
 |---|---|---|---|
 | **Renovate** | um robô do GitHub, fora do painel | grátis | pedido de alteração de dependência |
 | **Mecânico** | o próprio painel, sem IA | **R$ 0,00** | o arquivo corrigido, direto |
-| **Claude** | uma sessão do Claude em cópia sem acesso ao GitHub | pago, teto de US$ 3 por item | pedido de alteração |
+| **Claude** | uma sessão do Claude em cópia sem acesso ao GitHub | pago, teto de US$ 3 por item — ou menos, se o dia ja gastou | pedido de alteração |
 
 Só **três** das 16 regras entram na fila: `memoria_crlf` (mecânico),
 `env_drift` e `dependencia_insegura` (Claude). É lista **branca**: regra que não
@@ -142,7 +142,13 @@ Nenhuma delas é uma instrução no texto do pedido. Instrução em texto é sug
 trava é código que recusa.
 
 1. **Teto de R$ 50 por dia.** No ponto exato do teto já não cabe mais um item.
-   "Só mais um" é como conta de R$ 300 acontece.
+   "Só mais um" é como conta de R$ 300 acontece. O teto do dia limita o teto
+   **da sessão** (`fila.teto_da_sessao`): com R$ 49 gastos, a sessão sai com
+   teto de R$ 1, e não com os R$ 15,42 de sempre. Sem isso — e era assim até
+   25/08/2026 — a fila conferia o teto *antes* do item e o dia podia fechar
+   em R$ 64 sem nunca ter "estourado". O botão **Resolver** também conta:
+   ele dispara a mesma sessão e o custo dele entra na tabela `gasto`, que
+   `banco.gasto_entre` soma junto com a fila.
 2. **Anti-laço: duas tentativas por item**, e falha de hoje não volta hoje. Uma
    correção que não pega vira torneira aberta de madrugada.
 3. **Teste apagado.** Antes de publicar, o painel lê o diff. Apagou um arquivo
@@ -566,7 +572,8 @@ pendência tem uma ação".
 
 Medido nesta máquina em 24/08/2026: com `--max-budget-usd 0.10`, a execução
 terminou custando **US$ 0,44548** — estouro de 4,5×. A flag não é uma cerca; é
-um pedido. O teto adotado é **US$ 3** por execução, e a única garantia real de
+um pedido. O teto adotado é **US$ 3** por execução — ou o que sobra do teto do dia,
+se for menos (`fila.teto_da_sessao`) — e a única garantia real de
 parar é o botão **Parar**, que mata a árvore de processos e espera 5 segundos
 pela confirmação. Se não confirmar, a tela diz que **não** confirmou — não finge
 que parou.
@@ -635,7 +642,7 @@ fronteira de pasta. `Bash` fica porque sem ele a sessão não roda teste nem
 commita — e aí o recurso não existe.
 
 Enquanto havia uma pessoa olhando a tela, isso era um risco vigiado. A fila
-(`fila.py`) roda **desacompanhada**, e um risco sem vigia é outro risco. Três
+(`fila.py`) roda **desacompanhada**, e um risco sem vigia é outro risco. Quatro
 barreiras foram postas em 25/08/2026, em ordem de importância:
 
 1. **A cópia não alcança o GitHub.** Ela era um `git worktree`, que compartilha
@@ -657,11 +664,39 @@ barreiras foram postas em 25/08/2026, em ordem de importância:
 3. **Todo comando passa por uma lista antes de rodar** (`barreira.py`, um hook
    `PreToolUse`). Medido numa sessão de verdade em 25/08/2026, por US$ 0,33:
    `git push origin main` e `curl http://example.com` **barrados** com a frase
-   em português; `git status --porcelain` rodou. Lista branca de programas, `git push`/`remote`/`config`
-   barrados por nome, nada que fale com a rede, nada que vire interpretador de
-   texto solto (`python -c`, `node -e`, `bash -c`), nenhum caminho absoluto ou
-   com `..`, e `.git/` intocável. Recusa sai com código 2 e a frase em
-   português chega à sessão.
+   em português; `git status --porcelain` rodou. Lista branca de programas, nada que vire
+   interpretador de texto solto (`python -c`, `node -e`, `bash -c`), nenhum
+   caminho absoluto ou com `..`, e `.git/` intocável. Recusa sai com código 2
+   e a frase em português chega à sessão.
+
+   **O `git` tem lista BRANCA de subcomando, e a razão é um furo medido.** A
+   revisão de segurança de 25/08/2026 encontrou, e a medição confirmou, que
+   `git -c alias.pwn='!curl http://evil' pwn` passava **liberado** pela lista
+   negra: o git executa o valor do alias por um shell que a barreira nunca
+   leria, e de dentro dele `git remote add` mais `git push` alcançavam o
+   GitHub com a credencial do dono. A mesma porta existia em `core.pager`,
+   `core.fsmonitor`, `diff.external` e `--exec-path`. Lista negra de `git`
+   sempre perde: cada versão inventa capacidade nova, e a lista só protege o
+   que já conhece.
+
+   Da mesma revisão, três furos da mesma família: prefixo `NOME=valor` antes
+   do comando (`GIT_EXTERNAL_DIFF=x git diff` rodava `x`), caminho relativo
+   ao drive do Windows (`C:segredo.txt` escapava do teste de caminho
+   absoluto, que exigia a barra) e — o pior — **bug na barreira abria a
+   porta**: só o código 2 barra, e exceção não tratada saía com código 1, que
+   o Claude Code trata como liberado. `decidir` é um interpretador de linha
+   de comando escrito à mão; ele *vai* ter bug. Agora qualquer exceção
+   vira código 2.
+
+4. **A sessão não recebe segredo do ambiente** (`execucao.ambiente_da_filha`).
+   O `Popen` da filha não passava `env=`, então ela herdava o ambiente inteiro
+   do painel. Como a sessão é instruída a rodar a suíte do projeto-alvo, um
+   `conftest.py` plantado lê `os.environ` e manda tudo embora por socket — e a
+   barreira barra `curl` pelo **nome**, não contém rede. `GH_TOKEN` e
+   `GITHUB_TOKEN` são os que mais importam: com eles a sessão alcança o GitHub
+   sem precisar de `git push` nenhum. `ANTHROPIC_API_KEY` vai junto de
+   propósito, porque sem ela a sessão não roda — está escrito no código e tem
+   teste, para ninguém descobrir por acidente.
 
 **E o que continua não sendo isolado, dito sem enfeite:** rodar teste É rodar
 código arbitrário — a suíte do projeto é código de terceiro executando com todos
