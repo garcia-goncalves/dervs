@@ -695,5 +695,44 @@ class AlertaTemSeveridadeNaoSoContagem(unittest.TestCase):
         self.assertEqual(v["total"], 93)
         self.assertTrue(v["amostra"], "deveria marcar que a contagem e parcial")
 
+class MemoriaCrlf(unittest.TestCase):
+    """O varredor de fim de linha nas memorias. MEMORY.md fica de fora."""
+
+    def setUp(self):
+        self.pasta = tempfile.TemporaryDirectory()
+        self.antigo = coletar.PROJETOS_CLAUDE
+        coletar.PROJETOS_CLAUDE = Path(self.pasta.name)
+        self.repo = Path("C:/tmp/projeto-x")
+        slug = str(self.repo).replace("\\", "-").replace("/", "-").replace(":", "-")
+        self.memory = Path(self.pasta.name) / slug / "memory"
+        self.memory.mkdir(parents=True)
+
+    def tearDown(self):
+        coletar.PROJETOS_CLAUDE = self.antigo
+        self.pasta.cleanup()
+
+    def _gravar(self, nome, crlf):
+        fim = b"\r\n" if crlf else b"\n"
+        (self.memory / nome).write_bytes(b"---" + fim + b"name: x" + fim + b"---" + fim)
+
+    def test_memoria_em_crlf_e_apontada(self):
+        self._gravar("uma-coisa.md", crlf=True)
+        self.assertEqual(coletar.coleta_memoria_crlf(self.repo), ["uma-coisa.md"])
+
+    def test_memoria_em_lf_nao_e_apontada(self):
+        self._gravar("uma-coisa.md", crlf=False)
+        self.assertEqual(coletar.coleta_memoria_crlf(self.repo), [])
+
+    def test_MEMORY_md_em_crlf_NAO_e_apontado(self):
+        """Ele nao tem frontmatter para o harness ignorar — nao ha falha ali."""
+        self._gravar("MEMORY.md", crlf=True)
+        self.assertEqual(coletar.coleta_memoria_crlf(self.repo), [])
+
+    def test_MEMORY_md_nao_esconde_os_outros(self):
+        self._gravar("MEMORY.md", crlf=True)
+        self._gravar("outra.md", crlf=True)
+        self.assertEqual(coletar.coleta_memoria_crlf(self.repo), ["outra.md"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -101,6 +101,74 @@ ensinando o dono a ignorar a lista inteira.
 **Regra 6 existe porque o erro é calado.** Arquivo de memória em CRLF faz o
 harness ignorar o frontmatter, e a memória nunca carrega. Nada na tela avisa.
 
+## A fila que conserta — o painel deixa de só apontar
+
+Até aqui o painel apontava e você resolvia um item por vez, a dedo. A **fila**
+pega a lista de pendências, escolhe a ordem sozinha e trabalha desacompanhada
+até acabar serviço, dinheiro ou paciência. Ela só começa quando você aperta
+**"Trabalhar na fila"** — não há agendador, e isso é decisão, não pendência.
+
+### Três trilhos
+
+| Trilho | Quem faz | Custo | O que sai |
+|---|---|---|---|
+| **Renovate** | um robô do GitHub, fora do painel | grátis | pedido de alteração de dependência |
+| **Mecânico** | o próprio painel, sem IA | **R$ 0,00** | o arquivo corrigido, direto |
+| **Claude** | uma sessão do Claude em cópia isolada | pago, teto de US$ 3 por item | pedido de alteração |
+
+Só **três** das 16 regras entram na fila: `memoria_crlf` (mecânico),
+`env_drift` e `dependencia_insegura` (Claude). É lista **branca**: regra que não
+está lá não chega ao motor, nem por engano.
+
+**`ci_vermelha` fica de fora de propósito.** É o caso mais valioso e o único em
+que *apagar o teste parece uma correção*. Enquanto a trava do teste apagado não
+tiver histórico de acerto, ela não entra.
+
+**`grafo_velho` fica de fora porque não cabe.** A ação dela hoje é copiar um
+texto para você colar; reindexar acontece pelo MCP do grafo, e o painel não
+dirige o MCP — ele só serve a tela do grafo por procuração.
+
+### As quatro travas, todas verificadas em código
+
+Nenhuma delas é uma instrução no texto do pedido. Instrução em texto é sugestão;
+trava é código que recusa.
+
+1. **Teto de R$ 50 por dia.** No ponto exato do teto já não cabe mais um item.
+   "Só mais um" é como conta de R$ 300 acontece.
+2. **Anti-laço: duas tentativas por item**, e falha de hoje não volta hoje. Uma
+   correção que não pega vira torneira aberta de madrugada.
+3. **Teste apagado.** Antes de publicar, o painel lê o diff. Apagou um arquivo
+   de teste (`test_*.py`, `*_test.*`, `*.test.*`, `*.spec.*`) ou desligou um
+   teste (`@unittest.skip`, `pytest.mark.skip`, `it.skip(`, `xit(`…)? Reprovado.
+   **Tirar** um skip passa de propósito: religar um teste é o oposto de burlar.
+4. **Segredo no arquivo de exemplo de ambiente.** Linha nova só pode ser
+   `CHAVE=`. Com qualquer coisa depois do `=` — inclusive um espaço reservado
+   que pareça inofensivo — o item é reprovado. O custo de errar para o lado
+   frouxo é um segredo no histórico do git, e rotacionar segredo é varredura no
+   repositório inteiro, não a edição de uma linha.
+
+As travas 3 e 4 ficam no **último instante antes de publicar**, dentro do
+`execucao.py`, porque é o único ponto por onde todo caminho passa — botão,
+paleta e fila.
+
+### O teto usa a data local, não a UTC
+
+O resto do banco carimba em UTC. O teto, não. Em UTC−3, às 21h de terça já é
+quarta em UTC: o teto zeraria três horas cedo e a surpresa seria de madrugada,
+sem ninguém entender por quê.
+
+**Risco aceito:** o `hub.db` é descartável. Apagar o banco no meio do dia zera o
+gasto acumulado e devolve os R$ 50 inteiros. É ato deliberado seu, não acidente
+— fica registrado aqui e não vira código.
+
+### O que a regra 6 (CRLF) deixou de apontar
+
+O `MEMORY.md` saiu do varredor. O motivo da regra é *"em CRLF o harness ignora o
+frontmatter e a memória nunca carrega"* — e esse arquivo, por especificação,
+**não tem** frontmatter: ele é o índice, uma linha por memória. Não há cabeçalho
+para ser ignorado, logo não há falha a apontar. Conferido em 25/08/2026: dos 13
+arquivos `.md` da pasta de memória deste projeto, ele é o único sem `---`.
+
 ## A paleta de comandos (`Ctrl+K`)
 
 Uma porta de entrada só. `Ctrl+K` (ou `Cmd+K`) abre uma caixa de busca; digitar
