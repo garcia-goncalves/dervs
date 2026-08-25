@@ -1,6 +1,5 @@
 """Testes da fila que conserta. `python test_fila.py`."""
 import os
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -500,7 +499,7 @@ class RenomearTeste(unittest.TestCase):
         self.assertIn("login.spec.ts", fila.diff_mexeu_em_teste(diff))
 
 
-class OTetoDoDiaLimitaOTetoDaSessao(unittest.TestCase):
+class OTetoDoDiaLimitaOTetoDaSessao(BancoTemporario):
     """Achado do revisor em 25/08/2026.
 
     O teto do dia era conferido ANTES do item, e a sessao saia sempre com o
@@ -537,19 +536,10 @@ class OTetoDoDiaLimitaOTetoDaSessao(unittest.TestCase):
         self.assertAlmostEqual(chamadas[0], execucao.TETO_USD)
 
 
-class OBotaoResolverContaParaOTeto(unittest.TestCase):
+class OBotaoResolverContaParaOTeto(BancoTemporario):
     """O botao dispara a mesma sessao, com o mesmo custo, e nao encostava na
     tabela `fila` — entao o teto do dia nao o enxergava. Duas sessoes em
     paralelo (uma da fila, uma do botao) gastavam sem ver uma a outra."""
-
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-        self.antigo = banco.BANCO
-        banco.BANCO = os.path.join(self.tmp, "teste.db")
-
-    def tearDown(self):
-        banco.BANCO = self.antigo
-        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_gasto_de_fora_da_fila_entra_na_soma_do_dia(self):
         quando = "2026-08-25T12:00:00+00:00"
