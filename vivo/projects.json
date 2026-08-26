@@ -1,0 +1,17 @@
+{
+  "_comment": "Edite a vontade. id = identificador estavel. path = pasta local do repo (precisa ter .git). name = nome exibido. Para adicionar um projeto novo, copie um bloco e ajuste.",
+  "projects": [
+    { "id": "nukleoa", "name": "Nukleoa", "path": "C:\\Users\\andre\\source\\repos\\AutoCore", "tags": ["SaaS", "despachantes"] },
+    { "id": "hragro", "name": "Hragro PDV", "path": "C:\\Users\\andre\\source\\repos\\Hragro.Pdv", "tags": ["PDV"] },
+    { "id": "nexa", "name": "Nexa", "path": "C:\\Users\\andre\\source\\repos\\Nexa", "tags": [] },
+    { "id": "dents", "name": "Dents", "path": "C:\\Users\\andre\\source\\repos\\Dents", "tags": [] },
+    { "id": "medcrm", "name": "MedCRM", "path": "C:\\Users\\andre\\source\\repos\\MedCRM", "tags": ["CRM"] },
+    { "id": "inkflow", "name": "Inkflow", "path": "C:\\Users\\andre\\source\\repos\\inkflow", "tags": [] },
+    { "id": "ajudei", "name": "Ajudei", "path": "C:\\Users\\andre\\source\\repos\\Ajudei", "tags": [] },
+    { "id": "espacoflow", "name": "EspacoFlow", "path": "C:\\Users\\andre\\source\\repos\\EspacoFlow", "tags": [] },
+    { "id": "medconsultoria", "name": "Med Consultoria", "path": "C:\\Users\\andre\\source\\repos\\medconsultoria", "tags": [] },
+    { "id": "aninha-site", "name": "Aninha (site)", "path": "C:\\Users\\andre\\source\\repos\\aninha-site", "tags": ["site"] },
+    { "id": "zerofalta", "name": "ZeroFalta", "path": "C:\\Users\\andre\\source\\repos\\zerofalta", "tags": ["SaaS", "anti-falta", "clinicas"] },
+    { "id": "cuidadores", "name": "Cuidadores", "path": "C:\\Users\\andre\\source\\repos\\cuidadores", "tags": [] }
+  ]
+}

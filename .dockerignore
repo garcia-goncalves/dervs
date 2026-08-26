@@ -1,0 +1,43 @@
+# O que NUNCA pode entrar na imagem que vai para o ar.
+
+# ---------------------------------------------------------------------------
+# vivo/ — o código do dervs antigo, preservado só para leitura humana.
+# Ele abre terminal (PTY) sem autenticação nenhuma. Uma linha dele rodando
+# no servidor é execução remota de comando aberta para a internet.
+# Esta linha é a barreira. Ela e o Dockerfile são a mesma decisão.
+# ---------------------------------------------------------------------------
+vivo/
+
+# Banco local: dado real do desenvolvedor, nunca vai para a imagem.
+hub.db
+*.db
+*.db-journal
+*.db-wal
+
+# Git e histórico
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Documentação e artefatos da esteira: não servem em produção.
+docs/
+*.md
+
+# Testes: não vão para a imagem de produção.
+test_*.py
+evals/
+
+# Segredos e ambiente
+.env
+.env.*
+*.pem
+*.token
+
+# Lixo de sistema
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+Thumbs.db
+desktop.ini

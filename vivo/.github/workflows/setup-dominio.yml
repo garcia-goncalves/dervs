@@ -1,0 +1,95 @@
+name: Preparar dominio dervs.com.br
+
+# So roda quando alguem aperta o botao. Nunca sozinho.
+on:
+  workflow_dispatch:
+
+jobs:
+  preparar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Criar site no nginx e emitir HTTPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+
+            echo "=========== 1. CONFIRMANDO ACESSO =========="
+            sudo -n true && echo "sudo sem senha: SIM" || { echo "sudo sem senha: NAO"; exit 1; }
+
+            echo "=========== 2. CONTA LET'S ENCRYPT JA EXISTE? =========="
+            ACME=$(sudo find /etc/letsencrypt/accounts -name regr.json 2>/dev/null | head -1)
+            if [ -n "$ACME" ]; then echo "SIM - termos ja aceitos anteriormente"; else echo "NAO"; fi
+
+            echo "=========== 3. PAGINA PROVISORIA =========="
+            sudo mkdir -p /var/www/dervs /var/www/certbot
+            sudo tee /var/www/dervs/index.html >/dev/null <<'HTML'
+            <!doctype html>
+            <html lang="pt-BR">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width,initial-scale=1">
+              <title>DERVS</title>
+              <style>
+                :root { --fundo:#12141a; --texto:#e6e9ef; --fraco:#8b93a7; --vivo:#2fd6a8; }
+                * { box-sizing:border-box; margin:0; padding:0 }
+                body { min-height:100vh; display:grid; place-items:center;
+                       background:var(--fundo); color:var(--texto);
+                       font:400 16px/1.6 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif; }
+                main { text-align:center; padding:2rem; max-width:34rem }
+                h1 { font-size:clamp(2.5rem,9vw,4.5rem); letter-spacing:-.03em; font-weight:650 }
+                .ponto { color:var(--vivo) }
+                p { color:var(--fraco); margin-top:1rem }
+                .selo { display:inline-block; margin-top:2rem; padding:.4rem .9rem;
+                        border:1px solid #2a2f3a; border-radius:999px;
+                        font-size:.8rem; color:var(--fraco) }
+                .selo b { color:var(--vivo); font-weight:600 }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>DERVS<span class="ponto">.</span></h1>
+                <p>Em construção. O domínio já responde e o servidor está de pé.</p>
+                <span class="selo"><b>&#9679;</b> infraestrutura no ar</span>
+              </main>
+            </body>
+            </html>
+            HTML
+
+            echo "=========== 4. SITE NO NGINX =========="
+            sudo tee /etc/nginx/sites-available/dervs >/dev/null <<'CONF'
+            server {
+                listen 80;
+                server_name dervs.com.br;
+
+                location /.well-known/acme-challenge/ { root /var/www/certbot; }
+
+                root /var/www/dervs;
+                index index.html;
+                location / { try_files $uri $uri/ =404; }
+            }
+            CONF
+            sudo ln -sf /etc/nginx/sites-available/dervs /etc/nginx/sites-enabled/dervs
+            sudo nginx -t
+            sudo systemctl reload nginx
+            echo "nginx recarregado"
+
+            echo "=========== 5. TESTE ANTES DO HTTPS =========="
+            curl -s -o /dev/null -w "http  -> %{http_code}\n" -H "Host: dervs.com.br" http://127.0.0.1/
+
+            echo "=========== 6. CERTIFICADO HTTPS =========="
+            if [ -n "$ACME" ]; then
+              sudo certbot --nginx -d dervs.com.br --non-interactive --redirect --keep-until-expiring
+              sudo nginx -t && sudo systemctl reload nginx
+              echo "certificado emitido"
+            else
+              echo "PULADO: nenhuma conta Let's Encrypt registrada neste servidor."
+            fi
+
+            echo "=========== 7. CONFERINDO =========="
+            curl -sk -o /dev/null -w "https -> %{http_code}\n" -H "Host: dervs.com.br" https://127.0.0.1/ || true
+            sudo certbot certificates 2>/dev/null | grep -A2 "dervs.com.br" || echo "(sem certificado para dervs)"

@@ -1,0 +1,28 @@
+# dependencias
+node_modules/
+**/node_modules/
+
+# SEGREDOS / CREDENCIAIS — nunca versionar
+telegram/token.txt
+telegram/config.json
+**/.wwebjs_auth/
+**/.wwebjs_cache/
+*.token
+*.pem
+.env
+.env.*
+
+# logs
+*.log
+
+# estado de runtime (dados locais gerados pelo hub)
+canvas.json
+insights.json
+readiness.json
+telegram/notifier-state.json
+
+# temporarios / OS
+*.tmp
+Thumbs.db
+desktop.ini
+.DS_Store

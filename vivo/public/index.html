@@ -1,0 +1,984 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hub de Projetos</title>
+    <style>
+      :root {
+        --bg: #0a0c11;
+        --panel: #12151d;
+        --panel-2: #161a24;
+        --border: #232838;
+        --border-soft: #1b2030;
+        --text: #e8ecf4;
+        --muted: #8b93a7;
+        --faint: #5b6578;
+        --accent: #7c5cff;
+        --accent-2: #22d3ee;
+        --green: #3ddc84;
+        --amber: #ffb454;
+        --red: #ff6b6b;
+        --radius: 16px;
+        --shadow: 0 10px 40px -12px rgba(0, 0, 0, 0.6);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        background: radial-gradient(1200px 600px at 80% -10%, rgba(124, 92, 255, 0.12), transparent 60%),
+          radial-gradient(900px 500px at 0% 0%, rgba(34, 211, 238, 0.08), transparent 55%), var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        min-height: 100vh;
+        font-size: 14px;
+      }
+      a { color: inherit; text-decoration: none; }
+      .wrap { max-width: 1320px; margin: 0 auto; padding: 32px 28px 64px; }
+
+      header.top { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+      .brand h1 {
+        margin: 0; font-size: 30px; font-weight: 800; letter-spacing: -0.02em;
+        background: linear-gradient(95deg, #fff 10%, var(--accent) 60%, var(--accent-2));
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+      }
+      .brand p { margin: 6px 0 0; color: var(--muted); font-size: 13.5px; }
+      .stats { display: flex; gap: 14px; }
+      .stat {
+        background: linear-gradient(180deg, var(--panel-2), var(--panel));
+        border: 1px solid var(--border-soft); border-radius: 14px;
+        padding: 12px 18px; min-width: 96px; text-align: center;
+      }
+      .stat .n { font-size: 24px; font-weight: 800; line-height: 1; }
+      .stat .l { font-size: 11px; color: var(--faint); margin-top: 6px; text-transform: uppercase; letter-spacing: 0.06em; }
+      .stat.green .n { color: var(--green); }
+      .stat.amber .n { color: var(--amber); }
+      .stat.ready .n { color: var(--accent-2); }
+
+      .nav { display: flex; gap: 6px; margin: 26px 0 0; }
+      .nav button {
+        background: transparent; border: 1px solid transparent; color: var(--muted);
+        padding: 10px 18px; border-radius: 11px; font-size: 14px; font-weight: 600; cursor: pointer;
+      }
+      .nav button.on { background: var(--panel); border-color: var(--border); color: var(--text); }
+
+      .toolbar { display: flex; gap: 12px; align-items: center; margin: 18px 0 22px; flex-wrap: wrap; }
+      .search {
+        flex: 1; min-width: 220px; display: flex; align-items: center; gap: 10px;
+        background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 11px 14px;
+      }
+      .search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.15); }
+      .search input { flex: 1; background: transparent; border: 0; outline: 0; color: var(--text); font-size: 14px; }
+      .search svg { opacity: 0.5; }
+      select.sort, .ghost-btn {
+        background: var(--panel); border: 1px solid var(--border); color: var(--text);
+        border-radius: 12px; padding: 11px 14px; font-size: 13.5px; outline: 0; cursor: pointer;
+      }
+      .ghost-btn { color: var(--muted); transition: 0.15s; }
+      .ghost-btn:hover { color: var(--text); border-color: var(--accent); }
+
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 18px; }
+
+      .card {
+        position: relative; background: linear-gradient(180deg, var(--panel-2), var(--panel));
+        border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 20px 20px 16px;
+        overflow: hidden; transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+      }
+      .card:hover { transform: translateY(-3px); border-color: var(--border); box-shadow: var(--shadow); }
+      .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--faint); opacity: 0.7; }
+      .card.act-today::before { background: linear-gradient(var(--green), var(--accent-2)); }
+      .card.act-week::before { background: var(--accent); }
+      .card.has-changes::before { background: linear-gradient(var(--amber), var(--accent)); }
+      .card-title { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+      .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+      .tag { font-size: 10.5px; color: var(--accent-2); background: rgba(34, 211, 238, 0.08); border: 1px solid rgba(34, 211, 238, 0.18); padding: 2px 8px; border-radius: 999px; }
+
+      /* anel de % pronto p/ vendas */
+      .card-head2 { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+      .ring-wrap { flex: none; text-align: center; }
+      .ring { position: relative; width: 48px; height: 48px; cursor: pointer; }
+      .ring svg { width: 48px; height: 48px; transform: rotate(-90deg); }
+      .ring circle { fill: none; stroke-width: 4.5; }
+      .ring circle.bg { stroke: var(--border); }
+      .ring circle.fg { stroke-linecap: round; transition: stroke-dasharray 0.5s ease, stroke 0.3s; }
+      .ring .pct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 800; }
+      .ring .pct.est { color: var(--accent); font-size: 18px; animation: blink 1.2s infinite; }
+      .ring:hover { filter: brightness(1.15); }
+      .ring-cap { font-size: 9px; color: var(--faint); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.06em; }
+      .ring-input { width: 48px; height: 48px; border-radius: 50%; border: 2px solid var(--accent); background: var(--bg); color: var(--text); text-align: center; font-size: 14px; font-weight: 800; outline: none; -moz-appearance: textfield; }
+      .ring-input::-webkit-outer-spin-button, .ring-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+      .badges { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0 14px; }
+      .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
+      .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+      .badge.branch { color: #c7b8ff; } .badge.branch .dot { background: var(--accent); }
+      .badge.clean { color: var(--green); } .badge.clean .dot { background: var(--green); }
+      .badge.dirty { color: var(--amber); } .badge.dirty .dot { background: var(--amber); }
+      .badge.sync { color: var(--accent-2); } .badge.sync .dot { background: var(--accent-2); }
+      .badge.skel { color: transparent; background: var(--border-soft); border-color: transparent; min-width: 70px; animation: pulse 1.3s infinite; }
+      @keyframes pulse { 0%,100% { opacity: 0.5; } 50% { opacity: 0.9; } }
+
+      .commit { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-bottom: 16px; min-height: 18px; }
+      .commit b { color: var(--text); font-weight: 600; } .commit .when { color: var(--faint); }
+
+      .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      .btn { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 10px; padding: 9px 13px; font-size: 13px; font-weight: 600; cursor: pointer; transition: 0.15s; }
+      .btn:hover { border-color: var(--accent); background: var(--panel-2); }
+      .btn.primary { border: 0; color: #fff; background: linear-gradient(95deg, var(--accent), #9d7bff); }
+      .btn.primary:hover { filter: brightness(1.08); }
+      .btn.neguin { border: 0; color: #fff; background: linear-gradient(95deg, #ff7eb6, #9d7bff, #22d3ee); background-size: 200% 100%; animation: shimmer 4s linear infinite; }
+      .btn.neguin:hover { filter: brightness(1.12); }
+      @keyframes shimmer { to { background-position: 200% 0; } }
+
+      /* modal generico (Neguin) */
+      .ovl { position: fixed; inset: 0; background: rgba(5, 7, 11, 0.7); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; z-index: 70; }
+      .ovl.show { display: flex; }
+      .modal { width: min(560px, 92vw); background: var(--panel-2); border: 1px solid var(--border); border-radius: 18px; padding: 24px; box-shadow: var(--shadow); }
+      .modal h3 { margin: 0 0 4px; font-size: 19px; }
+      .modal .sub { margin: 0 0 16px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+      .modal textarea { width: 100%; min-height: 120px; resize: vertical; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; font-size: 14px; font-family: inherit; outline: 0; }
+      .modal textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.15); }
+      .modal .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+      .modal .guard { font-size: 11.5px; color: var(--faint); margin-top: 12px; line-height: 1.5; }
+      .btn.icon { padding: 9px 11px; color: var(--muted); }
+      .btn.icon:hover { color: var(--text); }
+      .spacer { flex: 1; }
+      .empty { text-align: center; color: var(--faint); padding: 80px 0; }
+
+      /* ---------- drawer ---------- */
+      .drawer-bg { position: fixed; inset: 0; background: rgba(5, 7, 11, 0.55); backdrop-filter: blur(3px); opacity: 0; pointer-events: none; transition: 0.2s; z-index: 40; }
+      .drawer-bg.show { opacity: 1; pointer-events: auto; }
+      .drawer {
+        position: fixed; top: 0; right: 0; height: 100%; width: min(560px, 94vw);
+        background: var(--panel); border-left: 1px solid var(--border); box-shadow: var(--shadow);
+        transform: translateX(100%); transition: transform 0.24s cubic-bezier(.4,0,.2,1); z-index: 45;
+        display: flex; flex-direction: column;
+      }
+      .drawer.show { transform: translateX(0); }
+      .drawer-head { padding: 20px 22px 0; }
+      .drawer-head .row1 { display: flex; align-items: center; justify-content: space-between; }
+      .drawer-head h2 { margin: 0; font-size: 20px; }
+      .x { background: transparent; border: 0; color: var(--muted); font-size: 22px; cursor: pointer; line-height: 1; }
+      .x:hover { color: var(--text); }
+      .dtabs { display: flex; gap: 4px; margin-top: 16px; border-bottom: 1px solid var(--border-soft); }
+      .dtabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 10px 14px; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+      .dtabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+      .dbody { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+      .dpane { flex: 1; overflow-y: auto; padding: 18px 22px; display: none; }
+      .dpane.on { display: block; }
+      .dpane.chat { display: none; flex-direction: column; padding: 0; }
+      .dpane.chat.on { display: flex; }
+
+      /* chat */
+      .msgs { flex: 1; overflow-y: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 14px; }
+      .msg { max-width: 92%; padding: 11px 14px; border-radius: 14px; font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; word-wrap: break-word; }
+      .msg.user { align-self: flex-end; background: linear-gradient(95deg, var(--accent), #9d7bff); color: #fff; border-bottom-right-radius: 4px; }
+      .msg.bot { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+      /* markdown dentro da resposta do Claude */
+      .msg.md { white-space: normal; }
+      .msg.md > *:first-child { margin-top: 0; }
+      .msg.md > *:last-child { margin-bottom: 0; }
+      .msg.md p { margin: 0 0 8px; }
+      .msg.md h3, .msg.md h4, .msg.md h5, .msg.md h6 { margin: 12px 0 6px; font-size: 14px; font-weight: 700; color: #fff; }
+      .msg.md ul, .msg.md ol { margin: 6px 0; padding-left: 20px; }
+      .msg.md li { margin: 3px 0; }
+      .msg.md code { background: rgba(255, 255, 255, 0.09); padding: 1px 5px; border-radius: 5px; font-family: Consolas, monospace; font-size: 12.5px; }
+      .msg.md pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 8px 0; }
+      .msg.md pre code { background: none; padding: 0; }
+      .msg.md a { color: var(--accent-2); text-decoration: underline; }
+      .msg.md strong { font-weight: 700; color: #fff; }
+      .msg.md hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+      /* indicador de digitando */
+      .msg.typing { display: inline-flex; gap: 5px; align-items: center; padding: 15px 16px; }
+      .msg.typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1.4s infinite both; }
+      .msg.typing span:nth-child(2) { animation-delay: 0.2s; }
+      .msg.typing span:nth-child(3) { animation-delay: 0.4s; }
+      @keyframes blink { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+      .chat-hint { text-align: center; color: var(--faint); font-size: 12px; padding: 24px; }
+      .composer { border-top: 1px solid var(--border-soft); padding: 14px 16px; display: flex; gap: 10px; align-items: flex-end; }
+      .composer textarea { flex: 1; resize: none; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 12px; padding: 11px 13px; font-size: 13.5px; font-family: inherit; outline: 0; max-height: 140px; }
+      .composer textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.15); }
+
+      /* tasks */
+      .task { display: flex; gap: 12px; align-items: flex-start; padding: 13px 0; border-bottom: 1px solid var(--border-soft); }
+      .task .num { color: var(--faint); font-size: 12px; font-weight: 700; min-width: 38px; }
+      .task .ttitle { font-size: 13.5px; line-height: 1.5; }
+      .task .lbls { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; }
+      .lbl { font-size: 10px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+      .muted-note { color: var(--faint); font-size: 13px; padding: 20px 0; }
+
+      /* sync */
+      .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 16px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; }
+      .switch { position: relative; width: 46px; height: 26px; }
+      .switch input { display: none; }
+      .switch .track { position: absolute; inset: 0; background: var(--border); border-radius: 999px; transition: 0.2s; cursor: pointer; }
+      .switch .track::before { content: ""; position: absolute; left: 3px; top: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: 0.2s; }
+      .switch input:checked + .track { background: var(--accent); }
+      .switch input:checked + .track::before { transform: translateX(20px); }
+      .sync-desc { color: var(--muted); font-size: 12.5px; line-height: 1.6; margin-top: 14px; }
+
+      /* ---------- insights / post-its ---------- */
+      .composer-note { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 24px; flex-wrap: wrap; }
+      .composer-note textarea { flex: 1; min-width: 280px; min-height: 70px; resize: vertical; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; font-size: 14px; font-family: inherit; outline: 0; }
+      .composer-note textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.15); }
+      .swatches { display: flex; gap: 8px; }
+      .sw { width: 26px; height: 26px; border-radius: 8px; cursor: pointer; border: 2px solid transparent; }
+      .sw.on { border-color: #fff; }
+      .notes { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; }
+      .note { border-radius: 14px; padding: 16px; min-height: 130px; position: relative; box-shadow: var(--shadow); color: #1a1205; display: flex; flex-direction: column; }
+      .note .txt { font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; flex: 1; outline: 0; }
+      .note .foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; font-size: 11px; opacity: 0.75; }
+      .note .del { background: rgba(0,0,0,0.15); border: 0; color: inherit; border-radius: 6px; width: 22px; height: 22px; cursor: pointer; font-size: 13px; }
+      .note .del:hover { background: rgba(0,0,0,0.3); }
+      .c-amber { background: linear-gradient(160deg, #ffd86b, #ffb454); }
+      .c-green { background: linear-gradient(160deg, #8ef0b0, #3ddc84); }
+      .c-blue { background: linear-gradient(160deg, #8fd4ff, #4aa8ff); color: #051527; }
+      .c-pink { background: linear-gradient(160deg, #ffaed4, #ff7eb6); }
+      .c-violet { background: linear-gradient(160deg, #c9b3ff, #9d7bff); color: #0c0726; }
+
+      /* portfólio: lista de projetos no modal */
+      .pf-projects { max-height: 240px; overflow-y: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px; }
+      .pf-projects label { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 2px; cursor: pointer; color: var(--text); }
+      .pf-projects input { accent-color: var(--accent); }
+      .nbtn { color: #c7b8ff !important; }
+      .nbtn:hover { border-color: var(--accent) !important; }
+
+      /* painel do portfólio (board) */
+      .neguin-console.board { width: min(820px, 97vw); z-index: 64; }
+      .board-grid { flex: 1; overflow-y: auto; padding: 18px 22px; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; align-content: start; }
+      .bcard { background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+      .bcard .bt { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .bcard .bn { font-weight: 700; font-size: 14px; }
+      .bstatus { font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em; }
+      .bstatus.queued { color: var(--faint); background: var(--border-soft); }
+      .bstatus.running { color: var(--accent-2); background: rgba(34, 211, 238, 0.1); }
+      .bstatus.done { color: var(--green); background: rgba(61, 220, 132, 0.1); }
+      .bstatus.error, .bstatus.stopped { color: var(--red); background: rgba(255, 107, 107, 0.1); }
+      .bcard .bl { font-size: 11.5px; color: var(--muted); line-height: 1.45; min-height: 32px; word-break: break-word; }
+      .bcard .bb { font-size: 10.5px; color: var(--faint); font-family: Consolas, monospace; }
+      .bcard .bopen { align-self: flex-start; margin-top: 2px; }
+
+      /* console do Neguin */
+      .neguin-console { position: fixed; top: 0; right: 0; height: 100%; width: min(700px, 96vw); background: var(--panel); border-left: 1px solid var(--border); box-shadow: var(--shadow); transform: translateX(100%); transition: transform 0.24s cubic-bezier(.4,0,.2,1); z-index: 65; display: flex; flex-direction: column; }
+      .neguin-console.show { transform: translateX(0); }
+      .nc-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--border-soft); }
+      .nc-head b { font-size: 17px; }
+      .nc-proj { color: var(--muted); font-size: 14px; }
+      .nc-branch { font-size: 11.5px; color: var(--faint); margin-top: 5px; font-family: Consolas, monospace; }
+      .nc-log { flex: 1; overflow-y: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 10px; }
+      .nc-composer { border-top: 1px solid var(--border-soft); padding: 14px 16px; display: flex; gap: 10px; align-items: flex-end; }
+      .nc-composer textarea { flex: 1; resize: none; max-height: 140px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 12px; padding: 11px 13px; font-size: 13.5px; font-family: inherit; outline: 0; }
+      .nc-composer textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.15); }
+      .ne { font-size: 13.5px; line-height: 1.55; max-width: 96%; }
+      .ne.you { align-self: flex-end; max-width: 88%; background: linear-gradient(95deg, var(--accent), #9d7bff); color: #fff; padding: 10px 13px; border-radius: 14px; border-bottom-right-radius: 4px; white-space: pre-wrap; }
+      .ne.text { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--border); padding: 11px 14px; border-radius: 14px; border-bottom-left-radius: 4px; }
+      .ne.tool { align-self: flex-start; color: var(--accent-2); font-size: 12px; font-family: Consolas, monospace; padding: 3px 0 3px 8px; border-left: 2px solid var(--border); word-break: break-all; }
+      .ne.tool .tn { color: #c7b8ff; font-weight: 700; }
+      .ne.sys { align-self: center; color: var(--faint); font-size: 11.5px; text-align: center; }
+      .ne.exit { align-self: stretch; color: var(--green); font-size: 12px; background: rgba(61, 220, 132, 0.08); border: 1px solid rgba(61, 220, 132, 0.25); border-radius: 10px; padding: 12px 14px; white-space: pre-wrap; font-family: Consolas, monospace; line-height: 1.6; }
+      .ne.err { align-self: flex-start; color: var(--red); font-size: 12px; }
+      .nc-typing { align-self: flex-start; color: var(--muted); font-size: 12px; font-style: italic; display: inline-flex; gap: 5px; align-items: center; }
+      .nc-typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: blink 1.3s infinite both; }
+      .nc-typing span:nth-child(2) { animation-delay: 0.2s; } .nc-typing span:nth-child(3) { animation-delay: 0.4s; }
+
+      /* toast */
+      #toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: 13px 20px; border-radius: 12px; box-shadow: var(--shadow); font-size: 13.5px; opacity: 0; pointer-events: none; transition: 0.25s; z-index: 60; max-width: 80vw; }
+      #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+      #toast.ok { border-color: rgba(61, 220, 132, 0.5); } #toast.err { border-color: rgba(255, 107, 107, 0.5); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="top">
+        <div class="brand">
+          <h1>Hub de Projetos</h1>
+          <p id="subtitle">Carregando seus projetos…</p>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="n" id="s-total">—</div><div class="l">Projetos</div></div>
+          <div class="stat green"><div class="n" id="s-today">—</div><div class="l">Ativos hoje</div></div>
+          <div class="stat amber"><div class="n" id="s-dirty">—</div><div class="l">Com alterações</div></div>
+          <div class="stat ready"><div class="n" id="s-ready">—</div><div class="l">Média p/ vendas</div></div>
+        </div>
+      </header>
+
+      <nav class="nav">
+        <button id="nav-proj" class="on">Projetos</button>
+        <button id="nav-ins">Insights</button>
+        <button id="nav-lousa" title="Abrir a lousa de agentes (terminais persistentes)">🪧 Lousa</button>
+      </nav>
+
+      <!-- VIEW: PROJETOS -->
+      <section id="view-proj">
+        <div class="toolbar">
+          <label class="search">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+            <input id="q" type="text" placeholder="Buscar projeto…  ( / )" autocomplete="off" />
+          </label>
+          <select class="sort" id="sort">
+            <option value="activity">Atividade recente</option>
+            <option value="changes">Mais alterações</option>
+            <option value="name">Nome (A→Z)</option>
+          </select>
+          <button class="ghost-btn" id="refresh">↻ Sincronizar</button>
+          <button class="ghost-btn" id="estimate-all" title="Calcular a % de todos os projetos com IA (um por um)">🤖 Calcular %</button>
+          <button class="ghost-btn nbtn" id="portfolio-btn" title="Soltar o Neguin em vários projetos de uma vez (3 em paralelo)">🧠 Neguin no portfólio</button>
+        </div>
+        <div class="grid" id="grid"></div>
+        <div class="empty" id="empty" style="display: none">Nenhum projeto encontrado.</div>
+      </section>
+
+      <!-- VIEW: INSIGHTS -->
+      <section id="view-ins" style="display: none">
+        <div class="composer-note">
+          <textarea id="ins-text" placeholder="Anote um insight, ideia ou lembrete…"></textarea>
+          <div style="display: flex; flex-direction: column; gap: 12px">
+            <div class="swatches" id="ins-swatches">
+              <div class="sw c-amber on" data-color="amber"></div>
+              <div class="sw c-green" data-color="green"></div>
+              <div class="sw c-blue" data-color="blue"></div>
+              <div class="sw c-pink" data-color="pink"></div>
+              <div class="sw c-violet" data-color="violet"></div>
+            </div>
+            <select class="sort" id="ins-project"><option value="">Sem projeto</option></select>
+            <button class="btn primary" id="ins-add">+ Adicionar</button>
+          </div>
+        </div>
+        <div class="notes" id="notes"></div>
+        <div class="empty" id="ins-empty" style="display: none">Nenhum insight ainda. Anote o primeiro acima.</div>
+      </section>
+    </div>
+
+    <!-- DRAWER -->
+    <div class="drawer-bg" id="drawer-bg"></div>
+    <aside class="drawer" id="drawer">
+      <div class="drawer-head">
+        <div class="row1"><h2 id="d-title">Projeto</h2><button class="x" id="d-close">×</button></div>
+        <div class="dtabs">
+          <button data-tab="chat" class="on">💬 Chat</button>
+          <button data-tab="tasks">✓ Tasks</button>
+          <button data-tab="sync">↻ Sync</button>
+        </div>
+      </div>
+      <div class="dbody">
+        <div class="dpane chat on" data-pane="chat">
+          <div class="msgs" id="msgs"></div>
+          <div class="composer">
+            <textarea id="chat-input" rows="1" placeholder="Pergunte ao Claude sobre este projeto…  (Ctrl+Enter envia)"></textarea>
+            <button class="btn primary" id="chat-send">Enviar</button>
+          </div>
+        </div>
+        <div class="dpane" data-pane="tasks"><div id="tasks-list"><div class="muted-note">Carregando issues…</div></div></div>
+        <div class="dpane" data-pane="sync">
+          <div class="toggle-row">
+            <div><b>Sync automático</b><div style="color: var(--muted); font-size: 12px; margin-top: 4px">Atualiza o hub a cada commit</div></div>
+            <label class="switch"><input type="checkbox" id="hook-toggle" /><span class="track"></span></label>
+          </div>
+          <div class="sync-desc">
+            Instala um hook <code>post-commit</code> no repositório que avisa o Hub sempre que
+            você commitar — assim o status fica instantâneo. O Hub também sincroniza sozinho a
+            cada 60s e ao clicar em <b>Sincronizar</b>.
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MODAL NEGUIN -->
+    <div class="ovl" id="neguin-ovl">
+      <div class="modal">
+        <h3>🧠 Chamar o Neguin</h3>
+        <p class="sub" id="neguin-sub">Diga o objetivo. O Neguin (Opus) vai planejar e executar sozinho num branch isolado.</p>
+        <textarea id="neguin-goal" placeholder="Ex: implementar billing por assinatura (planos + checkout) reaproveitando o que já existe, com testes…"></textarea>
+        <div class="guard">🔒 Roda num <b>git worktree isolado</b> no branch <code>neguin/&lt;data&gt;</code>. <b>Nunca dá push</b>; seu <code>main</code> fica intocado. Você revisa e dá merge se aprovar. Abre um terminal pra você acompanhar ao vivo.</div>
+        <div class="row">
+          <button class="btn" id="neguin-cancel">Cancelar</button>
+          <button class="btn neguin" id="neguin-go">🧠 Soltar o Neguin</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL PORTFÓLIO -->
+    <div class="ovl" id="portfolio-ovl">
+      <div class="modal" style="width: min(640px, 94vw)">
+        <h3>🧠 Neguin no portfólio</h3>
+        <p class="sub">Uma diretiva, vários projetos. O Neguin trabalha em até <b>3 ao mesmo tempo</b>, cada um num branch isolado. Você acompanha tudo no painel.</p>
+        <textarea id="portfolio-goal" placeholder="Ex: deixe cada projeto mais perto de vender — ataque o maior bloqueio de cada um (billing, deploy, etc.) com testes…"></textarea>
+        <div style="margin-top: 14px">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
+            <b style="font-size: 13px">Projetos</b>
+            <label style="font-size: 12px; color: var(--muted); cursor: pointer"><input type="checkbox" id="pf-all" checked /> todos</label>
+          </div>
+          <div id="pf-projects" class="pf-projects"></div>
+        </div>
+        <div class="guard">🔒 Cada Neguin roda num <b>worktree isolado</b>, <b>nunca dá push</b>. Config isolado por agente (paralelo seguro). Você revisa e dá merge no que aprovar.</div>
+        <div class="row">
+          <button class="btn" id="portfolio-cancel">Cancelar</button>
+          <button class="btn neguin" id="portfolio-go">🧠 Soltar o Neguin</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAINEL DO PORTFÓLIO (board) -->
+    <aside class="neguin-console board" id="board">
+      <div class="nc-head">
+        <div><b>🧠 Neguin · Portfólio</b><div class="nc-branch" id="board-sub"></div></div>
+        <button class="x" id="board-close">×</button>
+      </div>
+      <div class="board-grid" id="board-grid"></div>
+    </aside>
+
+    <!-- CONSOLE DO NEGUIN (streaming, dentro do hub) -->
+    <aside class="neguin-console" id="neguin-console">
+      <div class="nc-head">
+        <div>
+          <div><b>🧠 Neguin</b> <span class="nc-proj" id="nc-proj"></span></div>
+          <div class="nc-branch" id="nc-branch"></div>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center">
+          <button class="btn icon" id="nc-stop" title="Parar o Neguin">⏹ Parar</button>
+          <button class="x" id="nc-close">×</button>
+        </div>
+      </div>
+      <div class="nc-log" id="nc-log"></div>
+      <div class="nc-composer">
+        <textarea id="nc-input" rows="1" placeholder="Responder ao Neguin…  (Enter envia)"></textarea>
+        <button class="btn primary" id="nc-send">Enviar</button>
+      </div>
+    </aside>
+
+    <div id="toast"></div>
+
+    <script>
+      const $ = (s) => document.querySelector(s);
+      const grid = $("#grid");
+      let projects = [];
+      const statusMap = {};
+      const ghCache = {};
+      const chats = {}; // id -> [{role, text}]
+      let drawerId = null;
+      let insColor = "amber";
+
+      const esc = (s) => String(s || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+      // markdown -> html SEGURO: escapa tudo primeiro, depois aplica formatação.
+      // Só geramos nossas próprias tags + links http(s). Nada do texto vira HTML ativo.
+      function mdInline(s) {
+        s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+        s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+        s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+        s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+        return s;
+      }
+      function mdToHtml(raw) {
+        const lines = esc(raw).split("\n");
+        let html = "", i = 0, inList = false, listType = "";
+        const closeList = () => { if (inList) { html += `</${listType}>`; inList = false; } };
+        while (i < lines.length) {
+          const line = lines[i];
+          if (/^```/.test(line.trim())) {
+            closeList();
+            let code = ""; i++;
+            while (i < lines.length && !/^```/.test(lines[i].trim())) { code += lines[i] + "\n"; i++; }
+            i++;
+            html += `<pre><code>${code.replace(/\n$/, "")}</code></pre>`;
+            continue;
+          }
+          const h = line.match(/^(#{1,4})\s+(.*)$/);
+          if (h) { closeList(); const lv = Math.min(h[1].length + 2, 6); html += `<h${lv}>${mdInline(h[2])}</h${lv}>`; i++; continue; }
+          if (/^\s*(---|\*\*\*|___)\s*$/.test(line)) { closeList(); html += "<hr>"; i++; continue; }
+          const ul = line.match(/^\s*[-*]\s+(.*)$/);
+          if (ul) { if (!inList || listType !== "ul") { closeList(); html += "<ul>"; inList = true; listType = "ul"; } html += `<li>${mdInline(ul[1])}</li>`; i++; continue; }
+          const ol = line.match(/^\s*\d+\.\s+(.*)$/);
+          if (ol) { if (!inList || listType !== "ol") { closeList(); html += "<ol>"; inList = true; listType = "ol"; } html += `<li>${mdInline(ol[1])}</li>`; i++; continue; }
+          if (line.trim() === "") { closeList(); i++; continue; }
+          closeList();
+          html += `<p>${mdInline(line)}</p>`;
+          i++;
+        }
+        closeList();
+        return html;
+      }
+
+      function toast(msg, kind = "") {
+        const t = $("#toast");
+        t.textContent = msg; t.className = "show " + kind;
+        clearTimeout(t._t); t._t = setTimeout(() => (t.className = ""), 2800);
+      }
+      function activityClass(iso) {
+        if (!iso) return "";
+        const d = (Date.now() - new Date(iso).getTime()) / 86400000;
+        return d < 1 ? "act-today" : d < 7 ? "act-week" : "";
+      }
+
+      // ---------- projetos ----------
+      function cardHtml(p) {
+        const st = statusMap[p.id];
+        const tags = (p.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join("");
+        let badges, commit, cardCls = "";
+        if (!st) {
+          badges = `<span class="badge skel">branch</span><span class="badge skel">status</span>`;
+          commit = "carregando status…";
+        } else {
+          cardCls = st.changes > 0 ? "has-changes" : activityClass(st.lastIso);
+          const changeBadge = st.changes > 0
+            ? `<span class="badge dirty"><span class="dot"></span>${st.changes} alteraç${st.changes > 1 ? "ões" : "ão"}</span>`
+            : `<span class="badge clean"><span class="dot"></span>limpo</span>`;
+          const sync = st.ahead || st.behind
+            ? `<span class="badge sync"><span class="dot"></span>${st.ahead ? "↑" + st.ahead : ""}${st.behind ? " ↓" + st.behind : ""}</span>` : "";
+          const ghSlot = `<span class="badge gh skel" data-gh="${p.id}">github</span>`;
+          badges = `<span class="badge branch"><span class="dot"></span>${esc(st.branch)}</span>${changeBadge}${sync}${ghSlot}`;
+          commit = st.lastCommit
+            ? `<b>${esc(st.lastCommit)}</b> · <span class="when">${esc(st.lastRelative)}</span>${st.lastAuthor ? " · " + esc(st.lastAuthor) : ""}`
+            : "sem commits";
+        }
+        const gh = st && st.githubUrl ? `<a class="btn icon" href="${st.githubUrl}" target="_blank" title="Abrir no GitHub">GitHub ↗</a>` : "";
+        const r = Math.max(0, Math.min(100, p.readiness || 0));
+        const C = 119.38;
+        const dash = ((C * r) / 100).toFixed(1);
+        const col = r >= 67 ? "var(--green)" : r >= 34 ? "var(--amber)" : "var(--red)";
+        const ringInner = p._estimating
+          ? `<svg viewBox="0 0 48 48"><circle class="bg" cx="24" cy="24" r="19"/></svg><span class="pct est">⋯</span>`
+          : `<svg viewBox="0 0 48 48"><circle class="bg" cx="24" cy="24" r="19"/><circle class="fg" cx="24" cy="24" r="19" style="stroke:${col};stroke-dasharray:${dash} ${C}"/></svg><span class="pct" style="color:${col}">${r}%</span>`;
+        const ring = `<div class="ring-wrap"><div class="ring" data-ring="${p.id}" title="Pronto para vendas — clique para editar manualmente">${ringInner}</div><div class="ring-cap">${p._estimating ? "calculando…" : "p/ vendas"}</div></div>`;
+        return `
+          <div class="card ${cardCls}" data-id="${p.id}">
+            <div class="card-head2">
+              <div><div class="card-title">${esc(p.name)}</div><div class="tags">${tags}</div></div>
+              ${ring}
+            </div>
+            <div class="badges">${badges}</div>
+            <div class="commit">${commit}</div>
+            <div class="actions">
+              <button class="btn neguin" data-act="neguin" title="Chamar o Neguin — agente autônomo que planeja e executa num branch isolado">🧠 Neguin</button>
+              <button class="btn primary" data-act="chat" title="Conversar com o Claude aqui no hub">💬 Chat</button>
+              <button class="btn" data-act="claude" title="Abrir Claude Code num terminal">✦ Terminal</button>
+              <button class="btn" data-act="lousa" title="Abrir a lousa deste projeto (terminais embutidos persistentes)">🪧 Lousa</button>
+              <button class="btn" data-act="task" title="Rodar uma tarefa num terminal">▶ Tarefa</button>
+              <button class="btn" data-act="estimate" title="Estimar % pronto p/ vendas com IA (lê o repo)">🤖 %</button>
+              <span class="spacer"></span>
+              <button class="btn icon" data-act="code" title="VS Code">VS Code</button>
+              <button class="btn icon" data-act="pull" title="git pull">Pull</button>
+              ${gh}
+            </div>
+          </div>`;
+      }
+      function renderProjects() {
+        const q = $("#q").value.trim().toLowerCase();
+        const sort = $("#sort").value;
+        let list = projects.filter((p) => p.name.toLowerCase().includes(q) || (p.tags || []).join(" ").toLowerCase().includes(q));
+        list.sort((a, b) => {
+          const sa = statusMap[a.id], sb = statusMap[b.id];
+          if (sort === "name") return a.name.localeCompare(b.name);
+          if (sort === "changes") return ((sb && sb.changes) || 0) - ((sa && sa.changes) || 0);
+          const ta = sa && sa.lastIso ? new Date(sa.lastIso).getTime() : 0;
+          const tb = sb && sb.lastIso ? new Date(sb.lastIso).getTime() : 0;
+          return tb - ta;
+        });
+        grid.innerHTML = list.map(cardHtml).join("");
+        $("#empty").style.display = list.length ? "none" : "block";
+        for (const p of list) if (ghCache[p.id]) paintGh(p.id, ghCache[p.id]);
+      }
+      function updateStats() {
+        const sts = Object.values(statusMap);
+        $("#s-total").textContent = projects.length;
+        $("#s-today").textContent = sts.filter((s) => s.lastIso && (Date.now() - new Date(s.lastIso).getTime()) / 86400000 < 1).length;
+        $("#s-dirty").textContent = sts.filter((s) => s.changes > 0).length;
+        const avg = projects.length ? Math.round(projects.reduce((a, p) => a + (p.readiness || 0), 0) / projects.length) : 0;
+        $("#s-ready").textContent = avg + "%";
+        $("#subtitle").textContent = `${projects.length} projetos · conectados ao GitHub e ao Claude`;
+      }
+      function paintGh(id, gh) {
+        const el = grid.querySelector(`[data-gh="${id}"]`);
+        if (!el) return;
+        el.classList.remove("skel");
+        const parts = [];
+        if (gh.prs) parts.push(`${gh.prs} PR${gh.prs > 1 ? "s" : ""}`);
+        if (gh.issues) parts.push(`${gh.issues} issue${gh.issues > 1 ? "s" : ""}`);
+        if (!parts.length) { el.remove(); return; }
+        el.innerHTML = `<span class="dot"></span>${parts.join(" · ")}`;
+      }
+      async function loadStatuses() {
+        await Promise.all(projects.map(async (p) => {
+          try { statusMap[p.id] = await fetch(`/api/projects/${encodeURIComponent(p.id)}/status`).then((r) => r.json()); } catch {}
+        }));
+        renderProjects(); updateStats();
+        projects.forEach(async (p) => {
+          try { const gh = await fetch(`/api/projects/${encodeURIComponent(p.id)}/github`).then((r) => r.json()); ghCache[p.id] = gh; paintGh(p.id, gh); } catch {}
+        });
+      }
+      async function boot() {
+        projects = (await fetch("/api/projects").then((r) => r.json())).projects || [];
+        const sel = $("#ins-project");
+        sel.innerHTML = '<option value="">Sem projeto</option>' + projects.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+        renderProjects(); updateStats();
+        await loadStatuses();
+        loadInsights();
+      }
+      async function action(id, act, extra = {}) {
+        try {
+          const r = await fetch("/api/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, action: act, ...extra }) }).then((x) => x.json());
+          toast(r.msg || (r.ok ? "Feito." : "Falhou."), r.ok ? "ok" : "err");
+          if (act === "pull" && r.ok) setTimeout(loadStatuses, 800);
+        } catch { toast("Erro ao executar.", "err"); }
+      }
+
+      grid.addEventListener("click", (e) => {
+        const ringEl = e.target.closest("[data-ring]");
+        if (ringEl) { e.stopPropagation(); return editReadiness(ringEl); }
+        const btn = e.target.closest("[data-act]"); if (!btn) return;
+        const id = btn.closest(".card").dataset.id; const act = btn.dataset.act;
+        if (act === "neguin") return openNeguin(id);
+        if (act === "chat") return openDrawer(id);
+        if (act === "task") return openDrawerTask(id);
+        if (act === "estimate") return estimateOne(id);
+        if (act === "lousa") return (location.href = "/canvas.html?board=" + encodeURIComponent(id));
+        action(id, act);
+      });
+
+      // ---------- Neguin ----------
+      let neguinId = null;
+      function openNeguin(id) {
+        neguinId = id;
+        const p = projects.find((x) => x.id === id);
+        $("#neguin-sub").textContent = `Objetivo para o Neguin no projeto "${p ? p.name : ""}". Ele planeja e executa sozinho num branch isolado.`;
+        $("#neguin-goal").value = "";
+        $("#neguin-ovl").classList.add("show");
+        setTimeout(() => $("#neguin-goal").focus(), 60);
+      }
+      function closeNeguin() { $("#neguin-ovl").classList.remove("show"); neguinId = null; }
+      $("#neguin-cancel").addEventListener("click", closeNeguin);
+      $("#neguin-ovl").addEventListener("click", (e) => { if (e.target === $("#neguin-ovl")) closeNeguin(); });
+      let neguinES = null, neguinRunId = null;
+      $("#neguin-go").addEventListener("click", async () => {
+        const goal = $("#neguin-goal").value.trim();
+        if (!goal) return toast("Escreva o objetivo.", "err");
+        const id = neguinId;
+        const p = projects.find((x) => x.id === id);
+        closeNeguin();
+        openConsole(p);
+        ncAdd("sys", "Criando worktree isolado e chamando o Neguin…");
+        try {
+          const r = await fetch(`/api/projects/${encodeURIComponent(id)}/neguin`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ goal }) }).then((x) => x.json());
+          if (!r.ok) { ncAdd("err", r.msg || "Falhou ao iniciar o Neguin."); return; }
+          neguinRunId = r.runId;
+          connectStream(r.runId);
+        } catch { ncAdd("err", "Erro de rede ao chamar o Neguin."); }
+      });
+      $("#neguin-goal").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") $("#neguin-go").click(); });
+
+      // ---- console do Neguin (streaming via SSE) ----
+      const ncLog = () => $("#nc-log");
+      const ncScroll = () => { const l = ncLog(); l.scrollTop = l.scrollHeight; };
+      function openConsole(p) {
+        $("#nc-proj").textContent = p ? "· " + p.name : "";
+        $("#nc-branch").textContent = "";
+        ncLog().innerHTML = "";
+        $("#neguin-console").classList.add("show");
+      }
+      function closeConsole() { $("#neguin-console").classList.remove("show"); if (neguinES) { neguinES.close(); neguinES = null; } }
+      $("#nc-close").addEventListener("click", closeConsole);
+
+      function connectStream(runId) {
+        if (neguinES) neguinES.close();
+        neguinES = new EventSource(`/api/neguin/${encodeURIComponent(runId)}/stream`);
+        neguinES.onopen = () => { ncLog().innerHTML = ""; }; // re-render limpo a cada (re)conexão
+        neguinES.onmessage = (e) => { try { ncRender(JSON.parse(e.data)); } catch {} };
+      }
+
+      function setTyping(on) {
+        let t = document.getElementById("nc-typing-el");
+        if (on) { if (!t) { t = document.createElement("div"); t.id = "nc-typing-el"; t.className = "nc-typing"; t.innerHTML = "Neguin trabalhando <span></span><span></span><span></span>"; ncLog().appendChild(t); ncScroll(); } }
+        else if (t) t.remove();
+      }
+      function ncAdd(cls, text) { const d = document.createElement("div"); d.className = "ne " + cls; d.textContent = text; ncLog().appendChild(d); ncScroll(); }
+      function ncRender(ev) {
+        setTyping(false);
+        switch (ev.kind) {
+          case "queued": ncAdd("sys", "Na fila… aguardando um slot livre (3 em paralelo)."); break;
+          case "started": $("#nc-branch").textContent = "branch isolado: " + ev.branch + " · sem push"; ncAdd("sys", `Worktree criado. Neguin começou a trabalhar.`); setTyping(true); break;
+          case "you": { const d = document.createElement("div"); d.className = "ne you"; d.textContent = ev.text; ncLog().appendChild(d); ncScroll(); setTyping(true); break; }
+          case "text": { const d = document.createElement("div"); d.className = "ne text md"; d.innerHTML = mdToHtml(ev.text); ncLog().appendChild(d); ncScroll(); setTyping(true); break; }
+          case "tool": { const d = document.createElement("div"); d.className = "ne tool"; const label = ev.name === "Task" ? "🤖 subagente" : "🔧 " + esc(ev.name); d.innerHTML = `<span class="tn">${label}</span> ${esc(ev.info || "")}`; ncLog().appendChild(d); ncScroll(); setTyping(true); break; }
+          case "turn_done": setTyping(false); break;
+          case "error": ncAdd("err", ev.text || "erro"); break;
+          case "stderr": break;
+          case "stopped": ncAdd("sys", "Neguin parado."); break;
+          case "exit": { const base = ev.base || "main"; const d = document.createElement("div"); d.className = "ne exit"; d.textContent = `✅ Neguin finalizou (código ${ev.code}).\n\nBranch: ${ev.branch}\n\nRevisar:  git -C "${ev.worktree}" diff ${base}..${ev.branch}\nAprovar:  git -C "${ev.repo}" merge ${ev.branch}`; ncLog().appendChild(d); ncScroll(); break; }
+        }
+      }
+      async function ncSend() {
+        const inp = $("#nc-input"); const msg = inp.value.trim();
+        if (!msg || !neguinRunId) return;
+        inp.value = ""; inp.style.height = "auto";
+        try { await fetch(`/api/neguin/${encodeURIComponent(neguinRunId)}/say`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: msg }) }); }
+        catch { toast("Falha ao enviar.", "err"); }
+      }
+      $("#nc-send").addEventListener("click", ncSend);
+      $("#nc-input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ncSend(); } });
+      $("#nc-input").addEventListener("input", (e) => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px"; });
+      $("#nc-stop").addEventListener("click", async () => { if (neguinRunId) { try { await fetch(`/api/neguin/${encodeURIComponent(neguinRunId)}/stop`, { method: "POST" }); } catch {} } });
+
+      // abre o console para um run específico (usado pelo painel)
+      function openRunConsole(runId, projectName) {
+        neguinRunId = runId;
+        $("#nc-proj").textContent = projectName ? "· " + projectName : "";
+        $("#nc-branch").textContent = "";
+        $("#nc-log").innerHTML = "";
+        $("#neguin-console").classList.add("show");
+        connectStream(runId);
+      }
+
+      // ---------- Portfólio ----------
+      $("#portfolio-btn").addEventListener("click", openPortfolio);
+      function openPortfolio() {
+        const box = $("#pf-projects");
+        box.innerHTML = projects.map((p) => `<label><input type="checkbox" class="pf-cb" value="${p.id}" checked> ${esc(p.name)}</label>`).join("");
+        $("#pf-all").checked = true;
+        $("#portfolio-goal").value = "";
+        $("#portfolio-ovl").classList.add("show");
+        setTimeout(() => $("#portfolio-goal").focus(), 60);
+      }
+      function closePortfolio() { $("#portfolio-ovl").classList.remove("show"); }
+      $("#portfolio-cancel").addEventListener("click", closePortfolio);
+      $("#portfolio-ovl").addEventListener("click", (e) => { if (e.target === $("#portfolio-ovl")) closePortfolio(); });
+      $("#pf-all").addEventListener("change", (e) => { document.querySelectorAll(".pf-cb").forEach((c) => (c.checked = e.target.checked)); });
+      $("#portfolio-go").addEventListener("click", async () => {
+        const goal = $("#portfolio-goal").value.trim();
+        if (!goal) return toast("Escreva a diretiva.", "err");
+        const ids = [...document.querySelectorAll(".pf-cb:checked")].map((c) => c.value);
+        if (!ids.length) return toast("Selecione ao menos um projeto.", "err");
+        closePortfolio();
+        try {
+          const r = await fetch("/api/neguin/portfolio", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ goal, projectIds: ids }) }).then((x) => x.json());
+          if (!r.ok) return toast(r.msg || "Falhou.", "err");
+          toast(`🧠 Neguin solto em ${r.runs.length} projetos (3 em paralelo).`, "ok");
+          openBoard();
+        } catch { toast("Erro ao iniciar o portfólio.", "err"); }
+      });
+
+      // ---------- Painel (board) ----------
+      let boardTimer = null;
+      function openBoard() { $("#board").classList.add("show"); refreshBoard(); if (boardTimer) clearInterval(boardTimer); boardTimer = setInterval(refreshBoard, 3000); }
+      function closeBoard() { $("#board").classList.remove("show"); if (boardTimer) { clearInterval(boardTimer); boardTimer = null; } }
+      $("#board-close").addEventListener("click", closeBoard);
+      async function refreshBoard() {
+        let d;
+        try { d = await fetch("/api/neguin/board").then((x) => x.json()); } catch { return; }
+        const runs = (d.runs || []).slice().reverse();
+        $("#board-sub").textContent = `${d.running} trabalhando · ${d.queued} na fila · ${d.max} em paralelo`;
+        const order = { running: 0, queued: 1, done: 2, error: 3, stopped: 3 };
+        runs.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
+        const stLabel = { queued: "fila", running: "trabalhando", done: "concluído", error: "erro", stopped: "parado" };
+        $("#board-grid").innerHTML = runs.map((r) => `
+          <div class="bcard">
+            <div class="bt"><span class="bn">${esc(r.projectName)}</span><span class="bstatus ${r.status}">${stLabel[r.status] || r.status}</span></div>
+            <div class="bl">${esc(r.lastLine || "—")}</div>
+            ${r.branch ? `<div class="bb">${esc(r.branch)}</div>` : ""}
+            <button class="btn icon bopen" data-open="${r.runId}" data-name="${esc(r.projectName)}">abrir console →</button>
+          </div>`).join("") || '<div class="empty" style="grid-column:1/-1">Nenhum Neguin rodando ainda.</div>';
+      }
+      $("#board-grid").addEventListener("click", (e) => {
+        const b = e.target.closest("[data-open]");
+        if (b) openRunConsole(b.dataset.open, b.dataset.name);
+      });
+
+      async function estimateOne(id) {
+        const p = projects.find((x) => x.id === id);
+        if (!p || p._estimating) return;
+        p._estimating = true; renderProjects();
+        try {
+          const r = await fetch(`/api/projects/${encodeURIComponent(id)}/estimate`, { method: "POST" }).then((x) => x.json());
+          if (r.ok) { p.readiness = r.readiness; toast(`${p.name}: ${r.readiness}%${r.reason ? " — " + r.reason : ""}`, "ok"); }
+          else toast(`${p.name}: falhou (${r.error || "erro"})`, "err");
+        } catch { toast(`${p.name}: erro de rede`, "err"); }
+        p._estimating = false; renderProjects(); updateStats();
+      }
+      let estimatingAll = false;
+      async function estimateAll() {
+        if (estimatingAll) return;
+        estimatingAll = true;
+        toast("🤖 Calculando com IA, um por um… pode levar alguns minutos.");
+        for (const p of projects.slice()) await estimateOne(p.id);
+        toast("✅ % recalculadas para todos os projetos.", "ok");
+        estimatingAll = false;
+      }
+      $("#estimate-all").addEventListener("click", estimateAll);
+
+      function editReadiness(ringEl) {
+        const id = ringEl.dataset.ring;
+        const p = projects.find((x) => x.id === id);
+        const cur = p ? p.readiness || 0 : 0;
+        ringEl.innerHTML = `<input class="ring-input" type="number" min="0" max="100" value="${cur}">`;
+        const inp = ringEl.querySelector("input");
+        inp.focus(); inp.select();
+        let done = false;
+        const commit = async () => {
+          if (done) return; done = true;
+          let v = parseInt(inp.value, 10); if (isNaN(v)) v = cur;
+          try {
+            const res = await fetch("/api/readiness", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, value: v }) }).then((x) => x.json());
+            if (p && res.ok) p.readiness = res.readiness;
+          } catch {}
+          renderProjects();
+        };
+        inp.addEventListener("blur", commit);
+        inp.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") inp.blur();
+          else if (ev.key === "Escape") { done = true; renderProjects(); }
+        });
+      }
+      $("#q").addEventListener("input", renderProjects);
+      $("#sort").addEventListener("change", renderProjects);
+      $("#refresh").addEventListener("click", () => { toast("Sincronizando…"); loadStatuses(); });
+
+      // ---------- nav ----------
+      function showView(v) {
+        $("#nav-proj").classList.toggle("on", v === "proj");
+        $("#nav-ins").classList.toggle("on", v === "ins");
+        $("#view-proj").style.display = v === "proj" ? "" : "none";
+        $("#view-ins").style.display = v === "ins" ? "" : "none";
+      }
+      $("#nav-proj").addEventListener("click", () => showView("proj"));
+      $("#nav-ins").addEventListener("click", () => { showView("ins"); loadInsights(); });
+      $("#nav-lousa").addEventListener("click", () => (location.href = "/canvas.html"));
+
+      // ---------- drawer ----------
+      function openDrawer(id, tab = "chat") {
+        drawerId = id;
+        const p = projects.find((x) => x.id === id);
+        $("#d-title").textContent = p ? p.name : "Projeto";
+        $("#drawer").classList.add("show"); $("#drawer-bg").classList.add("show");
+        switchTab(tab);
+        renderChat();
+        if (tab === "tasks") loadTasks(id);
+        loadHook(id);
+        if (tab === "chat") setTimeout(() => $("#chat-input").focus(), 250);
+      }
+      function openDrawerTask(id) { openDrawer(id, "tasks"); }
+      function closeDrawer() { $("#drawer").classList.remove("show"); $("#drawer-bg").classList.remove("show"); drawerId = null; }
+      $("#d-close").addEventListener("click", closeDrawer);
+      $("#drawer-bg").addEventListener("click", closeDrawer);
+      function switchTab(tab) {
+        document.querySelectorAll(".dtabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+        document.querySelectorAll(".dpane").forEach((p) => p.classList.toggle("on", p.dataset.pane === tab));
+        if (tab === "tasks" && drawerId) loadTasks(drawerId);
+      }
+      document.querySelectorAll(".dtabs button").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+
+      // chat
+      function renderChat() {
+        const hist = chats[drawerId] || [];
+        const box = $("#msgs");
+        if (!hist.length) { box.innerHTML = `<div class="chat-hint">Converse com o Claude sobre este projeto.<br>Ele roda na pasta do repositório e enxerga o código.</div>`; return; }
+        box.innerHTML = hist
+          .map((m) => {
+            if (m.typing) return `<div class="msg bot typing"><span></span><span></span><span></span></div>`;
+            if (m.role === "bot") return `<div class="msg bot md">${mdToHtml(m.text)}</div>`;
+            return `<div class="msg user">${esc(m.text)}</div>`;
+          })
+          .join("");
+        box.scrollTop = box.scrollHeight;
+      }
+      async function sendChat() {
+        const input = $("#chat-input"); const msg = input.value.trim();
+        if (!msg || !drawerId) return;
+        const id = drawerId;
+        chats[id] = chats[id] || [];
+        chats[id].push({ role: "user", text: msg });
+        chats[id].push({ role: "bot", typing: true });
+        input.value = ""; input.style.height = "auto"; renderChat();
+        $("#chat-send").disabled = true;
+        try {
+          const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, message: msg }) }).then((x) => x.json());
+          chats[id].pop(); // remove "pensando"
+          chats[id].push({ role: "bot", text: r.reply || "(sem resposta)" });
+        } catch {
+          chats[id].pop();
+          chats[id].push({ role: "bot", text: "Erro ao falar com o Claude." });
+        }
+        $("#chat-send").disabled = false;
+        if (drawerId === id) renderChat();
+      }
+      $("#chat-send").addEventListener("click", sendChat);
+      $("#chat-input").addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); sendChat(); }
+      });
+      $("#chat-input").addEventListener("input", (e) => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px"; });
+
+      // tasks
+      async function loadTasks(id) {
+        const box = $("#tasks-list");
+        box.innerHTML = `<div class="muted-note">Carregando issues do GitHub…</div>`;
+        try {
+          const r = await fetch(`/api/projects/${encodeURIComponent(id)}/issues`).then((x) => x.json());
+          if (!r.repo) { box.innerHTML = `<div class="muted-note">Sem repositório GitHub vinculado.</div>`; return; }
+          if (!r.issues.length) { box.innerHTML = `<div class="muted-note">Nenhuma issue aberta. 🎉</div>`; return; }
+          box.innerHTML = r.issues.map((i) => `
+            <div class="task">
+              <div class="num">#${i.number}</div>
+              <div style="flex:1">
+                <a class="ttitle" href="${esc(i.url)}" target="_blank">${esc(i.title)}</a>
+                <div class="lbls">${(i.labels || []).map((l) => `<span class="lbl">${esc(l.name)}</span>`).join("")}</div>
+              </div>
+            </div>`).join("");
+        } catch { box.innerHTML = `<div class="muted-note">Falha ao carregar issues.</div>`; }
+      }
+
+      // sync hook
+      async function loadHook(id) {
+        try { const r = await fetch(`/api/projects/${encodeURIComponent(id)}/hook`).then((x) => x.json()); $("#hook-toggle").checked = !!r.enabled; } catch {}
+      }
+      $("#hook-toggle").addEventListener("change", async (e) => {
+        if (!drawerId) return;
+        const enable = e.target.checked;
+        try {
+          const r = await fetch(`/api/projects/${encodeURIComponent(drawerId)}/hook`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enable }) }).then((x) => x.json());
+          e.target.checked = !!r.enabled;
+          toast(r.enabled ? "Sync automático ativado." : "Sync automático desativado.", "ok");
+        } catch { toast("Falha ao configurar o hook.", "err"); }
+      });
+
+      // ---------- insights ----------
+      $("#ins-swatches").addEventListener("click", (e) => {
+        const sw = e.target.closest(".sw"); if (!sw) return;
+        insColor = sw.dataset.color;
+        document.querySelectorAll(".sw").forEach((s) => s.classList.toggle("on", s === sw));
+      });
+      async function loadInsights() {
+        const list = (await fetch("/api/insights").then((r) => r.json())).insights || [];
+        const box = $("#notes");
+        $("#ins-empty").style.display = list.length ? "none" : "block";
+        const pname = (pid) => { const p = projects.find((x) => x.id === pid); return p ? p.name : ""; };
+        box.innerHTML = list.map((n) => `
+          <div class="note c-${esc(n.color)}" data-id="${n.id}">
+            <div class="txt" contenteditable="true" data-id="${n.id}">${esc(n.text)}</div>
+            <div class="foot">
+              <span>${n.projectId ? "📌 " + esc(pname(n.projectId)) : ""}</span>
+              <button class="del" data-del="${n.id}" title="Apagar">×</button>
+            </div>
+          </div>`).join("");
+      }
+      $("#ins-add").addEventListener("click", async () => {
+        const text = $("#ins-text").value.trim(); if (!text) return toast("Escreva algo.", "err");
+        await fetch("/api/insights", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, color: insColor, projectId: $("#ins-project").value || null }) });
+        $("#ins-text").value = ""; loadInsights(); toast("Insight salvo.", "ok");
+      });
+      $("#notes").addEventListener("click", async (e) => {
+        const del = e.target.closest("[data-del]"); if (!del) return;
+        await fetch(`/api/insights/${del.dataset.del}`, { method: "DELETE" }); loadInsights();
+      });
+      $("#notes").addEventListener("focusout", async (e) => {
+        const txt = e.target.closest(".txt"); if (!txt) return;
+        await fetch(`/api/insights/${txt.dataset.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: txt.textContent }) });
+      });
+
+      // global keys
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { closeDrawer(); closeNeguin(); closePortfolio(); }
+        if (e.key === "/" && !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName) && !document.activeElement.isContentEditable) { e.preventDefault(); $("#q").focus(); }
+      });
+
+      boot();
+      setInterval(() => { if (!drawerId) loadStatuses(); }, 60000);
+    </script>
+  </body>
+</html>

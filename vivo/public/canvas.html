@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lousa — Hub de Projetos</title>
+<link rel="stylesheet" href="/vendor/xterm.css" />
+<style>
+  :root {
+    --bg: #0d1117; --grid: #161b22; --panel: #11161d; --panel2: #161c25;
+    --border: #2a3340; --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
+    --amber: #d2a64a; --purple: #a371f7; --teal: #39c5bb; --blue: #58a6ff;
+    --green: #3fb950; --gray: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden;
+    font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+
+  /* ---- top bar ---- */
+  #bar { position: fixed; top: 0; left: 0; right: 0; height: 46px; z-index: 50;
+    display: flex; align-items: center; gap: 10px; padding: 0 14px;
+    background: rgba(13,17,23,.92); border-bottom: 1px solid var(--border); backdrop-filter: blur(6px); }
+  #bar .title { font-weight: 600; font-size: 14px; letter-spacing: .2px; }
+  #bar .title small { color: var(--muted); font-weight: 400; }
+  #bar select, #bar button { background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+  #bar button:hover { border-color: var(--accent); }
+  #bar .spacer { flex: 1; }
+  #bar .hint { color: var(--muted); font-size: 12px; }
+  #bar a.home { color: var(--muted); text-decoration: none; font-size: 13px; }
+  #bar a.home:hover { color: var(--text); }
+
+  /* ---- canvas ---- */
+  #viewport { position: fixed; inset: 46px 0 0 0; overflow: hidden; cursor: grab;
+    background-color: var(--bg);
+    background-image: radial-gradient(var(--grid) 1px, transparent 1px);
+    background-size: 26px 26px; }
+  #viewport.panning { cursor: grabbing; }
+  #world { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  #edges { position: absolute; top: 0; left: 0; width: 8000px; height: 6000px;
+    pointer-events: none; overflow: visible; }
+  #edges path.edge { fill: none; stroke: var(--accent); stroke-width: 2.75;
+    filter: drop-shadow(0 0 4px rgba(88,166,255,.55)); }
+  #edges path.hot { stroke: var(--accent); }
+
+  /* ---- node ---- */
+  .node { position: absolute; width: 460px; height: 320px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column;
+    box-shadow: 0 8px 30px rgba(0,0,0,.45); overflow: hidden; }
+  .node.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 8px 30px rgba(0,0,0,.5); }
+  .node .head { height: 34px; flex: 0 0 34px; display: flex; align-items: center; gap: 8px;
+    padding: 0 8px 0 10px; background: var(--panel2); border-bottom: 1px solid var(--border);
+    cursor: move; user-select: none; }
+  .node .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray); flex: 0 0 auto; }
+  .node .dot.running { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .node .dot.queued { background: var(--amber); box-shadow: 0 0 6px var(--amber); animation: dotpulse 1.2s ease-in-out infinite; }
+  .node .dot.error { background: #f85149; box-shadow: 0 0 6px #f85149; }
+  .node .dot.exited { background: #6e7681; }
+  @keyframes dotpulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+  .node .role { font-size: 12.5px; font-weight: 600; color: var(--text); white-space: nowrap; }
+  .node .proj { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .node .head .grow { flex: 1; min-width: 6px; }
+  .node .pill { font-size: 10px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border); color: var(--muted);
+    white-space: nowrap; flex: 0 0 auto; }
+  .node .head button { background: transparent; border: 0; color: var(--muted); cursor: pointer;
+    font-size: 13px; padding: 3px 5px; border-radius: 5px; line-height: 1; }
+  .node .head button:hover { background: #21262d; color: var(--text); }
+  .node .head button.link.active { color: var(--accent); }
+  .node .term { flex: 1; min-height: 0; background: #000; padding: 4px 2px 2px 6px; }
+  .node .term .xterm { height: 100%; }
+  .node .reopen { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; color: var(--muted); font-size: 13px; background: #0b0e13; }
+  .node .reopen button { background: var(--accent); color: #04111f; border: 0; border-radius: 7px;
+    padding: 7px 14px; font-weight: 600; cursor: pointer; }
+  .node .resize { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+  .node .resize::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px;
+    border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); }
+
+  /* chips coloridos por role (igual o Maestri) */
+  .node[data-role="orchestrator"] .pill { color: var(--amber); border-color: var(--amber); background: rgba(210,166,74,.13); }
+  .node[data-role="reviewer"] .pill { color: var(--purple); border-color: var(--purple); background: rgba(163,113,247,.13); }
+  .node[data-role="tester"] .pill { color: var(--teal); border-color: var(--teal); background: rgba(57,197,187,.13); }
+  .node[data-role="dev"] .pill { color: var(--blue); border-color: var(--blue); background: rgba(88,166,255,.13); }
+  .node[data-role="claude"] .pill { color: var(--gray); border-color: var(--border); background: rgba(139,148,158,.10); }
+  .node[data-role="shell"] .pill { color: var(--green); border-color: var(--green); background: rgba(63,185,80,.13); }
+  /* faixa de cor no topo do node, por role */
+  .node::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--border); z-index: 1; }
+  .node[data-role="orchestrator"]::before { background: var(--amber); }
+  .node[data-role="reviewer"]::before { background: var(--purple); }
+  .node[data-role="tester"]::before { background: var(--teal); }
+  .node[data-role="dev"]::before { background: var(--blue); }
+  .node[data-role="shell"]::before { background: var(--green); }
+
+  /* ---- nota (post-it) ---- */
+  .note { position: absolute; width: 240px; min-height: 130px; background: #f2d775; color: #3a2f00;
+    border-radius: 4px; padding: 13px 15px; font-size: 14.5px; line-height: 1.4;
+    box-shadow: 0 6px 18px rgba(0,0,0,.4); cursor: move; }
+  .note textarea { width: 100%; height: 100%; min-height: 104px; border: 0; background: transparent;
+    resize: none; font: inherit; color: inherit; outline: none; }
+  .note .x { position: absolute; top: 2px; right: 5px; cursor: pointer; color: #7a6500; font-size: 14px; }
+
+  /* ---- modal criar agente ---- */
+  #modal { position: fixed; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.55); }
+  #modal.show { display: flex; }
+  #modal .box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    width: 440px; max-width: 92vw; padding: 18px 20px; }
+  #modal h3 { margin: 0 0 14px; font-size: 15px; }
+  #modal label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  #modal select, #modal textarea { width: 100%; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; font-size: 13px; font-family: inherit; }
+  #modal textarea { resize: vertical; min-height: 64px; }
+  #modal .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+  #modal .row button { padding: 8px 16px; border-radius: 7px; border: 1px solid var(--border);
+    background: var(--panel2); color: var(--text); cursor: pointer; font-size: 13px; }
+  #modal .row button.primary { background: var(--accent); color: #04111f; border-color: var(--accent); font-weight: 600; }
+
+  /* ---- seletor de lousas (tela inicial) ---- */
+  #picker { position: fixed; inset: 0; z-index: 120; background: var(--bg);
+    background-image: radial-gradient(var(--grid) 1px, transparent 1px); background-size: 26px 26px;
+    display: none; flex-direction: column; align-items: center; padding: 60px 24px; overflow: auto; }
+  #picker.show { display: flex; }
+  #picker .pk-head { text-align: center; margin-bottom: 28px; }
+  #picker h1 { font-size: 22px; margin: 0 0 6px; }
+  #picker .sub { color: var(--muted); font-size: 13px; }
+  #picker .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 14px; width: 100%; max-width: 920px; }
+  #picker .pk { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 16px 14px; cursor: pointer; transition: border-color .12s, transform .08s; }
+  #picker .pk:hover { border-color: var(--accent); transform: translateY(-2px); }
+  #picker .pk .nm { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  #picker .pk .meta { font-size: 12px; color: var(--muted); }
+  #picker .pk .tags { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+  #picker .pk .tag { font-size: 11px; color: var(--muted); background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 20px; padding: 2px 9px; }
+  #picker .pk.portfolio { border-color: var(--accent); background: linear-gradient(180deg, rgba(88,166,255,.08), var(--panel)); }
+  #picker .pk.portfolio .nm { color: var(--accent); }
+  #picker .pk-home { margin-top: 26px; }
+  #picker .pk-home a { color: var(--muted); text-decoration: none; font-size: 13px; }
+  #picker .pk-home a:hover { color: var(--text); }
+
+  /* ---- painel de agentes (global, todas as lousas) ---- */
+  #agents { position: fixed; inset: 0; z-index: 110; display: none; align-items: flex-start; justify-content: center;
+    background: rgba(0,0,0,.55); }
+  #agents.show { display: flex; }
+  #agents .box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    width: 560px; max-width: 94vw; margin-top: 64px; max-height: 78vh; display: flex; flex-direction: column; }
+  #agents .ah { display: flex; align-items: center; padding: 16px 18px 12px; border-bottom: 1px solid var(--border); }
+  #agents .ah h3 { margin: 0; font-size: 15px; flex: 1; }
+  #agents .ah h3 small { color: var(--muted); font-weight: 400; font-size: 13px; }
+  #agents .ah button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  #agents .ah button:hover { color: var(--text); }
+  #agList { overflow-y: auto; padding: 8px; }
+  #agList .empty { color: var(--muted); font-size: 13px; padding: 22px; text-align: center; }
+  .ag { display: flex; gap: 11px; align-items: flex-start; padding: 11px 12px; border-radius: 9px;
+    cursor: pointer; border: 1px solid transparent; }
+  .ag:hover { background: var(--panel2); border-color: var(--border); }
+  .ag .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+    box-shadow: 0 0 6px var(--green); margin-top: 5px; flex: 0 0 auto; }
+  .ag .info { flex: 1; min-width: 0; }
+  .ag .top { display: flex; align-items: center; gap: 8px; }
+  .ag .role { font-size: 13px; font-weight: 600; color: var(--text); }
+  .ag .proj { font-size: 11px; color: var(--accent); background: rgba(88,166,255,.1);
+    border: 1px solid var(--border); border-radius: 20px; padding: 1px 8px; }
+  .ag .desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .ag .task { font-size: 12.5px; color: var(--text); margin-top: 4px;
+    overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .ag .here { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 20px; padding: 0 7px; }
+
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 200;
+    background: #21262d; border: 1px solid var(--border); color: var(--text); padding: 9px 16px;
+    border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <a class="home" href="/" title="Voltar ao painel">‹ Painel</a>
+    <span class="title">🪧 Lousa <small id="boardName"></small></span>
+    <select id="boardSel" title="Trocar de lousa"></select>
+    <button id="addAgent">+ Agente</button>
+    <button id="addNote">+ Nota</button>
+    <button id="fitAll" title="Ver tudo (zoom out com transição)">⊡ Tudo</button>
+    <button id="showAgents" title="Todos os agentes rodando (todas as lousas)">👥 Agentes</button>
+    <span class="spacer"></span>
+    <span class="hint" id="connHint" style="display:none">Clique no node de destino para conectar · Esc cancela</span>
+    <span class="hint">duplo-clique num node p/ aproximar · no fundo p/ ver tudo · scroll p/ zoom</span>
+  </div>
+
+  <div id="viewport">
+    <div id="world">
+      <svg id="edges">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#58a6ff" />
+          </marker>
+        </defs>
+      </svg>
+    </div>
+  </div>
+
+  <div id="picker">
+    <div class="pk-head">
+      <h1>🪧 Escolha uma lousa</h1>
+      <div class="sub">Cada projeto tem a sua lousa de agentes · ou abra a do Portfolio (todos juntos)</div>
+    </div>
+    <div class="grid" id="pkGrid"></div>
+    <div class="pk-home"><a href="/">‹ Voltar ao painel</a></div>
+  </div>
+
+  <div id="modal">
+    <div class="box">
+      <h3>Novo agente na lousa</h3>
+      <label>Papel</label>
+      <select id="mRole"></select>
+      <label>Projeto (pasta onde o agente roda)</label>
+      <select id="mProject"></select>
+      <label>Tarefa inicial (opcional)</label>
+      <textarea id="mTask" placeholder="Ex.: revisar o módulo de pagamentos e listar riscos"></textarea>
+      <div class="row">
+        <button id="mCancel">Cancelar</button>
+        <button id="mCreate" class="primary">Criar terminal</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="agents">
+    <div class="box">
+      <div class="ah">
+        <h3>👥 Agentes em background <small id="agCount"></small></h3>
+        <button id="agClose" title="Fechar">✕</button>
+      </div>
+      <div id="agList"></div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/xterm-addon-fit.js"></script>
+  <script src="/vendor/xterm-addon-web-links.js"></script>
+  <script src="/canvas.js"></script>
+</body>
+</html>
