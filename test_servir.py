@@ -228,11 +228,13 @@ class ServidorDeVerdade(unittest.TestCase):
         self.assertNotIn("cortina", errado.cookies)
         self.assertIn("cortina", certo.cookies)
 
-    def test_a_combinacao_certa_revela_o_botao(self):
+    def test_a_combinacao_certa_revela_a_porta(self):
+        """QUAL porta aparece depende do ambiente; que NAO aparece nenhuma
+        antes da combinacao certa e o que este teste cobra."""
         antes = self.pedir("/").corpo.lower()
-        self.assertNotIn("/entrar/github", antes)
+        self.assertNotIn("/entrar/", antes)
         depois = self.pedir("/", cookies=self.abrir_cortina()).corpo.lower()
-        self.assertIn("/entrar/github", depois)
+        self.assertIn("/entrar/", depois)
 
     def test_o_selo_e_HttpOnly_e_SameSite(self):
         r = self.pedir("/entrada", "POST", {"combinacao": self.combinacao})
@@ -306,6 +308,67 @@ class ServidorDeVerdade(unittest.TestCase):
             with self.subTest(cookie=ruim):
                 self.assertEqual(
                     self.pedir("/api/dados", cookies={"sessao": ruim}).status, 401)
+
+    # ------------------------------------------------------ a porta local
+    def test_a_porta_local_abre_sessao(self):
+        r = self.pedir("/entrar/local", cookies=self.abrir_cortina())
+        self.assertEqual(r.status, 302)
+        self.assertIn("sessao", r.cookies)
+        self.assertEqual(
+            self.pedir("/api/dados",
+                       cookies={"sessao": r.cookies["sessao"]}).status, 200)
+
+    def test_a_porta_local_exige_a_cortina(self):
+        self.assertEqual(self.pedir("/entrar/local").status, 404)
+
+    def test_a_porta_local_some_fora_do_ambiente_local(self):
+        """A trava e DUPLA de proposito: uma variavel de ambiente esquecida no
+        servidor nao pode ser tudo o que separa o mundo de uma conta pronta."""
+        cookies = self.abrir_cortina()
+        antigo = servir.E_LOCAL
+        servir.E_LOCAL = False
+        try:
+            self.assertEqual(self.pedir("/entrar/local", cookies=cookies).status,
+                             404)
+        finally:
+            servir.E_LOCAL = antigo
+
+    def test_a_porta_local_some_para_quem_vem_de_outro_nome(self):
+        """A segunda trava: mesmo em ambiente local, so localhost entra. Barra
+        o truque de apontar um dominio para 127.0.0.1."""
+        cookies = self.abrir_cortina()
+        antigos = servir.HOSTS_OK
+        servir.HOSTS_OK = servir.HOSTS_OK | {"dervs.com.br"}
+        try:
+            r = self.pedir("/entrar/local", cookies=cookies,
+                           cabecalhos={"Host": "dervs.com.br"})
+            self.assertEqual(r.status, 404)
+            self.assertNotIn("sessao", r.cookies)
+        finally:
+            servir.HOSTS_OK = antigos
+
+    def test_a_porta_local_nao_inventa_senha(self):
+        """Entrar pelo ambiente local nao pode fabricar uma senha nem um
+        segredo de segundo fator: seria segredo sem dono, e num banco que um
+        dia migra para o servidor."""
+        self.pedir("/entrar/local", cookies=self.abrir_cortina())
+        con = banco.conectar()
+        try:
+            u = banco.usuario_por_email("dono@teste.local", con=con)
+            self.assertIsNotNone(u)
+            tipos = {l[0] for l in con.execute(
+                "SELECT tipo FROM credencial WHERE usuario_id=?", (u["id"],))}
+            self.assertNotIn("senha", tipos)
+            self.assertNotIn("totp", tipos)
+        finally:
+            con.close()
+
+    def test_a_capa_local_oferece_a_porta_local_e_nao_a_do_github(self):
+        corpo = self.pedir("/", cookies=self.abrir_cortina()).corpo
+        self.assertIn("/entrar/local", corpo)
+        # Sem aplicativo registrado, o botao do GitHub nem aparece: botao que
+        # leva a 404 e pior que botao que nao existe.
+        self.assertNotIn("/entrar/github", corpo)
 
     # ------------------------------------------------------------ anti-CSRF
     def test_silenciar_exige_o_anti_csrf_daquela_sessao(self):

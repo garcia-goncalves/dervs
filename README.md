@@ -9,10 +9,45 @@ bonita que se olha uma vez por semana. Esta produz uma tela que se abre todo dia
 ## Rodar
 
 ```
+set DERVS_AMBIENTE=local
 python servir.py
 ```
 
 Abre em **http://localhost:4777**. `Ctrl+C` encerra.
+
+**A primeira tela não é o painel.** Desde a etapa 9 o `/` é uma capa — um
+teclado de seis dígitos e nada que diga o que este sistema é. Na sua máquina a
+combinação é **`000000`**, fixa e escrita aqui de propósito: local é ambiente de
+mentira, e dado de teste não é segredo. Digite, e aparece o botão
+**Entrar · ambiente local**, que abre uma sessão para `dono@teste.local` sem
+senha nenhuma.
+
+`DERVS_AMBIENTE=local` é obrigatório: sem ela o cofre se recusa a criar a
+`cofre.chave` e a porta local some. As duas coisas falham fechadas de propósito
+— uma variável esquecida no servidor não pode ser tudo o que separa o mundo de
+uma conta pronta.
+
+No servidor é outra história: a combinação é **sorteada na primeira subida e
+impressa uma única vez no log**, e a única porta é **Entrar com GitHub**, contra
+a lista de contas da tabela `credencial`. Ver
+[`docs/operacao/registrar-app-github.md`](docs/operacao/registrar-app-github.md).
+
+| Variável | Para quê | Onde vive |
+|---|---|---|
+| `DERVS_AMBIENTE` | `local` libera a porta local e deixa o cofre nascer | linha de comando |
+| `DERVS_COFRE` | a chave do cofre, 32+ caracteres | ambiente do servidor |
+| `DERVS_COFRE_ARQUIVO` | tira a `cofre.chave` da pasta servida (etapa 16) | ambiente do servidor |
+| `DERVS_GITHUB_ID` | Client ID do OAuth App — **é público** | pode ser versionado |
+| `DERVS_GITHUB_SECRET` | Client Secret — **segredo** | só dentro do servidor |
+
+Sem `DERVS_GITHUB_ID`/`DERVS_GITHUB_SECRET`, `/entrar/github` responde **404** e
+o botão nem aparece. Botão que leva a erro é pior que botão que não existe.
+
+Conta nova só por comando, nunca pela web:
+
+```
+python autenticacao.py convidar <login-do-github> <email>
+```
 `python servir.py 4780 30` troca a porta e o intervalo da camada local.
 
 Só escuta em `127.0.0.1`: o HUB lê git, Docker e o GitHub autenticado, então

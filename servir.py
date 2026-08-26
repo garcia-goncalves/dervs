@@ -381,6 +381,9 @@ class Hub(SimpleHTTPRequestHandler):
 
     BOTAO_ENTRAR = ('<a class="entrar" href="/entrar/github" rel="nofollow">'
                     "Entrar com GitHub</a>")
+    # A faixa e o aviso: quem ve isto esta olhando dado de mentira.
+    BOTAO_LOCAL = ('<a class="entrar" href="/entrar/local" rel="nofollow">'
+                   "Entrar &#183; ambiente local</a>")
 
     def _pagina(self):
         """Tres estados, e a diferenca entre eles e o que protege a entrada.
@@ -396,8 +399,15 @@ class Hub(SimpleHTTPRequestHandler):
         sessao = self._sessao()
         if sessao is not None:
             return self._html_de(PAGINA, {"__TOKEN__": self._csrf_da_sessao(sessao)})
-        return self._html_de(PAGINA_CORTINA, {
-            "__PORTA_ABERTA__": self.BOTAO_ENTRAR if self._cortina_aberta() else ""})
+        if not self._cortina_aberta():
+            return self._html_de(PAGINA_CORTINA, {"__PORTA_ABERTA__": ""})
+        portas = []
+        if GITHUB_ID and GITHUB_SECRET:
+            portas.append(self.BOTAO_ENTRAR)
+        if E_LOCAL:
+            portas.append(self.BOTAO_LOCAL)
+        return self._html_de(PAGINA_CORTINA,
+                             {"__PORTA_ABERTA__": "\n".join(portas)})
 
     def _html_de(self, caminho, trocas):
         try:
@@ -487,6 +497,48 @@ class Hub(SimpleHTTPRequestHandler):
                              autenticacao.HORAS_DE_SESSAO * 3600)
         # Mesma resposta nos dois casos: volta para a capa. Quem falhou ve a
         # capa de novo e nao descobre o motivo.
+        self.send_response(302)
+        self.send_header("Location", "/")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    CONTA_LOCAL = "dono@teste.local"
+
+    def _entrar_local(self):
+        """A porta do AMBIENTE LOCAL, e so dele.
+
+        Sem ela, esta mudanca trancaria o dono do lado de fora da propria
+        maquina: o aplicativo do GitHub ainda nao existe, entao `/entrar/github`
+        responde 404 e nao ha outra porta. Local e de mentira por regra da casa
+        — dado de teste, conta de teste, e nada disso e segredo.
+
+        DUAS TRAVAS, e a segunda existe porque a primeira e uma variavel de
+        ambiente que alguem pode esquecer de definir no servidor:
+
+          1. `E_LOCAL`, lido de DERVS_AMBIENTE na subida;
+          2. o Host tem de ser localhost ou 127.0.0.1.
+
+        Falha FECHADA nas duas: fora disso a rota responde como se nao
+        existisse.
+        """
+        anfitriao = (self.headers.get("Host") or "").split(":", 1)[0].lower()
+        if not E_LOCAL or anfitriao not in ("localhost", "127.0.0.1"):
+            return self._json(404, {"erro": "nao existe"})
+        con = banco.conectar()
+        try:
+            usuario = banco.usuario_por_email(self.CONTA_LOCAL, con=con)
+            if usuario is None:
+                uid = banco.criar_usuario(self.CONTA_LOCAL,
+                                          nome="Dono (ambiente local)", con=con)
+            else:
+                uid = usuario["id"]
+            cookie = banco.novo_token()
+            banco.abrir_sessao(uid, cookie, banco.prazo(12 * 3600), con=con)
+            final = banco.confirmar_segundo_fator(cookie, banco.novo_token(),
+                                                  con=con)
+        finally:
+            con.close()
+        self._por_cookie("sessao", final, 12 * 3600)
         self.send_response(302)
         self.send_header("Location", "/")
         self.send_header("Content-Length", "0")
@@ -598,6 +650,9 @@ ROTAS = {
     "/index.html":              Rota("GET",  Hub._pagina,         "aberta"),
     "/entrada":                 Rota("POST", Hub._entrada,        "aberta"),
     "/entrar/github":           Rota("GET",  Hub._entrar_github,  "cortina"),
+    # So responde com DERVS_AMBIENTE=local E Host de localhost. No servidor ela
+    # e um 404 igual a qualquer caminho inventado.
+    "/entrar/local":            Rota("GET",  Hub._entrar_local,   "cortina"),
     "/entrar/github/retorno":   Rota("GET",  Hub._retorno_github, "cortina"),
     "/sair":                    Rota("POST", Hub._sair,           "aberta"),
     "/api/dados":               Rota("GET",  Hub._dados,          "dado"),
@@ -621,8 +676,12 @@ def main():
         print("Anote agora. Ela NAO aparece de novo.")
         print("=" * 62)
     if not GITHUB_ID or not GITHUB_SECRET:
-        print("AVISO: sem DERVS_GITHUB_ID/DERVS_GITHUB_SECRET, a rota de entrar"
-              " responde 404. Ver docs/operacao/registrar-app-github.md.")
+        print("AVISO: sem DERVS_GITHUB_ID/DERVS_GITHUB_SECRET, a entrada por"
+              " GitHub responde 404. Ver docs/operacao/registrar-app-github.md.")
+    if E_LOCAL:
+        print("AMBIENTE LOCAL: dado de mentira, e a porta /entrar/local esta"
+              " aberta atras da cortina. Combinacao: %s"
+              % cortina.COMBINACAO_LOCAL)
     if vazio:
         coletar("local", "primeira")
 
