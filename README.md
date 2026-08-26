@@ -28,7 +28,7 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `index.html` | A tela. Recarrega sozinha a cada 15 s. |
 | `servir.py` | Serve a página e o `/api/dados`. Agenda as três coletas. **Não executa comando** — ver a seção abaixo. |
 | `banco.py` | O SQLite (`hub.db`): 12 tabelas — as 6 da medição, mais as 6 de quem usa o painel (etapa 8). Também é onde mora o cofre que cifra segredo. |
-| `test_banco.py` | 48 testes das tabelas novas e do cofre. `python test_banco.py`. |
+| `test_banco.py` | 65 testes das tabelas novas e do cofre. `python test_banco.py`. |
 | `regras.py` | O motor das 18 pendências, mais o agrupamento das repetidas. Puro: entra dicionário, sai lista. |
 | `memoria.py` | A memória do tempo: idade de cada pendência, tendência da semana e o briefing. |
 | `test_memoria.py` | 46 testes da memória. `python test_memoria.py`. |
@@ -52,7 +52,7 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 25/08/2026, também zera a memória do tempo, que se reconstrói sozinha a partir da
 coleta seguinte.
 
-**502 testes no total**, todos em `unittest` da biblioteca padrão, e todos os dez
+**519 testes no total**, todos em `unittest` da biblioteca padrão, e todos os dez
 arquivos rodam na CI — que agora **falha se um `test_*.py` novo ficar de fora da
 lista**, porque arquivo esquecido não fica vermelho, fica invisível.
 
@@ -424,14 +424,48 @@ gente já dentro. A cifra é de biblioteca padrão (HMAC-SHA256 em modo contador
 mais um selo HMAC), porque este projeto não tem dependência externa e a CI cobra
 isso. Texto adulterado é **recusado**, nunca devolvido como lixo.
 
-**A chave do cofre não é versionada.** Ela vem da variável `DERVS_COFRE` ou, na
-falta dela, de um `cofre.chave` que nasce sozinho nesta máquina e está no
-`.gitignore`. Versionar a chave é o mesmo que não ter chave.
+**A chave do cofre não é versionada, e não nasce sozinha em qualquer lugar.**
+`cofre.chave` está no `.gitignore` — versionar a chave é o mesmo que não ter
+chave — e o programa só o cria quando o ambiente é explicitamente local. As três
+variáveis que mandam nisso estão logo abaixo.
 
-**Arquivar exige motivo.** `pendencia_arquivada` recusa motivo em branco, e
-desarquivar carimba a volta em vez de apagar a linha. Alerta que some para sempre
+**Arquivar exige motivo**, e a regra mora **no banco**, não só no Python:
+`pendencia_arquivada` tem um `CHECK` que recusa motivo em branco, e desarquivar
+carimba a volta em vez de apagar a linha. Invariante de negócio que vive fora do
+banco é uma promessa, não uma regra — hoje há um escritor, daqui a duas etapas
+há três. Alerta que some para sempre
 sem rastro é pior que o "esconder por 24 h" que ele substitui: daqui a três meses
 ninguém consegue responder por que aquilo parou de aparecer.
+
+### A chave do cofre, e por que ela se recusa a nascer sozinha no servidor
+
+Duas variáveis de ambiente mandam nisso:
+
+| Variável | Para quê |
+|---|---|
+| `DERVS_COFRE` | A chave, em texto. **Mínimo de 32 caracteres** — abaixo disso uma frase se quebra fora do ar, a partir de uma cópia do `hub.db`. Gere com `python -c "import secrets;print(secrets.token_urlsafe(32))"`. |
+| `DERVS_AMBIENTE` | `local` autoriza o programa a criar um `cofre.chave` sozinho nesta máquina. Em qualquer outro valor — inclusive vazio — ele **recusa subir** em vez de inventar uma chave. |
+| `DERVS_COFRE_ARQUIVO` | Tira o `cofre.chave` da pasta servida. Importa na etapa 16: um `root /app` no nginx entregaria a chave mestra por HTTP. |
+
+O motivo da recusa: se a variável for esquecida no servidor e o programa
+fabricar outra chave, **todo segredo de segundo fator já guardado vira
+"adulterado" e todo código de pareamento para de casar — sem uma linha de
+aviso**. Falhar na subida é barulhento e reversível; falhar assim é silencioso
+e caro. A chave também é derivada com `scrypt`, não com um SHA-256 solto: SHA-256
+custa nada por palpite, e o selo do próprio texto cifrado confirma o acerto.
+
+### Voltar atrás da etapa 8 exige apagar o `hub.db` — e isso custa
+
+O código anterior a esta etapa **quebra** num banco já migrado: o `silenciar`
+antigo usa `ON CONFLICT(id)`, que não casa mais com a chave. E quebra do pior
+jeito: a leitura continua funcionando, então o painel abre normalmente e só o
+"x" estoura — parece que voltar deu certo.
+
+O `hub.db` é descartável para `medida` e `pendencia_vida`, que a próxima coleta
+refaz. **Não é** para `historico` e `gasto`: são séries no tempo, e valor de
+ontem não se recoleta. Apagar o banco para voltar atrás custa o histórico
+inteiro e a conta de gasto do Actions — justamente o que o painel usa para
+mostrar tendência.
 
 ### O `x` de 24 h ganhou dono — e isso era um defeito de segurança
 

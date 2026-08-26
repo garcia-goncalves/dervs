@@ -30,7 +30,10 @@ from pathlib import Path
 
 # Chave fixa do cofre: o teste nao pode depender de arquivo no disco do dono
 # nem gravar um. Tem de ser definida ANTES de importar banco.
-os.environ.setdefault("DERVS_COFRE", "chave-de-teste-nao-e-segredo")
+# Precisa de 32 caracteres ou mais: o banco recusa chave curta, porque frase
+# curta se quebra offline a partir de uma copia do hub.db.
+os.environ.setdefault("DERVS_COFRE",
+                      "chave-de-teste-que-nao-e-segredo-nenhum-0123456789")
 
 import banco  # noqa: E402
 
@@ -275,13 +278,40 @@ class Pareamento(unittest.TestCase):
         self.assertIsNone(banco.usar_pareamento(self.codigo, "x",
                                                 agora_iso=daqui(minutes=11), con=self.con))
 
-    def test_o_chute_conta_e_depois_de_cinco_o_codigo_morre(self):
-        """Seis digitos sao um milhao de possibilidades: sem teto, da para chutar."""
-        for _ in range(5):
+    def test_chute_errado_nao_mata_o_pareamento_de_ninguem(self):
+        """A versao anterior contava o chute contra TODOS os pareamentos abertos.
+
+        Cinco chutes de um estranho matavam o pareamento de todas as contas —
+        negacao de servico de um usuario sobre o outro, com cinco requisicoes.
+        O teto de forca bruta e por origem e mora na rota (etapa 11).
+        """
+        for _ in range(8):
             self.assertIsNone(banco.usar_pareamento("000000", "x",
                                                     agora_iso=iso(AGORA), con=self.con))
-        self.assertIsNone(banco.usar_pareamento(self.codigo, "x",
-                                                agora_iso=iso(AGORA), con=self.con))
+        self.assertTrue(banco.usar_pareamento(self.codigo, "legitimo",
+                                              agora_iso=iso(AGORA), con=self.con))
+
+    def test_codigo_repetido_e_recusado_nao_rouba_a_conta_do_outro(self):
+        """Era o pior defeito do lote, e era silencioso.
+
+        Com `INSERT OR REPLACE`, dois usuarios sorteando o mesmo codigo faziam a
+        linha do primeiro sumir sem erro — e a maquina DELE nascia dentro da
+        conta do segundo, com projetos e alertas junto.
+        """
+        outro = banco.criar_usuario("outro@teste.local", "teste1234", con=self.con)
+        with self.assertRaises(sqlite3.IntegrityError):
+            banco.abrir_pareamento(outro, self.codigo, expira_em=daqui(minutes=10),
+                                   con=self.con)
+        token = banco.usar_pareamento(self.codigo, "x", agora_iso=iso(AGORA),
+                                      con=self.con)
+        self.assertEqual(banco.maquina_por_token(token, con=self.con)["usuario_id"],
+                         self.uid)
+
+    def test_novo_codigo_tem_seis_digitos_e_preserva_o_zero_a_esquerda(self):
+        for _ in range(50):
+            c = banco.novo_codigo()
+            self.assertEqual(len(c), 6)
+            self.assertTrue(c.isdigit())
 
     def test_token_de_maquina_desconhecido_nao_abre_nada(self):
         self.assertIsNone(banco.maquina_por_token(banco.novo_token(), con=self.con))
@@ -454,6 +484,228 @@ class MigracaoDoBancoVelho(unittest.TestCase):
         finally:
             con.close()
 
+
+
+class ContaDesativada(unittest.TestCase):
+    """Fechar a conta tem de fechar a porta — inclusive de quem ja esta dentro."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.uid = banco.criar_usuario("dono@teste.local", "teste1234", con=self.con)
+        self.cookie = banco.novo_token()
+        banco.abrir_sessao(self.uid, self.cookie, expira_em=daqui(hours=8), con=self.con)
+        banco.abrir_pareamento(self.uid, "123456", expira_em=daqui(minutes=10),
+                               con=self.con)
+        self.token = banco.usar_pareamento("123456", "n", agora_iso=iso(AGORA),
+                                           con=self.con)
+        self.con.execute("UPDATE usuario SET desativado_em=? WHERE id=?",
+                         (iso(AGORA), self.uid))
+        self.con.commit()
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_a_sessao_que_ja_estava_aberta_para_de_valer(self):
+        """Sem isto, o cookie no navegador sobrevive ao fechamento da conta."""
+        self.assertIsNone(banco.sessao_valida(self.cookie, agora_iso=iso(AGORA),
+                                              con=self.con))
+
+    def test_o_agente_da_maquina_para_de_ser_aceito(self):
+        self.assertIsNone(banco.maquina_por_token(self.token, con=self.con))
+
+    def test_o_login_tambem_nao_acha_mais_a_conta(self):
+        self.assertIsNone(banco.usuario_por_email("dono@teste.local", con=self.con))
+        self.assertIsNone(banco.credencial_por_email("dono@teste.local", con=self.con))
+
+
+class NadaDeSegredoNaSaida(unittest.TestCase):
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.uid = banco.criar_usuario("dono@teste.local", "teste1234", con=self.con)
+        banco.guardar_totp(self.uid, "JBSWY3DPEHPK3PXP", con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_usuario_por_email_nao_devolve_senha_nem_segredo(self):
+        """Era um `SELECT *`: bastava a etapa 9 devolver o dicionario num JSON."""
+        u = banco.usuario_por_email("dono@teste.local", con=self.con)
+        self.assertNotIn("senha_hash", u)
+        self.assertNotIn("totp_segredo", u)
+
+    def test_quem_precisa_da_senha_pede_pelo_nome(self):
+        uid, guardado = banco.credencial_por_email("dono@teste.local", con=self.con)
+        self.assertEqual(uid, self.uid)
+        self.assertTrue(banco.conferir_senha("teste1234", guardado))
+
+    def test_o_segredo_cifrado_de_um_nao_serve_na_linha_do_outro(self):
+        """A cifra amarra o blob ao dono. Copiar de linha em linha nao decifra."""
+        outro = banco.criar_usuario("outro@teste.local", "teste1234", con=self.con)
+        blob = self.con.execute("SELECT totp_segredo FROM usuario WHERE id=?",
+                                (self.uid,)).fetchone()[0]
+        self.con.execute("UPDATE usuario SET totp_segredo=? WHERE id=?", (blob, outro))
+        self.con.commit()
+        with self.assertRaises(ValueError):
+            banco.ler_totp(outro, con=self.con)
+
+
+class SubirDeNivelTrocaOCookie(unittest.TestCase):
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        uid = banco.criar_usuario("dono@teste.local", "teste1234", con=self.con)
+        self.velho = banco.novo_token()
+        banco.abrir_sessao(uid, self.velho, expira_em=daqui(hours=8), con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_o_cookie_de_antes_do_segundo_fator_deixa_de_valer(self):
+        """Fixacao de sessao: quem plantou o cookie antes do login ficaria dentro."""
+        novo = banco.novo_token()
+        self.assertEqual(banco.confirmar_segundo_fator(self.velho, novo, con=self.con),
+                         novo)
+        self.assertIsNone(banco.sessao_valida(self.velho, agora_iso=iso(AGORA),
+                                              con=self.con))
+        s = banco.sessao_valida(novo, agora_iso=iso(AGORA), con=self.con)
+        self.assertIsNotNone(s["segundo_fator_em"])
+
+
+class OPrazoTemUmFormatoSo(unittest.TestCase):
+    """A comparacao de prazo e por TEXTO, entao o formato e regra, nao estilo."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.uid = banco.criar_usuario("dono@teste.local", "teste1234", con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_prazo_produz_o_formato_que_o_banco_aceita(self):
+        banco.abrir_sessao(self.uid, banco.novo_token(), expira_em=banco.prazo(3600),
+                           con=self.con)
+
+    def test_o_banco_recusa_prazo_com_Z_no_lugar_do_fuso(self):
+        """'…T20:00:00Z' > '…T20:00:00+00:00' em texto: o Z sempre vence, e a
+        sessao sobreviveria ao proprio vencimento."""
+        with self.assertRaises(sqlite3.IntegrityError):
+            banco.abrir_sessao(self.uid, banco.novo_token(),
+                               expira_em="2026-08-26T20:00:00Z", con=self.con)
+
+
+class OCofreNaoInventaChave(unittest.TestCase):
+
+    def setUp(self):
+        self.antigo = dict(os.environ)
+        self.pasta = tempfile.TemporaryDirectory()
+        banco._CHAVE_EM_MEMORIA = None
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.antigo)
+        banco._CHAVE_EM_MEMORIA = None
+        self.pasta.cleanup()
+
+    def test_chave_curta_e_recusada_com_a_receita_na_mensagem(self):
+        os.environ["DERVS_COFRE"] = "curta"
+        with self.assertRaises(ValueError) as e:
+            banco.chave_do_cofre()
+        self.assertIn("secrets.token_urlsafe", str(e.exception))
+
+    def test_fora_do_ambiente_local_ele_se_recusa_a_criar_a_chave(self):
+        """Fabricar outra chave por variavel esquecida no servidor faria todo
+        segredo ja guardado virar 'adulterado', em silencio. Melhor nao subir."""
+        os.environ.pop("DERVS_COFRE", None)
+        os.environ.pop("DERVS_AMBIENTE", None)
+        os.environ["DERVS_COFRE_ARQUIVO"] = str(Path(self.pasta.name) / "c.chave")
+        with self.assertRaises(RuntimeError):
+            banco.chave_do_cofre()
+
+    def test_no_ambiente_local_ela_nasce_e_e_estavel(self):
+        os.environ.pop("DERVS_COFRE", None)
+        os.environ["DERVS_AMBIENTE"] = "local"
+        alvo = Path(self.pasta.name) / "c.chave"
+        os.environ["DERVS_COFRE_ARQUIVO"] = str(alvo)
+        primeira = banco.chave_do_cofre()
+        self.assertTrue(alvo.exists())
+        banco._CHAVE_EM_MEMORIA = None
+        self.assertEqual(banco.chave_do_cofre(), primeira)
+
+
+class MigracaoInterrompida(unittest.TestCase):
+    """Uma queda no meio da reconstrucao nao pode nem perder dado nem travar."""
+
+    def setUp(self):
+        self.pasta = tempfile.TemporaryDirectory()
+        self.caminho = Path(self.pasta.name) / "velho.db"
+        velho = sqlite3.connect(self.caminho)
+        velho.executescript(ESQUEMA_VELHO)
+        velho.execute("INSERT INTO pendencia_estado VALUES ('g:d',?,?)",
+                      (daqui(hours=24), iso(AGORA)))
+        velho.commit()
+        velho.close()
+
+    def tearDown(self):
+        self.pasta.cleanup()
+
+    def test_sobra_de_uma_tentativa_anterior_nao_trava_o_banco_para_sempre(self):
+        """A `_nova` orfa fazia `conectar()` explodir em TODA chamada — servidor
+        e coletores fora do ar ate alguem dropar a tabela na mao."""
+        c = sqlite3.connect(self.caminho)
+        c.execute("CREATE TABLE pendencia_estado_nova (id TEXT, usuario_id INTEGER,"
+                  " silenciada_ate TEXT, anotado_em TEXT)")
+        c.commit()
+        c.close()
+        con = banco.conectar(self.caminho)
+        try:
+            self.assertIn("g:d", banco.silenciadas(agora_iso=iso(AGORA), con=con))
+        finally:
+            con.close()
+
+    def test_chave_na_ordem_errada_tambem_e_corrigida(self):
+        """Um banco que passou por versao intermediaria desta etapa tem a coluna
+        de dono, mas com a chave em (id, usuario_id). A migracao olha a CHAVE,
+        nao a existencia da coluna — a proxima chance custaria outra
+        reconstrucao de tabela."""
+        meio = Path(self.pasta.name) / "meio.db"
+        c = sqlite3.connect(meio)
+        c.executescript("""
+            CREATE TABLE pendencia_estado (
+                id TEXT NOT NULL, usuario_id INTEGER NOT NULL DEFAULT 0,
+                silenciada_ate TEXT, anotado_em TEXT NOT NULL,
+                PRIMARY KEY (id, usuario_id));""")
+        c.execute("INSERT INTO pendencia_estado VALUES ('g:d', 7, ?, ?)",
+                  (daqui(hours=24), iso(AGORA)))
+        c.commit()
+        c.close()
+        con = banco.conectar(meio)
+        try:
+            forma = list(con.execute("PRAGMA table_info(pendencia_estado)"))
+            chave = [l[1] for l in sorted((l for l in forma if l[5]),
+                                          key=lambda l: l[5])]
+            self.assertEqual(chave, ["usuario_id", "id"])
+            # E o dono NAO foi zerado no caminho.
+            self.assertIn("g:d", banco.silenciadas(usuario_id=7, agora_iso=iso(AGORA),
+                                                   con=con))
+        finally:
+            con.close()
+
+    def test_a_reconstrucao_e_tudo_ou_nada(self):
+        """Sem transacao, uma queda entre o DROP e o RENAME apagava a tabela e
+        deixava a copia orfa — e a migracao nunca mais tentava de novo."""
+        con = banco.conectar(self.caminho)
+        con.close()
+        c = sqlite3.connect(self.caminho)
+        try:
+            sobrou = [l[0] for l in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name LIKE '%_nova'")]
+            self.assertEqual(sobrou, [])
+            self.assertEqual(
+                c.execute("SELECT COUNT(*) FROM pendencia_estado").fetchone()[0], 1)
+        finally:
+            c.close()
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

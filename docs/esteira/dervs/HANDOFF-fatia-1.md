@@ -92,7 +92,7 @@ rota apontando** — de propósito, pela trava de diff de `fila.py:229`.
 
 `banco.py` ganhou seis tabelas — `usuario`, `sessao`, `maquina`, `pareamento`,
 `projeto_conectado`, `pendencia_arquivada` — e o `hub.db` passou de 6 para 12.
-`test_banco.py` é novo: 48 testes, na CI.
+`test_banco.py` é novo: 65 testes, na CI.
 
 **Nenhuma rota encosta nelas ainda, de propósito.** A 8 constrói o esquema, a 9
 constrói o login. O esquema vem antes porque errar a forma de uma tabela depois
@@ -118,7 +118,7 @@ custa migrar dado e rotacionar segredo; errar a ordem só custa esperar.
 nenhum dos dois existia — o esquema era aplicado dentro de `conectar()` e o
 caminho se chama `BANCO`. `criar()` passou a existir; a prova usa `BANCO`.
 
-**Provado:** 48 testes novos OK, **502 no total**, os dez arquivos verdes · as 12
+**Provado:** 65 testes novos OK, **519 no total**, os dez arquivos verdes · as 12
 tabelas listadas · o `hub.db` real do dia 26/08 migrado sem perder linha · o
 servidor reiniciado e o **"x" da tela clicado de verdade**, gravando com
 `usuario_id = 0`.
@@ -133,6 +133,65 @@ todo `ON DELETE CASCADE` do esquema era só comentário bonito.
 passo cada, para o nome na tela do GitHub dizer o que quebrou. O preço disso é
 esquecer o arquivo novo — e arquivo esquecido não fica vermelho, fica invisível.
 Agora a CI reprova se algum `test_*.py` ficar de fora.
+
+### O que as duas revisões pegaram na etapa 8 (e todas foram corrigidas)
+
+Segurança e banco revisaram em paralelo. **As duas apontaram os mesmos dois
+bloqueantes**, e as duas os provaram executando código, não lendo.
+
+**Bloqueante 1 — o pareamento entregava a máquina de um usuário para a conta do
+outro, em silêncio.** `abrir_pareamento` usava `INSERT OR REPLACE`, e o hash do
+código é chave primária: dois usuários sorteando o mesmo código de seis dígitos
+faziam a linha do primeiro ser apagada **sem erro nenhum**. Ele então digitava o
+código que a própria tela mostrou, e a máquina dele nascia dentro da conta do
+segundo — com projetos, caminhos e alertas junto. Virou `INSERT` puro: colisão
+levanta erro, e quem chamou sorteia outro código. Barulho onde havia silêncio.
+
+**Bloqueante 2 — a migração não era tudo-ou-nada, e uma queda no meio travava o
+banco para sempre.** `executescript` faz *commit* implícito e não abre transação:
+os quatro comandos rodavam soltos. Uma queda entre o `DROP` e o `RENAME` (queda
+de energia, `Ctrl+C`, ou o próprio `vigia-vscode.py`, que **mata processo de
+rotina**) deixava a cópia órfã no disco, e a partir daí `conectar()` estourava em
+**toda** chamada — servidor e coletores fora do ar até alguém apagar a tabela na
+mão. Agora é `BEGIN IMMEDIATE` + comandos um a um + `commit`, com `rollback` no
+erro, e um `DROP IF EXISTS` da sobra. O `BEGIN IMMEDIATE` pega o *lock* de
+escrita antes de decidir, o que resolve a corrida de graça.
+
+**Mais quatro, que só a revisão de segurança viu:**
+
+- **Cinco chutes de um estranho matavam o pareamento de todo mundo.** O contador
+  de tentativas não tinha alvo: um código errado incrementava **todas** as linhas
+  abertas, de todas as contas. Negação de serviço de um usuário sobre o outro,
+  com cinco requisições. O contador global saiu. O teto de força bruta é por
+  origem e mora na rota — **é obrigação da etapa 11**, e está anotado aqui porque
+  seis dígitos sem ele são varríveis.
+- **`DERVS_COFRE` virava chave mestra com um único SHA-256.** Sem KDF, uma frase
+  digitada por gente cai em bilhões de tentativas por segundo, fora do ar, a
+  partir de uma cópia do `hub.db` — e aí todo segredo de segundo fator se abre.
+  Virou `scrypt`, com mínimo de 32 caracteres e a receita de gerar na mensagem
+  de erro.
+- **O cofre nascia sozinho, em silêncio, e falhava aberto.** Variável esquecida
+  no servidor e o programa fabricava outra chave: todo segredo já guardado
+  viraria "adulterado", sem uma linha de aviso. Agora ele só cria a chave quando
+  `DERVS_AMBIENTE=local`, com `O_EXCL` (o coletor e o servidor abrem o banco ao
+  mesmo tempo, e os dois viam "não existe"), e guarda em memória.
+- **Sessão de conta desativada continuava valendo.** `usuario_por_email` filtrava
+  `desativado_em`, mas `sessao_valida` e `maquina_por_token` não olhavam o dono:
+  fechar a conta não derrubava quem já estava dentro. Ganharam `JOIN`.
+
+**E cinco menores, todas feitas porque forma de tabela é cara depois:** chave
+primária invertida para `(usuario_id, id)`, que é a ordem das consultas reais;
+`CHECK` no motivo, no e-mail, no nome do projeto e no formato do prazo;
+`CHECK (id <> 0)` no usuário, que impedia uma conta herdar tudo do dono local;
+`usuario_por_email` deixou de fazer `SELECT *` e devolver senha e segredo;
+a cifra passou a amarrar o blob ao dono, e o cookie é trocado ao subir para o
+segundo fator.
+
+**Uma coisa que a revisão de banco fez e vale registrar:** ela apagou o
+`cofre.chave` da pasta ao fim dos testes dela. Não custou nada — havia zero
+usuários e zero segredos guardados —, mas se houvesse, o dado ficaria
+indecifrável. Agente de revisão com permissão de escrita no disco do projeto é
+um risco real, e este foi o aviso barato.
 
 **Para a etapa 9, herdado daqui:** `usuario.totp_confirmado_em` nasce `NULL` e
 `sessao.segundo_fator_em` nasce `NULL`. É o que faz a negativa ser o padrão —
@@ -208,7 +267,7 @@ Nada disso é defeito do que já foi feito; é o roteiro de expor o painel.
 
 ## NÚMEROS REAIS (os documentos da esteira erravam)
 
-- **502** funções de teste em 10 arquivos `test_*.py` **na raiz** (não em `tests/`),
+- **519** funções de teste em 10 arquivos `test_*.py` **na raiz** (não em `tests/`),
   medidas em 26/08 depois da etapa 8. Eram 500 em 8 arquivos antes dela.
   A CI reporta 483 pelo runner do unittest. Não são "452".
 - **18** rótulos em `regras.ROTULO_REGRA`. Não são "16".
