@@ -4,80 +4,117 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Sala de Leitura</title>
+<title>sh</title>
 <style>
   :root {
     color-scheme: dark;
-    --tinta: #e8e4de;
-    --tinta-fraca: #7d7873;
-    --fundo: #0a0908;
-    --caixa: #131211;
-    --borda: #262320;
-    --traco: #a3231f;
+    --fundo: #05070a;
+    --vidro: #0a0e13;
+    --barra: #0e141b;
+    --borda: #1a232e;
+    --tinta: #cdd9e3;
+    --fraca: #56646f;
+    --neon: #4ade80;
+    --alerta: #f87171;
+    --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", "JetBrains Mono",
+            Consolas, "Liberation Mono", monospace;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body {
     margin: 0;
-    background: var(--fundo);
+    background:
+      radial-gradient(120% 90% at 50% 0%, #0b1219 0%, var(--fundo) 62%),
+      var(--fundo);
     color: var(--tinta);
-    font: 1rem/1.6 Georgia, "Times New Roman", serif;
+    font: .9rem/1.65 var(--mono);
     display: grid;
     place-items: center;
-    padding: 2rem 1rem;
+    padding: 1.5rem 1rem;
   }
-  main {
-    width: min(30rem, 100%);
-    text-align: center;
-    border: 1px solid var(--borda);
-    border-radius: 1rem;
-    padding: clamp(1.5rem, 5vw, 3rem);
-    background: var(--caixa);
-  }
-  h1 {
-    font-size: clamp(1.6rem, 6vw, 2.6rem);
-    font-variant: small-caps;
-    letter-spacing: .02em;
-    font-weight: 400;
-    margin: 0 0 1.5rem;
-    position: relative;
-    display: inline-block;
-  }
-  /* Decoracao pura: fora do fluxo do texto, invisivel para leitor de tela. */
-  h1::after {
+  /* Linhas horizontais tenues, no fundo. Decoracao, fora do fluxo. */
+  body::before {
     content: "";
-    position: absolute;
-    inset-inline: -8%;
-    inset-block-start: 52%;
-    border-block-start: 2px solid var(--traco);
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom, rgba(120, 200, 160, .035) 0 1px, transparent 1px 3px);
   }
-  .selo {
-    display: inline-block;
-    border: 1px solid var(--traco);
-    color: var(--traco);
-    font-size: .78rem;
-    letter-spacing: .22em;
-    text-transform: uppercase;
-    padding: .6rem 1.2rem;
-    margin-block-end: 2rem;
-  }
-  p { margin: .3rem 0; color: var(--tinta-fraca); }
-  hr { border: 0; border-block-start: 1px solid var(--borda); margin: 2rem 0; }
-  .aviso {
-    font-size: .74rem;
-    letter-spacing: .16em;
-    text-transform: uppercase;
-  }
-  .remate { font-style: italic; color: var(--tinta); margin-block: 1.2rem 2rem; }
 
-  .marcas { display: flex; gap: .75rem; justify-content: center; margin-block-end: 1.75rem; }
-  .marca {
-    width: .55rem; height: .55rem; border-radius: 50%;
-    border: 1px solid var(--tinta-fraca);
+  main {
+    position: relative;
+    width: min(34rem, 100%);
+    background: var(--vidro);
+    border: 1px solid var(--borda);
+    border-radius: .5rem;
+    overflow: hidden;
+    box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, .6);
   }
-  .marca[data-cheia] { background: var(--tinta); border-color: var(--tinta); }
+
+  .barra {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .55rem .8rem;
+    background: var(--barra);
+    border-block-end: 1px solid var(--borda);
+    color: var(--fraca);
+    font-size: .72rem;
+    letter-spacing: .04em;
+  }
+  .bolha { width: .6rem; height: .6rem; border-radius: 50%; background: #263241; }
+  .barra .titulo { margin-inline-start: auto; margin-inline-end: auto; }
+
+  .corpo { padding: clamp(1.1rem, 4vw, 1.8rem); }
+
+  .linha { margin: 0; white-space: nowrap; overflow-x: auto; }
+  .prompt { color: var(--neon); }
+  .prompt::before { content: "$ "; }
+  .fraca { color: var(--fraca); }
+  .ok { color: var(--neon); }
+  .falha { color: var(--alerta); }
+  .saida { margin: .9rem 0 0; color: var(--fraca); }
+
+  hr {
+    border: 0;
+    border-block-start: 1px dashed var(--borda);
+    margin: 1.5rem 0 1.2rem;
+  }
+
+  .chave {
+    display: flex;
+    align-items: center;
+    gap: .55rem;
+    flex-wrap: wrap;
+    margin-block-end: 1.3rem;
+  }
+  .chave .rotulo { color: var(--neon); }
+  .slots { display: flex; gap: .4rem; }
+  .slot {
+    width: 1.5rem;
+    height: 2.1rem;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--borda);
+    border-radius: .2rem;
+    background: #070b0f;
+    color: var(--neon);
+    font-size: 1.05rem;
+  }
+  .slot::after { content: "\00b7"; color: #2b3742; }
+  .slot[data-cheia] { border-color: #2f6b4b; }
+  .slot[data-cheia]::after { content: "\2022"; color: var(--neon); }
+
+  .cursor {
+    width: .55rem;
+    height: 1.1rem;
+    background: var(--neon);
+  }
   @media (prefers-reduced-motion: no-preference) {
-    .marca { transition: background-color .12s ease, border-color .12s ease; }
+    .cursor { animation: piscar 1.05s steps(1) infinite; }
+    @keyframes piscar { 50% { opacity: 0; } }
+    .slot { transition: border-color .12s ease; }
   }
 
   /* Invisivel, e nao `display:none`: assim continua recebendo foco, teclado
@@ -87,83 +124,101 @@
     padding: 0; margin: -1px; overflow: hidden;
     clip-path: inset(50%); white-space: nowrap; border: 0;
   }
+
   .teclado {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: .6rem;
+    gap: .45rem;
   }
   .teclado button {
     font: inherit;
-    font-size: 1.1rem;
-    min-height: 3.4rem;
+    font-size: .95rem;
+    min-height: 2.9rem;
     color: var(--tinta);
-    background: #1b1917;
+    background: #0d141b;
     border: 1px solid var(--borda);
-    border-radius: .6rem;
+    border-radius: .3rem;
     cursor: pointer;
   }
-  .teclado button:hover { background: #232120; }
-  .teclado button:active { background: #2c2927; }
+  .teclado button::before { content: "["; color: var(--fraca); }
+  .teclado button::after  { content: "]"; color: var(--fraca); }
+  .teclado button:hover { background: #131c25; border-color: #2b3a49; }
+  .teclado button:active { background: #18232d; }
+  .teclado button[type="submit"] { color: var(--neon); }
+
   :is(button, a, input):focus-visible {
-    outline: 2px solid var(--tinta);
-    outline-offset: 3px;
+    outline: 2px solid var(--neon);
+    outline-offset: 2px;
   }
+
   .entrar {
     display: block;
-    margin-block-start: 2rem;
-    padding: 1rem;
-    border: 1px solid var(--tinta-fraca);
-    border-radius: .6rem;
-    color: var(--tinta);
+    margin-block-start: 1.4rem;
+    padding: .9rem;
+    text-align: center;
+    border: 1px solid #2f6b4b;
+    border-radius: .3rem;
+    color: var(--neon);
     text-decoration: none;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    font-size: .82rem;
+    font-size: .8rem;
+    letter-spacing: .08em;
   }
-  .entrar:hover { border-color: var(--tinta); }
+  .entrar:hover { background: #0c1a13; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Sala de Leitura</h1>
-  <div class="selo">Fora de operação</div>
+  <div class="barra" aria-hidden="true">
+    <span class="bolha"></span><span class="bolha"></span><span class="bolha"></span>
+    <span class="titulo">sh &#8212; 80&#215;24</span>
+  </div>
 
-  <p>Esta sala foi fechada.</p>
-  <p>Os volumes voltaram para as caixas, e as caixas para o porão.</p>
+  <div class="corpo">
+    <p class="linha prompt">uptime</p>
+    <p class="linha fraca">load average: 0.00, 0.00, 0.00</p>
 
-  <hr>
+    <p class="linha prompt">./checar.sh --all</p>
+    <p class="linha"><span class="ok">[ok]</span>   <span class="fraca">rede</span></p>
+    <p class="linha"><span class="ok">[ok]</span>   <span class="fraca">disco</span></p>
+    <p class="linha"><span class="falha">[--]</span>   <span class="fraca">handshake</span></p>
 
-  <p class="aviso">A combinação antiga ainda abre a porta.</p>
-  <p class="remate">Não há mais nada do outro lado.</p>
+    <p class="saida">exit status 137 &#183; nada escutando nesta porta</p>
 
-  <form id="porta" method="post" action="/entrada" novalidate>
-    <div class="marcas" aria-hidden="true">
-      <span class="marca"></span><span class="marca"></span><span class="marca"></span>
-      <span class="marca"></span><span class="marca"></span><span class="marca"></span>
-    </div>
+    <hr>
 
-    <label class="campo" for="combinacao">Combinação de seis dígitos</label>
-    <input class="campo" id="combinacao" name="combinacao" type="text"
-           inputmode="numeric" enterkeyhint="done" autocomplete="one-time-code"
-           maxlength="6" pattern="\d{6}" autofocus>
+    <form id="porta" method="post" action="/entrada" novalidate>
+      <div class="chave">
+        <span class="rotulo" aria-hidden="true">chave&#8239;&#8250;</span>
+        <span class="slots" aria-hidden="true">
+          <span class="slot"></span><span class="slot"></span><span class="slot"></span>
+          <span class="slot"></span><span class="slot"></span><span class="slot"></span>
+        </span>
+        <span class="cursor" aria-hidden="true"></span>
+      </div>
 
-    <div class="teclado">
-      <button type="button" data-d="1">1</button>
-      <button type="button" data-d="2">2</button>
-      <button type="button" data-d="3">3</button>
-      <button type="button" data-d="4">4</button>
-      <button type="button" data-d="5">5</button>
-      <button type="button" data-d="6">6</button>
-      <button type="button" data-d="7">7</button>
-      <button type="button" data-d="8">8</button>
-      <button type="button" data-d="9">9</button>
-      <button type="submit" aria-label="Confirmar">&#10003;</button>
-      <button type="button" data-d="0">0</button>
-      <button type="button" data-apagar aria-label="Apagar o último dígito">&#9003;</button>
-    </div>
-  </form>
+      <label class="campo" for="combinacao">Chave de seis d&#237;gitos</label>
+      <input class="campo" id="combinacao" name="combinacao" type="text"
+             inputmode="numeric" enterkeyhint="done" autocomplete="one-time-code"
+             maxlength="6" pattern="\d{6}" autofocus>
 
-  __PORTA_ABERTA__
+      <div class="teclado">
+        <button type="button" data-d="1">1</button>
+        <button type="button" data-d="2">2</button>
+        <button type="button" data-d="3">3</button>
+        <button type="button" data-d="4">4</button>
+        <button type="button" data-d="5">5</button>
+        <button type="button" data-d="6">6</button>
+        <button type="button" data-d="7">7</button>
+        <button type="button" data-d="8">8</button>
+        <button type="button" data-d="9">9</button>
+        <button type="submit" aria-label="Confirmar">&#8629;</button>
+        <button type="button" data-d="0">0</button>
+        <button type="button" data-apagar aria-label="Apagar o &#250;ltimo d&#237;gito">&#8592;</button>
+      </div>
+    </form>
+
+    __PORTA_ABERTA__
+  </div>
 </main>
 
 <script>
@@ -171,14 +226,14 @@
   "use strict";
   var porta = document.getElementById("porta");
   var campo = document.getElementById("combinacao");
-  var marcas = Array.prototype.slice.call(document.querySelectorAll(".marca"));
+  var slots = Array.prototype.slice.call(document.querySelectorAll(".slot"));
   var enviando = false;
 
   function pintar() {
     campo.value = campo.value.replace(/\D/g, "").slice(0, 6);
-    marcas.forEach(function (m, i) {
-      if (i < campo.value.length) { m.setAttribute("data-cheia", ""); }
-      else { m.removeAttribute("data-cheia"); }
+    slots.forEach(function (s, i) {
+      if (i < campo.value.length) { s.setAttribute("data-cheia", ""); }
+      else { s.removeAttribute("data-cheia"); }
     });
   }
 

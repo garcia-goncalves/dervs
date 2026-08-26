@@ -280,6 +280,7 @@ __FAIXA__
         <span>Buscar projeto ou ação</span><kbd>Ctrl K</kbd>
       </button>
       <button class="btn" id="btn-tema">Tema</button>
+      <button class="btn" id="btn-sair">Sair</button>
     </div>
   </header>
 
@@ -844,6 +845,16 @@ $("#btn-tema").addEventListener("click", () => {
   const novo = atual === "dark" ? "light" : "dark";
   document.documentElement.setAttribute("data-theme", novo);
   try { localStorage.setItem("tema", novo); } catch {}
+});
+
+/* Encerra a sessao NO SERVIDOR e nao so no navegador: apagar o cookie daqui
+   deixaria o registro vivo do outro lado, e ele voltaria a valer no proximo
+   pedido feito com a mesma sessao. O recarregar mostra a capa de novo. */
+$("#btn-sair").addEventListener("click", async () => {
+  const b = $("#btn-sair");
+  b.disabled = true;
+  try { await fetch("/sair", { method: "POST" }); } catch {}
+  location.reload();
 });
 try {
   const t = localStorage.getItem("tema");
