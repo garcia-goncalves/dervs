@@ -48,16 +48,21 @@ RAIZ = Path(r"C:\Users\Desktop\source\repos")
 AQUI = Path(__file__).resolve().parent
 CASOS = AQUI / "casos.json"
 
-# O PROPRIO HUB mora fora de source\repos, e por isso nao se vigiava: sapateiro
-# de pe no chao. Se este projeto ficasse com trabalho sem commit ou com a CI
-# vermelha, nada avisaria.
+# Ate 24/08/2026 o PROPRIO HUB morava fora de source\repos, e por isso nao se
+# vigiava: sapateiro de pe no chao. Listar a pasta aqui foi a correcao escolhida
+# NAQUELA data em vez de mudar o projeto de lugar, porque mover quebraria tres
+# coisas batizadas pelo CAMINHO — a pasta de memoria do Claude, o indice do
+# grafo e o processo no ar — e a primeira falha CALADA: a memoria nao some, so
+# deixa de ser encontrada, e ninguem avisa.
 #
-# Listar a pasta aqui foi a correcao escolhida em 24/08/2026 em vez de mudar o
-# projeto de lugar. Mover quebraria tres coisas batizadas pelo CAMINHO — a pasta
-# de memoria do Claude, o indice do grafo e o processo no ar — e a primeira
-# falha CALADA: a memoria nao some, so deixa de ser encontrada, e ninguem avisa.
-# E o mesmo tipo de erro silencioso que a regra 6 existe para pegar.
+# Em 26/08/2026 o projeto virou o `dervs` e nasceu ja dentro de source\repos,
+# quando nao havia ainda memoria, indice nem processo amarrados ao caminho novo
+# — o custo de mover era quase zero, e so cresceria. Hoje RAIZ.iterdir() ja
+# encontra esta pasta sozinha, e a linha abaixo e DEDUPLICADA em
+# pastas_de_projeto(): ela nao mede nada duas vezes.
 #
+# A linha fica como rede: se alguem mover este projeto para fora de repos\ de
+# novo, o hub continua se vigiando em vez de voltar a ser sapateiro descalco.
 # AQUI, e nao o caminho escrito na mao, para continuar certo se a pasta mudar
 # de nome.
 AVULSOS = [AQUI]
