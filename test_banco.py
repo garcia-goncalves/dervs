@@ -861,6 +861,158 @@ class MigracaoParaCredencial(unittest.TestCase):
             con.close()
 
 
+class AsCorrecoesDaRevisao(unittest.TestCase):
+    """Cada achado das revisoes de 26/08/2026 tem aqui o teste que o fecha."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.caminho = str(Path(self.dir.name) / "hub.db")
+        self.addCleanup(self.dir.cleanup)
+
+    def _forcar_estado_pre_etapa_9(self):
+        """A migracao ja rodou neste banco; devolve a coluna para ela rodar de
+        novo, agora por cima do estado que o teste montou."""
+        con = banco.conectar(self.caminho)
+        try:
+            con.execute("PRAGMA foreign_keys=OFF")
+            con.execute("ALTER TABLE usuario ADD COLUMN senha_hash TEXT")
+            con.commit()
+        finally:
+            con.close()
+
+    def test_orfao_HERDADO_nao_trava_o_conectar_para_sempre(self):
+        """A pergunta certa e "eu piorei alguma coisa?", nao "esta tudo limpo?".
+
+        A primeira versao comparava o banco inteiro contra zero: um orfao que ja
+        estava la abortava a migracao, e como isso acontece dentro de
+        `conectar()` — que roda em toda requisicao — o banco ficava inacessivel
+        para sempre, sem caminho de volta no codigo.
+        """
+        con = banco.conectar(self.caminho)
+        try:
+            con.execute("PRAGMA foreign_keys=OFF")
+            # Orfao numa FILHA da usuario, que e o caso dificil: ele nao foi
+            # criado por esta migracao, entao ela nao pode se recusar a rodar.
+            con.execute("INSERT INTO maquina (id, usuario_id, token_hash,"
+                        " criado_em) VALUES (77, 999999, 'x', ?)", (iso(AGORA),))
+            # E outro em tabela que nada tem a ver com a `usuario`.
+            con.execute("INSERT INTO projeto_conectado (maquina_id, projeto,"
+                        " visto_em) VALUES (4242, 'orfao', ?)", (iso(AGORA),))
+            con.commit()
+        finally:
+            con.close()
+        self._forcar_estado_pre_etapa_9()
+        for _ in range(3):
+            banco.conectar(self.caminho).close()
+        # E o dado legitimo passou pela migracao intacto.
+        con = banco.conectar(self.caminho)
+        try:
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM maquina").fetchone()[0], 1)
+        finally:
+            con.close()
+
+    def test_o_contador_de_orfaos_enxerga_o_que_promete(self):
+        """A guarda so vale se o contador for verdadeiro. Se `_orfaos` devolvesse
+        zero sempre, a comparacao antes/depois passaria em qualquer coisa."""
+        con = banco.conectar(self.caminho)
+        try:
+            self.assertEqual(banco._orfaos(con), 0)
+            con.execute("PRAGMA foreign_keys=OFF")
+            con.execute("INSERT INTO maquina (usuario_id, token_hash, criado_em)"
+                        " VALUES (12345, 'tok', ?)", (iso(AGORA),))
+            con.commit()
+            self.assertEqual(banco._orfaos(con), 1)
+        finally:
+            con.close()
+
+    def test_o_contador_ignora_tabela_que_ainda_nao_existe(self):
+        """O ESQUEMA roda DEPOIS da migracao: num hub.db antigo varias filhas
+        ainda nao nasceram, e `PRAGMA foreign_key_check(x)` numa tabela ausente
+        levanta erro em vez de devolver zero."""
+        c = sqlite3.connect(self.caminho)
+        c.execute("CREATE TABLE usuario (id INTEGER PRIMARY KEY,"
+                  " email TEXT UNIQUE, criado_em TEXT)")
+        c.commit()
+        try:
+            self.assertEqual(banco._orfaos(c), 0)
+        finally:
+            c.close()
+
+
+    def test_a_sequencia_do_autoincrement_sobrevive(self):
+        """Sem isto, um id ja usado seria reemitido — e `pendencia_estado` e
+        `pendencia_arquivada` de proposito NAO tem chave estrangeira para
+        `usuario`, entao as linhas da conta antiga seriam herdadas em silencio.
+        """
+        c = sqlite3.connect(self.caminho)
+        c.executescript("""
+            CREATE TABLE usuario (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                email         TEXT NOT NULL UNIQUE,
+                nome          TEXT NOT NULL DEFAULT '',
+                senha_hash    TEXT NOT NULL,
+                criado_em     TEXT NOT NULL,
+                desativado_em TEXT);""")
+        for i in (1, 2, 3):
+            c.execute("INSERT INTO usuario (email, senha_hash, criado_em)"
+                      " VALUES (?,?,?)", ("u%d@t.local" % i, "x", iso(AGORA)))
+        c.execute("DELETE FROM usuario WHERE id = 3")
+        c.commit()
+        antes = c.execute("SELECT seq FROM sqlite_sequence WHERE name='usuario'"
+                          ).fetchone()[0]
+        c.close()
+        self.assertEqual(antes, 3)
+        con = banco.conectar(self.caminho)
+        try:
+            depois = con.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name='usuario'").fetchone()[0]
+            self.assertEqual(depois, antes,
+                             "a sequencia voltou e um id sera reemitido")
+        finally:
+            con.close()
+
+    def test_o_esquema_e_a_constante_da_migracao_nao_divergem(self):
+        """As duas copias do CREATE da `credencial` so eram mantidas iguais por
+        um comentario. Divergir e silencioso: banco novo ganha a coluna, banco
+        migrado nao, e o `CREATE TABLE IF NOT EXISTS` vira no-op."""
+        def normalizar(t):
+            corpo = t[t.index("("):t.rindex(")")]
+            palavras = []
+            for linha in corpo.splitlines():
+                palavras += linha.split("--")[0].split()
+            return " ".join(palavras)
+        do_esquema = banco.ESQUEMA[banco.ESQUEMA.index(
+            "CREATE TABLE IF NOT EXISTS credencial"):]
+        do_esquema = do_esquema[:do_esquema.index(");") + 1]
+        self.assertEqual(normalizar(do_esquema),
+                         normalizar(banco._CREATE_CREDENCIAL))
+
+    def test_o_identificador_de_senha_tem_de_ser_o_dono(self):
+        """Tira a garantia "uma senha por pessoa" da convencao e poe no banco."""
+        con = banco.conectar(self.caminho)
+        try:
+            uid = banco.criar_usuario("x@teste.local", con=con)
+            with self.assertRaises(sqlite3.IntegrityError):
+                con.execute("INSERT INTO credencial (usuario_id, tipo,"
+                            " identificador, criado_em) VALUES (?,'senha',?,?)",
+                            (uid, "x@teste.local", iso(AGORA)))
+        finally:
+            con.close()
+
+    def test_credencial_de_github_com_login_de_texto_e_recusada(self):
+        """Nada impedia gravar o login ali, e casar por texto e entregar a conta
+        a quem pegar o nome abandonado."""
+        con = banco.conectar(self.caminho)
+        try:
+            uid = banco.criar_usuario("y@teste.local", con=con)
+            with self.assertRaises(sqlite3.IntegrityError):
+                banco.ligar_github(uid, "thiago", con=con)
+            banco.ligar_github(uid, "4242", con=con)
+        finally:
+            con.close()
+
+
 class AcessoPorGithub(unittest.TestCase):
     """Quem entra pelo GitHub nao tem senha, e o casamento e pelo id numerico."""
 

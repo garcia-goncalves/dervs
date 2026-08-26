@@ -181,6 +181,13 @@ CREATE TABLE IF NOT EXISTS credencial (
     -- `totp_confirmado_em`: a negativa continua sendo o padrao.
     usado_em      TEXT,
     revogada_em   TEXT,
+    -- O CHECK e o que tira a garantia "uma senha por pessoa" da convencao e a
+    -- poe no banco: sem ele, um chamador que passasse o e-mail criaria uma
+    -- SEGUNDA credencial de senha, e `credencial_por_email` devolveria uma das
+    -- duas sem criterio. O segundo CHECK e o mesmo raciocinio do id numerico:
+    -- nada impedia gravar um login de texto na credencial do GitHub.
+    CHECK (tipo NOT IN ('senha','totp') OR identificador = CAST(usuario_id AS TEXT)),
+    CHECK (tipo <> 'github' OR identificador GLOB '[0-9]*'),
     -- A peca central: dois usuarios nao reivindicam o mesmo id do GitHub, e
     -- ninguem tem duas senhas.
     UNIQUE (tipo, identificador)
@@ -316,6 +323,40 @@ def migrar(con: sqlite3.Connection) -> None:
     _migrar_credencial(con)
 
 
+# As tabelas que apontam para `usuario`. A migracao confere so estas: varrer o
+# banco inteiro faria um orfao antigo, de outra tabela, travar toda subida.
+FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento")
+
+
+def _orfaos(con: sqlite3.Connection) -> int:
+    """Quantas linhas das filhas da `usuario` apontam para lugar nenhum.
+
+    So as filhas, e so as que EXISTEM: o `ESQUEMA` roda DEPOIS da migracao,
+    entao num hub.db anterior a etapa 8 varias delas ainda nao nasceram, e
+    `PRAGMA foreign_key_check(x)` numa tabela ausente levanta erro.
+    """
+    presentes = {l[0] for l in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    total = 0
+    for filha in FILHAS_DE_USUARIO:
+        if filha in presentes:
+            total += len(list(con.execute("PRAGMA foreign_key_check(%s)" % filha)))
+    return total
+
+
+def _religar_fk(con: sqlite3.Connection) -> None:
+    """`PRAGMA foreign_keys` e NO-OP silencioso com transacao aberta.
+
+    Medido na revisao de 26/08/2026. Se a conexao sair daqui dentro de uma
+    transacao, religar falharia calado e ela voltaria ao servidor com a chave
+    estrangeira desligada — o `ON DELETE CASCADE` do esquema viraria enfeite.
+    Neste caso e melhor nao devolver a conexao nenhuma.
+    """
+    if con.in_transaction:
+        con.rollback()
+    con.execute("PRAGMA foreign_keys=ON")
+
+
 def _migrar_pendencia_estado(con: sqlite3.Connection) -> None:
     """`pendencia_estado` ganhou dono (etapa 8). O SQLite nao
     sabe trocar chave primaria, entao a tabela e reconstruida; o que ja estava
@@ -342,9 +383,23 @@ def _migrar_pendencia_estado(con: sqlite3.Connection) -> None:
         # TUDO OU NADA. `executescript` faria COMMIT implicito e rodaria os
         # quatro comandos como quatro transacoes soltas: uma queda entre o DROP
         # e o RENAME apagaria a tabela e deixaria a copia orfa, sem excecao
-        # nenhuma e sem nunca tentar de novo. BEGIN IMMEDIATE tambem pega o
-        # lock de escrita ANTES de decidir, o que resolve a corrida de graca.
+        # nenhuma e sem nunca tentar de novo.
         con.execute("BEGIN IMMEDIATE")
+        # DE NOVO, E AGORA DENTRO DA TRANSACAO. A leitura la em cima aconteceu
+        # antes do lock: dois processos subindo juntos leem os dois "preciso
+        # migrar", um migra e commita, e o outro chega aqui com a decisao
+        # obsoleta. Sem esta releitura ele refaz a reconstrucao com um
+        # `tinha_dono` velho e joga o silenciamento de TODAS as contas para o
+        # dono local. Achado da revisao de banco de 26/08/2026 — o comentario
+        # que estava aqui afirmava que o BEGIN resolvia isso, e nao resolvia:
+        # o BEGIN vinha nove linhas depois da decisao.
+        forma = list(con.execute("PRAGMA table_info(pendencia_estado)"))
+        chave = [l[1] for l in sorted((l for l in forma if l[5]),
+                                      key=lambda l: l[5])]
+        if chave == ["usuario_id", "id"]:
+            con.rollback()
+            return
+        tinha_dono = "usuario_id" in {l[1] for l in forma}
         con.execute("DROP TABLE IF EXISTS pendencia_estado_nova")
         con.execute("""CREATE TABLE pendencia_estado_nova (
                 id             TEXT NOT NULL,
@@ -363,7 +418,7 @@ def _migrar_pendencia_estado(con: sqlite3.Connection) -> None:
         con.rollback()
         raise
     finally:
-        con.execute("PRAGMA foreign_keys=ON")
+        _religar_fk(con)
 
 
 # A `credencial` precisa existir ANTES da reconstrucao da `usuario` la embaixo,
@@ -380,6 +435,8 @@ _CREATE_CREDENCIAL = """CREATE TABLE IF NOT EXISTS credencial (
     criado_em     TEXT NOT NULL,
     usado_em      TEXT,
     revogada_em   TEXT,
+    CHECK (tipo NOT IN ('senha','totp') OR identificador = CAST(usuario_id AS TEXT)),
+    CHECK (tipo <> 'github' OR identificador GLOB '[0-9]*'),
     UNIQUE (tipo, identificador))"""
 
 
@@ -406,9 +463,26 @@ def _migrar_credencial(con: sqlite3.Connection) -> None:
         # rodaria cada comando como uma transacao solta: uma queda entre o DROP
         # e o RENAME apagaria a `usuario` e deixaria as cinco filhas apontando
         # para uma tabela que nao existe mais, sem excecao nenhuma e sem nunca
-        # tentar de novo. BEGIN IMMEDIATE tambem pega o lock de escrita ANTES de
-        # decidir, o que resolve a corrida de graca.
+        # tentar de novo.
         con.execute("BEGIN IMMEDIATE")
+        # DE NOVO, DENTRO DA TRANSACAO — ver o comentario gemeo em
+        # `_migrar_pendencia_estado`. Aqui o processo perdedor nem chegava a
+        # estragar dado: ele estourava com `no such column: senha_hash` dentro
+        # de `conectar()`, e como `conectar()` roda em toda requisicao, o
+        # processo simplesmente nao subia.
+        if "senha_hash" not in {l[1] for l in
+                                con.execute("PRAGMA table_info(usuario)")}:
+            con.rollback()
+            return
+        # A sequencia do AUTOINCREMENT nao sobrevive ao DROP: ela voltaria para
+        # o maior id copiado, e um id ja usado poderia ser reemitido. Como
+        # `pendencia_estado` e `pendencia_arquivada` de proposito NAO tem chave
+        # estrangeira para `usuario`, as linhas de uma conta apagada seriam
+        # herdadas em silencio pela conta nova que recebesse o id.
+        seq = con.execute("SELECT seq FROM sqlite_sequence WHERE name='usuario'"
+                          ).fetchone()
+        seq = seq[0] if seq else None
+        orfaos_antes = _orfaos(con)
         con.execute("DROP TABLE IF EXISTS usuario_nova")
         con.execute("""CREATE TABLE usuario_nova (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id <> 0),
@@ -420,16 +494,19 @@ def _migrar_credencial(con: sqlite3.Connection) -> None:
                     " (id, email, nome, criado_em, desativado_em)"
                     " SELECT id, email, nome, criado_em, desativado_em FROM usuario")
         con.execute(_CREATE_CREDENCIAL)
-        # `INSERT OR IGNORE` e o que torna esta migracao repetivel: se ela ja
-        # rodou pela metade em outra subida, a linha existente e respeitada em
-        # vez de estourar no UNIQUE.
-        con.execute("INSERT OR IGNORE INTO credencial"
+        # `INSERT` seco, e nao `OR IGNORE`. A justificativa que estava aqui
+        # ("se ela ja rodou pela metade") descrevia um cenario impossivel: esta
+        # tudo numa transacao so, entao nao existe meia-migracao. O que o
+        # `OR IGNORE` fazia de fato era engolir conflito genuino — um hub.db com
+        # linha `senha` antiga na `credencial` e `usuario.senha_hash` mais nova
+        # teria a senha revertida em silencio.
+        con.execute("INSERT INTO credencial"
                     " (usuario_id, tipo, identificador, segredo_hash, criado_em)"
                     " SELECT id, 'senha', CAST(id AS TEXT), senha_hash, criado_em"
                     "   FROM usuario"
                     "  WHERE senha_hash IS NOT NULL AND senha_hash <> ''")
         if tinha_totp:
-            con.execute("INSERT OR IGNORE INTO credencial"
+            con.execute("INSERT INTO credencial"
                         " (usuario_id, tipo, identificador, segredo_hash,"
                         "  criado_em, usado_em)"
                         " SELECT id, 'totp', CAST(id AS TEXT), totp_segredo,"
@@ -437,15 +514,31 @@ def _migrar_credencial(con: sqlite3.Connection) -> None:
                         "   FROM usuario WHERE totp_segredo IS NOT NULL")
         con.execute("DROP TABLE usuario")
         con.execute("ALTER TABLE usuario_nova RENAME TO usuario")
-        sobra = list(con.execute("PRAGMA foreign_key_check"))
-        if sobra:
-            raise sqlite3.IntegrityError("migracao deixaria orfao: %r" % (sobra[:3],))
+        if seq is not None:
+            con.execute("UPDATE sqlite_sequence SET seq = ? WHERE name='usuario'",
+                        (seq,))
+        # A PERGUNTA CERTA E "eu PIOREI alguma coisa?", nao "esta tudo limpo?".
+        #
+        # A primeira versao desta linha era `PRAGMA foreign_key_check` sem
+        # argumento, comparado contra zero. Isso varre o banco INTEIRO e aborta
+        # por orfao que ja estava la — e como isso acontece dentro de
+        # `conectar()`, que roda em toda requisicao, o banco ficaria inacessivel
+        # PARA SEMPRE, sem caminho de volta no codigo. Orfao pre-existente e
+        # plausivel: qualquer escrita por conexao sem `foreign_keys=ON` deixa um.
+        #
+        # Comparando antes e depois, um orfao herdado passa (e continua sendo
+        # problema de outra pessoa, nao desta migracao) e um orfao CRIADO aqui
+        # aborta, que e exatamente o que precisa acontecer.
+        piorou = _orfaos(con) - orfaos_antes
+        if piorou > 0:
+            raise sqlite3.IntegrityError(
+                "a migracao criaria %d referencia orfa; nada foi gravado" % piorou)
         con.commit()
     except Exception:
         con.rollback()
         raise
     finally:
-        con.execute("PRAGMA foreign_keys=ON")
+        _religar_fk(con)
 
 
 # --------------------------------------------------------------------------
@@ -1031,7 +1124,8 @@ def confirmar_totp(usuario_id: int, con=None) -> None:
     con = con or conectar()
     try:
         con.execute("UPDATE credencial SET usado_em = ?"
-                    " WHERE tipo = 'totp' AND identificador = ?",
+                    " WHERE tipo = 'totp' AND identificador = ?"
+                    "   AND revogada_em IS NULL",
                     (agora(), str(usuario_id)))
         con.commit()
     finally:

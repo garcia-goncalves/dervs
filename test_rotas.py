@@ -249,6 +249,19 @@ class TodaRotaDeclaraAcesso(unittest.TestCase):
                          "/api/usuarios"):
             self.assertNotIn(proibida, servir.ROTAS)
 
+    def test_a_porta_local_nao_existe_fora_do_ambiente_local(self):
+        """A defesa nao e um `if` dentro da rota: e a rota NAO ESTAR NA TABELA.
+
+        O primeiro desenho prometia "duas travas independentes" dentro da funcao,
+        e a revisao mostrou que a segunda nunca disparava — `_despachar` ja tinha
+        barrado o Host. Rota ausente da tabela e verificavel aqui, em memoria,
+        sem subir servidor nenhum.
+        """
+        import os
+        e_local = (os.environ.get("DERVS_AMBIENTE") or "").lower() == "local"
+        self.assertEqual("/entrar/local" in servir.ROTAS, e_local,
+                         "a porta local so pode existir no ambiente local")
+
     def test_o_token_global_nao_voltou(self):
         """`servir.TOKEN` era um valor so para o servidor inteiro. Com
         multiusuario ele seria a chave de todo mundo: o anti-CSRF passou a ser

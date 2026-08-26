@@ -63,6 +63,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.parse
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
@@ -149,6 +150,9 @@ HOSTS_OK = {"localhost:%d" % PORTA, "127.0.0.1:%d" % PORTA}
 # tem o token teria a chave de todo mundo. O anti-CSRF passa a ser derivado da
 # SESSAO de quem pede, em `_csrf_da_sessao`.
 ONDE_VOLTAR = "/entrar/github/retorno"
+# Folego da ida ao GitHub. Dez minutos nao bastam: no meio dela cabe uma tela de
+# login e um segundo fator digitado do celular.
+MINUTOS_DA_IDA = 30
 
 _travas = {c: threading.Lock() for c in COLETORES}
 _ultima_falha: dict = {}
@@ -334,7 +338,16 @@ class Hub(SimpleHTTPRequestHandler):
             # A MESMA resposta de rota inexistente: quem nao passou pela cortina
             # nao pode nem descobrir que esta rota existe.
             return self._json(404, {"erro": "nao existe"})
-        return rota.funcao(self)
+        try:
+            return rota.funcao(self)
+        except Exception:
+            # Sem esta rede, uma excecao dentro da rota faz o `socketserver`
+            # imprimir o traceback e FECHAR O SOQUETE: o navegador leva
+            # "connection reset", sem status nenhum, e a tela nao sabe o que
+            # aconteceu. A mensagem e generica de proposito; o traceback vai
+            # para o stderr do servidor, nao para quem pediu.
+            traceback.print_exc()
+            return self._json(500, {"erro": "falhou"})
 
     def do_GET(self):
         return self._despachar("GET")
@@ -344,18 +357,28 @@ class Hub(SimpleHTTPRequestHandler):
 
     # ------------------------------------------------------------- as rotas
     def _dados(self):
-        return self._json(200, self._estado())
+        # O dono da sessao, e nao o dono da MAQUINA. Ver `_estado`.
+        return self._json(200, self._estado(self._sessao()["usuario_id"]))
 
     def _estatico(self):
         """Os quatro arquivos de ESTATICOS_OK, e mais nenhum."""
         return super().do_GET()
 
-    def _estado(self):
+    def _estado(self, usuario_id: int):
+        """O estado COMO AQUELA CONTA o ve.
+
+        `usuario_id` nao era passado, e `banco.silenciadas` caia no padrao
+        `DONO_LOCAL = 0`: com uma segunda conta entrando pela web — que e
+        exatamente o que esta etapa passou a permitir —, o "x" de um usuario
+        escondia o alerta do outro. E o mesmo IDOR que a etapa 8 consertou no
+        esquema; faltava consertar na rota. Achado da revisao de seguranca.
+        """
         con = banco.conectar()
         try:
             e = banco.montar_estado(con)
             pend = regras.avaliar(e["projetos"], quota=e["quota"],
-                                  silenciadas=banco.silenciadas(con))
+                                  silenciadas=banco.silenciadas(
+                                      con, usuario_id=usuario_id))
             # So LEITURA aqui: quem escreve a vida e o laco de coleta. Ver
             # _anotar_a_vida() para o motivo.
             agora_iso = banco.agora()
@@ -445,9 +468,8 @@ class Hub(SimpleHTTPRequestHandler):
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._sem_conteudo()
         origem, agora_s = self._origem_do_pedido(), time.time()
-        if not cortina.pode_tentar(origem, agora_s):
+        if not cortina.registrar_tentativa(origem, agora_s):
             return self._sem_conteudo()
-        cortina.anotar_tentativa(origem, agora_s)
         try:
             n = int(self.headers.get("Content-Length") or 0)
             corpo = json.loads(self.rfile.read(min(n, 1024)) or b"{}")
@@ -472,8 +494,21 @@ class Hub(SimpleHTTPRequestHandler):
         if not GITHUB_ID or not GITHUB_SECRET:
             return self._json(404, {"erro": "nao existe"})
         state = autenticacao.novo_state()
-        self._por_cookie("state", state, 600)
-        origem = "http://" + (self.headers.get("Host") or "localhost:%d" % PORTA)
+        self._por_cookie("state", state, MINUTOS_DA_IDA * 60)
+        # O selo da cortina vale dez minutos, e a ida ao GitHub inclui login e
+        # segundo fator. Sem renovar, quem demorasse voltaria para um 404 seco na
+        # rota de retorno, sem pista do que aconteceu. Renova-se para o mesmo
+        # folego do `state`, e nao mais: a cortina nao vira sessao.
+        self._por_cookie("cortina",
+                         cortina.selar(time.time(), banco.chave_do_cofre(),
+                                       minutos=MINUTOS_DA_IDA),
+                         MINUTOS_DA_IDA * 60)
+        # O esquema segue o ambiente. Hoje o Host ja passou pelo conjunto fechado
+        # de `HOSTS_OK`, entao nao ha o que forjar — mas no dia em que a etapa 16
+        # acrescentar `dervs.com.br` ali, um "http://" fixo faria o `code` do
+        # OAuth viajar em claro.
+        esquema = "http://" if E_LOCAL else "https://"
+        origem = esquema + (self.headers.get("Host") or "localhost:%d" % PORTA)
         self.send_response(302)
         self.send_header("Location", autenticacao.url_de_autorizacao(
             GITHUB_ID, origem + ONDE_VOLTAR, state))
@@ -511,31 +546,49 @@ class Hub(SimpleHTTPRequestHandler):
     def _entrar_local(self):
         """A porta do AMBIENTE LOCAL, e so dele.
 
-        Sem ela, esta mudanca trancaria o dono do lado de fora da propria
-        maquina: o aplicativo do GitHub ainda nao existe, entao `/entrar/github`
-        responde 404 e nao ha outra porta. Local e de mentira por regra da casa
-        — dado de teste, conta de teste, e nada disso e segredo.
+        Sem ela, esta etapa trancaria o dono do lado de fora da propria maquina:
+        o aplicativo do GitHub ainda nao existe, entao `/entrar/github` responde
+        404 e nao ha outra porta. Local e de mentira por regra da casa — dado de
+        teste, conta de teste, e nada disso e segredo.
 
-        DUAS TRAVAS, e a segunda existe porque a primeira e uma variavel de
-        ambiente que alguem pode esquecer de definir no servidor:
+        UMA CHAVE, E ELA E `E_LOCAL`. Uma versao anterior deste texto prometia
+        "duas travas independentes", e a revisao de Python de 26/08/2026 mostrou
+        que a segunda nao podia disparar: `_despachar` ja rejeita todo `Host`
+        fora de `HOSTS_OK`, entao a checagem daqui era sempre verdadeira. Prometer
+        defesa que nao existe e pior que nao ter a defesa, porque encerra a
+        pergunta.
 
-          1. `E_LOCAL`, lido de DERVS_AMBIENTE na subida;
-          2. o Host tem de ser localhost ou 127.0.0.1.
+        O que existe de verdade, e nesta ordem:
 
-        Falha FECHADA nas duas: fora disso a rota responde como se nao
-        existisse.
+          1. a rota **nao entra na tabela `ROTAS`** quando `E_LOCAL` e falso, ou
+             seja, no servidor ela nao existe — nem como 403, nem como caminho;
+          2. a checagem de `E_LOCAL` aqui dentro, para o caso de alguem montar a
+             tabela de outro jeito;
+          3. a checagem de `Host`, que hoje e redundante e passa a valer no dia
+             em que a etapa 16 acrescentar `dervs.com.br` a `HOSTS_OK`.
+
+        As tres falham FECHADAS: fora do ambiente local a rota responde como se
+        nao existisse.
         """
         anfitriao = (self.headers.get("Host") or "").split(":", 1)[0].lower()
         if not E_LOCAL or anfitriao not in ("localhost", "127.0.0.1"):
             return self._json(404, {"erro": "nao existe"})
         con = banco.conectar()
         try:
-            usuario = banco.usuario_por_email(self.CONTA_LOCAL, con=con)
-            if usuario is None:
+            # `usuario_por_email` filtra `desativado_em IS NULL`: se a conta
+            # local estiver desativada ele devolve None, e um `criar_usuario`
+            # aqui estouraria no UNIQUE do e-mail e derrubaria o pedido inteiro.
+            # Procura-se pela linha, nao pela conta ativa.
+            l = con.execute("SELECT id, desativado_em FROM usuario WHERE email = ?",
+                            (self.CONTA_LOCAL,)).fetchone()
+            if l is None:
                 uid = banco.criar_usuario(self.CONTA_LOCAL,
                                           nome="Dono (ambiente local)", con=con)
+            elif l["desativado_em"]:
+                # Desativada de proposito: a porta local nao reativa conta.
+                return self._json(404, {"erro": "nao existe"})
             else:
-                uid = usuario["id"]
+                uid = l["id"]
             cookie = banco.novo_token()
             banco.abrir_sessao(uid, cookie, banco.prazo(12 * 3600), con=con)
             final = banco.confirmar_segundo_fator(cookie, banco.novo_token(),
@@ -549,6 +602,13 @@ class Hub(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def _sair(self):
+        # `SameSite=Lax` ja impede o cookie de acompanhar um POST de outro site,
+        # entao um pedido forjado chegaria sem sessao e nao encerraria nada. O
+        # `Origin` entra assim mesmo: e a unica rota de escrita que estava sem o
+        # par que `/api/silenciar` mantem, e defesa em camada nao se dispensa
+        # por "a outra ja resolve".
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
         cookie = self._ler_cookie("sessao")
         if cookie:
             banco.encerrar_sessao(cookie)
@@ -570,6 +630,11 @@ class Hub(SimpleHTTPRequestHandler):
         # A rota e de `acesso="dado"`, entao o despacho ja garantiu que ha
         # sessao completa. Aqui so falta o anti-CSRF DAQUELA sessao.
         sessao = self._sessao()
+        if sessao is None:
+            # A sessao pode ter vencido entre o despacho e esta linha. Sem esta
+            # guarda, `_csrf_da_sessao(None)` levantaria TypeError e devolveria
+            # 500 onde o certo e 403.
+            return self._json(403, {"erro": "entre de novo"})
         if not secrets.compare_digest(self.headers.get("X-Token") or "",
                                       self._csrf_da_sessao(sessao)):
             return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
@@ -594,7 +659,7 @@ class Hub(SimpleHTTPRequestHandler):
             return self._json(400, {"erro": "prazo invalido"})
         ate = (datetime.now(timezone.utc)
                + timedelta(hours=horas)).isoformat(timespec="seconds")
-        banco.silenciar(pid, ate)
+        banco.silenciar(pid, ate, usuario_id=sessao["usuario_id"])
         return self._json(200, {"ok": True,
                                 "saida": "silenciada por %d h." % horas})
 
@@ -654,9 +719,6 @@ ROTAS = {
     "/index.html":              Rota("GET",  Hub._pagina,         "aberta"),
     "/entrada":                 Rota("POST", Hub._entrada,        "aberta"),
     "/entrar/github":           Rota("GET",  Hub._entrar_github,  "cortina"),
-    # So responde com DERVS_AMBIENTE=local E Host de localhost. No servidor ela
-    # e um 404 igual a qualquer caminho inventado.
-    "/entrar/local":            Rota("GET",  Hub._entrar_local,   "cortina"),
     "/entrar/github/retorno":   Rota("GET",  Hub._retorno_github, "cortina"),
     "/sair":                    Rota("POST", Hub._sair,           "aberta"),
     "/api/dados":               Rota("GET",  Hub._dados,          "dado"),
@@ -664,6 +726,13 @@ ROTAS = {
 }
 ROTAS.update({caminho: Rota("GET", Hub._estatico, "aberta")
               for caminho in ESTATICOS_OK})
+
+# A porta do ambiente local NAO EXISTE no servidor — nem como 403, nem como
+# caminho reconhecido. Nao ha `if` dentro da rota que segure tanto quanto a rota
+# nao estar na tabela: `test_rotas.py` le esta estrutura em memoria, entao a
+# ausencia dela e verificavel sem subir servidor nenhum.
+if E_LOCAL:
+    ROTAS["/entrar/local"] = Rota("GET", Hub._entrar_local, "cortina")
 
 
 def main():

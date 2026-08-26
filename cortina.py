@@ -60,13 +60,24 @@ def garantir_combinacao(con):
     desta linha o numero nao existe em lugar nenhum deste sistema — so a
     impressao digital, que nao volta a ser numero.
     """
-    con.execute("INSERT OR IGNORE INTO instalacao (id, criada_em) VALUES (1, ?)",
-                (banco.agora(),))
-    if combinacao_atual(con):
+    # Ler e escrever na mesma transacao: dois processos subindo juntos gerariam
+    # dois numeros diferentes, o segundo venceria, e o primeiro teria impresso
+    # na tela uma combinacao que nao abre nada — e ela nao aparece de novo.
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        con.execute("INSERT OR IGNORE INTO instalacao (id, criada_em)"
+                    " VALUES (1, ?)", (banco.agora(),))
+        if combinacao_atual(con):
+            con.commit()
+            return None
+        numero = COMBINACAO_LOCAL if _e_local() else banco.novo_codigo(6)
+        con.execute("UPDATE instalacao SET combinacao_hash = ?,"
+                    " combinacao_em = ? WHERE id = 1",
+                    (banco.hash_senha(numero), banco.agora()))
         con.commit()
-        return None
-    numero = COMBINACAO_LOCAL if _e_local() else banco.novo_codigo(6)
-    _gravar(numero, con)
+    except Exception:
+        con.rollback()
+        raise
     return numero
 
 
@@ -98,10 +109,15 @@ def conferir(combinacao, con) -> bool:
     `hmac.compare_digest` —, entao o tempo de resposta nao diz quantos digitos
     bateram.
     """
+    # A forma e conferida ANTES do scrypt: sem isto, uma string de 1 KiB custa o
+    # mesmo `scrypt` de ~16 MiB que seis digitos, e quem chuta escolhe o
+    # tamanho. A combinacao tem forma fixa e conhecida — barra-se pela forma.
+    if not _SEIS_DIGITOS.match(combinacao or ""):
+        return False
     guardado = combinacao_atual(con)
     if not guardado:
         return False
-    return banco.conferir_senha(combinacao or "", guardado)
+    return banco.conferir_senha(combinacao, guardado)
 
 
 # ------------------------------------------------------------------ o selo
@@ -142,16 +158,27 @@ def _assinar(ate: str, chave: bytes) -> str:
 # aceitavel para uma cortina. Persistir daria a quem chuta um jeito de encher o
 # disco de outra pessoa.
 
-def pode_tentar(origem: str, agora_s: float) -> bool:
+def registrar_tentativa(origem: str, agora_s: float) -> bool:
+    """Anota a tentativa e diz se ela pode ser conferida. UMA funcao so.
+
+    Antes eram duas — `pode_tentar` e `anotar_tentativa` —, cada uma pegando o
+    lock por conta propria. Entre a saida de uma e a entrada da outra nao havia
+    nada: N pedidos simultaneos liam todos "ainda cabe" antes de qualquer um
+    anotar, e o teto de cinco virava "o quanto eu consigo paralelizar". O
+    servidor e `ThreadingHTTPServer`, entao os N chegam mesmo.
+
+    Isso importava mais do que parece: a spec sustenta a escolha de seis digitos
+    dizendo que o teto por origem e o que a segura. Teto que so vale
+    sequencialmente nao segura nada. Havia ainda o custo — cada conferencia paga
+    um `scrypt` de ~16 MiB, e duzentos em paralelo sao uns 3 GiB.
+    """
     with _trava:
         _podar(agora_s)
-        return len(_tentativas.get(origem, ())) < TETO
-
-
-def anotar_tentativa(origem: str, agora_s: float) -> None:
-    with _trava:
-        _podar(agora_s)
-        _tentativas.setdefault(origem, []).append(agora_s)
+        vistas = _tentativas.setdefault(origem, [])
+        if len(vistas) >= TETO:
+            return False
+        vistas.append(agora_s)
+        return True
 
 
 def origens_lembradas() -> set:

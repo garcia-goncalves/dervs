@@ -258,6 +258,24 @@ class Convite(unittest.TestCase):
             autenticacao.convidar("thiago", "outro@teste.local",
                                   con=self.con, abrir=self.rede)
 
+    def test_convite_que_falha_nao_deixa_conta_pela_metade(self):
+        """`criar_usuario` commita sozinho: sem guarda, um id ja ligado a outra
+        conta deixava uma `usuario` gravada sem credencial nenhuma — conta que
+        nao loga, e-mail queimado pelo UNIQUE, e nenhum comando para apaga-la."""
+        autenticacao.convidar("thiago", "thiago@teste.local",
+                              con=self.con, abrir=self.rede)
+        with self.assertRaises(Exception):
+            autenticacao.convidar("thiago", "outro@teste.local",
+                                  con=self.con, abrir=self.rede)
+        sobrou = self.con.execute(
+            "SELECT COUNT(*) FROM usuario WHERE email = ?",
+            ("outro@teste.local",)).fetchone()[0]
+        self.assertEqual(sobrou, 0, "sobrou uma conta que nao loga")
+        # E o e-mail continua livre para o convite certo.
+        rede = duble({"api.github.com/users/andre": {"id": 99, "login": "andre"}})
+        self.assertTrue(autenticacao.convidar("andre", "outro@teste.local",
+                                              con=self.con, abrir=rede))
+
     def test_login_que_nao_existe_no_github_estoura(self):
         rede = duble({"api.github.com/users/ninguem": {"message": "Not Found"}})
         with self.assertRaises(autenticacao.ErroDoGithub):

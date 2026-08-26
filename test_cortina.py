@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -126,23 +127,22 @@ class Teto(unittest.TestCase):
 
     def test_a_sexta_tentativa_nao_passa(self):
         for _ in range(cortina.TETO):
-            self.assertTrue(cortina.pode_tentar("10.0.0.1", 100.0))
-            cortina.anotar_tentativa("10.0.0.1", 100.0)
-        self.assertFalse(cortina.pode_tentar("10.0.0.1", 100.0))
+            self.assertTrue(cortina.registrar_tentativa("10.0.0.1", 100.0))
+        self.assertFalse(cortina.registrar_tentativa("10.0.0.1", 100.0))
 
     def test_uma_origem_nao_derruba_a_outra(self):
         """O defeito que a etapa 8 removeu da tabela de pareamento: contador
         global deixava um estranho matar o acesso de todo mundo."""
         for _ in range(cortina.TETO):
-            cortina.anotar_tentativa("10.0.0.1", 100.0)
-        self.assertFalse(cortina.pode_tentar("10.0.0.1", 100.0))
-        self.assertTrue(cortina.pode_tentar("10.0.0.2", 100.0))
+            cortina.registrar_tentativa("10.0.0.1", 100.0)
+        self.assertFalse(cortina.registrar_tentativa("10.0.0.1", 100.0))
+        self.assertTrue(cortina.registrar_tentativa("10.0.0.2", 100.0))
 
     def test_a_janela_vira(self):
         for _ in range(cortina.TETO):
-            cortina.anotar_tentativa("10.0.0.1", 100.0)
+            cortina.registrar_tentativa("10.0.0.1", 100.0)
         self.assertTrue(
-            cortina.pode_tentar("10.0.0.1", 100.0 + cortina.JANELA + 1))
+            cortina.registrar_tentativa("10.0.0.1", 100.0 + cortina.JANELA + 1))
 
     def test_a_janela_desliza_uma_vaga_por_vez(self):
         """A vaga volta quando o chute que a ocupava vence, e so ela.
@@ -151,22 +151,58 @@ class Teto(unittest.TestCase):
         por dia. Varrer o milhao de combinacoes assim levaria uns dois mil dias.
         """
         for i in range(cortina.TETO):
-            cortina.anotar_tentativa("10.0.0.1", 100.0 + i)
+            cortina.registrar_tentativa("10.0.0.1", 100.0 + i)
         # Um instante ANTES de o primeiro chute vencer: ainda travado.
         self.assertFalse(
-            cortina.pode_tentar("10.0.0.1", 100.0 + cortina.JANELA - 1))
+            cortina.registrar_tentativa("10.0.0.1", 100.0 + cortina.JANELA - 1))
         # O primeiro venceu: uma vaga, nao cinco.
         agora_s = 100.0 + cortina.JANELA
-        self.assertTrue(cortina.pode_tentar("10.0.0.1", agora_s))
-        cortina.anotar_tentativa("10.0.0.1", agora_s)
-        self.assertFalse(cortina.pode_tentar("10.0.0.1", agora_s))
+        self.assertTrue(cortina.registrar_tentativa("10.0.0.1", agora_s))
+        self.assertFalse(cortina.registrar_tentativa("10.0.0.1", agora_s))
+
+    def test_conferir_e_anotar_acontecem_SOB_O_MESMO_LOCK(self):
+        """O achado da revisao: eram duas funcoes, cada uma pegando o lock por
+        conta propria. N pedidos simultaneos liam todos "ainda cabe" antes de
+        qualquer um anotar, e o teto de cinco virava "o quanto eu paralelizo".
+
+        O servidor e ThreadingHTTPServer, entao os N chegam mesmo. Aqui as
+        threads sao soltas de uma vez por uma barreira, e o total de "pode"
+        NUNCA pode passar do teto.
+        """
+        largada = threading.Barrier(24)
+        passaram = []
+        trava = threading.Lock()
+
+        def bater():
+            largada.wait()
+            if cortina.registrar_tentativa("10.9.9.9", 100.0):
+                with trava:
+                    passaram.append(1)
+
+        linhas = [threading.Thread(target=bater) for _ in range(24)]
+        for t in linhas:
+            t.start()
+        for t in linhas:
+            t.join()
+        self.assertEqual(len(passaram), cortina.TETO)
 
     def test_origem_antiga_e_esquecida(self):
         """Sem poda, o dicionario cresce por IP ate o processo morrer."""
-        cortina.anotar_tentativa("10.0.0.1", 100.0)
-        cortina.anotar_tentativa("10.0.0.2", 100.0 + cortina.JANELA * 3)
+        cortina.registrar_tentativa("10.0.0.1", 100.0)
+        cortina.registrar_tentativa("10.0.0.2", 100.0 + cortina.JANELA * 3)
         self.assertNotIn("10.0.0.1", cortina.origens_lembradas())
         self.assertIn("10.0.0.2", cortina.origens_lembradas())
+
+    def test_string_longa_nao_paga_scrypt(self):
+        """`conferir` recebia qualquer coisa ate 1 KiB e pagava um scrypt de
+        ~16 MiB por ela. A forma e fixa e conhecida: barra-se pela forma."""
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        con = banco.conectar(str(Path(d.name) / "hub.db"))
+        self.addCleanup(con.close)
+        cortina.trocar("314159", con)
+        for ruim in ("9" * 5000, "31415", "3141599", "abcdef", "31415a"):
+            self.assertFalse(cortina.conferir(ruim, con), ruim[:10])
 
 
 if __name__ == "__main__":

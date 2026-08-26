@@ -15,6 +15,7 @@ de `urllib.request.urlopen` para que o teste nunca toque a rede.
 """
 from __future__ import annotations
 
+import http.client
 import hmac
 import json
 import secrets
@@ -32,6 +33,9 @@ QUEM = "https://api.github.com/users/"
 # GitHub fora do ar nao pode segurar uma linha de execucao do servidor para
 # sempre.
 ESPERA = 10
+# Teto do que se le de fora. A resposta do GitHub aqui tem alguns KiB; sem teto,
+# quem conseguir se pos no meio manda um corpo infinito e a memoria acaba.
+TETO_DA_RESPOSTA = 64 * 1024
 HORAS_DE_SESSAO = 12
 _CABECALHO = {"Accept": "application/vnd.github+json", "User-Agent": "dervs"}
 
@@ -68,7 +72,7 @@ def trocar_code(code: str, client_id: str, client_secret: str, abrir=None) -> st
     req = urllib.request.Request(TROCAR, data=corpo, headers=dict(
         _CABECALHO, Accept="application/json"))
     with abrir(req, timeout=ESPERA) as r:
-        resposta = json.loads(r.read().decode("utf-8"))
+        resposta = json.loads(r.read(TETO_DA_RESPOSTA).decode("utf-8"))
     token = resposta.get("access_token")
     if not token:
         # NAO ponha `resposta` inteira na mensagem: em alguns erros o OAuth
@@ -85,7 +89,7 @@ def identidade(token: str, abrir=None) -> dict:
     req = urllib.request.Request(EU, headers=dict(
         _CABECALHO, Authorization="Bearer " + token))
     with abrir(req, timeout=ESPERA) as r:
-        u = json.loads(r.read().decode("utf-8"))
+        u = json.loads(r.read(TETO_DA_RESPOSTA).decode("utf-8"))
     return {"id": str(u.get("id") or ""), "login": u.get("login") or "",
             "2fa": u.get("two_factor_authentication")}
 
@@ -101,16 +105,17 @@ def entrar_por_github(code, state, state_esperado, con, client_id,
     if not state or not state_esperado or not hmac.compare_digest(
             str(state), str(state_esperado)):
         return None
-    token = None
     try:
+        # O token do GitHub nao e gravado, nao e registrado em log e nao volta
+        # para quem chamou: ele vive so nas duas linhas abaixo. NAO da para
+        # apaga-lo da memoria em CPython — uma versao anterior deste codigo tinha
+        # um `finally: token = None` com um comentario dizendo que "o token morre
+        # aqui", e isso era falso: reatribuir a variavel local nao toca o texto
+        # no heap, que fica ate o coletor de lixo passar.
         token = trocar_code(code, client_id, client_secret, abrir=abrir)
         quem = identidade(token, abrir=abrir)
-    except (ErroDoGithub, OSError, ValueError, KeyError):
+    except (ErroDoGithub, OSError, ValueError, KeyError, http.client.HTTPException):
         return None
-    finally:
-        # O token do GitHub morre aqui. Nao vai ao banco, nao vai a log, e nao
-        # e devolvido a quem chamou.
-        token = None
     if not quem["id"]:
         return None
     if quem["2fa"] is False:
@@ -148,16 +153,30 @@ def convidar(login: str, email: str, con=None, abrir=None) -> int:
     """Cria conta e amarra ao id NUMERICO do GitHub. Devolve o id da conta."""
     abrir = abrir or urllib.request.urlopen
     req = urllib.request.Request(
-        QUEM + urllib.parse.quote((login or "").strip()), headers=_CABECALHO)
+        # `safe=""`: o padrao do `quote` deixa a barra passar, e ai
+        # `convidar "../orgs/x"` sairia da rota /users/. So alcancavel por quem
+        # ja digita na linha de comando da maquina, mas custa uma palavra.
+        QUEM + urllib.parse.quote((login or "").strip(), safe=""),
+        headers=_CABECALHO)
     with abrir(req, timeout=ESPERA) as r:
-        u = json.loads(r.read().decode("utf-8"))
+        u = json.loads(r.read(TETO_DA_RESPOSTA).decode("utf-8"))
     if not u.get("id"):
         raise ErroDoGithub("login do GitHub nao encontrado: %s" % login)
     fechar = con is None
     con = con or banco.conectar()
     try:
+        # TUDO OU NADA. `banco.criar_usuario` commita sozinho: sem esta guarda,
+        # um id do GitHub ja ligado a outra conta fazia a `usuario` ficar
+        # gravada e a credencial estourar — sobrava uma conta que nao loga, com
+        # o e-mail queimado pelo UNIQUE e nenhum comando para apaga-la. Repetir
+        # o convite com o e-mail certo passava a estourar tambem.
         uid = banco.criar_usuario(email, nome=u.get("name") or login, con=con)
-        banco.ligar_github(uid, str(u["id"]), con=con)
+        try:
+            banco.ligar_github(uid, str(u["id"]), con=con)
+        except Exception:
+            con.execute("DELETE FROM usuario WHERE id = ?", (uid,))
+            con.commit()
+            raise
         return uid
     finally:
         if fechar:

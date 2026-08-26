@@ -33,9 +33,10 @@ os.environ.setdefault("DERVS_AMBIENTE", "local")
 os.environ.setdefault("DERVS_COFRE",
                       "chave-de-teste-que-nao-e-segredo-nenhum-0123456789")
 
-import banco    # noqa: E402
-import cortina  # noqa: E402
-import servir   # noqa: E402
+import autenticacao  # noqa: E402
+import banco         # noqa: E402
+import cortina       # noqa: E402
+import servir        # noqa: E402
 
 
 class PortaDaLinhaDeComando(unittest.TestCase):
@@ -129,6 +130,13 @@ class ServidorDeVerdade(unittest.TestCase):
         cls._porta_antiga = servir.PORTA
         cls._origens_antigas = servir.ORIGENS_OK
         cls._hosts_antigos = servir.HOSTS_OK
+        # O ESTADO DO OAUTH TAMBEM E FIXADO AQUI, e nao lido do ambiente. Dois
+        # testes afirmavam que `GITHUB_ID` era vazio; no dia em que o dono
+        # seguisse docs/operacao/registrar-app-github.md e exportasse a
+        # variavel, a suite ficava VERMELHA na maquina de quem configurou certo.
+        # Achado da revisao de Python de 26/08/2026.
+        cls._id_antigo, cls._segredo_antigo = servir.GITHUB_ID, servir.GITHUB_SECRET
+        servir.GITHUB_ID = servir.GITHUB_SECRET = ""
         servir.PORTA = cls.porta
         servir.ORIGENS_OK = {"http://127.0.0.1:%d" % cls.porta}
         servir.HOSTS_OK = {"127.0.0.1:%d" % cls.porta}
@@ -142,6 +150,8 @@ class ServidorDeVerdade(unittest.TestCase):
         servir.PORTA = cls._porta_antiga
         servir.ORIGENS_OK = cls._origens_antigas
         servir.HOSTS_OK = cls._hosts_antigos
+        servir.GITHUB_ID = cls._id_antigo
+        servir.GITHUB_SECRET = cls._segredo_antigo
         banco.BANCO = cls._banco_antigo
         cls.dir.cleanup()
 
@@ -385,6 +395,62 @@ class ServidorDeVerdade(unittest.TestCase):
         # leva a 404 e pior que botao que nao existe.
         self.assertNotIn("/entrar/github", corpo)
 
+    def test_a_conta_local_desativada_nao_e_ressuscitada(self):
+        """`usuario_por_email` filtra desativados: um `criar_usuario` cego aqui
+        estouraria no UNIQUE do e-mail e derrubaria o pedido inteiro."""
+        self.pedir("/entrar/local", cookies=self.abrir_cortina())
+        con = banco.conectar()
+        try:
+            con.execute("UPDATE usuario SET desativado_em = ? WHERE email = ?",
+                        (banco.agora(), "dono@teste.local"))
+            con.commit()
+        finally:
+            con.close()
+        try:
+            r = self.pedir("/entrar/local", cookies=self.abrir_cortina())
+            self.assertEqual(r.status, 404)
+            self.assertNotIn("sessao", r.cookies)
+        finally:
+            con = banco.conectar()
+            con.execute("UPDATE usuario SET desativado_em = NULL WHERE email = ?",
+                        ("dono@teste.local",))
+            con.commit()
+            con.close()
+
+    def test_o_silencio_de_um_nao_esconde_o_alerta_do_outro(self):
+        """O IDOR que a etapa 8 consertou no esquema e que faltava na rota.
+
+        `_silenciar` gravava sem `usuario_id` e `_estado` lia sem `usuario_id`:
+        os dois caiam no balde do DONO_LOCAL. Com uma segunda conta entrando
+        pela web — que e o que esta etapa passou a permitir — o "x" de um
+        escondia o alerta do outro.
+        """
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("segundo@teste.local", con=con)
+            cookie = banco.novo_token()
+            banco.abrir_sessao(outro, cookie, banco.prazo(3600), con=con)
+            do_outro = {"sessao": banco.confirmar_segundo_fator(
+                cookie, banco.novo_token(), con=con)}
+        finally:
+            con.close()
+        meu = self.com_sessao()
+        pid = "regra-de-teste:projeto-de-teste"
+        ok = self.pedir("/api/silenciar", "POST", {"id": pid, "horas": 24},
+                        cookies=meu,
+                        cabecalhos={"X-Token": self._token_da_pagina(meu)})
+        self.assertEqual(ok.status, 200)
+        con = banco.conectar()
+        try:
+            self.assertIn(pid, banco.silenciadas(con, usuario_id=self.uid))
+            self.assertNotIn(pid, banco.silenciadas(con, usuario_id=outro))
+            # E o balde do DONO_LOCAL nao recebeu nada.
+            self.assertNotIn(pid, banco.silenciadas(con,
+                                                    usuario_id=banco.DONO_LOCAL))
+        finally:
+            con.close()
+        self.assertEqual(self.pedir("/api/dados", cookies=do_outro).status, 200)
+
     # ------------------------------------------------------------ anti-CSRF
     def test_silenciar_exige_o_anti_csrf_daquela_sessao(self):
         cookies = self.com_sessao()
@@ -428,9 +494,31 @@ class ServidorDeVerdade(unittest.TestCase):
 
     def test_a_rota_de_entrar_nao_existe_sem_aplicativo_registrado(self):
         """Falha FECHADA: melhor nao ter porta do que ter porta que nao tranca."""
-        self.assertEqual(servir.GITHUB_ID, "")
         self.assertEqual(
             self.pedir("/entrar/github", cookies=self.abrir_cortina()).status, 404)
+
+    def test_com_aplicativo_registrado_a_rota_leva_ao_github(self):
+        """O caminho "aplicativo registrado" nao tinha teste nenhum: a suite so
+        exercitava o mundo em que ele nao existe."""
+        antes = servir.GITHUB_ID, servir.GITHUB_SECRET
+        servir.GITHUB_ID, servir.GITHUB_SECRET = "inventado", "tambem-inventado"
+        try:
+            cookies = self.abrir_cortina()
+            r = self.pedir("/entrar/github", cookies=cookies)
+            self.assertEqual(r.status, 302)
+            destino = r.cabecalhos.get("Location", "")
+            self.assertTrue(destino.startswith(autenticacao.AUTORIZAR + "?"),
+                            destino)
+            self.assertIn("client_id=inventado", destino)
+            # O segredo NUNCA vai para a URL de ida.
+            self.assertNotIn("tambem-inventado", destino)
+            # E o selo da cortina e renovado, senao ele vence enquanto o dono
+            # digita o segundo fator no GitHub e a volta cai num 404 seco.
+            self.assertIn("cortina", r.cookies)
+            self.assertIn("state", r.cookies)
+            self.assertIn("/entrar/github", self.pedir("/", cookies=cookies).corpo)
+        finally:
+            servir.GITHUB_ID, servir.GITHUB_SECRET = antes
 
     def test_nao_existe_rota_de_registro(self):
         self.assertNotIn("/api/registro", servir.ROTAS)
