@@ -123,9 +123,20 @@ def coletar(camada: str, motivo: str) -> None:
         return
     with _travas[camada]:
         inicio = time.time()
-        r = subprocess.run([sys.executable, str(script)], capture_output=True,
-                           text=True, encoding="utf-8", errors="replace",
-                           creationflags=SEM_JANELA)
+        # PRAZO. Sem ele, um coletor travado segura a trava desta camada para
+        # sempre: o numero na tela congela e nada avisa. Num painel cuja regra
+        # numero um e "nao mentir", medicao parada em silencio e o pior defeito
+        # possivel. 10 min e folgado — a camada pesada leva ~40 s no pior dia.
+        try:
+            r = subprocess.run([sys.executable, str(script)], capture_output=True,
+                               text=True, encoding="utf-8", errors="replace",
+                               creationflags=SEM_JANELA, timeout=600)
+        except subprocess.TimeoutExpired:
+            _ultima_falha[camada] = ("o coletor passou de 10 min e foi "
+                                     "interrompido.")
+            print("[%s] PRAZO estourado em %s (%s)"
+                  % (time.strftime("%H:%M:%S"), camada, motivo))
+            return
         marca = time.strftime("%H:%M:%S")
         if r.returncode == 0:
             _ultima_falha.pop(camada, None)
@@ -293,6 +304,11 @@ class Hub(SimpleHTTPRequestHandler):
         pid = corpo.get("id")
         if not pid or not isinstance(pid, str):
             return self._json(400, {"erro": "faltou o id da pendencia"})
+        # O id e sempre `regra:projeto` — dezenas de caracteres. Sem teto, quem
+        # tem o token grava ids de 16 KiB, um por pedido, e cada um vira linha
+        # que nenhuma coleta jamais colhe. Nao vaza nada; incha o banco.
+        if len(pid) > 200:
+            return self._json(400, {"erro": "id longo demais"})
         try:
             horas = max(1, min(24 * 30, int(corpo.get("horas") or 24)))
         except (TypeError, ValueError):
@@ -311,7 +327,13 @@ class Hub(SimpleHTTPRequestHandler):
         nao tem corpo), mas vazava existencia, tamanho e data do banco, do
         arquivo de variaveis e do .git/config. Revisao de 24/08/2026.
         """
-        return self._json(405, {"erro": "método não permitido"})
+        # Cabecalho e ponto: HEAD com corpo dessincroniza a fila de respostas
+        # assim que ligarmos HTTP/1.1 com keep-alive atras do nginx (etapa 16).
+        # Hoje seria inofensivo, e e por isso que se conserta hoje.
+        self.send_response(405)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
