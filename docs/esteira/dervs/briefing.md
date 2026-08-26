@@ -174,7 +174,14 @@ Estrategista `sonnet`, juiz `opus`. Fase 4: `neguin-planner` em `opus`. Fase 5:
 `typescript-reviewer`, `security-reviewer` e `design-reviewer`; o de segurança em `opus`, por
 causa do risco de execução remota. Fase 7: Cronista `sonnet`.
 
-**Despachos previstos: 22.** Fase 2: 5. Fase 3: 3. Fase 4: 1. Fase 5: 6. Fase 6: 6. Fase 7: 1.
+**Despachos previstos: 20.** Fase 2: 3. Fase 3: 3. Fase 4: 1. Fase 5: 6. Fase 6: 6. Fase 7: 1.
+
+Revisto em 26/08/2026, a pedido do dono, que avisou que o custo estava subindo. A fase 2
+caiu de 5 despachos para 3: o Analista e o Diretor viram um despacho só com as duas
+lentes, e a síntese fica com o Interrogador em vez de um Sintetizador novo — ele já tem
+os dois repositórios na cabeça, e um agente novo pagaria 28 mil tokens para redescobrir
+o que já está sabido. O Arquiteto e o Pesquisador continuam separados de propósito: são
+os dois papéis cujo trabalho é grande, independente e o que mais muda a decisão final.
 
 **Portões previstos:** o 1 (este briefing), o 3 (escolha visual entre direções de preto,
 branco e verde) e o 4 (risco: publicação em VPS pública e guarda de segredo). O portão 2 só
