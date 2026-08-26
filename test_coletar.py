@@ -734,5 +734,65 @@ class MemoriaCrlf(unittest.TestCase):
         self.assertEqual(coletar.coleta_memoria_crlf(self.repo), ["outra.md"])
 
 
+class PortasDoProc(unittest.TestCase):
+    """O leitor de /proc/net/tcp — como o Linux conta quem esta escutando.
+
+    Fora do Windows nao ha Get-NetTCPConnection. Sem este caminho, o coletor
+    devolvia lista vazia em silencio e TODA porta de TODO projeto virava
+    "fora do ar" — inclusive as que estavam respondendo.
+    """
+
+    CABECALHO = ("  sl  local_address rem_address   st tx_queue rx_queue tr "
+                 "tm->when retrnsmt   uid  timeout inode\n")
+
+    def test_le_a_porta_de_quem_escuta(self):
+        # 1F90 = 8080. 0A = TCP_LISTEN.
+        texto = self.CABECALHO + "   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 12345 1\n"
+        self.assertEqual(coletar.portas_do_proc(texto), {8080})
+
+    def test_ignora_conexao_que_nao_esta_escutando(self):
+        # 01 = TCP_ESTABLISHED: e trafego saindo, nao servico de pe.
+        texto = self.CABECALHO + "   0: 0100007F:1F90 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1000        0 12345 1\n"
+        self.assertEqual(coletar.portas_do_proc(texto), set())
+
+    def test_aceita_endereco_ipv6_do_tcp6(self):
+        seis = "00000000000000000000000001000000"
+        texto = self.CABECALHO + "   0: " + seis + ":12A1 " + ("0" * 32) + ":0000 0A 00000000:00000000 00:00000000 00000000  1000        0 12345 1\n"
+        self.assertEqual(coletar.portas_do_proc(texto), {4769})
+
+    def test_linha_estragada_nao_derruba_a_leitura(self):
+        texto = (self.CABECALHO
+                 + "lixo que nao e linha nenhuma\n"
+                 + "   1: 0100007F:1F90 00000000:0000 0A 0 0 0 0 0 0 1\n")
+        self.assertEqual(coletar.portas_do_proc(texto), {8080})
+
+    def test_texto_vazio_da_conjunto_vazio(self):
+        self.assertEqual(coletar.portas_do_proc(""), set())
+
+
+class NaoSaberNaoEDizerNao(unittest.TestCase):
+    """Sem lista de portas, a decisao volta para a conexao de verdade.
+
+    O defeito real (26/08/2026): `p in portas and porta_viva(p)`. Quando
+    portas_escutando() nao conseguia responder, `portas` vinha vazio e o `and`
+    dava False ANTES de tentar a conexao — o painel jurava que estava tudo fora
+    do ar sem ter batido em porta nenhuma. Mentira por omissao.
+    """
+
+    def test_sem_lista_manda_testar(self):
+        self.assertTrue(coletar.deve_testar(4777, None))
+
+    def test_porta_na_lista_manda_testar(self):
+        self.assertTrue(coletar.deve_testar(4777, {4777, 5432}))
+
+    def test_porta_fora_da_lista_dispensa_o_teste(self):
+        self.assertFalse(coletar.deve_testar(4777, {5432}))
+
+    def test_lista_vazia_de_verdade_dispensa_o_teste(self):
+        # Conjunto vazio e resposta: "medi, nao ha ninguem escutando".
+        # E diferente de None, que e "nao consegui medir".
+        self.assertFalse(coletar.deve_testar(4777, set()))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

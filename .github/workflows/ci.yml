@@ -31,7 +31,7 @@ jobs:
           fi
 
       - name: Compila
-        run: python -m py_compile banco.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py
+        run: python -m py_compile banco.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py
 
       - name: Motor de regras
         run: python test_regras.py
@@ -47,3 +47,11 @@ jobs:
 
       - name: Execução
         run: python test_execucao.py
+
+      # Estes dois nunca tinham rodado no GitHub: 128 testes, e sao a barreira
+      # de comando e o motor da fila — as duas pecas onde defeito custa caro.
+      - name: Barreira de comando
+        run: python test_barreira.py
+
+      - name: Fila
+        run: python test_fila.py

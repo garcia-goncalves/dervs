@@ -1217,7 +1217,9 @@ async function carregar(){
   const inf = d.infra || {};
   $("#rodape").textContent =
     (inf.containers||[]).length + " contêineres · "
-    + (inf.portas||[]).length + " portas escutando"
+    // null = o coletor nao conseguiu medir. "0 portas" seria mentira com cara
+    // de medicao: o rodape diz que nao sabe, e nao um numero inventado.
+    + (inf.portas == null ? "portas: não medido" : inf.portas.length + " portas escutando")
     + (q ? " · Actions " + q.pct + "% de " + q.cota + " min" : "");
 
   if (grafoMontado && !$("#aba-grafo").hidden && d.grafo_ui) desenhaGrafo(d.grafo_ui);

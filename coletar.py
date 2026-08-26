@@ -706,11 +706,64 @@ def coleta_docker() -> list:
     return itens
 
 
-def portas_escutando() -> list:
-    saida = sh(["powershell", "-NoProfile", "-Command",
-                "Get-NetTCPConnection -State Listen | "
-                "Select-Object -ExpandProperty LocalPort -Unique | Sort-Object"], timeout=30)
-    return sorted({int(l) for l in saida.split() if l.strip().isdigit() and 1024 < int(l) < 65535})
+def _uteis(portas) -> list:
+    return sorted({p for p in portas if 1024 < p < 65536})
+
+
+def portas_do_proc(texto: str) -> set:
+    """As portas em LISTEN dentro de um /proc/net/tcp (ou tcp6) do Linux.
+
+    Formato de cada linha: `sl local_address:PORTA rem:PORTA st ...`, tudo em
+    hexadecimal. `st` 0A e TCP_LISTEN; qualquer outro estado e conexao de
+    passagem, nao servico de pe. Linha estragada nao derruba a leitura: uma
+    porta a menos e ruim, um coletor morto de minuto em minuto e pior.
+    """
+    portas = set()
+    for linha in texto.splitlines():
+        campos = linha.split()
+        if len(campos) < 4 or campos[3].upper() != "0A":
+            continue
+        try:
+            portas.add(int(campos[1].rsplit(":", 1)[1], 16))
+        except (IndexError, ValueError):
+            continue
+    return portas
+
+
+def portas_escutando():
+    """Quem esta escutando nesta maquina. None quando NAO DEU para medir.
+
+    None e vazio dizem coisas opostas e o painel depende da diferenca: vazio e
+    "medi, nao ha ninguem"; None e "nao consegui medir". Ate 26/08/2026 esta
+    funcao so sabia perguntar ao PowerShell e, fora do Windows, devolvia vazio
+    em silencio — e o painel jurava que todo projeto estava fora do ar.
+    """
+    if sys.platform.startswith("win"):
+        saida = sh(["powershell", "-NoProfile", "-Command",
+                    "Get-NetTCPConnection -State Listen | "
+                    "Select-Object -ExpandProperty LocalPort -Unique | Sort-Object"], timeout=30)
+        if not saida:
+            return None
+        return _uteis(int(l) for l in saida.split() if l.strip().isdigit())
+
+    achou = False
+    portas = set()
+    for arquivo in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
+        try:
+            portas |= portas_do_proc(arquivo.read_text(encoding="utf-8", errors="replace"))
+            achou = True
+        except OSError:
+            continue
+    return _uteis(portas) if achou else None
+
+
+def deve_testar(porta: int, portas) -> bool:
+    """Vale abrir conexao nesta porta? Sem lista (None), vale sempre.
+
+    Nao saber nao e dizer nao: quando a medicao falhou, quem decide e a conexao
+    de verdade, que funciona nos dois sistemas.
+    """
+    return portas is None or porta in portas
 
 
 def porta_viva(porta: int) -> bool:
@@ -767,7 +820,7 @@ def main():
             "fase": fase(g, pr),
             "esteiras": coleta_esteira(repo),
             "containers": meus,
-            "portas": [{"porta": p, "vivo": p in portas and porta_viva(p)}
+            "portas": [{"porta": p, "vivo": deve_testar(p, portas) and porta_viva(p)}
                        for p in caso.get("portas", [])],
         })
 
