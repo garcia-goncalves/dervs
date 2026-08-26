@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Motor de pendencias do HUB — as 17 regras.
+"""Motor de pendencias do HUB — as 18 regras.
 
 O HUB responde uma pergunta so: "o que precisa de mim agora?". Este arquivo e
 onde essa pergunta vira lista.
@@ -16,7 +16,7 @@ TRES INVARIANTES, e o teste cobre os tres:
      silenciar uma pendencia e ela continuar silenciada na coleta seguinte.
 
 Este modulo e PURO: entra dicionario, sai lista. Nao le disco, nao chama rede,
-nao roda comando — e por isso da para testar as 17 regras em um segundo.
+nao roda comando — e por isso da para testar as 18 regras em um segundo.
 """
 from __future__ import annotations
 
@@ -61,6 +61,10 @@ def _do_projeto(p: dict) -> list:
     caminho = p.get("caminho", "")
     g = p.get("git") or {}
     versionado = bool(g.get("versionado"))
+    # `is False` de proposito, e nao `not g.get(...)`: retrato gravado antes
+    # desta chave existir nao tem opiniao sobre o assunto, e dado antigo nao
+    # deve virar enxurrada de "nao medi".
+    git_mudo = versionado and g.get("medido") is False
     gh = p.get("github")            # None = camada nao coletada (ver invariante 2)
     pesado = p.get("pesado") or {}
     itens = []
@@ -265,13 +269,33 @@ def _do_projeto(p: dict) -> list:
             {"tipo": "vscode", "rotulo": "Abrir e decidir", "caminho": caminho}))
 
     # 13. Sem remoto no GitHub
-    if not versionado or not g.get("tem_remoto"):
+    # `git_mudo` barra aqui porque a acao e destrutiva: sem a resposta do git,
+    # `tem_remoto` some do retrato, esta regra concluia "existe so neste
+    # computador" de um repo que TEM GitHub, e entregava ao dono um `git init`
+    # em cima dele. Alarme inventado ja e ruim; com acao destrutiva junto, e
+    # estrago.
+    if not git_mudo and (not versionado or not g.get("tem_remoto")):
         itens.append(_p(
             "sem_remoto", "baixa", nome,
             "O %s não tem cópia no GitHub — existe só neste computador." % nome,
             {"tipo": "copiar", "rotulo": "Copiar o comando",
              "texto": "cd %s && git init && gh repo create %s --private --source=. --push"
                       % (caminho, nome)}))
+
+    # 18. O git nao respondeu por este projeto
+    #
+    # Irma da regra 17, mesma logica: fato medido ("tentei e nao consegui"),
+    # nao alarme tirado de numero ausente. Enquanto ela nao existia, git
+    # quebrado virava "arvore limpa, 0 commits, nunca publicado" — tela
+    # tranquila por cegueira, indistinguivel de boa noticia.
+    if git_mudo:
+        itens.append(_p(
+            "git_nao_medido", "media", nome,
+            "Não consegui ler o git do %s — o que a tela mostra dele não foi "
+            "medido." % nome,
+            {"tipo": "copiar", "rotulo": "Copiar o comando",
+             "texto": "cd %s && git status" % caminho},
+            detalhe="rode o comando para ver o erro do git com seus olhos"))
 
     # 14. Estudo de caso vazio
     if p.get("caso_vazio"):
@@ -434,6 +458,7 @@ ROTULO_REGRA = {
     "site_fora": "com o site fora do ar",
     "nao_publicado": "com trabalho pronto e não publicado",
     "auditoria_nao_rodou": "cujas dependências não consegui auditar",
+    "git_nao_medido": "cujo git não consegui ler",
 }
 
 

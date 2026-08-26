@@ -28,7 +28,7 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `index.html` | A tela. Recarrega sozinha a cada 15 s. |
 | `servir.py` | Serve a página, o `/api/dados`, o `/api/acao` e o `/api/execucao`. Agenda as três coletas. |
 | `banco.py` | O SQLite (`hub.db`): uma linha por (projeto, camada), com carimbo de tempo. |
-| `regras.py` | O motor das 17 pendências, mais o agrupamento das repetidas. Puro: entra dicionário, sai lista. |
+| `regras.py` | O motor das 18 pendências, mais o agrupamento das repetidas. Puro: entra dicionário, sai lista. |
 | `memoria.py` | A memória do tempo: idade de cada pendência, tendência da semana e o briefing. |
 | `test_memoria.py` | 46 testes da memória. `python test_memoria.py`. |
 | `execucao.py` | O botão **Resolver**: dispara uma sessão do Claude Code numa cópia isolada e abre o pedido de alteração. Seção própria abaixo. |
@@ -66,7 +66,7 @@ arquivos rodam na CI. Passam em Windows e em Linux — verificado num contêiner
 troca o número quando o novo chegar. Cada camada exibe há quanto tempo foi
 medida e esmaece quando envelhece — se o painel mentir uma vez, o hábito morre.
 
-## As 16 pendências
+## As 18 pendências
 
 | # | Regra | Gravidade | Ação |
 |---|---|---|---|
@@ -86,6 +86,8 @@ medida e esmaece quando envelhece — se o painel mentir uma vez, o hábito morr
 | 14 | Sem descrição no `casos.json` | baixa | escrever |
 | 15 | Site de produção fora do ar | alta | abrir o site |
 | 16 | Trabalho pronto no GitHub e não publicado | média | ver as publicações |
+| 17 | A auditoria de dependência tentou rodar e falhou | baixa | copiar o comando |
+| 18 | O git não respondeu por este projeto | média | copiar o comando |
 
 Três invariantes, cobertos por teste:
 
@@ -147,7 +149,7 @@ Sobram quatro onde a automesclagem é honesta: `painel-projetos`, `investrix`,
 e deploy só por botão. Quem ganhar CI, ou trocar o deploy por botão, apaga o
 bloco do seu `renovate.json` e volta ao padrão da organização.
 
-Só **três** das 17 regras entram na fila: `memoria_crlf` (mecânico),
+Só **três** das 18 regras entram na fila: `memoria_crlf` (mecânico),
 `env_drift` e `dependencia_insegura` (Claude). É lista **branca**: regra que não
 está lá não chega ao motor, nem por engano.
 
@@ -890,6 +892,29 @@ máquina dele.
 **Falha de medição não apaga medição boa.** `ok=None` é "não medi"; `ok=False` é
 "caiu". Um blip de rede às 20h não pode fazer "site no ar" virar "site fora" —
 mesmo cuidado que os alertas de segurança já tinham.
+
+### Comando que falhou não vira zero medido
+
+Até 26/08/2026 o `sh()` do coletor devolvia a mesma string vazia para dois fatos
+opostos: "rodou e não havia nada" e "não rodou". Git ausente do PATH, repositório
+corrompido ou permissão negada viravam, na tela, **"árvore limpa, 0 commits,
+nunca publicado"** — e o painel oferecia um `git init` que estragaria um repo que
+já tem GitHub.
+
+O conserto tem quatro degraus, e o par `(deu_certo, saída)` é o de baixo:
+
+| Peça | Antes | Agora |
+|---|---|---|
+| `coletar.executa()` | não existia; só `sh()`, que perdia o código de saída | devolve `(ok, saída)` |
+| `coleta_git()` | seguia inventando zeros | sentinela no `rev-parse`; se falhou, devolve `{"versionado": true, "medido": false}` |
+| `coleta_docker()` | `[]` para Docker mudo **e** para máquina sem contêiner | `None` quando o Docker não respondeu, `[]` quando respondeu vazio |
+| Nota de prontidão | `"segredo"` lia chave ausente, `not None` dava `True` e **concedia o ponto de segurança sem olhar** | os critérios de `CRITERIOS_QUE_PEDEM_GIT` ficam sem veredito e aparecem como `?` |
+
+Na tela: `?` em itálico na cor de alerta (nunca `—`, que parece "não tem", nunca
+`0`, que parece medido), nota com `*` de parcial, e a regra 18 dizendo em
+português que não deu para medir. Mesma lição de `portas_escutando()`, que já
+separava `None` de vazio: **tela limpa por cegueira é indistinguível de boa
+notícia, e é a pior mentira que um painel pode contar.**
 
 ## 203 alertas eram 32 pacotes: contagem não é risco
 

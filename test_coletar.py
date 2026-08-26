@@ -284,12 +284,12 @@ class ProntidaoSoCobraOQueSeAplica(unittest.TestCase):
 
     # ---------------------------------------------------------------- Docker
     def test_docker_nao_se_aplica_a_quem_nao_declara_conteiner(self):
-        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True, "medido": True},
                                       self._arq(), {})
         self.assertFalse(self._por_chave(pr)["docker"]["aplica"])
 
     def test_docker_se_aplica_a_quem_declara_conteiner_no_casos_json(self):
-        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True, "medido": True},
                                       self._arq(), {"containers": ["medcrm"]})
         item = self._por_chave(pr)["docker"]
         self.assertTrue(item["aplica"])
@@ -297,42 +297,42 @@ class ProntidaoSoCobraOQueSeAplica(unittest.TestCase):
 
     # ---------------------------------------------------------------- deploy
     def test_deploy_nao_se_aplica_a_projeto_que_nunca_publica(self):
-        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True, "medido": True},
                                       self._arq(), {})
         self.assertFalse(self._por_chave(pr)["deploy"]["aplica"])
 
     def test_deploy_se_aplica_a_quem_tem_endereco_de_producao(self):
-        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True, "medido": True},
                                       self._arq(), {"url_prod": "https://x.com.br"})
         self.assertTrue(self._por_chave(pr)["deploy"]["aplica"])
 
     # ------------------------------------------------------------------ docs
     def test_docs_nao_se_aplica_a_projeto_pequeno(self):
-        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True, "medido": True},
                                       self._arq(arquivos=24), {})
         self.assertFalse(self._por_chave(pr)["docs"]["aplica"])
 
     def test_docs_se_aplica_a_projeto_grande(self):
-        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True, "medido": True},
                                       self._arq(arquivos=2602), {})
         self.assertTrue(self._por_chave(pr)["docs"]["aplica"])
 
     # ---------------------------------------------------------------- testes
     def test_teste_nao_e_cobrado_de_site_estatico(self):
         """Regra da casa: CSS, layout e texto de tela sao isentos de TDD."""
-        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True, "medido": True},
                                       self._arq(arquivos=35, testaveis=40), {})
         self.assertFalse(self._por_chave(pr)["testes"]["aplica"])
 
     def test_teste_e_cobrado_de_quem_tem_logica(self):
-        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True, "medido": True},
                                       self._arq(arquivos=300, testaveis=25000), {})
         self.assertTrue(self._por_chave(pr)["testes"]["aplica"])
 
     # -------------------------------------------------------------------- CI
     def test_ci_nao_e_cobrada_de_pasta_sem_github(self):
         pr = coletar.coleta_prontidao(self._repo("README.md"),
-                                      {"versionado": True, "tem_remoto": False},
+                                      {"versionado": True, "medido": True, "tem_remoto": False},
                                       self._arq(), {})
         self.assertFalse(self._por_chave(pr)["ci"]["aplica"])
 
@@ -351,7 +351,7 @@ class ProntidaoSoCobraOQueSeAplica(unittest.TestCase):
         alto da regua — e derrubava 6 dos 17 projetos por fazerem o certo.
         """
         pr = coletar.coleta_prontidao(self._repo("README.md", coletar.ARQ_SEGREDO),
-                                      {"versionado": True, "env_versionado": False},
+                                      {"versionado": True, "medido": True, "env_versionado": False},
                                       self._arq(), {})
         item = self._por_chave(pr)["segredo"]
         self.assertTrue(item["aplica"])
@@ -359,29 +359,29 @@ class ProntidaoSoCobraOQueSeAplica(unittest.TestCase):
 
     def test_segredo_dentro_do_historico_e_pecado(self):
         pr = coletar.coleta_prontidao(self._repo("README.md", coletar.ARQ_SEGREDO),
-                                      {"versionado": True, "env_versionado": True},
+                                      {"versionado": True, "medido": True, "env_versionado": True},
                                       self._arq(), {})
         self.assertFalse(self._por_chave(pr)["segredo"]["ok"])
 
     def test_sem_arquivo_de_variaveis_nao_ha_o_que_verificar(self):
         pr = coletar.coleta_prontidao(self._repo("README.md"),
-                                      {"versionado": True}, self._arq(), {})
+                                      {"versionado": True, "medido": True}, self._arq(), {})
         self.assertFalse(self._por_chave(pr)["segredo"]["aplica"])
 
     # ------------------------------------------------- exemplo de variaveis
     def test_exemplo_so_e_cobrado_de_quem_usa_variavel(self):
-        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True, "medido": True},
                                       self._arq(), {})
         self.assertFalse(self._por_chave(pr)["env_exemplo"]["aplica"])
         pr2 = coletar.coleta_prontidao(self._repo("README.md", coletar.ARQ_SEGREDO),
-                                       {"versionado": True}, self._arq(), {})
+                                       {"versionado": True, "medido": True}, self._arq(), {})
         self.assertTrue(self._por_chave(pr2)["env_exemplo"]["aplica"])
 
     # --------------------------------------------------------------- a conta
     def test_o_que_nao_se_aplica_sai_do_denominador(self):
         pr = coletar.coleta_prontidao(
             self._repo("README.md", ".gitignore"),
-            {"versionado": True, "tem_remoto": False, "sujos": 0, "ahead": 0},
+            {"versionado": True, "medido": True, "tem_remoto": False, "sujos": 0, "ahead": 0},
             self._arq(arquivos=24), {})
         aplicaveis = [i for i in pr["itens"] if i["aplica"]]
         self.assertEqual(pr["total"], sum(i["peso"] for i in aplicaveis))
@@ -389,13 +389,13 @@ class ProntidaoSoCobraOQueSeAplica(unittest.TestCase):
 
     def test_dono_pode_desligar_um_criterio_pelo_casos_json(self):
         caso = {"url_prod": "https://x.com.br", "prontidao": {"deploy": False}}
-        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True, "medido": True},
                                       self._arq(), caso)
         self.assertFalse(self._por_chave(pr)["deploy"]["aplica"])
 
     def test_dono_pode_ligar_um_criterio_pelo_casos_json(self):
         caso = {"prontidao": {"docker": True}}
-        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True, "medido": True},
                                       self._arq(), caso)
         item = self._por_chave(pr)["docker"]
         self.assertTrue(item["aplica"])
@@ -411,12 +411,12 @@ class ProntidaoSoCobraOQueSeAplica(unittest.TestCase):
     def test_criterio_quebrado_nao_derruba_a_coleta(self):
         """Nenhum criterio pode explodir a coleta inteira de um projeto."""
         pr = coletar.coleta_prontidao(Path("nao/existe/em/lugar/nenhum"),
-                                      {"versionado": True}, self._arq(), {})
+                                      {"versionado": True, "medido": True}, self._arq(), {})
         self.assertIsInstance(pr["pct"], int)
 
     def test_a_chamada_antiga_continua_valendo(self):
         """coleta_prontidao sem casos.json nao pode explodir."""
-        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True},
+        pr = coletar.coleta_prontidao(self._repo("README.md"), {"versionado": True, "medido": True},
                                       self._arq())
         self.assertIsInstance(pr["pct"], int)
 
@@ -796,3 +796,97 @@ class NaoSaberNaoEDizerNao(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class NaoConsegueMedir(unittest.TestCase):
+    """Falha de git ou de docker precisa aparecer como falha, nao como zero.
+
+    Ate 26/08/2026 sh() devolvia "" tanto para "rodou e nao havia nada" quanto
+    para "nao rodou". O painel entao dizia "arvore limpa, 0 commits" de um repo
+    que ele nao tinha conseguido medir — que e a pior forma de errar: numero
+    errado com cara de certo. Mesma licao de portas_escutando(), que ja separa
+    None de vazio.
+    """
+
+    def test_executa_separa_falha_de_saida_vazia(self):
+        ok, saida = coletar.executa(["git", "--version"])
+        self.assertTrue(ok)
+        self.assertIn("git", saida.lower())
+
+    def test_executa_marca_falha_quando_o_comando_nao_existe(self):
+        ok, saida = coletar.executa(["programa-que-nao-existe-mesmo"])
+        self.assertFalse(ok)
+        self.assertEqual(saida, "")
+
+    def test_executa_marca_falha_quando_o_comando_sai_com_erro(self):
+        ok, _ = coletar.executa(["git", "-C", tempfile.gettempdir(),
+                                 "rev-parse", "--abbrev-ref", "HEAD"])
+        self.assertFalse(ok)
+
+    def _repo_quebrado(self):
+        """Pasta com .git, mas que o git recusa. E o caso real: repo corrompido,
+        git ausente do PATH, ou permissao negada."""
+        d = Path(tempfile.mkdtemp())
+        (d / ".git").mkdir()
+        return d
+
+    def test_repo_quebrado_nao_vira_arvore_limpa(self):
+        g = coletar.coleta_git(self._repo_quebrado())
+        self.assertIs(g.get("medido"), False)
+        self.assertNotIn("sujos", g)
+        self.assertNotIn("commits_total", g)
+
+    def test_repo_de_verdade_fica_marcado_como_medido(self):
+        g = coletar.coleta_git(Path(__file__).resolve().parent)
+        self.assertIs(g.get("medido"), True)
+        self.assertTrue(g["branch"])
+
+    def test_pasta_sem_git_continua_dizendo_so_que_nao_e_versionada(self):
+        g = coletar.coleta_git(Path(tempfile.mkdtemp()))
+        self.assertIs(g["versionado"], False)
+
+    def test_docker_fora_do_ar_e_None_e_nao_lista_vazia(self):
+        self.assertIsNone(coletar.coleta_docker(executor=lambda *a, **k: (False, "")))
+
+    def test_docker_de_pe_e_sem_conteiner_e_lista_vazia(self):
+        self.assertEqual(coletar.coleta_docker(executor=lambda *a, **k: (True, "")), [])
+
+
+class NaoMedidoNaoViraNota(unittest.TestCase):
+    """Git que nao respondeu nao pode virar tendencia, fase nem ponto de nota.
+
+    O caso mais grave e o criterio "Segredo fora do historico": ele le uma
+    chave que so existe quando o git respondeu. Faltando a chave, o teste
+    `not None` da True e o painel CONCEDE o ponto de seguranca sem ter olhado.
+    """
+
+    NAO_MEDIDO = {"versionado": True, "medido": False}
+
+    def test_projecao_nao_inventa_tendencia(self):
+        pr = {"pontos": 3, "total": 10, "pct": 30}
+        self.assertEqual(coletar.projecao(self.NAO_MEDIDO, pr)["status"], "nao_medido")
+
+    def test_fase_diz_que_nao_mediu(self):
+        pr = {"pontos": 3, "total": 10, "pct": 30}
+        self.assertEqual(coletar.fase(self.NAO_MEDIDO, pr), "Não medido")
+
+    def _com_env(self):
+        d = Path(tempfile.mkdtemp())
+        (d / coletar.ARQ_SEGREDO).write_text("SENHA=teste1234", encoding="utf-8")
+        return d
+
+    def test_ponto_de_segredo_nao_e_dado_de_graca(self):
+        pr = coletar.coleta_prontidao(self._com_env(), self.NAO_MEDIDO, {}, {})
+        segredo = next(i for i in pr["itens"] if i["chave"] == "segredo")
+        self.assertFalse(segredo["ok"], "concedeu o ponto de seguranca sem medir")
+
+    def test_criterios_que_dependem_do_git_ficam_listados_como_nao_medidos(self):
+        pr = coletar.coleta_prontidao(self._com_env(), self.NAO_MEDIDO, {}, {})
+        self.assertIn("segredo", pr["nao_medido"])
+        self.assertIn("git_limpo", pr["nao_medido"])
+
+    def test_repo_medido_nao_ganha_marca_de_nao_medido(self):
+        aqui = Path(__file__).resolve().parent
+        g = coletar.coleta_git(aqui)
+        pr = coletar.coleta_prontidao(aqui, g, coletar.coleta_arquivos(aqui), {})
+        self.assertEqual(pr["nao_medido"], [])

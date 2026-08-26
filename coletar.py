@@ -158,16 +158,30 @@ EH_TESTE = re.compile(
     r"(\.test\.|\.spec\.|_test\.|^test_.*\.py$|^conftest\.py$|Tests?\.cs$)", re.I)
 
 
-def sh(args, cwd=None, timeout=25):
+def executa(args, cwd=None, timeout=25):
+    """Roda o comando e devolve (deu_certo, saida).
+
+    A saida vazia sozinha nao diz nada: "git status" de arvore limpa e "git
+    ausente do PATH" produzem a MESMA string vazia. Quem so olha a string acaba
+    afirmando "arvore limpa, 0 commits" de um repo que nunca foi medido — numero
+    errado com cara de certo, o pior defeito possivel num painel. Por isso o
+    primeiro item do par: ele separa "medi e nao ha nada" de "nao consegui
+    medir". Mesma distincao que portas_escutando() ja fazia com None.
+    """
     try:
         r = subprocess.run(
             args, cwd=cwd, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout,
             creationflags=SEM_JANELA,
         )
-        return r.stdout.strip() if r.returncode == 0 else ""
+        return (r.returncode == 0), (r.stdout.strip() if r.returncode == 0 else "")
     except Exception:
-        return ""
+        return False, ""
+
+
+def sh(args, cwd=None, timeout=25):
+    """Só a saída, para quem de fato nao precisa distinguir falha de vazio."""
+    return executa(args, cwd=cwd, timeout=timeout)[1]
 
 
 def git(repo: Path, *args):
@@ -304,7 +318,13 @@ def coleta_git(repo: Path) -> dict:
     if not (repo / ".git").exists():
         return {"versionado": False}
 
-    branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    # Sentinela. Se ATE ISTO falhou, o git nao respondeu por este repo — e
+    # tudo que viesse depois seria zero inventado, nao zero medido. Melhor a
+    # tela dizer "nao consegui medir" do que jurar "arvore limpa".
+    ok, branch = executa(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"])
+    if not ok:
+        return {"versionado": True, "medido": False}
+
     sujos = [l for l in git(repo, "-c", "core.quotepath=false",
                             "status", "--porcelain").splitlines() if l.strip()]
 
@@ -363,6 +383,7 @@ def coleta_git(repo: Path) -> dict:
 
     return {
         "versionado": True,
+        "medido": True,
         "branch": branch,
         "sujos": len(sujos),
         "sujos_lista": [s.strip() for s in sujos[:8]],
@@ -464,6 +485,12 @@ LIMIAR_TESTES = 500      # linhas em linguagem com logica; abaixo disso e tela
 #
 # Regra dura: o que NAO se aplica sai do denominador. Nao vira ponto de graca
 # (isso inflaria a nota) nem falta (isso e o defeito antigo) — some da conta.
+# Criterios cujo veredito depende de uma resposta do git. Se o git nao
+# respondeu, eles nao podem ser julgados — e julgar assim mesmo e o pior
+# caminho: "segredo" leria uma chave ausente, `not None` daria True e o
+# painel CONCEDERIA o ponto de seguranca sem ter olhado o historico.
+CRITERIOS_QUE_PEDEM_GIT = {"git_limpo", "ci", "segredo"}
+
 CRITERIOS = [
     ("readme", "README", 1,
      lambda c: existe(c["repo"], "README.md", "readme.md"),
@@ -541,8 +568,16 @@ def coleta_prontidao(repo: Path, g: dict, arq: dict, caso: dict | None = None) -
     }
     manual = caso.get("prontidao") or {}
 
+    sem_medida = bool(g.get("versionado")) and not g.get("medido")
+    nao_medido = []
     itens = []
     for chave, rotulo, peso, teste, aplica in CRITERIOS:
+        if sem_medida and chave in CRITERIOS_QUE_PEDEM_GIT:
+            nao_medido.append(chave)
+            itens.append({"chave": chave, "rotulo": rotulo, "peso": peso,
+                          "aplica": False, "ok": False, "manual": False,
+                          "nao_medido": True})
+            continue
         if chave in manual:
             vale = bool(manual[chave])
         elif aplica is None:
@@ -551,7 +586,7 @@ def coleta_prontidao(repo: Path, g: dict, arq: dict, caso: dict | None = None) -
             vale = _seguro(aplica, ctx)
         itens.append({
             "chave": chave, "rotulo": rotulo, "peso": peso,
-            "aplica": vale,
+            "aplica": vale, "nao_medido": False,
             "ok": _seguro(teste, ctx) if vale else False,
             "manual": chave in manual,
         })
@@ -560,6 +595,8 @@ def coleta_prontidao(repo: Path, g: dict, arq: dict, caso: dict | None = None) -
     feito = sum(i["peso"] for i in itens if i["aplica"] and i["ok"])
     return {
         "itens": itens, "pontos": feito, "total": total,
+        # Quais criterios ficaram SEM VEREDITO. Lista vazia = a nota e inteira.
+        "nao_medido": nao_medido,
         # total 0 = o dono desligou tudo. Nada cobrado, nada devendo.
         "pct": round(100 * feito / total) if total else 100,
     }
@@ -575,6 +612,9 @@ def projecao(g: dict, pr: dict) -> dict:
     """
     if not g.get("versionado"):
         return {"status": "sem_git", "riscos": ["fora do controle de versão"], "tendencia": "sem git"}
+    if not g.get("medido"):
+        return {"status": "nao_medido", "tendencia": "não medido",
+                "riscos": ["não consegui medir o git deste projeto"]}
 
     sem = g["semanas"]
     recente = sum(sem[-4:]) / 4
@@ -637,6 +677,8 @@ def projecao(g: dict, pr: dict) -> dict:
 def fase(g: dict, pr: dict) -> str:
     if not g.get("versionado"):
         return "Rascunho"
+    if not g.get("medido"):
+        return "Não medido"
     pct, parado = pr["pct"], (g.get("dias_parado") if g.get("dias_parado") is not None else 999)
     if pct >= 85 and parado <= 30:
         return "Operação"
@@ -688,11 +730,22 @@ def coleta_esteira(repo: Path) -> list:
 
 
 # ------------------------------------------------------------------ infra ao vivo
-def coleta_docker() -> list:
+def coleta_docker(executor=None) -> list | None:
+    """Os conteineres de pe. None quando NAO DEU para perguntar ao Docker.
+
+    Lista vazia e None dizem coisas opostas: vazia e "perguntei, nao ha
+    nenhum"; None e "o Docker nao respondeu". Sem essa diferenca, Docker
+    desligado virava "nada no ar" na tela — indistinguivel de aplicacao
+    realmente derrubada.
+    """
+    executor = executor or executa
     fmt = ('{{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}\t'
            '{{.Label "com.docker.compose.project"}}')
+    ok, saida = executor(["docker", "ps", "--format", fmt], timeout=30)
+    if not ok:
+        return None
     itens = []
-    for linha in sh(["docker", "ps", "--format", fmt], timeout=30).splitlines():
+    for linha in saida.splitlines():
         p = linha.split("\t")
         if len(p) < 4:
             continue
@@ -778,6 +831,8 @@ def porta_viva(porta: int) -> bool:
 def main():
     casos = json.loads(CASOS.read_text(encoding="utf-8")) if CASOS.exists() else {}
     containers = coleta_docker()
+    docker_mudo = containers is None
+    containers = containers or []
     portas = portas_escutando()
     abertos = abertos_no_editor()
 
@@ -832,13 +887,14 @@ def main():
             banco.gravar(p["nome"], "local", p, con)
         banco.gravar(banco.INFRA, "local", {
             "containers": containers,
+            "docker_mudo": docker_mudo,
             "quebrados": [c["nome"] for c in containers if c["reiniciando"]],
             "portas": portas,
         }, con)
     finally:
         con.close()
 
-    print(f"ok: {len(projetos)} projetos, {len(containers)} containers -> {banco.BANCO.name}")
+    print(f"ok: {len(projetos)} projetos, {'DOCKER MUDO' if docker_mudo else str(len(containers)) + ' containers'} -> {banco.BANCO.name}")
     # A raiz sumida nao levanta erro: iterdir() nao roda e a lista fica so com os
     # avulsos. Sem este aviso o coletor imprime "ok: 1 projetos" e parece que deu
     # certo — foi o que aconteceu ao rodar em Linux pela primeira vez, onde o

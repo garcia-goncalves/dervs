@@ -209,6 +209,10 @@ td.num{font-family:var(--mono);text-align:right}
 .pt{color:var(--ok)} .pt.mal{color:var(--erro)} .pt.meio{color:var(--alerta)}
 .tenue{color:var(--fraquinho)}
 .velho{opacity:.45}
+/* "?" nao e numero. Fica na cor de alerta e em italico para o olho nao
+   lê-lo como zero — que foi exatamente o defeito que esta tela tinha. */
+.nao-medi{color:var(--alerta-texto);font-style:italic;cursor:help}
+.peca.nm{color:var(--alerta-texto)}
 
 /* ------------------------------------------------------------------ paleta */
 .btn.busca{display:inline-flex;align-items:center;gap:9px;color:var(--fraco)}
@@ -1086,11 +1090,16 @@ function ciTexto(p){
    estados — feito, falta, e NÃO SE APLICA, que é o estado que faltava existir.  */
 function pecaDoCriterio(i){
   const el = document.createElement("span");
-  const estado = !i.aplica ? "na" : i.ok ? "ok" : "mal";
+  // "não se aplica" e "não consegui medir" sao coisas opostas: a primeira diz
+  // que o criterio nao cabe a este projeto, a segunda que ele cabe e eu fiquei
+  // cega. Confundir as duas era conceder em silencio o ponto de segurança.
+  const estado = i.nao_medido ? "nm" : !i.aplica ? "na" : i.ok ? "ok" : "mal";
   el.className = "peca " + estado;
-  el.textContent = (estado === "ok" ? "✓ " : estado === "mal" ? "✗ " : "— ") + i.rotulo;
+  el.textContent = (estado === "ok" ? "✓ " : estado === "mal" ? "✗ " : estado === "nm" ? "? " : "— ") + i.rotulo;
   const nota = document.createElement("i");
-  nota.textContent = !i.aplica
+  nota.textContent = i.nao_medido
+    ? "não consegui medir"
+    : !i.aplica
     ? (i.manual ? "desligado por você" : "não se aplica")
     : (i.manual ? i.peso + " pt · exigido por você" : i.peso + " pt");
   el.append(nota);
@@ -1108,11 +1117,13 @@ function linhaDaConta(pr){
   for (const i of pr.itens || []) caixa.append(pecaDoCriterio(i));
   td.append(caixa);
 
-  const fora = (pr.itens || []).filter(i => !i.aplica).length;
+  const fora = (pr.itens || []).filter(i => !i.aplica && !i.nao_medido).length;
+  const cego = (pr.nao_medido || []).length;
   const p = document.createElement("p");
   p.className = "tenue";
   p.textContent = pr.pontos + " de " + pr.total + " pontos aplicáveis"
     + (fora ? " · " + fora + " critério(s) não entram na conta deste projeto" : "")
+    + (cego ? " · " + cego + " critério(s) ficaram SEM VEREDITO: não consegui medir" : "")
     + " · ajuste em casos.json → \"prontidao\"";
   td.append(p);
 
@@ -1135,7 +1146,15 @@ function celulaProntidao(pr, linha, nome){
   b.className = "conta-btn";
   b.textContent = pr.pct + "%";
   b.setAttribute("aria-expanded", String(CONTAS_ABERTAS.has(nome)));
-  b.title = "Ver de que é feita esta nota";
+  // Nota com criterio sem veredito nao e a mesma nota. O asterisco e o aviso
+  // de que ela foi calculada sobre menos do que deveria.
+  const faltam = (pr.nao_medido || []).length;
+  if (faltam){
+    b.textContent = pr.pct + "%*";
+    b.title = "nota parcial: " + faltam + " critério(s) não pude medir";
+  } else {
+    b.title = "Ver de que é feita esta nota";
+  }
   b.onclick = () => {
     const conta = linha.nextElementSibling;
     if (conta && conta.classList.contains("conta")){
@@ -1160,7 +1179,15 @@ function desenhaTabela(projetos){
     const tr = document.createElement("tr");
     tr.append(celula(p.nome, "nome"));
     tr.append(celula(p.fase || "—", "tenue"));
-    tr.append(celula(g.branch || "—", "tenue"));
+    // Git que nao respondeu: "—" mentiria de novo (parece "nao tem"), e 0
+    // mentiria pior (parece medido). "?" com explicacao ao passar o mouse.
+    const semGit = g.medido === false;
+    const nm = (classe) => {
+      const td = celula("?", (classe || "") + " nao-medi");
+      td.title = "não consegui ler o git deste projeto — nada aqui foi medido";
+      return td;
+    };
+    tr.append(semGit ? nm("tenue") : celula(g.branch || "—", "tenue"));
 
     const ci = celula(ciTexto(p));
     if (ciTexto(p) === "falhou") ci.style.color = "var(--erro)";
@@ -1177,9 +1204,13 @@ function desenhaTabela(projetos){
     else cel.classList.add("tenue");
     tr.append(cel);
 
-    tr.append(celula(g.sujos || "—", "num"));
-    tr.append(celula(g.ahead || "—", "num"));
-    tr.append(celula(g.dias_parado != null ? g.dias_parado + " d" : "—", "num tenue"));
+    if (semGit){
+      tr.append(nm("num")); tr.append(nm("num")); tr.append(nm("num"));
+    } else {
+      tr.append(celula(g.sujos || "—", "num"));
+      tr.append(celula(g.ahead || "—", "num"));
+      tr.append(celula(g.dias_parado != null ? g.dias_parado + " d" : "—", "num tenue"));
+    }
 
     tr.append(celulaProntidao(pr, tr, p.nome));
 
@@ -1216,7 +1247,9 @@ async function carregar(){
   const q = d.quota;
   const inf = d.infra || {};
   $("#rodape").textContent =
-    (inf.containers||[]).length + " contêineres · "
+    // Mesmo tratamento das portas: Docker mudo nao pode virar "0 contêineres".
+    (inf.docker_mudo ? "contêineres: não medido · "
+                       : (inf.containers||[]).length + " contêineres · ")
     // null = o coletor nao conseguiu medir. "0 portas" seria mentira com cara
     // de medicao: o rodape diz que nao sabe, e nao um numero inventado.
     + (inf.portas == null ? "portas: não medido" : inf.portas.length + " portas escutando")

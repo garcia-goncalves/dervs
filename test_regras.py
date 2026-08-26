@@ -22,7 +22,7 @@ def projeto(**mudancas):
         "titulo": "Exemplo",
         "resumo": "um resumo escrito a mao",
         "git": {
-            "versionado": True, "branch": "main", "sujos": 0, "sujos_dias": None,
+            "versionado": True, "medido": True, "branch": "main", "sujos": 0, "sujos_dias": None,
             "ahead": 0, "behind": 0, "dias_parado": 2,
             "tem_remoto": True, "remoto_slug": "thi-garcia/exemplo",
         },
@@ -573,3 +573,31 @@ class OMaisPerigosoVemPrimeiro(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class GitQueNaoRespondeu(unittest.TestCase):
+    """Nao ter medido o git nao pode virar alarme sobre o que nao se mediu.
+
+    O caso concreto: sem a resposta do git, `tem_remoto` some do retrato e a
+    regra 13 concluia "existe so neste computador" — de um repo que tem GitHub
+    —, entregando ao dono um `git init` que estragaria o repositorio.
+    """
+
+    def _mudo(self):
+        return projeto(git={"versionado": True, "medido": False})
+
+    def test_nao_acusa_falta_de_github(self):
+        self.assertEqual(so(regras.avaliar([self._mudo()], quota=None), "sem_remoto"), [])
+
+    def test_nao_acusa_arvore_suja_nem_commit_parado(self):
+        saida = regras.avaliar([self._mudo()], quota=None)
+        for regra in ("trabalho_parado", "nao_enviado", "abandonado"):
+            self.assertEqual(so(saida, regra), [], regra)
+
+    def test_avisa_que_nao_conseguiu_medir(self):
+        (item,) = so(regras.avaliar([self._mudo()], quota=None), "git_nao_medido")
+        self.assertEqual(item["gravidade"], "media")
+        self.assertIn("não consegui", item["texto"].lower())
+
+    def test_projeto_medido_nao_recebe_esse_aviso(self):
+        self.assertEqual(so(regras.avaliar([projeto()], quota=None), "git_nao_medido"), [])
