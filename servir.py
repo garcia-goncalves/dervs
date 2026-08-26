@@ -224,7 +224,6 @@ class Hub(SimpleHTTPRequestHandler):
         """Os quatro arquivos de ESTATICOS_OK, e mais nenhum."""
         return super().do_GET()
 
-
     def _estado(self):
         con = banco.conectar()
         try:

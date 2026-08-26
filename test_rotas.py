@@ -8,7 +8,7 @@ Até a etapa 7 do DERVS a resposta era sim, e nem dava para vê-la: o despacho
 era uma cadeia de `if self.path…` espalhada por dois métodos, e a rota que
 disparava uma sessão do Claude estava no meio dela.
 
-DUAS DECISÕES DE PROJETO, e as duas são o ponto do teste:
+TRÊS DECISÕES DE PROJETO, e as três são o ponto do teste:
 
 1. **Ele lê `servir.ROTAS` em memória, não o texto do arquivo.** Um grep por
    `"/api/acao"` não veria `"/api/" + nome` — e uma rota montada por
@@ -18,6 +18,13 @@ DUAS DECISÕES DE PROJETO, e as duas são o ponto do teste:
 2. **Ele reprova se `ROTAS` não existir.** Sem isso, o jeito mais fácil de
    "consertar" este teste seria apagar a tabela e voltar para a cadeia de `if`,
    que é justamente o estado que ele foi escrito para impedir.
+
+3. **Ele olha o comportamento, não só o nome** (acrescentado na revisão de
+   26/08/2026). Nome é rótulo: uma rota `/api/diagnostico` apontando para
+   `Hub._diagnostico` — dois nomes limpos — com `subprocess.run` dentro do corpo
+   passava pelo vigia da primeira versão. Agora ele segue o grafo de chamadas.
+   E confere que ninguém acrescentou um `do_PUT` à classe, que despacharia por
+   fora da tabela inteira.
 
     python test_rotas.py
 """
@@ -95,6 +102,85 @@ class OModuloNaoGuardaMaisAExecucao(unittest.TestCase):
                     "servir.%s voltou. `execucao.py` e `fila.py` continuam no "
                     "repositório de propósito, mas SEM rota apontando para "
                     "eles." % nome)
+
+
+# Nomes que, alcancados a partir de uma rota, significam execucao. Nao e uma
+# lista de tudo que e perigoso — e a lista do que este servidor JAMAIS precisa
+# fazer a pedido de uma requisicao. `coletar` entra porque ele roda os
+# coletores por subprocess; o laco de tempo pode chama-lo, uma rota nao.
+EXECUTA = {"subprocess", "system", "popen", "Popen", "spawnl", "spawnv",
+           "spawnv_passfds", "execv", "execl", "execvp", "startfile", "eval",
+           "exec", "compile", "__import__", "coletar"}
+
+# Os unicos verbos HTTP que a classe pode responder. `do_HEAD` esta aqui porque
+# ele recusa (405) — precisa existir para nao cair no handler de arquivos.
+VERBOS_PERMITIDOS = {"do_GET", "do_POST", "do_HEAD"}
+
+
+def _alcancaveis(funcao, vistos=None):
+    """Todos os nomes que `funcao` usa, seguindo as chamadas dentro de `servir`.
+
+    Olhar so o corpo da funcao da rota nao basta: `_dados` e inocente, mas ela
+    chama `_estado`, que chama outra coisa. A execucao pode estar tres saltos
+    abaixo de um nome inofensivo. Esta funcao anda o grafo de chamadas ate onde
+    ele sai do modulo (banco, regras, memoria — modulos, nao funcoes daqui).
+    """
+    vistos = vistos if vistos is not None else set()
+    codigo = getattr(funcao, "__code__", None)
+    if codigo is None or id(funcao) in vistos:
+        return set()
+    vistos.add(id(funcao))
+    nomes = set(codigo.co_names)
+    for nome in list(nomes):
+        alvo = getattr(servir.Hub, nome, None) or getattr(servir, nome, None)
+        if callable(alvo):
+            nomes |= _alcancaveis(alvo, vistos)
+    return nomes
+
+
+class NenhumaRotaAlcancaExecucao(unittest.TestCase):
+    """O furo que a revisao de 26/08/2026 achou no primeiro vigia.
+
+    Ele olhava so o NOME do caminho e o NOME da funcao. Uma rota chamada
+    `/api/diagnostico` apontando para `Hub._diagnostico` — dois nomes limpos —
+    com `subprocess.run(["git","push"])` dentro do corpo passava inteira.
+
+    Nome e rotulo. Este teste olha o comportamento: segue o grafo de chamadas a
+    partir de cada rota e reprova se ele alcanca qualquer forma de executar.
+    """
+
+    def test_nenhuma_rota_alcanca_subprocess(self):
+        for caminho, rota in servir.ROTAS.items():
+            with self.subTest(caminho=caminho):
+                achados = _alcancaveis(rota.funcao) & EXECUTA
+                self.assertEqual(achados, set(),
+                                 "a rota %s alcanca %s" % (caminho,
+                                                           sorted(achados)))
+
+    def test_o_andarilho_realmente_enxerga_o_corpo(self):
+        """Se `_alcancaveis` parasse de andar, o teste acima passaria vazio.
+
+        `_dados` nao cita `banco` no proprio corpo — quem cita e `_estado`, um
+        salto abaixo. Ver `banco` aqui prova que o andarilho desceu.
+        """
+        self.assertIn("banco", _alcancaveis(servir.Hub._dados))
+
+
+class NenhumVerboEscapaDaTabela(unittest.TestCase):
+    """O segundo furo da mesma revisao.
+
+    O `BaseHTTPRequestHandler` despacha por `do_<METODO>`: basta alguem definir
+    um `do_PUT` na classe para existir um caminho que nunca passa por `ROTAS`,
+    nunca aparece em `sorted(servir.ROTAS)` e nunca entra no radar dos testes
+    acima. A tabela so e o contrato enquanto ela for o UNICO contrato.
+    """
+
+    def test_a_classe_nao_ganhou_verbo_novo(self):
+        verbos = {n for n in dir(servir.Hub) if n.startswith("do_")}
+        sobrando = verbos - VERBOS_PERMITIDOS
+        self.assertEqual(sobrando, set(),
+                         "Hub.%s despacha por fora da tabela de rotas"
+                         % sorted(sobrando))
 
 
 class ODespachoUsaSoATabela(unittest.TestCase):

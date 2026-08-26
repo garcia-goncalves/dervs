@@ -37,7 +37,7 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `test_barreira.py` | 36 testes da barreira — cada um é um ataque concreto ou um comando honesto. `python test_barreira.py`. |
 | `test_regras.py` | 67 testes do motor. `python test_regras.py`. |
 | `test_servir.py` | 6 testes: a linha de comando, e o amarre entre o que a tela busca e o que o servidor serve. `python test_servir.py`. |
-| `test_rotas.py` | 8 testes — **o vigia**: importa `servir` e prova que nenhuma rota executa comando. `python test_rotas.py`. |
+| `test_rotas.py` | 11 testes — **o vigia**: importa `servir` e prova que nenhuma rota executa comando. `python test_rotas.py`. |
 | `coletar.py` | Camada **local**: git, Docker, portas, idade do grafo, memória, variáveis. |
 | `coletar_github.py` | Camada **github**: CI, PRs, alertas, o site no ar e o último deploy. Uma consulta GraphQL em lote. |
 | `test_coletar.py` | 94 testes dos pedaços dos coletores que já erraram. `python test_coletar.py`. |
@@ -51,7 +51,7 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 25/08/2026, também zera a memória do tempo, que se reconstrói sozinha a partir da
 coleta seguinte.
 
-**468 testes no total**, todos em `unittest` da biblioteca padrão, e todos os oito
+**471 testes no total**, todos em `unittest` da biblioteca padrão, e todos os nove
 arquivos rodam na CI. Passam em Windows e em Linux — verificado num contêiner
 `python:3.12-slim`, porque o núcleo vai rodar em Linux na VPS.
 
@@ -90,9 +90,16 @@ python -c "import servir; print(sorted(servir.ROTAS))"
 escrita à mão. O vigia também reprova se `ROTAS` **não existir**, para que
 ninguém "conserte" o teste apagando a tabela.
 
-Provado pelos dois lados em 26/08/2026: no código são ele passa; nas três
-sabotagens (rota escrita à mão, rota por concatenação, e caminho de nome
-inocente apontando para função que executa) ele reprova as três.
+E ele olha o **comportamento**, não só o nome: uma rota `/api/diagnostico`
+apontando para `Hub._diagnostico` — dois nomes limpos — com `subprocess.run`
+no corpo passaria por um vigia que só lesse rótulos. Ele segue o grafo de
+chamadas a partir de cada rota. E confere que ninguém acrescentou um `do_PUT`
+à classe, que despacharia por fora da tabela inteira.
+
+Provado pelos dois lados em 26/08/2026: no código são ele passa; e reprova as
+**cinco** sabotagens testadas — rota escrita à mão, rota montada por
+concatenação, caminho inocente apontando para função de nome suspeito, nomes
+limpos com `subprocess` no corpo, e um `do_PUT` novo por fora da tabela.
 
 ### `execucao.py` e `fila.py` continuam aqui, sem rota
 
