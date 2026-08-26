@@ -63,6 +63,25 @@ jobs:
       - name: Compila
         run: python -m py_compile banco.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py
 
+      # Os testes abaixo sao listados A MAO, um passo cada, porque cada nome na
+      # tela do GitHub diz o que quebrou sem ninguem abrir o log. O preco disso
+      # e esquecer de acrescentar o arquivo novo — e arquivo esquecido nao fica
+      # vermelho, fica invisivel. Este passo cobra a lista.
+      - name: Nenhum arquivo de teste ficou de fora
+        run: |
+          faltou=0
+          for t in test_*.py; do
+            grep -q "python $t" .github/workflows/ci.yml || { echo "FALTOU na CI: $t"; faltou=1; }
+          done
+          if [ "$faltou" = "0" ]; then echo "Todos os test_*.py estao na CI."; fi
+          exit $faltou
+
+      # As seis tabelas da etapa 8, mais o cofre. O que ele cobra alem de "a
+      # tabela existe": nenhum segredo em claro, arquivar sem motivo recusado, e
+      # o "x" de um usuario nao escondendo o alerta do outro.
+      - name: Banco multiusuário
+        run: python test_banco.py
+
       - name: Motor de regras
         run: python test_regras.py
 
