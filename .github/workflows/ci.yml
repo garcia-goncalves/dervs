@@ -82,6 +82,13 @@ jobs:
       - name: Banco multiusuário
         run: python test_banco.py
 
+      # A cortina: a combinacao de seis digitos conferida NO SERVIDOR, o selo
+      # assinado e o teto de tentativas por origem. O teto e por origem, e nao
+      # global, porque contador global deixa um estranho trancar a casa inteira
+      # com cinco chutes — foi o defeito que a etapa 8 removeu do pareamento.
+      - name: Cortina
+        run: python test_cortina.py
+
       - name: Motor de regras
         run: python test_regras.py
 
