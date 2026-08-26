@@ -226,6 +226,16 @@
     connect();
   }
 
+  // placeholder "na fila": o node ja aparece na lousa antes do processo subir
+  // (criacao escalonada). Vira terminal quando o sessionId chega (node_updated).
+  function showQueued(node) {
+    const el = els[node.id];
+    const body = $(".body", el);
+    body.className = "reopen";
+    body.innerHTML = `<div>Na fila — abrindo em instantes…</div>`;
+    setDot(node, "queued");
+  }
+
   // mostra overlay "reabrir" quando a sessao nao existe mais (ex.: servidor reiniciou)
   function showReopen(node) {
     const el = els[node.id];
@@ -281,6 +291,7 @@
     if (!state.nodes.some((n) => n.id === node.id)) state.nodes.push(node);
     renderNode(node);
     if (node.sessionId) { liveSessions.add(node.sessionId); mountTerminal(node); }
+    else if (node.status === "queued") showQueued(node);
     else showReopen(node);
     redrawEdges();
   }
@@ -310,6 +321,8 @@
     const n = state.nodes.find((x) => x.id === nodeId); if (!n) return;
     Object.assign(n, patch);
     const el = els[nodeId]; if (!el) return;
+    // saiu da fila: o processo subiu e ganhou sessionId -> monta o terminal de fato
+    if (patch.sessionId && !terms[nodeId]) { liveSessions.add(patch.sessionId); mountTerminal(n); }
     if (patch.label !== undefined) $(".role", el).textContent = n.label || roleLabel(n.role);
     if (patch.status !== undefined) setDot(n, patch.status);
     if (patch.x !== undefined) el.style.left = n.x + "px";
@@ -393,8 +406,8 @@
     return { x: n.x + (n.w || 460) / 2, y: n.y + (n.h || 320) / 2, w: n.w || 460, h: n.h || 320, nx: n.x, ny: n.y };
   }
   function redrawEdges() {
-    // limpa
-    while (edgesSvg.firstChild) edgesSvg.removeChild(edgesSvg.firstChild);
+    // limpa SO as arestas (preserva o <defs> com o marcador de seta)
+    edgesSvg.querySelectorAll("path.edge").forEach((p) => p.remove());
     for (const e of state.edges) {
       const a = nodeCenter(e.from), b = nodeCenter(e.to);
       if (!a || !b) continue;
@@ -405,7 +418,9 @@
       const dx = Math.max(40, Math.abs(bx - ax) * 0.5);
       const c1x = ax + (a.x < b.x ? dx : -dx), c2x = bx + (a.x < b.x ? -dx : dx);
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("class", "edge");
       path.setAttribute("d", `M ${ax} ${ay} C ${c1x} ${ay}, ${c2x} ${by}, ${bx} ${by}`);
+      path.setAttribute("marker-end", "url(#arrow)"); // seta indica direcao pai -> filho
       edgesSvg.appendChild(path);
     }
   }
@@ -506,6 +521,47 @@
     else toast("Agente na fila — abrindo em instantes…");
   }
 
+  // ---- painel GLOBAL de agentes (todas as lousas) ----
+  // lista toda sessao viva do Hub, com a funcao do papel + o que ela esta fazendo.
+  // clicar leva ate o agente (foca o node; troca de lousa se for de outra).
+  async function openAgents() {
+    $("#agents").classList.add("show");
+    const list = $("#agList");
+    list.innerHTML = `<div class="empty">Carregando…</div>`;
+    let agents = [];
+    try { const r = await api("GET", "/api/agents"); agents = r.agents || []; }
+    catch { list.innerHTML = `<div class="empty">Falha ao carregar.</div>`; return; }
+    $("#agCount").textContent = agents.length ? `· ${agents.length} rodando` : "";
+    if (!agents.length) { list.innerHTML = `<div class="empty">Nenhum agente rodando agora.</div>`; return; }
+    list.innerHTML = "";
+    for (const a of agents) list.appendChild(agentRow(a));
+  }
+  function closeAgents() { $("#agents").classList.remove("show"); }
+
+  // monta a linha via DOM (textContent) — o task/label vem do agente (texto livre),
+  // entao NUNCA via innerHTML, pra nao abrir XSS.
+  function agentRow(a) {
+    const row = document.createElement("div"); row.className = "ag";
+    const dot = document.createElement("div"); dot.className = "dot"; row.appendChild(dot);
+    const info = document.createElement("div"); info.className = "info";
+    const top = document.createElement("div"); top.className = "top";
+    const role = document.createElement("span"); role.className = "role"; role.textContent = a.roleLabel || a.role; top.appendChild(role);
+    if (a.projectName) { const p = document.createElement("span"); p.className = "proj"; p.textContent = a.projectName; top.appendChild(p); }
+    if (a.board === boardId) { const h = document.createElement("span"); h.className = "here"; h.textContent = "nesta lousa"; top.appendChild(h); }
+    info.appendChild(top);
+    if (a.roleDesc) { const d = document.createElement("div"); d.className = "desc"; d.textContent = a.roleDesc; info.appendChild(d); }
+    if (a.task) { const t = document.createElement("div"); t.className = "task"; t.textContent = "▸ " + a.task; info.appendChild(t); }
+    row.appendChild(info);
+    row.addEventListener("click", () => gotoAgent(a));
+    return row;
+  }
+
+  function gotoAgent(a) {
+    if (!a.board || !a.nodeId) { toast("Agente sem node numa lousa."); return; }
+    if (a.board === boardId) { closeAgents(); selectNode(a.nodeId); focusNode(a.nodeId); return; }
+    location.search = "?board=" + encodeURIComponent(a.board) + "&focus=" + encodeURIComponent(a.nodeId);
+  }
+
   // ====================================================================
   //  BOOT
   // ====================================================================
@@ -560,12 +616,21 @@
     for (const node of state.nodes) {
       renderNode(node);
       if (node.sessionId && liveSessions.has(node.sessionId)) mountTerminal(node);
+      else if (node.status === "queued" && !node.sessionId) showQueued(node);
       else showReopen(node);
     }
     for (const note of state.notes) renderNote(note);
     redrawEdges();
 
     subscribeStream(); // eventos ao vivo (agente criando agentes/conexoes, etc.)
+
+    // veio do painel de agentes (?focus=nodeId): foca direto nesse node em vez da entrada
+    const focusId = params.get("focus");
+    if (focusId && state.nodes.some((n) => n.id === focusId)) {
+      selectNode(focusId);
+      requestAnimationFrame(() => focusNode(focusId));
+      return;
+    }
 
     // transicao de entrada (igual Maestri): surge um tico afastado e aproxima ate o zoom salvo
     if (state.nodes.length) {
@@ -590,9 +655,12 @@
     if (r.note) applyNoteAdded(r.note);
   });
   $("#fitAll").addEventListener("click", fitAll);
+  $("#showAgents").addEventListener("click", openAgents);
+  $("#agClose").addEventListener("click", closeAgents);
+  $("#agents").addEventListener("click", (e) => { if (e.target.id === "agents") closeAgents(); });
   viewport.addEventListener("dblclick", (e) => { if (e.target === viewport || e.target === world || e.target === edgesSvg) fitAll(); });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { cancelConnect(); closeModal(); }
+    if (e.key === "Escape") { cancelConnect(); closeModal(); closeAgents(); }
     else if ((e.key === "0" || e.key === "1") && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) fitAll();
   });
   window.addEventListener("resize", () => { Object.values(terms).forEach((r) => r.fitFn && r.fitFn()); });

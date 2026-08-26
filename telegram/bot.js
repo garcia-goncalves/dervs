@@ -9,6 +9,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { execFile } = require("child_process");
 
 const HUB = process.env.HUB_URL || "http://127.0.0.1:4321";
 const CFG_PATH = path.join(__dirname, "config.json");
@@ -80,6 +81,70 @@ function findProject(q) {
   );
 }
 
+// git read-only (log). Nunca usa shell => args seguros mesmo com texto do usuario.
+function git(cwd, args) {
+  return new Promise((resolve) => {
+    execFile("git", args, { cwd, windowsHide: true, timeout: 15000 }, (err, stdout) => {
+      resolve({ ok: !err, out: (stdout || "").trim() });
+    });
+  });
+}
+
+// boards da lousa = "portfolio" + o id de cada projeto (mesma convencao do server/lousa.js)
+function boardIdsFor() {
+  return ["portfolio", ...projects.map((p) => p.id)];
+}
+
+async function lousaText(arg) {
+  await loadProjects();
+  let boardIds;
+  if (arg) {
+    if (arg.toLowerCase() === "portfolio") boardIds = ["portfolio"];
+    else {
+      const p = findProject(arg);
+      if (!p) return `Não achei "${arg}". Mande: projetos`;
+      boardIds = [p.id];
+    }
+  } else {
+    boardIds = boardIdsFor();
+  }
+  const lines = [];
+  for (const bid of boardIds) {
+    let data;
+    try {
+      data = await api(`/api/canvas/${encodeURIComponent(bid)}/list`);
+    } catch {
+      continue;
+    }
+    const nodes = data.nodes || [];
+    if (!nodes.length) continue;
+    lines.push(`🗂 ${bid}`);
+    for (const n of nodes) lines.push(`  • [${n.role}] ${n.label}${n.projectName ? " (" + n.projectName + ")" : ""} — ${n.status}`);
+  }
+  return lines.length ? lines.join("\n") : "(nenhum node ativo na lousa)";
+}
+
+async function agentesText() {
+  const r = await api("/api/agents");
+  const agents = r.agents || [];
+  if (!agents.length) return "(nenhum agente rodando agora)";
+  return agents
+    .map((a) => {
+      const proj = a.projectName ? ` ${a.projectName}` : "";
+      const task = a.task ? `\n   ↳ ${a.task}` : "";
+      return `🤖 [${a.roleLabel || a.role}]${proj} — lousa ${a.board || "?"}${task}`;
+    })
+    .join("\n\n");
+}
+
+async function commitsText(p, n = 5) {
+  const r = await git(p.path, ["log", `-${n}`, "--pretty=%h %s (%ar)"]);
+  if (!r.ok) return `⚠️ não consegui ler o git de ${p.name}`;
+  const lines = r.out.split("\n").filter(Boolean);
+  if (!lines.length) return `${p.name}: sem commits`;
+  return `📝 ${p.name} — últimos commits:\n` + lines.map((l) => "• " + l).join("\n");
+}
+
 // envia texto, quebrando em pedaços de <=4000 chars (limite do Telegram = 4096)
 async function send(chatId, text) {
   const s = String(text || "");
@@ -108,6 +173,21 @@ async function handle(textRaw) {
     cfg.activeProject = p.id;
     saveCfg(cfg);
     return `✅ Projeto ativo: ${p.name}\nPode perguntar à vontade, ou mande: status`;
+  }
+
+  if (low === "lousa" || low.startsWith("lousa ")) {
+    return lousaText(text.slice(5).trim());
+  }
+
+  if (low === "agentes") {
+    return agentesText();
+  }
+
+  if ((m = text.match(/^commits\s+(.+)$/i))) {
+    await loadProjects();
+    const p = findProject(m[1]);
+    if (!p) return `Não achei "${m[1]}". Mande: projetos`;
+    return commitsText(p);
   }
 
   if (low === "status" || low.startsWith("status ")) {
@@ -149,6 +229,9 @@ function helpText() {
     "• projetos — lista seus projetos",
     "• projeto <nome> — escolhe o projeto ativo",
     "• status — estado do projeto (git + GitHub)",
+    "• lousa [projeto] — nodes da lousa (papel + status atual)",
+    "• agentes — o que cada agente esta fazendo agora",
+    "• commits <projeto> — ultimos commits",
     "• qualquer pergunta — o Claude responde (somente-leitura) sobre o projeto ativo",
     "",
     "Ex: projeto nukleoa → qual o estado pra iniciar as vendas?",
