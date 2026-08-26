@@ -56,6 +56,24 @@ Para descobrir o número do processo que está na porta 4777:
 Get-NetTCPConnection -LocalPort 4777 -State Listen | Select-Object OwningProcess
 ```
 
+## Mudou um arquivo `.py`? Reinicie o servidor
+
+O `servir.py` importa `regras.py`, `banco.py` e `coletar.py` **uma vez, quando
+sobe**. Editar esses arquivos não muda nada na tela enquanto o processo não
+reiniciar — a página continua servindo a versão que estava em memória.
+
+Isso engana de um jeito caro: você conserta um defeito, confere na tela, o
+defeito ainda está lá, e você vai investigar código que já estava certo. Foi o
+que aconteceu em 26/08/2026.
+
+Derrube (receita acima) e suba de novo. Depois recarregue a página.
+
+Mudança só no `index.html` **não** precisa disso: o arquivo é lido a cada
+pedido — basta recarregar a página.
+
+E `python coletar.py` também não basta sozinho: ele grava no `hub.db`, mas quem
+calcula as pendências é o processo do servidor.
+
 ## Se a porta 4777 já estiver ocupada
 
 O sintoma é o painel não subir e o log acusar endereço em uso. Duas saídas:
