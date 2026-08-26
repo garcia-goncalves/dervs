@@ -1,4 +1,4 @@
-# Handoff — DERVS Fatia 1, etapas 1 a 8 concluídas
+# Handoff — DERVS Fatia 1, etapas 1 a 9 concluídas
 
 Gravado em 26/08/2026, atualizado no fim do dia.
 **Etapas 1 a 8 concluídas.** A próxima é a 9.
@@ -197,18 +197,108 @@ um risco real, e este foi o aviso barato.
 `sessao.segundo_fator_em` nasce `NULL`. É o que faz a negativa ser o padrão —
 a 9 só precisa recusar quem está assim, não inventar o estado.
 
-## A RETOMAR — ETAPA 9
+## ETAPA 9 — CONCLUÍDA (26/08/2026, branch `etapa-9-login`)
 
-Plano: `docs/superpowers/plans/dervs-fatia-1.md`, seção "## 9" — autenticação:
-sessão, senha, segundo fator **obrigatório** e cadastro fechado (`POST
-/api/registro` devolve 403). Depois: 10 · 11 · 12 · 13→14→15 (as telas) · 16
-(publicação) · 17.
+**O desenho mudou antes de começar, a pedido do dono.** A seção "## 9" do plano
+dizia e-mail + senha + TOTP. Ele pediu entrada disfarçada e login **sem senha**,
+com a intenção declarada de um dia vender o DERVS. Isso virou desenho próprio,
+aprovado em conversa e commitado antes de qualquer linha de código:
+`docs/superpowers/specs/2026-08-26-login-cortina-github-design.md`, executado por
+`docs/superpowers/plans/2026-08-26-etapa-9-login.md`.
 
-A 9 disputa `servir.py` com a 7, que já está mesclada — o caminho está livre.
-As tabelas de que ela precisa já existem (etapa 8) e já nascem negando: quem não
-tem `totp_confirmado_em` e quem não tem `segundo_fator_em` na sessão está fora
-por padrão. O `TOKEN` de boot de `servir.py:111-113` sai de cena; ele é
-anti-CSRF e **não pode** virar credencial de usuário.
+### O que existe agora
+
+**Três camadas, e só a segunda é a fechadura.**
+
+1. **A cortina** (`cortina.py`, `index-cortina.html`). `GET /` não mostra login:
+   mostra uma capa escura com um teclado de seis dígitos e nada que diga o que
+   este sistema é. A combinação é conferida **no servidor** — o botão de entrar
+   não existe no HTML da primeira visita, então `Ctrl+U` não revela nada. Errar e
+   acertar devolvem **204 idêntico**; a única diferença observável é o cookie.
+   Teto de **5 tentativas por origem a cada 15 min**, na rota e em memória.
+2. **A porta** (`autenticacao.py`). OAuth do GitHub, casando pelo **id numérico**
+   e nunca pelo login — login trocado libera o nome antigo para outra pessoa
+   registrar. Escopo vazio: o DERVS só quer saber quem é. O token do GitHub é
+   descartado na hora e não vai ao banco. Toda rejeição é idêntica.
+3. **A chave reserva.** Senha e TOTP continuam existindo como credenciais, sem
+   rota que as ofereça. Ligar é decisão consciente.
+
+**A `usuario` perdeu `senha_hash`, `totp_segredo` e `totp_confirmado_em`.** Eles
+viraram linhas na tabela **`credencial`** (`tipo` em github/senha/totp/passkey,
+`UNIQUE (tipo, identificador)`). É essa separação que faz chave de acesso entrar
+na Fatia 2 como acréscimo em vez de reescrita. Nasceu também a `instalacao`, de
+uma linha só, que guarda a impressão digital da combinação. **hub.db foi de 12
+para 14 tabelas.**
+
+**Toda rota declara `acesso`** em {`aberta`, `cortina`, `dado`}, no terceiro
+campo da tupla `Rota`. Não há lista de rotas protegidas escrita à mão em lugar
+nenhum — era essa a armadilha anotada no plano. `test_rotas.py` reprova a suíte
+se alguma rota nascer sem classificação, **e** se a tupla voltar a ter dois
+campos (senão o `getattr` devolveria `None` em tudo e o vigia mentiria).
+
+**O `TOKEN` global saiu de cena.** O anti-CSRF passa a ser derivado da sessão de
+quem pede. Há teste provando que o token de uma sessão devolve 403 na outra.
+
+**SUÍTE: 612 testes em 12 arquivos** (era 519). `test_cortina.py` e
+`test_autenticacao.py` são novos, e os 28 testes novos de `test_servir.py` falam
+**HTTP de verdade por soquete** — não leem estrutura em memória.
+
+### `/entrar/local` — acrescentada fora do plano, e por quê
+
+Sem ela, esta etapa **trancava o dono do lado de fora do painel na própria
+máquina**: o app do GitHub ainda não existe, `/entrar/github` responde 404, e não
+havia outra porta. Só apareceu porque o servidor de verdade foi reiniciado, e não
+nos testes.
+
+Ela abre sessão para `dono@teste.local`, sem senha e sem fabricar credencial
+nenhuma. **Duas travas independentes**, cada uma com teste: `DERVS_AMBIENTE=local`
+**e** `Host` de localhost/127.0.0.1. Uma variável de ambiente esquecida no
+servidor não pode ser tudo o que separa o mundo de uma conta pronta.
+
+### A dívida da etapa 11 foi paga aqui
+
+O teto de tentativas **por origem, na rota** (`cortina.pode_tentar`) é exatamente
+o mecanismo que a etapa 11 precisava para o código de pareamento de seis dígitos —
+a dívida que a etapa 8 deixou nomeada ao remover o contador global da tabela.
+A etapa 11 reusa este módulo; não reimplemente.
+
+### VOLTAR ATRÁS DA ETAPA 9 — leia antes de publicar
+
+**Não existe migração de volta, e isso é decisão, não esquecimento.** Assim que
+**um** processo abrir o banco no esquema novo, a versão anterior da aplicação
+não sobe mais: a etapa 8 faz `SELECT senha_hash FROM usuario`, e a coluna não
+existe mais.
+
+O caminho de volta é o de sempre, e é de operação, não de código:
+
+1. **Antes** de publicar, com o serviço **parado**, copie `hub.db` e, se
+   existir, `hub.db-wal`.
+2. Voltar atrás = parar o serviço, restaurar a cópia, publicar a etiqueta
+   anterior.
+
+Isso vira uma linha no workflow de publicação da etapa 16. Está escrito aqui
+porque a migração roda **de verdade uma vez só**, no servidor: o `hub.db` desta
+máquina já está migrado, então não há ensaio possível no local.
+
+### PENDENTE, e depende da mão do dono
+
+Registrar o OAuth App em github.com — cinco minutos, uma vez. Roteiro campo a
+campo, escrito para leigo, em **`docs/operacao/registrar-app-github.md`**. Sem
+`DERVS_GITHUB_ID`/`DERVS_GITHUB_SECRET` a rota responde 404 e o botão nem é
+desenhado (botão que leva a erro é pior que botão que não existe).
+
+### Anotado e NÃO feito nesta etapa
+
+- **A faixa `AMBIENTE LOCAL` no painel** — estava faltando e **foi feita** ainda
+  nesta etapa. Só aparece com `DERVS_AMBIENTE=local`; o servidor não a desenha.
+- **Chave de acesso (passkey)** — Fatia 2, como o plano já previa. A tabela
+  `credencial` é o encaixe pronto.
+
+## A RETOMAR — ETAPA 10
+
+Plano: `docs/superpowers/plans/dervs-fatia-1.md`, seção "## 10" — o motor do
+selo: quatro estados, e o que acontece quando o agente cala. Depois:
+11 · 12 · 13→14→15 (as telas) · 16 (publicação) · 17.
 
 ## PARA A ETAPA 16 — o que a revisão de segurança deixou anotado
 

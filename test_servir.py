@@ -19,11 +19,24 @@ respondida pela estrutura em memória, não por este arquivo.
 """
 from __future__ import annotations
 
+import http.client
+import json
+import os
 import re
+import tempfile
+import threading
 import unittest
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-import servir
+os.environ.setdefault("DERVS_AMBIENTE", "local")
+os.environ.setdefault("DERVS_COFRE",
+                      "chave-de-teste-que-nao-e-segredo-nenhum-0123456789")
+
+import autenticacao  # noqa: E402
+import banco         # noqa: E402
+import cortina       # noqa: E402
+import servir        # noqa: E402
 
 
 class PortaDaLinhaDeComando(unittest.TestCase):
@@ -85,6 +98,446 @@ class ATelaSoChamaRotaQueExiste(unittest.TestCase):
             with self.subTest(rota=morta):
                 self.assertNotIn('fetch("%s' % morta, html)
                 self.assertNotIn('src = "%s"' % morta, html)
+
+
+class ServidorDeVerdade(unittest.TestCase):
+    """Sobe o servidor de verdade numa porta livre e CONVERSA com ele.
+
+    Os outros testes deste arquivo leem estrutura em memoria, e isso e bom para
+    o que eles cobram. Mas "a tela abriu" nao e prova de que o botao dispara --
+    ja afirmei isso uma vez tendo visto so a faixa aparecer. Aqui o pedido sai
+    pelo soquete e a resposta vem pelo soquete.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.TemporaryDirectory()
+        cls.caminho = Path(cls.dir.name) / "hub.db"
+        cls._banco_antigo = banco.BANCO
+        banco.BANCO = cls.caminho
+
+        con = banco.conectar()
+        cls.combinacao = cortina.garantir_combinacao(con) or "000000"
+        cls.uid = banco.criar_usuario("dono@teste.local", con=con)
+        banco.ligar_github(cls.uid, "4242", con=con)
+        con.close()
+
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), servir.Hub)
+        cls.porta = cls.srv.server_address[1]
+        # O servidor confere Host e Origin contra a porta com que o modulo foi
+        # importado. Como o teste sobe noutra porta, os tres conjuntos mudam
+        # junto -- e sao restaurados no fim para nao contaminar outro teste.
+        cls._porta_antiga = servir.PORTA
+        cls._origens_antigas = servir.ORIGENS_OK
+        cls._hosts_antigos = servir.HOSTS_OK
+        # O ESTADO DO OAUTH TAMBEM E FIXADO AQUI, e nao lido do ambiente. Dois
+        # testes afirmavam que `GITHUB_ID` era vazio; no dia em que o dono
+        # seguisse docs/operacao/registrar-app-github.md e exportasse a
+        # variavel, a suite ficava VERMELHA na maquina de quem configurou certo.
+        # Achado da revisao de Python de 26/08/2026.
+        cls._id_antigo, cls._segredo_antigo = servir.GITHUB_ID, servir.GITHUB_SECRET
+        servir.GITHUB_ID = servir.GITHUB_SECRET = ""
+        servir.PORTA = cls.porta
+        servir.ORIGENS_OK = {"http://127.0.0.1:%d" % cls.porta}
+        servir.HOSTS_OK = {"127.0.0.1:%d" % cls.porta}
+        cls.linha = threading.Thread(target=cls.srv.serve_forever, daemon=True)
+        cls.linha.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+        servir.PORTA = cls._porta_antiga
+        servir.ORIGENS_OK = cls._origens_antigas
+        servir.HOSTS_OK = cls._hosts_antigos
+        servir.GITHUB_ID = cls._id_antigo
+        servir.GITHUB_SECRET = cls._segredo_antigo
+        banco.BANCO = cls._banco_antigo
+        cls.dir.cleanup()
+
+    def setUp(self):
+        cortina.zerar_tentativas()
+        self.addCleanup(cortina.zerar_tentativas)
+
+    # ------------------------------------------------------------ utilidades
+    def pedir(self, caminho, metodo="GET", corpo=None, cookies=None,
+              com_origem=True, cabecalhos=None, corpo_cru=None):
+        """Fala HTTP na mao, de proposito.
+
+        `urllib` segue redirecionamento em silencio e junta cabecalhos
+        repetidos num so — e sao exatamente o 302 e os varios `Set-Cookie` que
+        este teste precisa ver.
+        """
+        dados = corpo_cru
+        if dados is None and corpo is not None:
+            dados = json.dumps(corpo).encode("utf-8")
+        cab = {"Host": "127.0.0.1:%d" % self.porta}
+        if dados is not None:
+            cab["Content-Type"] = "application/json"
+            cab["Content-Length"] = str(len(dados))
+        if com_origem:
+            cab["Origin"] = "http://127.0.0.1:%d" % self.porta
+        if cookies:
+            cab["Cookie"] = "; ".join("%s=%s" % kv for kv in cookies.items())
+        cab.update(cabecalhos or {})
+        c = http.client.HTTPConnection("127.0.0.1", self.porta, timeout=10)
+        try:
+            c.request(metodo, caminho, body=dados, headers=cab)
+            r = c.getresponse()
+            lido = (r.read() or b"").decode("utf-8", "replace")
+            postos = r.headers.get_all("Set-Cookie") or []
+            return _Resposta(r.status, lido, r.headers, postos)
+        finally:
+            c.close()
+
+    def abrir_cortina(self):
+        r = self.pedir("/entrada", "POST", {"combinacao": self.combinacao})
+        self.assertIn("cortina", r.cookies)
+        return {"cortina": r.cookies["cortina"]}
+
+    def com_sessao(self):
+        """Uma sessao completa, aberta pela porta dos fundos do banco.
+
+        O caminho do GitHub e testado em test_autenticacao.py com duble de rede;
+        aqui interessa o que a SESSAO libera, nao como ela nasceu.
+        """
+        cookie = banco.novo_token()
+        con = banco.conectar()
+        try:
+            banco.abrir_sessao(self.uid, cookie, banco.prazo(3600), con=con)
+            final = banco.confirmar_segundo_fator(cookie, banco.novo_token(),
+                                                  con=con)
+        finally:
+            con.close()
+        return {"sessao": final}
+
+    # ---------------------------------------------------------------- a capa
+    def test_a_capa_nao_entrega_o_formulario_de_login(self):
+        corpo = self.pedir("/").corpo.lower()
+        for proibido in ("oauth", "github", "client_id", "entrar com",
+                         "/entrar/", "dervs", "__porta_aberta__"):
+            self.assertNotIn(proibido, corpo, proibido)
+
+    def test_a_capa_nao_diz_o_que_este_sistema_e(self):
+        corpo = self.pedir("/").corpo.lower()
+        for proibido in ("painel", "projeto", "pendencia", "hub do dev"):
+            self.assertNotIn(proibido, corpo, proibido)
+
+    def test_a_capa_pede_para_nao_ser_indexada(self):
+        r = self.pedir("/")
+        self.assertIn("noindex", r.cabecalhos.get("X-Robots-Tag", ""))
+
+    # ------------------------------------------------------------- a cortina
+    def test_errar_e_acertar_devolvem_a_mesma_resposta(self):
+        errado = self.pedir("/entrada", "POST", {"combinacao": "111111"})
+        cortina.zerar_tentativas()
+        certo = self.pedir("/entrada", "POST", {"combinacao": self.combinacao})
+        self.assertEqual(errado.status, certo.status)
+        self.assertEqual(errado.corpo, certo.corpo)
+        # A UNICA diferenca observavel e o cookie.
+        self.assertNotIn("cortina", errado.cookies)
+        self.assertIn("cortina", certo.cookies)
+
+    def test_a_combinacao_certa_revela_a_porta(self):
+        """QUAL porta aparece depende do ambiente; que NAO aparece nenhuma
+        antes da combinacao certa e o que este teste cobra."""
+        antes = self.pedir("/").corpo.lower()
+        self.assertNotIn("/entrar/", antes)
+        depois = self.pedir("/", cookies=self.abrir_cortina()).corpo.lower()
+        self.assertIn("/entrar/", depois)
+
+    def test_o_selo_e_HttpOnly_e_SameSite(self):
+        r = self.pedir("/entrada", "POST", {"combinacao": self.combinacao})
+        cru = " ".join(r.postos).lower()
+        self.assertIn("httponly", cru)
+        self.assertIn("samesite=lax", cru)
+
+    def test_selo_forjado_nao_abre_a_porta(self):
+        forjado = {"cortina": "99999999999.%s" % ("a" * 64)}
+        self.assertNotIn("/entrar/github", self.pedir("/", cookies=forjado).corpo)
+        self.assertEqual(self.pedir("/entrar/github", cookies=forjado).status, 404)
+
+    def test_a_sexta_tentativa_responde_igual_e_nao_confere_nada(self):
+        for _ in range(cortina.TETO):
+            self.pedir("/entrada", "POST", {"combinacao": "111111"})
+        bloqueado = self.pedir("/entrada", "POST",
+                               {"combinacao": self.combinacao})
+        self.assertEqual(bloqueado.status, 204)
+        self.assertNotIn("cortina", bloqueado.cookies)
+
+    def test_a_cortina_recusa_pedido_de_outra_origem(self):
+        r = self.pedir("/entrada", "POST", {"combinacao": self.combinacao},
+                       com_origem=False)
+        self.assertEqual(r.status, 204)
+        self.assertNotIn("cortina", r.cookies)
+
+    def test_corpo_torto_na_entrada_nao_derruba_nada(self):
+        for ruim in (b"[]", b'"x"', b"{", b"", b"null", b"9" * 5000):
+            with self.subTest(corpo=ruim[:12]):
+                cortina.zerar_tentativas()
+                r = self.pedir("/entrada", "POST", corpo_cru=ruim)
+                self.assertEqual(r.status, 204)
+                self.assertEqual(r.cookies, {})
+
+    # -------------------------------------------------------- rota de dado
+    def test_toda_rota_de_dado_nega_sem_sessao(self):
+        for caminho, rota in servir.ROTAS.items():
+            if rota.acesso != "dado":
+                continue
+            with self.subTest(rota=caminho):
+                r = self.pedir(caminho, rota.metodo,
+                               {} if rota.metodo == "POST" else None)
+                self.assertIn(r.status, (401, 302), caminho)
+                # E o corpo nao pode trazer nome de projeto nenhum.
+                for vazamento in ("projeto", "dervs", "pendencia"):
+                    self.assertNotIn(vazamento, r.corpo.lower(), caminho)
+
+    def test_o_selo_da_cortina_nao_vale_como_sessao(self):
+        """A cortina nao e a fechadura, e isto e o teste que prova a frase."""
+        r = self.pedir("/api/dados", cookies=self.abrir_cortina())
+        self.assertEqual(r.status, 401)
+
+    def test_com_sessao_a_rota_de_dado_responde(self):
+        r = self.pedir("/api/dados", cookies=self.com_sessao())
+        self.assertEqual(r.status, 200)
+        self.assertIn("projetos", json.loads(r.corpo))
+
+    def test_com_sessao_a_pagina_e_o_painel(self):
+        corpo = self.pedir("/", cookies=self.com_sessao()).corpo
+        self.assertNotIn("Sala de Leitura", corpo)
+        # Marca nao substituida vaza na cara do dono e some com o anti-CSRF.
+        for marca in ("__TOKEN__", "__FAIXA__", "__PORTA_ABERTA__"):
+            self.assertNotIn(marca, corpo, marca)
+
+    def test_o_painel_local_avisa_que_a_entrada_nao_pediu_senha(self):
+        """Quem esta vendo esta tela entrou por uma porta sem senha, e precisa
+        saber disso: a mesma tela no servidor exige GitHub."""
+        corpo = self.pedir("/", cookies=self.com_sessao()).corpo
+        self.assertIn('class="faixa-local"', corpo)
+        antigo = servir.E_LOCAL
+        servir.E_LOCAL = False
+        try:
+            self.assertNotIn('class="faixa-local"',
+                             self.pedir("/", cookies=self.com_sessao()).corpo)
+        finally:
+            servir.E_LOCAL = antigo
+
+    def test_sessao_encerrada_para_de_valer(self):
+        cookies = self.com_sessao()
+        self.assertEqual(self.pedir("/api/dados", cookies=cookies).status, 200)
+        self.pedir("/sair", "POST", cookies=cookies)
+        self.assertEqual(self.pedir("/api/dados", cookies=cookies).status, 401)
+
+    def test_cookie_de_sessao_inventado_nao_entra(self):
+        for ruim in ("x", "a" * 200, "../../etc", ""):
+            with self.subTest(cookie=ruim):
+                self.assertEqual(
+                    self.pedir("/api/dados", cookies={"sessao": ruim}).status, 401)
+
+    # ------------------------------------------------------ a porta local
+    def test_a_porta_local_abre_sessao(self):
+        r = self.pedir("/entrar/local", cookies=self.abrir_cortina())
+        self.assertEqual(r.status, 302)
+        self.assertIn("sessao", r.cookies)
+        self.assertEqual(
+            self.pedir("/api/dados",
+                       cookies={"sessao": r.cookies["sessao"]}).status, 200)
+
+    def test_a_porta_local_exige_a_cortina(self):
+        self.assertEqual(self.pedir("/entrar/local").status, 404)
+
+    def test_a_porta_local_some_fora_do_ambiente_local(self):
+        """A trava e DUPLA de proposito: uma variavel de ambiente esquecida no
+        servidor nao pode ser tudo o que separa o mundo de uma conta pronta."""
+        cookies = self.abrir_cortina()
+        antigo = servir.E_LOCAL
+        servir.E_LOCAL = False
+        try:
+            self.assertEqual(self.pedir("/entrar/local", cookies=cookies).status,
+                             404)
+        finally:
+            servir.E_LOCAL = antigo
+
+    def test_a_porta_local_some_para_quem_vem_de_outro_nome(self):
+        """A segunda trava: mesmo em ambiente local, so localhost entra. Barra
+        o truque de apontar um dominio para 127.0.0.1."""
+        cookies = self.abrir_cortina()
+        antigos = servir.HOSTS_OK
+        servir.HOSTS_OK = servir.HOSTS_OK | {"dervs.com.br"}
+        try:
+            r = self.pedir("/entrar/local", cookies=cookies,
+                           cabecalhos={"Host": "dervs.com.br"})
+            self.assertEqual(r.status, 404)
+            self.assertNotIn("sessao", r.cookies)
+        finally:
+            servir.HOSTS_OK = antigos
+
+    def test_a_porta_local_nao_inventa_senha(self):
+        """Entrar pelo ambiente local nao pode fabricar uma senha nem um
+        segredo de segundo fator: seria segredo sem dono, e num banco que um
+        dia migra para o servidor."""
+        self.pedir("/entrar/local", cookies=self.abrir_cortina())
+        con = banco.conectar()
+        try:
+            u = banco.usuario_por_email("dono@teste.local", con=con)
+            self.assertIsNotNone(u)
+            tipos = {l[0] for l in con.execute(
+                "SELECT tipo FROM credencial WHERE usuario_id=?", (u["id"],))}
+            self.assertNotIn("senha", tipos)
+            self.assertNotIn("totp", tipos)
+        finally:
+            con.close()
+
+    def test_a_capa_local_oferece_a_porta_local_e_nao_a_do_github(self):
+        corpo = self.pedir("/", cookies=self.abrir_cortina()).corpo
+        self.assertIn("/entrar/local", corpo)
+        # Sem aplicativo registrado, o botao do GitHub nem aparece: botao que
+        # leva a 404 e pior que botao que nao existe.
+        self.assertNotIn("/entrar/github", corpo)
+
+    def test_a_conta_local_desativada_nao_e_ressuscitada(self):
+        """`usuario_por_email` filtra desativados: um `criar_usuario` cego aqui
+        estouraria no UNIQUE do e-mail e derrubaria o pedido inteiro."""
+        self.pedir("/entrar/local", cookies=self.abrir_cortina())
+        con = banco.conectar()
+        try:
+            con.execute("UPDATE usuario SET desativado_em = ? WHERE email = ?",
+                        (banco.agora(), "dono@teste.local"))
+            con.commit()
+        finally:
+            con.close()
+        try:
+            r = self.pedir("/entrar/local", cookies=self.abrir_cortina())
+            self.assertEqual(r.status, 404)
+            self.assertNotIn("sessao", r.cookies)
+        finally:
+            con = banco.conectar()
+            con.execute("UPDATE usuario SET desativado_em = NULL WHERE email = ?",
+                        ("dono@teste.local",))
+            con.commit()
+            con.close()
+
+    def test_o_silencio_de_um_nao_esconde_o_alerta_do_outro(self):
+        """O IDOR que a etapa 8 consertou no esquema e que faltava na rota.
+
+        `_silenciar` gravava sem `usuario_id` e `_estado` lia sem `usuario_id`:
+        os dois caiam no balde do DONO_LOCAL. Com uma segunda conta entrando
+        pela web — que e o que esta etapa passou a permitir — o "x" de um
+        escondia o alerta do outro.
+        """
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("segundo@teste.local", con=con)
+            cookie = banco.novo_token()
+            banco.abrir_sessao(outro, cookie, banco.prazo(3600), con=con)
+            do_outro = {"sessao": banco.confirmar_segundo_fator(
+                cookie, banco.novo_token(), con=con)}
+        finally:
+            con.close()
+        meu = self.com_sessao()
+        pid = "regra-de-teste:projeto-de-teste"
+        ok = self.pedir("/api/silenciar", "POST", {"id": pid, "horas": 24},
+                        cookies=meu,
+                        cabecalhos={"X-Token": self._token_da_pagina(meu)})
+        self.assertEqual(ok.status, 200)
+        con = banco.conectar()
+        try:
+            self.assertIn(pid, banco.silenciadas(con, usuario_id=self.uid))
+            self.assertNotIn(pid, banco.silenciadas(con, usuario_id=outro))
+            # E o balde do DONO_LOCAL nao recebeu nada.
+            self.assertNotIn(pid, banco.silenciadas(con,
+                                                    usuario_id=banco.DONO_LOCAL))
+        finally:
+            con.close()
+        self.assertEqual(self.pedir("/api/dados", cookies=do_outro).status, 200)
+
+    # ------------------------------------------------------------ anti-CSRF
+    def test_silenciar_exige_o_anti_csrf_daquela_sessao(self):
+        cookies = self.com_sessao()
+        sem = self.pedir("/api/silenciar", "POST", {"id": "x:y"}, cookies=cookies)
+        self.assertEqual(sem.status, 403)
+        errado = self.pedir("/api/silenciar", "POST", {"id": "x:y"},
+                            cookies=cookies, cabecalhos={"X-Token": "a" * 64})
+        self.assertEqual(errado.status, 403)
+
+    def test_o_anti_csrf_de_uma_sessao_nao_serve_na_outra(self):
+        """Era um token global ate a etapa 9. Com multiusuario, um token so
+        para o servidor inteiro seria a chave de todo mundo."""
+        a, b = self.com_sessao(), self.com_sessao()
+        token_de_a = self._token_da_pagina(a)
+        ok = self.pedir("/api/silenciar", "POST", {"id": "r:p"}, cookies=a,
+                        cabecalhos={"X-Token": token_de_a})
+        self.assertEqual(ok.status, 200)
+        cruzado = self.pedir("/api/silenciar", "POST", {"id": "r:p"}, cookies=b,
+                             cabecalhos={"X-Token": token_de_a})
+        self.assertEqual(cruzado.status, 403)
+
+    def _token_da_pagina(self, cookies):
+        corpo = self.pedir("/", cookies=cookies).corpo
+        achado = re.search(r'"([0-9a-f]{64})"', corpo)
+        self.assertIsNotNone(achado, "o anti-CSRF nao foi injetado na pagina")
+        return achado.group(1)
+
+    def test_o_token_global_nao_existe_mais(self):
+        self.assertFalse(hasattr(servir, "TOKEN"),
+                         "servir.TOKEN voltou: ele e anti-CSRF e nao pode virar"
+                         " credencial de usuario")
+
+    # -------------------------------------------------------------- segredo
+    def test_nenhuma_resposta_traz_a_combinacao(self):
+        for caminho, rota in servir.ROTAS.items():
+            if rota.metodo != "GET":
+                continue
+            with self.subTest(rota=caminho):
+                corpo = self.pedir(caminho, cookies=self.com_sessao()).corpo
+                self.assertNotIn(self.combinacao, corpo)
+
+    def test_a_rota_de_entrar_nao_existe_sem_aplicativo_registrado(self):
+        """Falha FECHADA: melhor nao ter porta do que ter porta que nao tranca."""
+        self.assertEqual(
+            self.pedir("/entrar/github", cookies=self.abrir_cortina()).status, 404)
+
+    def test_com_aplicativo_registrado_a_rota_leva_ao_github(self):
+        """O caminho "aplicativo registrado" nao tinha teste nenhum: a suite so
+        exercitava o mundo em que ele nao existe."""
+        antes = servir.GITHUB_ID, servir.GITHUB_SECRET
+        servir.GITHUB_ID, servir.GITHUB_SECRET = "inventado", "tambem-inventado"
+        try:
+            cookies = self.abrir_cortina()
+            r = self.pedir("/entrar/github", cookies=cookies)
+            self.assertEqual(r.status, 302)
+            destino = r.cabecalhos.get("Location", "")
+            self.assertTrue(destino.startswith(autenticacao.AUTORIZAR + "?"),
+                            destino)
+            self.assertIn("client_id=inventado", destino)
+            # O segredo NUNCA vai para a URL de ida.
+            self.assertNotIn("tambem-inventado", destino)
+            # E o selo da cortina e renovado, senao ele vence enquanto o dono
+            # digita o segundo fator no GitHub e a volta cai num 404 seco.
+            self.assertIn("cortina", r.cookies)
+            self.assertIn("state", r.cookies)
+            self.assertIn("/entrar/github", self.pedir("/", cookies=cookies).corpo)
+        finally:
+            servir.GITHUB_ID, servir.GITHUB_SECRET = antes
+
+    def test_nao_existe_rota_de_registro(self):
+        self.assertNotIn("/api/registro", servir.ROTAS)
+        self.assertEqual(self.pedir("/api/registro", "POST", {}).status, 404)
+
+
+class _Resposta:
+    def __init__(self, status, corpo, cabecalhos, postos):
+        self.status = status
+        self.corpo = corpo
+        self.cabecalhos = cabecalhos
+        self.postos = postos
+        self.cookies = {}
+        for cru in postos:
+            nome, _, resto = cru.partition("=")
+            valor = resto.split(";", 1)[0]
+            # Max-Age=0 e um cookie sendo APAGADO, nao posto.
+            if valor and "max-age=0" not in cru.lower():
+                self.cookies[nome.strip()] = valor
 
 
 if __name__ == "__main__":

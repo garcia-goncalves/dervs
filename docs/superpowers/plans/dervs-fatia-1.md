@@ -256,7 +256,21 @@ vira exatamente o que ela existe para não ser.
   segredo. Segunda armadilha: `pendencia_arquivada` sem coluna de motivo e data — o
   arquivamento permanente sem rastro é pior que o silêncio de 24 h que ele substitui.
 
-## 9. Autenticação: sessão, senha, segundo fator obrigatório, cadastro fechado
+## 9. Autenticação: cortina, entrar com GitHub, cadastro fechado
+
+> **REESCRITA EM 26/08/2026, ANTES DE COMEÇAR.** O dono pediu entrada disfarçada e login
+> sem senha, com a intenção declarada de vender o DERVS um dia. O desenho aprovado está em
+> `docs/superpowers/specs/2026-08-26-login-cortina-github-design.md` — **leia aquele
+> arquivo, não o texto abaixo**. O que muda: identidade passa a vir do GitHub (OAuth);
+> `GET /` vira cortina com combinação de seis dígitos conferida no servidor; senha e TOTP
+> saem de colunas da `usuario` e viram linhas numa tabela `credencial` nova, o que deixa
+> chave de acesso (*passkey*) entrar na Fatia 2 como acréscimo em vez de reescrita; senha +
+> TOTP ficam como porta de emergência desligada. O que **não** muda: cadastro fechado (403),
+> negativa por padrão em toda rota de dado, e a mesma resposta para toda rejeição.
+>
+> O texto original segue abaixo por honestidade de histórico. A etapa ficou maior e pode
+> quebrar em 9a (banco + cortina) e 9b (OAuth + sessão) durante a implementação; o grafo de
+> dependências aguenta, porque as trilhas são disjuntas por arquivo.
 
 - **objetivo** — nenhuma rota de dado responde sem sessão com segundo fator conferido.
 - **arquivos** — `servir.py` (camada de sessão em cima da tabela de rotas da etapa 7;

@@ -203,5 +203,71 @@ class ODespachoUsaSoATabela(unittest.TestCase):
         self.assertNotIn("/api/dados?x=1", servir.ROTAS)
 
 
+class TodaRotaDeclaraAcesso(unittest.TestCase):
+    """NEGA POR PADRAO, INCLUSIVE NO TESTE (etapa 9).
+
+    A armadilha que este bloco existe para fechar: a lista de rotas protegidas
+    ser escrita a mao num `if` em algum lugar, e nascer desatualizada na
+    primeira rota nova. Aqui a lista nao existe -- cada rota carrega a propria
+    classificacao no terceiro campo da tupla, e ROTA SEM CLASSIFICACAO REPROVA
+    A SUITE. Esquecer de classificar nao pode dar acesso.
+    """
+
+    VALIDOS = {"aberta", "cortina", "dado"}
+
+    def test_toda_rota_declara_acesso(self):
+        for caminho, rota in servir.ROTAS.items():
+            with self.subTest(rota=caminho):
+                self.assertIn(getattr(rota, "acesso", None), self.VALIDOS,
+                              "rota sem classificacao declarada: %s" % caminho)
+
+    def test_a_tupla_tem_os_tres_campos(self):
+        """Sem isto, voltar `Rota` para dois campos faria o teste acima passar
+        por `getattr` devolvendo None em tudo -- e ai o vigia mentiria."""
+        self.assertEqual(servir.Rota._fields, ("metodo", "funcao", "acesso"))
+
+    def test_o_que_le_dado_do_dono_exige_sessao(self):
+        """A classificacao nao pode ser so um rotulo bonito: as rotas que
+        chegam ao banco do dono tem de estar em `dado`, nominalmente."""
+        for caminho in ("/api/dados", "/api/silenciar"):
+            self.assertEqual(servir.ROTAS[caminho].acesso, "dado", caminho)
+
+    def test_a_capa_e_a_entrada_sao_abertas(self):
+        """Se a capa exigisse sessao, ninguem conseguiria nem tentar entrar."""
+        for caminho in ("/", "/entrada"):
+            self.assertEqual(servir.ROTAS[caminho].acesso, "aberta", caminho)
+
+    def test_entrar_exige_a_cortina(self):
+        for caminho in servir.ROTAS:
+            if caminho.startswith("/entrar/"):
+                self.assertEqual(servir.ROTAS[caminho].acesso, "cortina", caminho)
+
+    def test_nao_existe_rota_de_registro(self):
+        """Cadastro fechado. Conta so nasce por `autenticacao.convidar`, que e
+        comando de quem tem acesso a maquina."""
+        for proibida in ("/api/registro", "/registro", "/cadastro",
+                         "/api/usuarios"):
+            self.assertNotIn(proibida, servir.ROTAS)
+
+    def test_a_porta_local_nao_existe_fora_do_ambiente_local(self):
+        """A defesa nao e um `if` dentro da rota: e a rota NAO ESTAR NA TABELA.
+
+        O primeiro desenho prometia "duas travas independentes" dentro da funcao,
+        e a revisao mostrou que a segunda nunca disparava — `_despachar` ja tinha
+        barrado o Host. Rota ausente da tabela e verificavel aqui, em memoria,
+        sem subir servidor nenhum.
+        """
+        import os
+        e_local = (os.environ.get("DERVS_AMBIENTE") or "").lower() == "local"
+        self.assertEqual("/entrar/local" in servir.ROTAS, e_local,
+                         "a porta local so pode existir no ambiente local")
+
+    def test_o_token_global_nao_voltou(self):
+        """`servir.TOKEN` era um valor so para o servidor inteiro. Com
+        multiusuario ele seria a chave de todo mundo: o anti-CSRF passou a ser
+        derivado da sessao de quem pede."""
+        self.assertFalse(hasattr(servir, "TOKEN"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)
