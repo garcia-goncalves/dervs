@@ -69,23 +69,6 @@ button.btn{font:inherit;font-size:12.5px;padding:6px 12px;border-radius:7px;
 button.btn:hover{border-color:var(--acento)}
 button.btn:disabled{opacity:.5;cursor:progress}
 
-/* ----------------------------------------------------------------- as abas */
-nav.abas{display:flex;gap:2px;border-bottom:1px solid var(--borda);margin:-6px 0 18px}
-nav.abas button{font:inherit;font-size:13px;font-weight:550;padding:8px 14px;
-  border:0;border-bottom:2px solid transparent;background:none;color:var(--fraco);
-  cursor:pointer;margin-bottom:-1px}
-nav.abas button:hover{color:var(--texto)}
-nav.abas button[aria-selected="true"]{color:var(--texto);border-bottom-color:var(--acento)}
-nav.abas button:focus-visible{outline:2px solid var(--acento);outline-offset:-2px;border-radius:5px}
-
-/* ------------------------------------------------------------ o grafo */
-#quadro-grafo{width:100%;height:min(72vh,760px);border:1px solid var(--borda);
-  border-radius:10px;background:var(--painel);display:block}
-.cartao-grafo{border:1px solid var(--borda);border-radius:10px;background:var(--painel);
-  padding:26px;text-align:center;box-shadow:var(--sombra)}
-.cartao-grafo h3{margin:0 0 8px;font-size:15px;font-weight:600}
-.cartao-grafo p{margin:0 auto 16px;color:var(--fraco);font-size:13px;max-width:56ch}
-
 /* ------------------------------------------------------------- o briefing */
 /* A primeira coisa que o olho pega. Uma frase, escrita a partir do dado — se
    ela nao mudar quando o dado muda, e decoracao, e decoracao no topo de um
@@ -130,16 +113,6 @@ h2.secao{font-size:12px;text-transform:uppercase;letter-spacing:.09em;
   margin-left:7px;vertical-align:1px}
 .idade{color:var(--fraquinho)}
 .idade.velha{color:var(--alerta-texto)}
-/* A faixa da fila. Mesmo vocabulario visual da caixa — nao inventa um segundo. */
-.faixa-fila{background:var(--painel);border:1px solid var(--borda);border-radius:9px;
-  box-shadow:var(--sombra);padding:11px 13px;margin:0 0 14px}
-.faixa-fila-topo{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.faixa-fila-topo span{font-size:13px;color:var(--fraco)}
-#fila-itens{list-style:none;margin:9px 0 0;padding:0;display:grid;gap:5px}
-#fila-itens li{font-size:12.5px;color:var(--fraco);border-left:3px solid var(--fraquinho);
-  padding:3px 0 3px 9px}
-#fila-itens li[data-estado="rodando"]{border-left-color:var(--alerta)}
-#fila-itens li[data-estado="falha"]{border-left-color:var(--erro)}
 /* O grupo: 3+ pendencias da mesma regra numa linha so. Herda o .item para nao
    inventar um segundo vocabulario visual na mesma lista. */
 details.grupo{background:var(--painel);border:1px solid var(--borda);
@@ -280,94 +253,6 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
    vermelho o que nao e problema ensina o dono a ignorar vermelho. */
 .aviso.neutro{border-color:var(--acento);color:var(--texto)}
 
-/* ------------------------------------------------ o painel de execucao */
-/* max-height e o mesmo padrao do #paleta. Sem ele o dialogo crescia com o
-   conteudo: no estado "ok" o log (38vh) e o resultado (30vh) aparecem juntos e,
-   em janela baixa, o rodape com o botao "Fechar" saia da tela. */
-#execucao{width:min(640px,92vw);padding:0;border:none;border-radius:13px;
-  background:var(--painel);color:var(--texto);
-  box-shadow:0 18px 60px rgba(0,0,0,.28);margin:8vh auto auto;
-  max-height:min(84vh,760px);overflow-y:auto}
-#execucao::backdrop{background:rgba(0,0,0,.42)}
-#execucao .e-topo{display:flex;align-items:center;gap:10px;padding:13px 16px;
-  border-bottom:1px solid var(--borda)}
-#execucao h2{margin:0;font-size:15px;font-weight:600;flex:1;min-width:0;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#execucao h2:focus-visible{outline:2px solid var(--acento);outline-offset:3px;
-  border-radius:5px}
-#execucao .e-fechar{background:none;border:none;color:var(--fraco);cursor:pointer;
-  font-size:19px;line-height:1;padding:4px 8px;border-radius:6px}
-#execucao .e-fechar:hover{color:var(--texto);background:var(--grade)}
-#execucao .e-corpo{padding:14px 16px}
-#execucao .e-rodape{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
-  padding:10px 16px;border-top:1px solid var(--borda);font-size:11.5px;
-  color:var(--fraquinho)}
-#execucao .e-rodape .e-nota{flex-basis:100%;margin:0;font-size:11px}
-#e-custo{font-family:var(--mono);color:var(--texto);font-size:12.5px}
-
-/* A linha de status. O ponto e o indicador NAO textual: --acento, --ok e
-   --alerta nunca viram cor de palavra neste painel; a palavra fica em
-   --texto, e so --erro pode colorir texto ("Falhou"). */
-#e-status{display:flex;align-items:baseline;gap:9px;font-size:14px;margin:0 0 12px}
-#e-status .ponto{flex:none;font-size:11px;line-height:1.4}
-#execucao[data-estado="rodando"] #e-status .ponto{color:var(--acento)}
-#execucao[data-estado="ok"] #e-status .ponto{color:var(--ok)}
-#execucao[data-estado="parada_pelo_dono"] #e-status .ponto{color:var(--alerta)}
-#execucao[data-estado="falha"] #e-status .ponto{color:var(--erro)}
-
-#e-manchete{margin:0 0 6px;font-size:14.5px;font-weight:600}
-#execucao[data-estado="falha"] #e-manchete{color:var(--erro)}
-#e-corpo-falha{margin:0 0 12px;font-size:13px;color:var(--fraco);line-height:1.5}
-
-/* O log NAO some. Nada de setTimeout aqui: o molde do #recado apaga em 9 s, e
-   um log que evapora enquanto o dono le e pior que log nenhum. */
-#e-log{margin:0;padding:10px 12px;background:var(--grade);border-radius:9px;
-  font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--fraco);
-  max-height:38vh;overflow-y:auto;overflow-x:auto;white-space:pre;
-  overscroll-behavior:contain}
-#e-log:empty::before{content:"Iniciando…";color:var(--fraquinho)}
-
-#execucao nav.abas{margin:0 0 12px}
-#e-resultado{margin:0;font-size:13px;line-height:1.6;white-space:pre-wrap;
-  max-height:30vh;overflow-y:auto}
-#e-resultado.diff{font-family:var(--mono);font-size:11.5px;white-space:pre;
-  overflow-x:auto;background:var(--grade);border-radius:9px;padding:10px 12px}
-
-/* Correcao 1 do juiz: --acento mede 4,44:1, abaixo dos 4,5:1 exigidos. Peso e
-   sublinhado permanentes fazem o link nao depender so da cor (WCAG 1.4.1) —
-   mas nao consertam o contraste em si (1.4.3). Por isso a cor aqui e um acento
-   escurecido, so para texto: #2f57c4 sobre --painel mede 6,1:1. O --acento
-   original segue valendo para botao e borda, onde a regra e mais folgada. */
-#e-pr{display:inline-block;margin-bottom:12px;color:#2f57c4;
-  font-weight:600;text-decoration:underline;font-size:13.5px}
-
-#execucao .e-acoes{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-
-/* Os cinco estados: cada um mostra so o que e dele. `hidden` nao basta porque
-   display:flex de .e-status venceria o hidden do navegador. */
-#execucao [data-so]{display:none}
-#execucao[data-estado="rodando"] [data-so~="rodando"],
-#execucao[data-estado="ok"] [data-so~="ok"],
-#execucao[data-estado="falha"] [data-so~="falha"],
-#execucao[data-estado="parada_pelo_dono"] [data-so~="parada_pelo_dono"],
-#execucao[data-estado="recusada"] [data-so~="recusada"]{display:revert}
-#execucao[data-estado="rodando"] #e-status,
-#execucao[data-estado="ok"] #e-status,
-#execucao[data-estado="falha"] #e-status,
-#execucao[data-estado="parada_pelo_dono"] #e-status{display:flex}
-#execucao[data-estado="ok"] .e-acoes,
-#execucao[data-estado="falha"] .e-acoes,
-#execucao[data-estado="recusada"] .e-acoes{display:flex}
-
-@media (max-width:420px){
-  #execucao{width:96vw;margin:4vh auto auto}
-  #execucao .e-topo,#execucao .e-corpo,#execucao .e-rodape{padding-left:12px;
-    padding-right:12px}
-  #e-log{max-height:32vh}
-}
-@media (prefers-reduced-motion:no-preference){
-  #execucao[open]{animation:sobe .13s ease-out}
-}
 #recado{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);
   background:var(--texto);color:var(--bg);padding:9px 16px;border-radius:8px;
   font-size:13px;max-width:min(680px,90vw);box-shadow:var(--sombra);
@@ -390,20 +275,10 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
               aria-keyshortcuts="Control+K Meta+K">
         <span>Buscar projeto ou ação</span><kbd>Ctrl K</kbd>
       </button>
-      <button class="btn" id="btn-recoletar">Medir agora</button>
-      <button class="btn" id="btn-github">Atualizar GitHub</button>
       <button class="btn" id="btn-tema">Tema</button>
     </div>
   </header>
 
-  <nav class="abas" role="tablist" aria-label="Seções do HUB">
-    <button role="tab" id="aba-btn-painel" aria-controls="aba-painel"
-            aria-selected="true" tabindex="0">Painel</button>
-    <button role="tab" id="aba-btn-grafo" aria-controls="aba-grafo"
-            aria-selected="false" tabindex="-1">Grafo de código</button>
-  </nav>
-
-  <div id="aba-painel" role="tabpanel" aria-labelledby="aba-btn-painel" tabindex="0">
   <!-- A regiao viva e SO a frase, e ela so e reescrita quando o texto muda de
        verdade. O bloco inteiro com aria-live, redesenhado a cada 15 s, faria o
        leitor de tela reanunciar frase, placar e seta em todo ciclo, tenha
@@ -414,17 +289,6 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
     <div class="frase" id="briefing-frase" aria-live="polite"></div>
     <div class="placar" id="briefing-placar"></div>
   </div>
-
-  <!-- A fila. Fica ACIMA da caixa porque e a resposta a pergunta que a caixa
-       faz: o painel deixou de so apontar. So aparece quando ha o que fazer. -->
-  <section id="faixa-fila" class="faixa-fila" hidden>
-    <div class="faixa-fila-topo">
-      <button id="fila-comecar" type="button">Trabalhar na fila</button>
-      <button id="fila-parar" type="button" hidden>Parar</button>
-      <span id="fila-resumo" aria-live="polite"></span>
-    </div>
-    <ul id="fila-itens"></ul>
-  </section>
 
   <h2 class="secao">Precisa de você agora</h2>
   <div class="caixa" id="caixa"></div>
@@ -444,11 +308,6 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
   </details>
 
   <div id="falhas"></div>
-  </div><!-- /aba-painel -->
-
-  <!-- Vazio de proposito: o quadro do grafo so entra no DOM quando o dono abre
-       esta aba. Ver montaGrafo() la embaixo. -->
-  <div id="aba-grafo" role="tabpanel" aria-labelledby="aba-btn-grafo" tabindex="0" hidden></div>
 
   <div class="rodape" id="rodape"></div>
 </div>
@@ -472,87 +331,10 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
     <span id="p-conta"></span>
   </div>
 </dialog>
-<!-- --------------------------------------------------- painel de execucao ----
-     O que o botao "Resolver" abre. Mesmo molde da paleta: closedby="any" +
-     showModal(), que dao de graca foco preso, Esc, clique fora e camada.
-
-     QUAL ESTADO APARECE e decidido por data-estado no proprio <dialog>, com os
-     valores: rodando · ok · falha · parada_pelo_dono · recusada. Da para
-     desfilar os cinco pelo console, sem rede:
-         execucao.showModal(); execucao.dataset.estado = "falha";
-
-     OS ids QUE O JAVASCRIPT PREENCHE (contrato desta tela; se mudar aqui, muda
-     no <script> junto):
-       #e-titulo        h2 do cabecalho — "Resolvendo: {projeto}"
-       #e-frase         a frase de status em portugues (aria-live)
-       #e-log           o log cru, uma linha por <div>; NUNCA some sozinho
-       #e-custo         "≈ R$ 0,00 · estimativa, ainda rodando"
-       #e-manchete      a manchete de falha/parada/recusa
-       #e-corpo-falha   o paragrafo que explica a manchete
-       #e-pr            o link do pedido de alteracao
-       #e-resultado     o miolo das abas (Resumo ou Diff)
-       #e-aviso         o aviso `ℹ` de estar resolvendo o proprio painel
-       #e-parar         o botao Parar
-       #e-ver           o botao "Ver essa execução" do estado recusada
-     Todo texto visivel aqui e literal do design.md, secao `textos`. -->
-<dialog id="execucao" closedby="any" aria-labelledby="e-titulo" data-estado="rodando">
-  <div class="e-topo">
-    <h2 id="e-titulo" tabindex="-1">Resolvendo: —</h2>
-    <button class="e-fechar" type="button" data-fechar
-            aria-label="Fechar o painel de execução">×</button>
-  </div>
-
-  <div class="e-corpo">
-    <p id="e-status" role="status" aria-live="polite"
-       data-so="rodando ok falha parada_pelo_dono">
-      <span class="ponto" aria-hidden="true">●</span>
-      <span id="e-frase">Preparando uma cópia isolada</span>
-    </p>
-
-    <p id="e-manchete" data-so="falha parada_pelo_dono recusada"></p>
-    <p id="e-corpo-falha" data-so="falha parada_pelo_dono recusada"></p>
-
-    <div id="e-aviso" class="aviso neutro" data-so="rodando ok falha" hidden>
-      ℹ Você está resolvendo o próprio painel. A mudança só aparece na tela
-      depois que o painel for reiniciado — o servidor que está te mostrando
-      esta execução é o mesmo que ela está tentando alterar.
-    </div>
-
-    <a id="e-pr" data-so="ok" href="#" target="_blank"
-       rel="noopener noreferrer">Ver o pedido de alteração ↗</a>
-
-    <nav class="abas" role="tablist" data-so="ok" aria-label="Resultado da execução">
-      <button type="button" role="tab" id="e-aba-resumo" aria-controls="e-resultado"
-              aria-selected="true" tabindex="0" data-aba="resumo">Resumo</button>
-      <button type="button" role="tab" id="e-aba-diff" aria-controls="e-resultado"
-              aria-selected="false" tabindex="-1" data-aba="diff">Diff</button>
-    </nav>
-    <p id="e-resultado" role="tabpanel" tabindex="0"
-       aria-labelledby="e-aba-resumo" data-so="ok"></p>
-
-    <pre id="e-log" role="log" aria-label="Saída bruta da execução"
-         data-so="rodando ok falha parada_pelo_dono"></pre>
-
-    <div class="e-acoes">
-      <button id="e-ver" class="btn" type="button" data-so="recusada">Ver essa execução</button>
-      <button class="btn" type="button" data-fechar data-so="ok falha parada_pelo_dono recusada">Fechar</button>
-    </div>
-  </div>
-
-  <div class="e-rodape">
-    <button id="e-parar" class="btn" type="button" data-so="rodando">Parar</button>
-    <span id="e-custo">≈ R$ 0,00 · estimativa, ainda rodando</span>
-    <p class="e-nota">Estimativa calculada pelo próprio Claude Code, não é a
-      fatura. O teto por execução é aproximado: já foi medido estourar em
-      4,5×.</p>
-  </div>
-</dialog>
-<div id="recado" role="status" aria-live="polite"></div>
-
 <script>
 const TOKEN = "__TOKEN__";
 const $ = s => document.querySelector(s);
-let ESTADO = null, ocupado = false;
+let ESTADO = null;
 
 /* ------------------------------------------------------------------ tempo */
 function haQuanto(iso){
@@ -583,15 +365,28 @@ function recado(txt, erro){
 }
 
 /* ------------------------------------------------------------------ acoes */
-async function mandar(corpo){
-  const r = await fetch("/api/acao", {
+/* Na etapa 7 do DERVS o servidor deixou de executar comando. Foram embora com
+   ele o "Resolver", a fila, o grafo e os botoes que rodavam `git push`,
+   `docker compose` e o VS Code. Sobrou UMA escrita: esconder um alerta. */
+async function silenciar(id, horas){
+  const r = await fetch("/api/silenciar", {
     method:"POST", headers:{"Content-Type":"application/json","X-Token":TOKEN},
-    body: JSON.stringify(corpo)
+    body: JSON.stringify({id, horas})
   });
   return r.json();
 }
 
-async function agir(pend, botao){
+/* As duas acoes que sobreviveram sao as que o NAVEGADOR faz sozinho: abrir um
+   link e copiar um texto. O que precisava do servidor nao vira botao, e quem
+   decide isso e `temAcaoNaTela()` — um lugar so, obedecido pela caixa E pela
+   paleta. Duas listas divergiriam, e a divergencia apareceria como um botao
+   que nao faz nada. */
+function temAcaoNaTela(pend){
+  const t = pend && pend.acao && pend.acao.tipo;
+  return t === "abrir_url" || t === "copiar";
+}
+
+async function agir(pend){
   const a = pend.acao;
   if (a.tipo === "abrir_url"){ window.open(a.url, "_blank", "noopener"); return; }
   if (a.tipo === "copiar"){
@@ -599,185 +394,11 @@ async function agir(pend, botao){
     catch { recado("Não consegui copiar. O texto é: " + a.texto, true); }
     return;
   }
-  if (ocupado){ recado("Espere a ação anterior terminar."); return; }
-  // botao e opcional: a paleta (Ctrl+K) dispara a MESMA acao sem ter um botao
-  // na tela. Um executor so para os dois caminhos — dois divergiriam.
-  ocupado = true;
-  const antes = botao ? botao.textContent : "";
-  if (botao){ botao.disabled = true; botao.textContent = "…"; }
-  try{
-    const corpo = a.tipo === "vscode"
-      ? {comando:"vscode", projeto: pend.projeto}
-      : {comando: a.comando, projeto: a.projeto || pend.projeto};
-    const r = await mandar(corpo);
-    recado(r.ok ? (r.saida || "Feito.") : ("Não deu certo: " + (r.saida||r.erro)), !r.ok);
-  } catch(e){ recado("Não consegui falar com o servidor: " + e.message, true); }
-  finally{
-    ocupado = false;
-    if (botao){ botao.disabled = false; botao.textContent = antes; }
-    carregar();
-  }
-}
-
-/* ------------------------------------------------------ o botao "Resolver"
-   Segundo executor, ao lado de agir(), e NAO uma reforma dela: agir() e o
-   executor de acao unica e e onde vive a trava `ocupado` global. O Resolver
-   nao usa `ocupado` de proposito — a trava de execucao mora no SERVIDOR
-   agora, e os outros botoes do painel seguem clicaveis enquanto o Claude
-   trabalha. Duas travas para a mesma coisa divergem no primeiro erro. */
-let EXEC_TIMER = null, EXEC_LINHAS = 0, EXEC_BOTAO = null, EXEC_ABA = "resumo";
-let EXEC_TEXTOS = {resumo: "", diff: ""};
-
-function podeResolver(p){
-  if (!p.projeto) return false;
-  // A regra mora no servidor; aqui e so a copia que esconde o botao. Quem
-  // recusa de verdade e execucao.pode_resolver(), do outro lado.
-  const bloqueados = (ESTADO && ESTADO.resolver_bloqueado) || [];
-  return !bloqueados.includes(p.projeto.toLowerCase());
-}
-
-function rodandoAgora(){
-  const e = ESTADO && ESTADO.execucao;
-  return e && e.estado === "rodando" ? e : null;
-}
-
-function abreExecucao(botao){
-  const d = $("#execucao");
-  if (botao) EXEC_BOTAO = botao;
-  if (!d.open) d.showModal();
-  $("#e-titulo").focus();          // o h2, e nao o "Parar": abrir a tela nao
-}                                   // pode convidar a interromper por engano
-
-function fechaExecucao(){
-  const d = $("#execucao");
-  if (d.open) d.close();
-}
-
-async function resolver(pend, botao){
-  const d = $("#execucao");
-  abreExecucao(botao);
-  d.dataset.estado = "rodando";
-  $("#e-titulo").textContent = "Resolvendo: " + pend.projeto;
-  $("#e-frase").textContent = "Preparando uma cópia isolada de " + pend.projeto;
-  $("#e-log").textContent = "";
-  $("#e-custo").textContent = "≈ R$ 0,00 · estimativa, ainda rodando";
-  $("#e-aviso").hidden = pend.projeto !== "painel-projetos";
-  EXEC_LINHAS = 0;
-  EXEC_TEXTOS = {resumo: "", diff: ""};
-
-  try{
-    const r = await mandar({comando: "resolver", id: pend.id});
-    if (!r.ok){
-      if ((r.saida || "").indexOf("já há uma execução") >= 0) return telaRecusada();
-      return telaDeFalha("Falhou: o painel não conseguiu começar",
-                         r.saida || r.erro || "O servidor recusou sem explicar.");
-    }
-  } catch(e){
-    return telaDeFalha("Falhou: não consegui falar com o servidor", e.message);
-  }
-  await consultarExecucao();
-  lacoDeExecucao();
-}
-
-function telaRecusada(){
-  const d = $("#execucao"), emCurso = rodandoAgora();
-  d.dataset.estado = "recusada";
-  $("#e-titulo").textContent = "Resolver: " + (emCurso ? emCurso.projeto : "—");
-  $("#e-manchete").textContent = "Já há uma execução em andamento";
-  $("#e-corpo-falha").textContent =
-    "Só é possível rodar uma correção por vez nesta máquina. Agora mesmo o "
-    + "Claude está trabalhando em " + (emCurso ? emCurso.projeto : "outro projeto") + ".";
-}
-
-function telaDeFalha(manchete, corpo){
-  const d = $("#execucao");
-  d.dataset.estado = "falha";
-  $("#e-manchete").textContent = manchete;
-  $("#e-corpo-falha").textContent = corpo;
-}
-
-/* De 1 em 1 segundo, e so enquanto roda. `desde` = quantas linhas ja temos,
-   para o servidor mandar so o que falta em vez do log inteiro toda vez. */
-function lacoDeExecucao(){
-  clearInterval(EXEC_TIMER);
-  EXEC_TIMER = setInterval(async () => {
-    const e = await consultarExecucao();
-    if (!e || e.estado !== "rodando"){ clearInterval(EXEC_TIMER); EXEC_TIMER = null; carregar(); }
-  }, 1000);
-}
-
-async function consultarExecucao(){
-  try{
-    // O GET manda o token a mao: `mandar()` so serve o POST de /api/acao.
-    const r = await fetch("/api/execucao?desde=" + EXEC_LINHAS,
-                          {headers: {"X-Token": TOKEN}});
-    if (!r.ok) return null;
-    const e = await r.json();
-    pintaExecucao(e);
-    return e;
-  } catch(err){ return null; }
-}
-
-function pintaExecucao(e){
-  const d = $("#execucao");
-  if (e.estado !== "parada") d.dataset.estado = e.estado;
-  if (e.projeto) $("#e-titulo").textContent =
-    (e.estado === "rodando" ? "Resolvendo: " : "Resolver: ") + e.projeto;
-  if (e.frase) $("#e-frase").textContent = e.frase;
-
-  for (const linha of e.linhas || []){
-    $("#e-log").append(linha + "\n");
-    EXEC_LINHAS++;
-  }
-  if (typeof e.total_de_linhas === "number") EXEC_LINHAS = e.total_de_linhas;
-  const log = $("#e-log");
-  log.scrollTop = log.scrollHeight;
-
-  $("#e-custo").textContent = e.estado === "rodando"
-    ? "≈ " + e.custo_brl + " · estimativa, ainda rodando"
-    : e.custo_brl + " · estimativa";
-
-  if (e.manchete) $("#e-manchete").textContent = e.manchete;
-  if (e.corpo) $("#e-corpo-falha").textContent = e.corpo;
-  if (e.pr_url) $("#e-pr").href = e.pr_url;
-
-  EXEC_TEXTOS = {
-    resumo: e.resumo || "A sessão terminou sem alterar nenhum arquivo.",
-    diff: e.diff || "Nenhuma diferença registrada.",
-  };
-  pintaAbaDoResultado();
-}
-
-/* As abas NAO fazem requisicao: os dois textos ja vieram no mesmo estado. */
-function pintaAbaDoResultado(){
-  const alvo = $("#e-resultado");
-  alvo.textContent = EXEC_TEXTOS[EXEC_ABA] || "";
-  alvo.classList.toggle("diff", EXEC_ABA === "diff");
-  for (const b of document.querySelectorAll("#execucao nav.abas button")){
-    const ativa = b.dataset.aba === EXEC_ABA;
-    b.setAttribute("aria-selected", ativa ? "true" : "false");
-    b.tabIndex = ativa ? 0 : -1;          // uma parada de Tab por grupo de abas
-    if (ativa) alvo.setAttribute("aria-labelledby", b.id);
-  }
-}
-
-async function pararExecucao(botao){
-  const antes = botao.textContent;
-  botao.disabled = true; botao.textContent = "Parando…";
-  try{
-    const r = await mandar({comando: "parar"});
-    if (!r.ok) recado(r.saida || "Não consegui confirmar que parou.", true);
-  } catch(e){ recado("Não consegui falar com o servidor: " + e.message, true); }
-  finally{
-    botao.disabled = false; botao.textContent = antes;
-    clearInterval(EXEC_TIMER); EXEC_TIMER = null;
-    await consultarExecucao();
-    carregar();
-  }
+  recado("Esta ação saiu do painel: agora ela é feita por você, fora dele.", true);
 }
 
 async function calar(pend){
-  const r = await mandar({comando:"silenciar", id: pend.id, horas: 24});
+  const r = await silenciar(pend.id, 24);
   recado(r.ok ? "Escondida por 24 h." : "Não deu certo.", !r.ok);
   carregar();
 }
@@ -917,43 +538,6 @@ function linhasEm(caixa, linhas){
   }
 }
 
-/* A fila. Nada de innerHTML com dado do servidor: o projeto mantem essa
-   disciplina e os dois innerHTML existentes sao literais fixos. */
-function desenhaFila(f){
-  const faixa = $("#faixa-fila");
-  if (!f){ faixa.hidden = true; return; }
-  faixa.hidden = false;
-  const espera = f.itens.filter(i => i.estado === "esperando").length;
-  $("#fila-resumo").textContent =
-    espera + (espera === 1 ? " item" : " itens") + " · "
-    + f.gasto_hoje_brl + " de " + f.teto_brl + " hoje";
-  $("#fila-comecar").hidden = f.trabalhando;
-  $("#fila-parar").hidden = !f.trabalhando;
-
-  const lista = $("#fila-itens");
-  lista.textContent = "";
-  for (const i of f.itens){
-    const li = document.createElement("li");
-    li.dataset.estado = i.estado;
-    li.textContent = i.projeto + " — " + i.regra + " — " + i.estado
-      + (i.trilho === "mecanico" ? " — R$ 0,00" : "")
-      + (i.erro ? " — " + i.erro : "");
-    if (i.pr_url){
-      const a = document.createElement("a");
-      a.href = i.pr_url; a.rel = "noopener"; a.target = "_blank";
-      a.textContent = " ver o pedido";
-      li.appendChild(a);
-    }
-    lista.appendChild(li);
-  }
-}
-
-async function comandarFila(comando){
-  const r = await mandar({comando: comando});
-  recado(r.saida || (r.ok ? "feito." : "não deu."), !r.ok);
-  carregar();
-}
-
 function desenhaCaixa(d){
   const caixa = $("#caixa");
   caixa.textContent = "";
@@ -1033,27 +617,12 @@ function itensEm(caixa, pend){
 
     const botoes = document.createElement("div");
     botoes.className = "botoes";
-    const b = document.createElement("button");
-    b.className = "agir";
-    b.textContent = p.acao.rotulo;
-    b.addEventListener("click", () => agir(p, b));
-    botoes.append(b);
-
-    // O "Resolver" entra AO LADO da acao de sempre, nunca no lugar dela: a
-    // acao continua sendo a resposta rapida, e esta e a demorada. So aparece
-    // onde ha o que resolver — pendencia sem projeto (cota_actions) e projeto
-    // bloqueado ficam so com a acao. Botao que existe para dizer "nao" e o
-    // oposto do invariante "toda pendencia tem uma acao".
-    if (podeResolver(p)){
-      const emCurso = rodandoAgora();
-      const rb = document.createElement("button");
-      rb.className = "btn";
-      const vendo = emCurso && emCurso.projeto === p.projeto;
-      rb.textContent = vendo ? "Ver execução" : "Resolver";
-      rb.addEventListener("click", () => vendo
-        ? (abreExecucao(rb), consultarExecucao(), lacoDeExecucao())
-        : resolver(p, rb));
-      botoes.append(rb);
+    if (temAcaoNaTela(p)){
+      const b = document.createElement("button");
+      b.className = "agir";
+      b.textContent = p.acao.rotulo;
+      b.addEventListener("click", () => agir(p));
+      botoes.append(b);
     }
 
     const c = document.createElement("button");
@@ -1236,7 +805,6 @@ async function carregar(){
 
   desenhaBriefing(d);
   desenhaCaixa(d);
-  desenhaFila(d.fila);
   desenhaTabela(d.projetos);
 
   const altas = d.pendencias.filter(p => p.gravidade === "alta").length;
@@ -1255,8 +823,6 @@ async function carregar(){
     + (inf.portas == null ? "portas: não medido" : inf.portas.length + " portas escutando")
     + (q ? " · Actions " + q.pct + "% de " + q.cota + " min" : "");
 
-  if (grafoMontado && !$("#aba-grafo").hidden && d.grafo_ui) desenhaGrafo(d.grafo_ui);
-
   const falhas = $("#falhas");
   falhas.textContent = "";
   for (const [camada, erro] of Object.entries(d.falhas_de_coleta || {})){
@@ -1269,20 +835,6 @@ async function carregar(){
 }
 
 /* ------------------------------------------------------------------- botoes */
-$("#btn-recoletar").addEventListener("click", async e => {
-  e.target.disabled = true;
-  await mandar({comando:"recoletar", camada:"local"});
-  await carregar();
-  e.target.disabled = false;
-  recado("Medido agora.");
-});
-$("#btn-github").addEventListener("click", async e => {
-  e.target.disabled = true;
-  recado("Consultando o GitHub…");
-  await mandar({comando:"recoletar", camada:"github"});
-  await carregar();
-  e.target.disabled = false;
-});
 $("#btn-tema").addEventListener("click", () => {
   const atual = document.documentElement.getAttribute("data-theme");
   const novo = atual === "dark" ? "light" : "dark";
@@ -1347,32 +899,23 @@ function comandosDe(d){
   const c = [];
 
   // 1. As pendencias primeiro: e a pergunta que o HUB existe para responder.
+  //    So as que ainda tem acao de tela. A paleta nao pode oferecer o que o
+  //    botao nao oferece mais — senao ela vira exatamente a porta dos fundos
+  //    que o bloco acima jura nao ser.
   for (const p of d.pendencias || []){
+    if (!temAcaoNaTela(p)) continue;
     c.push(cmd(p.acao.rotulo + ": " + p.texto, p.projeto || "a máquina",
                p.gravidade === "alta" ? "urgente" : "pendência",
-               () => agir(p, null), p.gravidade));
-    // Mesma funcao do botao, nunca uma acao propria da paleta (ver o comentario
-    // do bloco acima): uma porta a mais para a MESMA coisa.
-    if (podeResolver(p))
-      c.push(cmd("Resolver com o Claude: " + p.texto, p.projeto, "resolver",
-                 () => resolver(p, null), p.gravidade));
+               () => agir(p), p.gravidade));
   }
 
   // 2. Um projeto = varias portas de entrada. So entram as que EXISTEM: item
   //    que abre nada e pior que item ausente.
   for (const p of d.projetos || []){
     const g = p.git || {};
-    c.push(cmd("Abrir " + p.nome + " no VS Code", p.caminho, "projeto",
-               () => agir({projeto: p.nome, acao: {tipo: "vscode"}}, null),
-               "", p.nome));
-    if (p.compose)
-      c.push(cmd("Subir os contêineres do " + p.nome, p.caminho, "docker",
-                 () => agir({projeto: p.nome,
-                             acao: {tipo: "rodar", comando: "docker_up"}}, null)));
-    if (g.ahead)
-      c.push(cmd("Enviar " + p.nome + " ao GitHub", g.ahead + " commit(s) parado(s)",
-                 "git", () => agir({projeto: p.nome,
-                                    acao: {tipo: "rodar", comando: "git_push"}}, null)));
+    // "Abrir no VS Code", "Subir os conteineres" e "Enviar ao GitHub" moravam
+    // aqui e sairam na etapa 7: os tres rodavam programa na maquina do dono.
+    // O que sobrou abre link, e link o navegador abre sozinho.
     if (g.remoto_slug)
       c.push(cmd("Abrir " + p.nome + " no GitHub", g.remoto_slug, "site",
                  () => window.open("https://github.com/" + g.remoto_slug,
@@ -1387,13 +930,9 @@ function comandosDe(d){
                                      "_blank", "noopener")));
   }
 
-  // 3. Comandos da maquina inteira.
-  c.push(cmd("Medir tudo de novo agora", "recoleta a camada local", "hub",
-             () => $("#btn-recoletar").click()));
-  c.push(cmd("Atualizar os dados do GitHub", "CI, PRs e alertas", "hub",
-             () => $("#btn-github").click()));
-  c.push(cmd("Abrir o grafo de código", "aba do mapa de funções", "hub",
-             () => trocaAba("#aba-btn-grafo", true)));
+  // 3. Comandos da maquina inteira. "Medir agora" e "Atualizar o GitHub"
+  //    sairam na etapa 7 (os dois disparavam um coletor). As tres camadas
+  //    seguem rodando sozinhas: 60 s, 20 min e 24 h.
   c.push(cmd("Trocar o tema (claro / escuro)", "", "hub",
              () => $("#btn-tema").click()));
   return c;
@@ -1487,54 +1026,6 @@ document.addEventListener("keydown", e => {
   }
 });
 
-/* ------------------------------------------- controles do painel de execucao */
-for (const b of document.querySelectorAll("#execucao [data-fechar]"))
-  b.addEventListener("click", fechaExecucao);
-
-$("#e-parar").addEventListener("click", e => pararExecucao(e.currentTarget));
-
-$("#e-ver").addEventListener("click", () => {
-  // "Ver essa execução": reconecta na que ja esta rodando, sem disparar nada.
-  consultarExecucao(); lacoDeExecucao();
-});
-
-/* Mesmo contrato das abas Painel/Grafo: clique troca, seta anda e leva o foco. */
-{
-  const ABAS_EXEC = [...document.querySelectorAll("#execucao nav.abas button")];
-  const trocaExec = (b, focar) => {
-    EXEC_ABA = b.dataset.aba; pintaAbaDoResultado();
-    if (focar) b.focus();
-  };
-  for (const b of ABAS_EXEC){
-    b.addEventListener("click", () => trocaExec(b, false));
-    b.addEventListener("keydown", ev => {
-      const i = ABAS_EXEC.indexOf(b);
-      if (ev.key === "ArrowRight") trocaExec(ABAS_EXEC[(i + 1) % ABAS_EXEC.length], true);
-      else if (ev.key === "ArrowLeft") trocaExec(ABAS_EXEC[(i - 1 + ABAS_EXEC.length) % ABAS_EXEC.length], true);
-      else return;
-      ev.preventDefault();
-    });
-  }
-}
-
-// Fechar NAO para a execucao no servidor — so para de perguntar por ela. E ao
-// fechar o foco volta para o botao que abriu, que e o que falta hoje na paleta.
-$("#execucao").addEventListener("close", () => {
-  clearInterval(EXEC_TIMER); EXEC_TIMER = null;
-  if (EXEC_BOTAO && document.body.contains(EXEC_BOTAO)) EXEC_BOTAO.focus();
-  EXEC_BOTAO = null;
-});
-
-// Safari ainda nao tem closedby. Sem isto, clicar fora nao fecha la.
-if (!("closedBy" in HTMLDialogElement.prototype)){
-  $("#execucao").addEventListener("click", e => {
-    if (e.target !== $("#execucao")) return;
-    const r = e.target.getBoundingClientRect();
-    const dentro = r.top <= e.clientY && e.clientY <= r.top + r.height
-                && r.left <= e.clientX && e.clientX <= r.left + r.width;
-    if (!dentro) e.target.close();
-  });
-}
 if (!("closedBy" in HTMLDialogElement.prototype)){
   paleta.addEventListener("click", e => {
     if (e.target !== paleta) return;      // clique num filho: nao e o fundo
@@ -1545,150 +1036,7 @@ if (!("closedBy" in HTMLDialogElement.prototype)){
   });
 }
 
-/* ------------------------------------------------------------------- abas */
-/* MONTAGEM preguicosa, nao import preguicoso: o quadro do grafo nao existe no
-   DOM ate o dono clicar na aba. Grafo pesado dentro de painel e a receita
-   classica de painel que demora a abrir. */
-const ABAS = [["#aba-btn-painel", "#aba-painel"], ["#aba-btn-grafo", "#aba-grafo"]];
-let grafoMontado = false;
-
-function trocaAba(qualBotao, focar){
-  for (const [b, painel] of ABAS){
-    const ativa = b === qualBotao;
-    $(b).setAttribute("aria-selected", ativa ? "true" : "false");
-    $(b).tabIndex = ativa ? 0 : -1;
-    $(painel).hidden = !ativa;
-  }
-  if (focar) $(qualBotao).focus();
-  try { localStorage.setItem("aba", qualBotao); } catch {}
-  if (qualBotao === "#aba-btn-grafo") montaGrafo();
-}
-
-for (const [b] of ABAS){
-  $(b).addEventListener("click", () => trocaAba(b, false));
-  $(b).addEventListener("keydown", e => {
-    const i = ABAS.findIndex(([x]) => x === b);
-    if (e.key === "ArrowRight") trocaAba(ABAS[(i + 1) % ABAS.length][0], true);
-    else if (e.key === "ArrowLeft") trocaAba(ABAS[(i - 1 + ABAS.length) % ABAS.length][0], true);
-    else return;
-    e.preventDefault();
-  });
-}
-
-/* -------------------------------------------------------- os tres estados */
-let esperandoGrafo = null;
-
-function cartaoGrafo(titulo, texto, rotuloBotao){
-  const d = document.createElement("div");
-  d.className = "cartao-grafo";
-  const h = document.createElement("h3"); h.textContent = titulo;
-  const p = document.createElement("p"); p.textContent = texto;
-  d.append(h, p);
-  if (rotuloBotao){
-    const b = document.createElement("button");
-    b.className = "btn"; b.textContent = rotuloBotao;
-    b.addEventListener("click", async () => {
-      b.disabled = true;
-      const r = await mandar({comando:"grafo_ligar"});
-      if (r && r.ok === false){
-        recado(r.saida || "não consegui ligar o grafo.", true);
-        b.disabled = false; return;
-      }
-      desenhaGrafo({estado:"subindo", ha:0});
-    });
-    d.append(b);
-  }
-  return d;
-}
-
-function desenhaGrafo(g){
-  const alvo = $("#aba-grafo");
-  if (esperandoGrafo){ clearInterval(esperandoGrafo); esperandoGrafo = null; }
-
-  if (g.estado === "no_ar"){
-    /* Recria o quadro so quando ele ainda nao esta la — trocar o src a cada
-       carregada faria a tela do grafo recomecar do zero de 15 em 15 s. */
-    if (alvo.querySelector("#quadro-grafo")) return;
-    alvo.textContent = "";
-    const q = document.createElement("iframe");
-    q.id = "quadro-grafo"; q.src = "/grafo/"; q.title = "Grafo de código";
-    q.loading = "lazy"; q.referrerPolicy = "no-referrer";
-    /* CONTORNO de comportamento do grafo, medido em 24/08/2026: a tela dele
-       so mede a area de desenho quando a janela muda de tamanho. Sem empurrao,
-       o dono abre a aba, escolhe o projeto, ve o menu e os filtros — e a area
-       do grafo VAZIA. Conclui que o painel quebrou.
-       O empurrao no "load" nao basta sozinho: a area de desenho so nasce quando
-       ele escolhe um projeto, bem depois. Dai o observador, que empurra quando o
-       desenho aparece e se desliga assim que ele ganha tamanho de verdade. */
-    q.addEventListener("load", () => {
-      try {
-        const jan = q.contentWindow, doc = q.contentDocument;
-        const empurra = () => jan.dispatchEvent(new Event("resize"));
-        empurra();
-        const olho = new jan.MutationObserver(() => {
-          const tela = doc.querySelector("canvas");
-          if (!tela) return;
-          empurra();
-          if (tela.width > 300) olho.disconnect();
-        });
-        olho.observe(doc.body, {childList:true, subtree:true});
-      } catch {}
-    });
-    alvo.append(q);
-    return;
-  }
-
-  alvo.textContent = "";
-  if (g.estado === "subindo"){
-    const c = cartaoGrafo("Ligando o grafo…",
-      "O primeiro carregamento costuma levar alguns segundos. A tela aparece "
-      + "sozinha quando ele responder.", null);
-    const cont = document.createElement("p");
-    cont.className = "sub"; cont.textContent = "esperando há 0 s";
-    c.append(cont);
-    alvo.append(c);
-    let s = g.ha || 0;
-    esperandoGrafo = setInterval(async () => {
-      s += 2;
-      cont.textContent = "esperando há " + s + " s";
-      try {
-        const e = await (await fetch("/api/grafo")).json();
-        if (e.estado !== "subindo") desenhaGrafo(e);
-      } catch {}
-    }, 2000);
-    return;
-  }
-
-  if (g.estado === "sem_exe"){
-    alvo.append(cartaoGrafo("O grafo não está instalado nesta máquina",
-      "O HUB procurou o programa codebase-memory-mcp no PATH e em "
-      + "~/.local/bin e não achou. Sem ele não há o que ligar.", null));
-    return;
-  }
-
-  alvo.append(cartaoGrafo("O grafo de código está desligado",
-    "Ele mapeia funções, chamadas e dependências do seu código. Costuma subir "
-    + "junto com o Claude Code — e cai junto quando você fecha. Este botão sobe "
-    + "ele pelo HUB, e daí ele fica de pé enquanto o painel estiver de pé.",
-    "Ligar o grafo"));
-}
-
-function montaGrafo(){
-  if (!grafoMontado){
-    grafoMontado = true;
-    $("#aba-grafo").append(cartaoGrafo("Verificando…", "Um instante.", null));
-  }
-  fetch("/api/grafo").then(r => r.json()).then(desenhaGrafo).catch(() => {});
-}
-
-try {
-  const a = localStorage.getItem("aba");
-  if (a === "#aba-btn-grafo") trocaAba(a, false);
-} catch {}
-
 carregar();
-$("#fila-comecar").addEventListener("click", () => comandarFila("fila_comecar"));
-$("#fila-parar").addEventListener("click", () => comandarFila("fila_parar"));
 
 setInterval(carregar, 15000);
 </script>

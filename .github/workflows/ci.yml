@@ -75,8 +75,14 @@ jobs:
       - name: Memória do tempo
         run: python test_memoria.py
 
-      - name: Proxy do grafo
+      - name: Servidor
         run: python test_servir.py
+
+      # O VIGIA. Ele prova que nenhuma rota do servidor executa comando, lendo
+      # a tabela `servir.ROTAS` em memoria. Se ele sair daqui, a barreira da
+      # etapa 7 vira texto: ninguem repara que voltou ate estar em producao.
+      - name: Vigia das rotas
+        run: python test_rotas.py
 
       - name: Execução
         run: python test_execucao.py
