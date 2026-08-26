@@ -839,6 +839,16 @@ def main():
         con.close()
 
     print(f"ok: {len(projetos)} projetos, {len(containers)} containers -> {banco.BANCO.name}")
+    # A raiz sumida nao levanta erro: iterdir() nao roda e a lista fica so com os
+    # avulsos. Sem este aviso o coletor imprime "ok: 1 projetos" e parece que deu
+    # certo — foi o que aconteceu ao rodar em Linux pela primeira vez, onde o
+    # caminho do Windows obviamente nao existe.
+    if not RAIZ.is_dir():
+        print(f"AVISO: a raiz {RAIZ} nao existe. Os projetos dela NAO foram medidos "
+              f"— isto nao e 'nenhum projeto pendente'.")
+    if portas is None:
+        print("AVISO: nao consegui listar as portas em uso. "
+              "O 'no ar' de cada projeto saiu so da conexao direta.")
     return 0
 
 

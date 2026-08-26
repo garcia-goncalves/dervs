@@ -39,6 +39,9 @@ jobs:
       - name: Coletor
         run: python test_coletar.py
 
+      - name: Coletor pesado
+        run: python test_coletar_pesado.py
+
       - name: Memória do tempo
         run: python test_memoria.py
 
