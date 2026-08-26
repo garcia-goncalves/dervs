@@ -89,6 +89,12 @@ jobs:
       - name: Cortina
         run: python test_cortina.py
 
+      # O login por GitHub. NENHUM destes testes toca a rede: as funcoes que
+      # falam com o GitHub recebem a funcao de abrir URL por parametro, e o
+      # teste passa um duble que estoura em URL nao prevista.
+      - name: Autenticação
+        run: python test_autenticacao.py
+
       - name: Motor de regras
         run: python test_regras.py
 
