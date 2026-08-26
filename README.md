@@ -128,6 +128,20 @@ espera aprovação, e nada com menos de 24 horas de publicado é adotado — a j
 em que um pacote comprometido ainda não foi despublicado. O motivo do aperto é a
 cota do GitHub Actions, medida em 88% (2.646 de 3.000 min em 30 dias).
 
+**Automesclagem, ligada em 25/08/2026 — e só onde ela significa alguma coisa.**
+Correção de falha de segurança pequena (`patch` e `minor`) entra sozinha quando
+a CI fica verde; versão maior nunca entra sozinha. A regra vive no preset
+central, mas **seis dos dez repositórios a desligam** por escrito no próprio
+`renovate.json`, e o motivo está lá dentro: em `fristachiodontologia` e
+`medconsultoria-crm` não existe CI nenhuma, então "CI verde" seria uma frase
+vazia — mesclar sem verificação alguma; em `medconsultoria`, `odontologia-pericia`,
+`ccvp-painel` e `zacareli` o deploy dispara em `push` na `main`, então
+automesclar não seria mesclar, seria **publicar em produção sem ninguém olhar**.
+Sobram quatro onde a automesclagem é honesta: `painel-projetos`, `investrix`,
+`grimoire` e `workspace-medconsultoria` — todos com CI rodando em `pull_request`
+e deploy só por botão. Quem ganhar CI, ou trocar o deploy por botão, apaga o
+bloco do seu `renovate.json` e volta ao padrão da organização.
+
 Só **três** das 16 regras entram na fila: `memoria_crlf` (mecânico),
 `env_drift` e `dependencia_insegura` (Claude). É lista **branca**: regra que não
 está lá não chega ao motor, nem por engano.
