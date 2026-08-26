@@ -90,6 +90,11 @@
     margin-block-end: 1.3rem;
   }
   .chave .rotulo { color: var(--neon); }
+  .recusa {
+    color: var(--alerta);
+    margin: -.6rem 0 1.2rem;
+    white-space: normal;
+  }
   .slots { display: flex; gap: .4rem; }
   .slot {
     width: 1.5rem;
@@ -196,6 +201,9 @@
         <span class="cursor" aria-hidden="true"></span>
       </div>
 
+      <p class="linha recusa" id="recusa" role="status" hidden>recusado &#183;
+        ap&#243;s 5 tentativas a porta fecha por 15 min</p>
+
       <label class="campo" for="combinacao">Chave de seis d&#237;gitos</label>
       <input class="campo" id="combinacao" name="combinacao" type="text"
              inputmode="numeric" enterkeyhint="done" autocomplete="one-time-code"
@@ -249,10 +257,23 @@
     campo.focus();
   });
 
+  // A resposta do servidor e IDENTICA para chave certa e errada, de proposito:
+  // o tempo e o corpo nao podem dizer quantos digitos bateram. Quem sabe a
+  // diferenca e o proximo carregamento — se a porta abriu, ela aparece. Sem
+  // este aviso, recusa vira tela que nao faz nada, e tela que nao faz nada
+  // parece defeito. Ja custou uma sessao inteira de quem estava do outro lado.
+  try {
+    if (sessionStorage.getItem("tentou") && !document.querySelector(".entrar")) {
+      document.getElementById("recusa").hidden = false;
+    }
+    sessionStorage.removeItem("tentou");
+  } catch (err) {}
+
   porta.addEventListener("submit", function (e) {
     e.preventDefault();
     if (enviando) { return; }
     enviando = true;
+    try { sessionStorage.setItem("tentou", "1"); } catch (err) {}
     fetch("/entrada", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
