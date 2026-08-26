@@ -262,6 +262,24 @@ o mecanismo que a etapa 11 precisava para o código de pareamento de seis dígit
 a dívida que a etapa 8 deixou nomeada ao remover o contador global da tabela.
 A etapa 11 reusa este módulo; não reimplemente.
 
+### VOLTAR ATRÁS DA ETAPA 9 — leia antes de publicar
+
+**Não existe migração de volta, e isso é decisão, não esquecimento.** Assim que
+**um** processo abrir o banco no esquema novo, a versão anterior da aplicação
+não sobe mais: a etapa 8 faz `SELECT senha_hash FROM usuario`, e a coluna não
+existe mais.
+
+O caminho de volta é o de sempre, e é de operação, não de código:
+
+1. **Antes** de publicar, com o serviço **parado**, copie `hub.db` e, se
+   existir, `hub.db-wal`.
+2. Voltar atrás = parar o serviço, restaurar a cópia, publicar a etiqueta
+   anterior.
+
+Isso vira uma linha no workflow de publicação da etapa 16. Está escrito aqui
+porque a migração roda **de verdade uma vez só**, no servidor: o `hub.db` desta
+máquina já está migrado, então não há ensaio possível no local.
+
 ### PENDENTE, e depende da mão do dono
 
 Registrar o OAuth App em github.com — cinco minutos, uma vez. Roteiro campo a
