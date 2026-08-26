@@ -142,7 +142,7 @@ Sobram quatro onde a automesclagem é honesta: `painel-projetos`, `investrix`,
 e deploy só por botão. Quem ganhar CI, ou trocar o deploy por botão, apaga o
 bloco do seu `renovate.json` e volta ao padrão da organização.
 
-Só **três** das 16 regras entram na fila: `memoria_crlf` (mecânico),
+Só **três** das 17 regras entram na fila: `memoria_crlf` (mecânico),
 `env_drift` e `dependencia_insegura` (Claude). É lista **branca**: regra que não
 está lá não chega ao motor, nem por engano.
 

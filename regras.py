@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Motor de pendencias do HUB — as 14 regras.
+"""Motor de pendencias do HUB — as 17 regras.
 
 O HUB responde uma pergunta so: "o que precisa de mim agora?". Este arquivo e
 onde essa pergunta vira lista.
@@ -16,7 +16,7 @@ TRES INVARIANTES, e o teste cobre os tres:
      silenciar uma pendencia e ela continuar silenciada na coleta seguinte.
 
 Este modulo e PURO: entra dicionario, sai lista. Nao le disco, nao chama rede,
-nao roda comando — e por isso da para testar as 14 regras em um segundo.
+nao roda comando — e por isso da para testar as 17 regras em um segundo.
 """
 from __future__ import annotations
 
@@ -218,6 +218,26 @@ def _do_projeto(p: dict) -> list:
              "texto": "cd %s && npm audit fix" % caminho},
             detalhe=", ".join(deps[:12])))
 
+    # 17. A auditoria de dependencia TENTOU rodar e falhou
+    #
+    # Nao viola o invariante 2. "A camada pesada nunca rodou" continua sendo
+    # silencio: sem a marca `auditoria_falhou`, este bloco nem acorda. O que
+    # falamos aqui e um fato medido — tentamos auditar e nao conseguimos —, e
+    # nao um alarme inventado a partir de numero que nao chegou.
+    #
+    # Existe porque o contrario ja aconteceu: por um defeito de invocacao, o
+    # `npm audit` nunca rodava em Linux, devolvia lista vazia, e a regra 10
+    # ficava calada. Tela limpa por cegueira e a pior mentira de um painel,
+    # porque e indistinguivel de boa noticia.
+    if pesado.get("auditoria_falhou"):
+        itens.append(_p(
+            "auditoria_nao_rodou", "baixa", nome,
+            "Não consegui auditar as dependências do %s — não sei se há falha de "
+            "segurança nele." % nome,
+            {"tipo": "copiar", "rotulo": "Copiar o comando",
+             "texto": "cd %s && npm audit" % caminho},
+            detalhe="rode o comando para ver o erro do npm com seus olhos"))
+
     # 11. Exemplo de variaveis divergente do arquivo real
     # So NOMES de variavel entram aqui. Valor de segredo nunca sai do disco.
     drift = p.get("env_drift") or {}
@@ -413,6 +433,7 @@ ROTULO_REGRA = {
     "caso_vazio": "sem descrição escrita",
     "site_fora": "com o site fora do ar",
     "nao_publicado": "com trabalho pronto e não publicado",
+    "auditoria_nao_rodou": "cujas dependências não consegui auditar",
 }
 
 

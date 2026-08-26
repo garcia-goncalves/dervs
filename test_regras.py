@@ -259,6 +259,101 @@ class SiteDeProducao(unittest.TestCase):
         self.assertNotIn("https://", t)
 
 
+class ADocumentacaoNaoPodeMentir(unittest.TestCase):
+    """A docstring dizia "as 14 regras" com 16 no arquivo, por meses.
+
+    Documentacao que descreve o software de ontem mente com autoridade — e este
+    projeto inteiro existe para acabar com numero errado com cara de certo.
+    Contar na mao e o mesmo erro que o HUB corrige nos outros; entao conta o
+    teste.
+    """
+
+    def _nomes(self):
+        import re
+        with open(regras.__file__, encoding="utf-8") as f:
+            fonte = f.read()
+        return sorted(set(re.findall(r'_p\(\s*\n?\s*"([a-z_]+)"', fonte)))
+
+    def test_a_docstring_diz_o_numero_certo_de_regras(self):
+        quantas = len(self._nomes())
+        self.assertIn("as %d regras" % quantas, regras.__doc__,
+                      "a docstring de regras.py esta desatualizada: sao %d" % quantas)
+
+    def test_nenhuma_regra_repete_o_nome(self):
+        import re
+        with open(regras.__file__, encoding="utf-8") as f:
+            fonte = f.read()
+        todos = re.findall(r'_p\(\s*\n?\s*"([a-z_]+)"', fonte)
+        # grafo_velho aparece duas vezes de proposito (ausente / velho): sao dois
+        # textos para a mesma pendencia, e o id continua um so por projeto.
+        repetidos = {n for n in todos if todos.count(n) > 1}
+        self.assertEqual(repetidos, {"grafo_velho"})
+
+
+class AuditoriaQueNaoRodou(unittest.TestCase):
+    """Regra 17. A diferenca entre "auditei e esta limpo" e "nao auditei".
+
+    Nasceu de um defeito real (26/08/2026): o `npm audit` era invocado de um
+    jeito que, em Linux, nao rodava — e o motor, vendo lista vazia, ficava
+    calado. Auditoria de seguranca que nunca aconteceu, com cara de auditoria
+    limpa. Na VPS isso valeria para todos os projetos, todo dia.
+
+    A regra tem de ficar em pe SEM atropelar o invariante 2: ausencia de camada
+    continua sendo silencio. So falamos quando TENTAMOS e falhamos.
+    """
+
+    def test_auditoria_limpa_nao_produz_pendencia(self):
+        p = projeto(pesado={"deps_inseguras": []})
+        self.assertEqual(so(regras.avaliar([p]), "auditoria_nao_rodou"), [])
+
+    def test_camada_pesada_ausente_fica_calada(self):
+        """Invariante 2: nunca rodou != rodou e falhou."""
+        for ausente in ({}, None):
+            with self.subTest(pesado=ausente):
+                p = projeto(pesado=ausente)
+                self.assertEqual(so(regras.avaliar([p]), "auditoria_nao_rodou"), [])
+
+    def test_tentou_e_falhou_produz_uma_pendencia(self):
+        p = projeto(pesado={"deps_inseguras": None, "auditoria_falhou": True})
+        achadas = so(regras.avaliar([p]), "auditoria_nao_rodou")
+        self.assertEqual(len(achadas), 1)
+
+    def test_a_pendencia_tem_acao_de_verdade(self):
+        """Invariante 1: sem acao nao e pendencia, e estatistica."""
+        p = projeto(pesado={"deps_inseguras": None, "auditoria_falhou": True})
+        acao = so(regras.avaliar([p]), "auditoria_nao_rodou")[0]["acao"]
+        self.assertIn(acao["tipo"], regras.ACOES)
+        self.assertTrue(acao.get("texto") or acao.get("url"))
+
+    def test_o_texto_diz_que_nao_sabemos_nao_que_esta_limpo(self):
+        p = projeto(pesado={"deps_inseguras": None, "auditoria_falhou": True})
+        t = so(regras.avaliar([p]), "auditoria_nao_rodou")[0]["texto"].lower()
+        self.assertIn("exemplo", t)
+        self.assertNotIn("limpo", t)
+        self.assertNotIn("seguro", t)
+
+    def test_id_estavel_para_poder_silenciar(self):
+        """Invariante 3."""
+        p = projeto(pesado={"deps_inseguras": None, "auditoria_falhou": True})
+        self.assertEqual(so(regras.avaliar([p]), "auditoria_nao_rodou")[0]["id"],
+                         "auditoria_nao_rodou:exemplo")
+
+    def test_nao_se_dobra_com_a_regra_de_dependencia_insegura(self):
+        """Falhou = nao ha lista. As duas juntas seriam contradicao na tela."""
+        p = projeto(pesado={"deps_inseguras": None, "auditoria_falhou": True})
+        pend = regras.avaliar([p])
+        self.assertEqual(so(pend, "dependencia_insegura"), [])
+        self.assertEqual(len(so(pend, "auditoria_nao_rodou")), 1)
+
+    def test_falha_nao_ofusca_uma_pendencia_alta_do_mesmo_projeto(self):
+        p = projeto(pesado={"deps_inseguras": None, "auditoria_falhou": True},
+                    github={"ci": {"conclusao": "failure", "url": "u", "quando": "hoje"},
+                            "prs": [], "vulns": {"total": 0, "url": "v"}})
+        pend = regras.avaliar([p])
+        self.assertEqual(pend[0]["gravidade"], "alta")
+        self.assertTrue(so(pend, "auditoria_nao_rodou"))
+
+
 class TrabalhoNaoPublicado(unittest.TestCase):
     """Regra 16 — o que esta na main do GitHub e mais novo que o que esta no ar."""
 

@@ -145,7 +145,12 @@ def main():
             deps = audita_npm(repo)
             # None vai para o banco COMO None de proposito: "nao auditei" tem de
             # sobreviver ate a tela. Gravar [] aqui seria inventar uma medicao.
-            banco.gravar(repo.name, "pesado", {"deps_inseguras": deps}, con)
+            #
+            # `auditoria_falhou` e o que separa "tentei e nao consegui" de "esta
+            # camada nunca rodou". Sem essa marca a regra 17 nao acorda, e o
+            # invariante 2 do motor (ausencia nao e falha) continua de pe.
+            banco.gravar(repo.name, "pesado",
+                         {"deps_inseguras": deps, "auditoria_falhou": deps is None}, con)
             if deps is None:
                 cegos.append(repo.name)
             else:
