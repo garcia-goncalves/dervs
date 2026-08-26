@@ -28,26 +28,31 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `index.html` | A tela. Recarrega sozinha a cada 15 s. |
 | `servir.py` | Serve a página, o `/api/dados`, o `/api/acao` e o `/api/execucao`. Agenda as três coletas. |
 | `banco.py` | O SQLite (`hub.db`): uma linha por (projeto, camada), com carimbo de tempo. |
-| `regras.py` | O motor das 16 pendências, mais o agrupamento das repetidas. Puro: entra dicionário, sai lista. |
+| `regras.py` | O motor das 17 pendências, mais o agrupamento das repetidas. Puro: entra dicionário, sai lista. |
 | `memoria.py` | A memória do tempo: idade de cada pendência, tendência da semana e o briefing. |
-| `test_memoria.py` | 38 testes da memória. `python test_memoria.py`. |
+| `test_memoria.py` | 46 testes da memória. `python test_memoria.py`. |
 | `execucao.py` | O botão **Resolver**: dispara uma sessão do Claude Code numa cópia isolada e abre o pedido de alteração. Seção própria abaixo. |
-| `test_execucao.py` | 85 testes das decisões do Resolver e das barreiras. `python test_execucao.py`. |
+| `test_execucao.py` | 90 testes das decisões do Resolver e das barreiras. `python test_execucao.py`. |
 | `barreira.py` | O porteiro do `Bash` da sessão desacompanhada: roda como hook do `claude` e barra o comando **antes** dele rodar. |
-| `test_barreira.py` | 43 testes da barreira — cada um é um ataque concreto ou um comando honesto. `python test_barreira.py`. |
-| `test_regras.py` | 40 testes do motor. `python test_regras.py`. |
-| `test_servir.py` | 43 testes do proxy do grafo e da superfície do Resolver. `python test_servir.py`. |
+| `test_barreira.py` | 36 testes da barreira — cada um é um ataque concreto ou um comando honesto. `python test_barreira.py`. |
+| `test_regras.py` | 67 testes do motor. `python test_regras.py`. |
+| `test_servir.py` | 46 testes do proxy do grafo e da superfície do Resolver. `python test_servir.py`. |
 | `coletar.py` | Camada **local**: git, Docker, portas, grafo, memória, variáveis. |
 | `coletar_github.py` | Camada **github**: CI, PRs, alertas, o site no ar e o último deploy. Uma consulta GraphQL em lote. |
-| `test_coletar.py` | 74 testes dos pedaços dos coletores que já erraram. `python test_coletar.py`. |
+| `test_coletar.py` | 94 testes dos pedaços dos coletores que já erraram. `python test_coletar.py`. |
 | `coletar_pesado.py` | Camada **pesado**: cota do Actions e `npm audit`. |
+| `test_coletar_pesado.py` | 12 testes da auditoria de dependência. `python test_coletar_pesado.py`. |
+| `fila.py` | A fila desacompanhada: escolhe a pendência, escolhe o trilho e segura o teto de gasto do dia. |
+| `test_fila.py` | 92 testes da fila. `python test_fila.py`. |
 | `casos.json` | Camada **curada**, escrita à mão. Nenhum coletor toca aqui. |
 
 `hub.db` é descartável e não é versionado: apagar só custa uma coleta — e, desde
 25/08/2026, também zera a memória do tempo, que se reconstrói sozinha a partir da
 coleta seguinte.
 
-**273 testes no total**, todos em `unittest` da biblioteca padrão.
+**483 testes no total**, todos em `unittest` da biblioteca padrão, e todos os oito
+arquivos rodam na CI. Passam em Windows e em Linux — verificado num contêiner
+`python:3.12-slim`, porque o núcleo vai rodar em Linux na VPS.
 
 ## As três cadências
 
