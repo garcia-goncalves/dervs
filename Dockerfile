@@ -24,8 +24,10 @@ COPY barreira.py      /app/
 COPY coletar.py       /app/
 COPY coletar_github.py /app/
 COPY coletar_pesado.py /app/
-COPY execucao.py      /app/
-COPY fila.py          /app/
+# `execucao.py` e `fila.py` NAO entram. Eles ficam no repositorio de proposito
+# (182 testes e a trava de diff de fila.py:229), mas desde a etapa 7 nenhuma
+# rota aponta para eles — e a doutrina deste arquivo e que a barreira e a
+# imagem, nao a ausencia de rota. Se voltarem a ser usados, voltam por aqui.
 COPY memoria.py       /app/
 COPY regras.py        /app/
 COPY servir.py        /app/
