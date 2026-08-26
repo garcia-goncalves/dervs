@@ -229,6 +229,37 @@ repositório.
 
 ## duvidas_para_o_dono
 
+> **Atualização de 26/08/2026, depois desta fase.** As **duas dúvidas bloqueantes foram
+> respondidas** em sessões posteriores à escrita desta spec, e nenhuma delas precisa mais ir
+> ao dono. O texto original fica abaixo, intacto, porque as recomendações continuam válidas
+> e porque quem ler daqui a um mês precisa ver o que se sabia na hora.
+>
+> - **Dúvida 1 — o que roda na VPS: RESPONDIDA.** Medido de dentro do servidor pelo workflow
+>   `diagnostico.yml`. `57.129.81.137`, Ubuntu 24.04, 8 vCPU / 24 GB / 193 GB, **26 containers
+>   servindo 8 sistemas** — a VPS é a infraestrutura inteira do dono, não terreno limpo.
+>   Padrão a copiar: container publicando em porta alta de `127.0.0.1` + nginx do host fazendo
+>   proxy reverso, um arquivo por site em `/etc/nginx/sites-enabled/`, código em `/opt/<nome>/`.
+>   Certbot instalado, `certbot.timer` ativo. `dervs.com.br` já aponta para o IP e já serve
+>   HTTPS válido. O molde é o `nukleoa.com.br`, único com domínio próprio.
+> - **Dúvida 2 — os 452 testes em Linux: RESPONDIDA, e o risco estava errado.** A suíte
+>   inteira passou em `python:3.12-slim`, duas corridas, sem nenhum `skipIf` no repositório;
+>   o `barreira.py`, apontado como o mais provável de quebrar, passou inteiro. **O perigo era
+>   o oposto:** `portas_escutando()`, que nenhum teste exercitava, só sabia perguntar ao
+>   PowerShell e devolvia lista vazia calada fora do Windows — na VPS, toda porta de todo
+>   projeto apareceria "fora do ar", inclusive as que respondiam. Corrigido em `7b4221c`.
+>   Outras duas falhas silenciosas da mesma família foram achadas e corrigidas (`3f5aa40`,
+>   `c50fe1d`), e a CI subiu de 5 para 8 arquivos de teste.
+>
+> **A lição que substitui a dúvida, e que vale para a fase 4:** a pergunta útil ao portar para
+> Linux não é "os testes passam?" — é **"quais funções chamam o sistema operacional, e o que
+> elas devolvem quando falham?"**. Suíte verde mede o que a suíte cobre, e as funções que
+> tocam o sistema são justamente as sem teste.
+>
+> **Continuam abertas as dúvidas 3 e 4** (mecanismo de login forte; onde moram hoje os
+> segredos do servidor).
+
+### Texto original desta fase, preservado
+
 Quatro, cada uma com recomendação marcada. As duas primeiras bloqueiam trabalho.
 
 **1. O que roda hoje na VPS da OVH?** BLOQUEIA A PUBLICAÇÃO. Não há infraestrutura
