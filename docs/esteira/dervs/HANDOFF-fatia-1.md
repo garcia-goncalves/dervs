@@ -1,8 +1,7 @@
-# Handoff — DERVS Fatia 1, etapas 1 a 7 concluídas
+# Handoff — DERVS Fatia 1, etapas 1 a 8 concluídas
 
 Gravado em 26/08/2026, atualizado no fim do dia.
-Estado: `main@81424f6`, árvore limpa, tudo no GitHub, CI verde.
-**Etapas 1 a 7 concluídas.** A próxima é a 8.
+**Etapas 1 a 8 concluídas.** A próxima é a 9.
 
 ## ATENÇÃO — A PASTA MUDOU
 
@@ -12,7 +11,8 @@ O trabalho agora acontece em **`C:\Users\Desktop\source\repos\dervs`**
 - Repositório: `github.com/garcia-goncalves/dervs` — privado, `main` protegida.
 - A memória do Claude foi migrada para o slug `C--Users-Desktop-source-repos-dervs`.
 - `source\painel-projetos` ficou **congelado de propósito** — ponto de retorno.
-  O processo em `localhost:4777` ainda roda de lá.
+  O processo em `localhost:4777` roda **desta** pasta desde 26/08 — foi
+  reiniciado daqui na etapa 8.
 
 ## FEITO (etapas 1 a 6, todas com prova rodada)
 
@@ -88,12 +88,68 @@ deixou de embarcar `execucao.py` e `fila.py`.
 `execucao.py` e `fila.py` continuam no repositório, 182 testes verdes, **sem
 rota apontando** — de propósito, pela trava de diff de `fila.py:229`.
 
-## A RETOMAR — ETAPA 8
+## ETAPA 8 — CONCLUÍDA (26/08/2026, branch `etapa-8-banco`)
 
-Plano: `docs/superpowers/plans/dervs-fatia-1.md`, seção "## 8" — banco
-multiusuário, pareamento e arquivamento permanente. Depois: 9 (login + 2FA,
-disputa `servir.py` com a 7, já mesclada) · 10 · 11 · 12 · 13→14→15 (as telas)
-· 16 (publicação) · 17.
+`banco.py` ganhou seis tabelas — `usuario`, `sessao`, `maquina`, `pareamento`,
+`projeto_conectado`, `pendencia_arquivada` — e o `hub.db` passou de 6 para 12.
+`test_banco.py` é novo: 48 testes, na CI.
+
+**Nenhuma rota encosta nelas ainda, de propósito.** A 8 constrói o esquema, a 9
+constrói o login. O esquema vem antes porque errar a forma de uma tabela depois
+custa migrar dado e rotacionar segredo; errar a ordem só custa esperar.
+
+**As três armadilhas do plano, fechadas:**
+
+1. **Nenhum segredo em claro, desde o primeiro dia.** Senha vira hash de
+   `scrypt` com sal próprio; cookie de sessão e token do agente viram hash de
+   SHA-256; código de pareamento vira HMAC com a chave do cofre; o segredo do
+   segundo fator entra cifrado. A cifra é de biblioteca padrão (HMAC-SHA256 em
+   modo contador + selo HMAC, encrypt-then-MAC) porque o projeto não tem
+   dependência externa e a CI cobra isso. Texto adulterado é **recusado**.
+   A chave vem de `DERVS_COFRE` ou de um `cofre.chave` local, no `.gitignore`.
+2. **Arquivar exige motivo**, e desarquivar carimba a volta em vez de apagar a
+   linha.
+3. **`pendencia_estado` ganhou dono.** Era IDOR por desenho de esquema: a chave
+   era só o `id`, então o "x" de um usuário escondia o alerta do outro. Virou
+   `(id, usuario_id)`. O SQLite não troca chave primária, então `banco.migrar()`
+   reconstrói a tabela; o que já estava lá vira do dono local (`usuario_id = 0`).
+
+**O plano errava a prova.** Ele manda rodar `banco.criar()` e `banco.CAMINHO`;
+nenhum dos dois existia — o esquema era aplicado dentro de `conectar()` e o
+caminho se chama `BANCO`. `criar()` passou a existir; a prova usa `BANCO`.
+
+**Provado:** 48 testes novos OK, **502 no total**, os dez arquivos verdes · as 12
+tabelas listadas · o `hub.db` real do dia 26/08 migrado sem perder linha · o
+servidor reiniciado e o **"x" da tela clicado de verdade**, gravando com
+`usuario_id = 0`.
+
+**Dois defeitos que só apareceram porque o teste veio antes:**
+`pareamento.maquina_id` referenciava `maquina(id)` sem `ON DELETE`, e apagar uma
+máquina pareada era recusado pelo banco (virou `SET NULL`); e a chave
+estrangeira precisava de `PRAGMA foreign_keys=ON` **por conexão**, sem o qual
+todo `ON DELETE CASCADE` do esquema era só comentário bonito.
+
+**A CI ganhou um vigia da própria lista.** Os testes são listados à mão, um
+passo cada, para o nome na tela do GitHub dizer o que quebrou. O preço disso é
+esquecer o arquivo novo — e arquivo esquecido não fica vermelho, fica invisível.
+Agora a CI reprova se algum `test_*.py` ficar de fora.
+
+**Para a etapa 9, herdado daqui:** `usuario.totp_confirmado_em` nasce `NULL` e
+`sessao.segundo_fator_em` nasce `NULL`. É o que faz a negativa ser o padrão —
+a 9 só precisa recusar quem está assim, não inventar o estado.
+
+## A RETOMAR — ETAPA 9
+
+Plano: `docs/superpowers/plans/dervs-fatia-1.md`, seção "## 9" — autenticação:
+sessão, senha, segundo fator **obrigatório** e cadastro fechado (`POST
+/api/registro` devolve 403). Depois: 10 · 11 · 12 · 13→14→15 (as telas) · 16
+(publicação) · 17.
+
+A 9 disputa `servir.py` com a 7, que já está mesclada — o caminho está livre.
+As tabelas de que ela precisa já existem (etapa 8) e já nascem negando: quem não
+tem `totp_confirmado_em` e quem não tem `segundo_fator_em` na sessão está fora
+por padrão. O `TOKEN` de boot de `servir.py:111-113` sai de cena; ele é
+anti-CSRF e **não pode** virar credencial de usuário.
 
 ## PARA A ETAPA 16 — o que a revisão de segurança deixou anotado
 
@@ -109,10 +165,11 @@ Nada disso é defeito do que já foi feito; é o roteiro de expor o painel.
    403. O risco não é o 403, é a pressa que faz alguém relaxar para "aceita
    qualquer coisa". Allowlist explícita do domínio, e `X-Forwarded-Host` fora
    da decisão.
-3. `pendencia_estado` **não tem coluna de dono** — com múltiplos usuários, é
-   IDOR por desenho de esquema. Conserta-se na migration da etapa 8, não na
-   rota. E o `TOKEN` é um só por processo, injetado em toda página: serve de
-   anti-CSRF e **não pode** virar credencial de usuário.
+3. ~~`pendencia_estado` **não tem coluna de dono**~~ — **FEITO na etapa 8.** A
+   chave virou `(id, usuario_id)` e `banco.migrar()` reconstrói o banco antigo.
+   Continua valendo o resto do item: o `TOKEN` é um só por processo, injetado
+   em toda página; serve de anti-CSRF e **não pode** virar credencial de
+   usuário. Quem substitui o `TOKEN` é a etapa 9.
 4. A página não manda **nenhum** cabeçalho de segurança (sem CSP, sem
    `frame-ancestors`, sem `nosniff`). O token vive dentro do HTML.
 5. Nada tem limite de taxa, e `/api/dados` recalcula as regras a cada chamada.
@@ -151,7 +208,8 @@ Nada disso é defeito do que já foi feito; é o roteiro de expor o painel.
 
 ## NÚMEROS REAIS (os documentos da esteira erravam)
 
-- **500** funções de teste em 8 arquivos `test_*.py` **na raiz** (não em `tests/`).
+- **502** funções de teste em 10 arquivos `test_*.py` **na raiz** (não em `tests/`),
+  medidas em 26/08 depois da etapa 8. Eram 500 em 8 arquivos antes dela.
   A CI reporta 483 pelo runner do unittest. Não são "452".
 - **18** rótulos em `regras.ROTULO_REGRA`. Não são "16".
 - `projects.json` não existe. `casos.json` existe.
