@@ -210,7 +210,8 @@ def _anotar_a_vida(camada: str) -> None:
         try:
             e = banco.montar_estado(con)
             pend = regras.avaliar(e["projetos"], quota=e["quota"],
-                                  silenciadas=banco.silenciadas(con))
+                                  silenciadas=banco.silenciadas(con),
+                                  arquivadas=banco.arquivadas(con=con))
             # Coleta que terminou bem mas nao enxergou projeto nenhum NAO e "o
             # dono resolveu tudo": e a pasta de repositorios indisponivel por um
             # instante. Sem esta guarda, o painel fecharia as 27 pendencias de
@@ -378,7 +379,9 @@ class Hub(SimpleHTTPRequestHandler):
             e = banco.montar_estado(con)
             pend = regras.avaliar(e["projetos"], quota=e["quota"],
                                   silenciadas=banco.silenciadas(
-                                      con, usuario_id=usuario_id))
+                                      con, usuario_id=usuario_id),
+                                  arquivadas=banco.arquivadas(
+                                      usuario_id=usuario_id, con=con))
             # So LEITURA aqui: quem escreve a vida e o laco de coleta. Ver
             # _anotar_a_vida() para o motivo.
             agora_iso = banco.agora()

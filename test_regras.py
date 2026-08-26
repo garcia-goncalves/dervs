@@ -10,6 +10,7 @@ veio antes do motor.
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timedelta, timezone
 
 import regras
 
@@ -571,9 +572,6 @@ class OMaisPerigosoVemPrimeiro(unittest.TestCase):
     def test_sem_severidade_medida_o_risco_e_zero_e_nao_um_chute(self):
         self.assertEqual(regras.risco_alerta({"total": 93}), 0)
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
 
 class GitQueNaoRespondeu(unittest.TestCase):
     """Nao ter medido o git nao pode virar alarme sobre o que nao se mediu.
@@ -601,3 +599,156 @@ class GitQueNaoRespondeu(unittest.TestCase):
 
     def test_projeto_medido_nao_recebe_esse_aviso(self):
         self.assertEqual(so(regras.avaliar([projeto()], quota=None), "git_nao_medido"), [])
+
+
+# ------------------------------------------------------------------ o selo
+def _iso(segundos_atras=0):
+    return (datetime.now(timezone.utc)
+            - timedelta(seconds=segundos_atras)).isoformat(timespec="seconds")
+
+
+def medido(local=0, github=None, pesado=None):
+    """Carimbos de camada, em segundos ATRAS. `None` = camada nunca coletada."""
+    c = {"local": _iso(local)}
+    if github is not None:
+        c["github"] = _iso(github)
+    if pesado is not None:
+        c["pesado"] = _iso(pesado)
+    return c
+
+
+class OSeloNaoInventaSaude(unittest.TestCase):
+    """O quarto estado e o motivo desta etapa existir.
+
+    Ate aqui o painel so sabia dizer verde ou vermelho, e "nao ha pendencia
+    aberta" virava verde. Projeto que ninguem mediu e indistinguivel de
+    projeto saudavel — e essa e a mentira por omissao ja catalogada.
+    """
+
+    def test_projeto_vazio_e_sem_dados(self):
+        self.assertEqual(regras.selo_do_projeto({}), "sem_dados")
+
+    def test_sem_nenhum_carimbo_e_sem_dados_mesmo_com_tudo_passando(self):
+        # O retrato esta impecavel. Falta a unica coisa que importa: a hora.
+        self.assertEqual(regras.selo_do_projeto(projeto()), "sem_dados")
+
+    def test_tudo_medido_e_passando_e_saudavel(self):
+        p = projeto(medido_em=medido(github=60, pesado=3600))
+        self.assertEqual(regras.selo_do_projeto(p), "saudavel")
+
+    def test_pendencia_alta_quebra_o_selo(self):
+        p = projeto(medido_em=medido(github=60),
+                    github={"ci": {"conclusao": "failure", "url": "u", "quando": "hoje"},
+                            "prs": [], "vulns": {"total": 0, "url": "v"}})
+        self.assertEqual(regras.selo_do_projeto(p), "quebrado")
+
+    def test_pendencia_media_pede_atencao_e_nao_quebra(self):
+        p = projeto(medido_em=medido(github=60),
+                    env_drift={"faltando": ["DATABASE_URL"], "sobrando": []})
+        self.assertEqual(regras.selo_do_projeto(p), "atencao")
+
+    # ------------------------------------------------- medida velha nao vale
+    def test_camada_local_velha_apaga_os_criterios_de_maquina(self):
+        """Vinte minutos e uma eternidade para uma camada que mede a cada 60 s.
+
+        O numero continua no banco, e continua ERRADO. Pendencia calculada
+        sobre medida vencida nao pode pintar o selo.
+        """
+        p = projeto(medido_em=medido(local=1200, github=60),
+                    git={"versionado": True, "medido": True, "branch": "main",
+                         "sujos": 3, "sujos_dias": 4, "ahead": 0, "behind": 0,
+                         "dias_parado": 2, "tem_remoto": True,
+                         "remoto_slug": "thi-garcia/exemplo"})
+        # `nao_commitado` e ALTA e sairia como quebrado se a medida valesse.
+        self.assertIn("nao_commitado",
+                      [i["regra"] for i in regras.avaliar([p], quota=None)])
+        self.assertEqual(regras.selo_do_projeto(p), "saudavel")
+
+    def test_camada_do_github_segue_valendo_quando_a_local_vence(self):
+        p = projeto(medido_em=medido(local=1200, github=60),
+                    github={"ci": {"conclusao": "failure", "url": "u", "quando": "hoje"},
+                            "prs": [], "vulns": {"total": 0, "url": "v"}})
+        self.assertEqual(regras.selo_do_projeto(p), "quebrado")
+
+    def test_todas_as_camadas_vencidas_e_sem_dados(self):
+        p = projeto(medido_em=medido(local=1200))
+        self.assertEqual(regras.selo_do_projeto(p), "sem_dados")
+
+    def test_camadas_do_selo_diz_quais_valem(self):
+        p = projeto(medido_em=medido(local=1200, github=60))
+        self.assertEqual(regras.camadas_do_selo(p),
+                         {"local": False, "github": True, "pesado": False})
+
+    # ------------------------------------- as quatro regras que saem do selo
+    def test_as_quatro_regras_sem_acao_util_nao_alteram_o_selo(self):
+        """Elas continuam na lista de pendencias. So nao pintam o selo.
+
+        Sao constatacao ou convencao interna: nenhuma delas quer dizer que o
+        projeto esta doente, e todas as quatro se repetem para sempre.
+        """
+        p = projeto(
+            medido_em=medido(github=60),
+            grafo={"indexado": False},
+            memoria_crlf=["memoria/x.md"],
+            caso_vazio=True,
+            git={"versionado": True, "medido": True, "branch": "main", "sujos": 0,
+                 "sujos_dias": None, "ahead": 0, "behind": 0, "dias_parado": 900,
+                 "tem_remoto": True, "remoto_slug": "thi-garcia/exemplo"})
+        regras_vistas = {i["regra"] for i in regras.avaliar([p], quota=None)}
+        for r in ("grafo_velho", "memoria_crlf", "caso_vazio", "abandonado"):
+            self.assertIn(r, regras_vistas, r)
+        self.assertEqual(regras.selo_do_projeto(p), "saudavel")
+
+    def test_pendencia_arquivada_nao_pinta_o_selo(self):
+        p = projeto(medido_em=medido(github=60),
+                    github={"ci": {"conclusao": "failure", "url": "u", "quando": "hoje"},
+                            "prs": [], "vulns": {"total": 0, "url": "v"}})
+        aberto = regras.avaliar([p], quota=None)
+        self.assertEqual(regras.selo_do_projeto(p, aberto), "quebrado")
+        fechado = regras.avaliar([p], quota=None, arquivadas={"ci_vermelha:exemplo"})
+        self.assertEqual(regras.selo_do_projeto(p, fechado), "saudavel")
+
+
+class ArquivarEParaSempre(unittest.TestCase):
+    """Silenciar esconde por 24 h; arquivar e "isto esta certo assim".
+
+    O defeito que isto corrige: projeto que o dono arquivou de proposito
+    voltava a cutucar todo dia, para sempre.
+    """
+
+    def _com_ci_vermelha(self):
+        return projeto(github={"ci": {"conclusao": "failure", "url": "u",
+                                      "quando": "hoje"},
+                               "prs": [], "vulns": {"total": 0, "url": "v"}})
+
+    def test_arquivada_some_da_lista(self):
+        p = self._com_ci_vermelha()
+        saida = regras.avaliar([p], quota=None, arquivadas={"ci_vermelha:exemplo"})
+        self.assertEqual(so(saida, "ci_vermelha"), [])
+
+    def test_arquivar_uma_nao_arrasta_as_outras(self):
+        p = self._com_ci_vermelha()
+        saida = regras.avaliar([p], quota=None, arquivadas={"ci_vermelha:outro"})
+        self.assertEqual(len(so(saida, "ci_vermelha")), 1)
+
+    def test_arquivada_nao_reaparece_na_coleta_seguinte(self):
+        """Nao ha prazo para expirar: e a diferenca para o silenciar."""
+        p = self._com_ci_vermelha()
+        for _ in range(3):
+            saida = regras.avaliar([p], quota=None,
+                                   arquivadas={"ci_vermelha:exemplo"})
+            self.assertEqual(so(saida, "ci_vermelha"), [])
+
+    def test_o_grupo_nao_conta_o_que_foi_arquivado(self):
+        projetos = [projeto(nome=n, github={"ci": {"conclusao": "failure", "url": "u",
+                                                   "quando": "hoje"},
+                                            "prs": [], "vulns": {"total": 0, "url": "v"}})
+                    for n in ("a", "b", "c", "d")]
+        grupos = regras.agrupar(regras.avaliar(projetos, quota=None,
+                                               arquivadas={"ci_vermelha:d"}))
+        (g,) = [x for x in grupos if x["tipo"] == "grupo"]
+        self.assertEqual(g["n"], 3)
+        self.assertNotIn("d", g["projetos"])
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
