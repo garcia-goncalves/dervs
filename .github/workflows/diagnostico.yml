@@ -1,0 +1,48 @@
+name: Diagnostico do servidor
+
+# So roda quando alguem aperta o botao. Nunca sozinho.
+on:
+  workflow_dispatch:
+
+jobs:
+  olhar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ler o estado da VPS (somente leitura)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            echo "=========== 1. QUEM SOU EU =========="
+            id
+            echo "sudo sem senha?"; sudo -n true 2>/dev/null && echo "SIM" || echo "NAO"
+
+            echo "=========== 2. NGINX: SITES =========="
+            for f in /etc/nginx/sites-enabled/*; do
+              echo "--- $f ---"
+              grep -hE "server_name|listen |root |proxy_pass|ssl_certificate" "$f" | sed 's/^[[:space:]]*//'
+            done
+
+            echo "=========== 3. QUEM E O DEFAULT =========="
+            grep -rl "default_server" /etc/nginx/sites-enabled/ /etc/nginx/nginx.conf 2>/dev/null || echo "(nenhum default_server explicito)"
+
+            echo "=========== 4. CERTIFICADOS HTTPS =========="
+            ls -1 /etc/letsencrypt/live/ 2>/dev/null || echo "(sem /etc/letsencrypt)"
+            ls -d /root/.acme.sh /home/*/.acme.sh 2>/dev/null || echo "(sem acme.sh no home)"
+            echo "-- renovacao agendada? --"
+            systemctl list-timers --all 2>/dev/null | grep -iE "cert|acme|renew" || echo "(nenhum timer de certificado)"
+            crontab -l 2>/dev/null | grep -iE "cert|acme|renew" || echo "(nada no crontab do usuario)"
+
+            echo "=========== 5. ONDE MORAM OS PROJETOS =========="
+            ls -1 /opt /srv /var/www 2>/dev/null
+            echo "-- home --"; ls -1 ~ 2>/dev/null
+
+            echo "=========== 6. CONTAINERS E PORTAS =========="
+            docker ps --format '{{.Names}}|{{.Ports}}' 2>/dev/null || echo "(tiba nao pode docker)"
+
+            echo "=========== 7. ESPACO E SAUDE =========="
+            df -h / | tail -1
+            uptime
