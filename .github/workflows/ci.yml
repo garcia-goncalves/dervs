@@ -3,11 +3,17 @@ name: CI
 # Escalonado de proposito: no push roda so o barato. A cota de minutos desta
 # conta ja estourou uma vez (2.313 min em 30 dias num repositorio so), e a
 # cobranca e por tarefa arredondada — job paralelo triplica a conta.
+#
+# `vivo/` e a subarvore do dervs-hub: Node, preservado so para leitura humana.
+# Nao e compilado nem testado nesta fatia, e mudanca la dentro nao gasta minuto
+# de Actions. O que a CI faz com `vivo/` e uma coisa so: conferir que a barreira
+# que o mantem fora da imagem continua de pe.
 on:
   push:
     branches: [main]
-    paths-ignore: ['**.md']
+    paths-ignore: ['**.md', 'vivo/**']
   pull_request:
+    paths-ignore: ['vivo/**']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -29,6 +35,30 @@ jobs:
             echo "Este projeto e de biblioteca padrao. Apareceu arquivo de dependencia."
             exit 1
           fi
+
+      # A barreira mais importante do repositorio. O codigo em vivo/ abre um
+      # terminal (PTY) sem autenticacao nenhuma; publicado, e execucao remota de
+      # comando aberta para a internet. Duas trancas independentes o seguram, e
+      # este passo existe para que remover qualquer uma delas fique VERMELHO
+      # antes de virar deploy — nao depois.
+      - name: A barreira do vivo/ continua de pe
+        run: |
+          erro=0
+          if ! grep -qx 'vivo/' .dockerignore; then
+            echo "FALHOU: .dockerignore perdeu a linha 'vivo/'."
+            erro=1
+          fi
+          if grep -qE '^\s*COPY\s+\.\s+' Dockerfile; then
+            echo "FALHOU: o Dockerfile voltou a usar 'COPY . .'."
+            echo "A copia tem de ser explicita, arquivo por arquivo."
+            erro=1
+          fi
+          if grep -rn --include='*.py' --exclude-dir=vivo -E '(^|[^.[:alnum:]_])(import|from)[[:space:]]+vivo\b' . ; then
+            echo "FALHOU: codigo da raiz importando de vivo/."
+            erro=1
+          fi
+          if [ "$erro" = "0" ]; then echo "As duas trancas de pe, e ninguem importa vivo/."; fi
+          exit $erro
 
       - name: Compila
         run: python -m py_compile banco.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py
