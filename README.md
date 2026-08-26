@@ -27,7 +27,8 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 |---|---|
 | `index.html` | A tela. Recarrega sozinha a cada 15 s. |
 | `servir.py` | Serve a página e o `/api/dados`. Agenda as três coletas. **Não executa comando** — ver a seção abaixo. |
-| `banco.py` | O SQLite (`hub.db`): uma linha por (projeto, camada), com carimbo de tempo. |
+| `banco.py` | O SQLite (`hub.db`): 12 tabelas — as 6 da medição, mais as 6 de quem usa o painel (etapa 8). Também é onde mora o cofre que cifra segredo. |
+| `test_banco.py` | 65 testes das tabelas novas e do cofre. `python test_banco.py`. |
 | `regras.py` | O motor das 18 pendências, mais o agrupamento das repetidas. Puro: entra dicionário, sai lista. |
 | `memoria.py` | A memória do tempo: idade de cada pendência, tendência da semana e o briefing. |
 | `test_memoria.py` | 46 testes da memória. `python test_memoria.py`. |
@@ -51,8 +52,11 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 25/08/2026, também zera a memória do tempo, que se reconstrói sozinha a partir da
 coleta seguinte.
 
-**471 testes no total**, todos em `unittest` da biblioteca padrão, e todos os nove
-arquivos rodam na CI. Passam em Windows e em Linux — verificado num contêiner
+**519 testes no total**, todos em `unittest` da biblioteca padrão, e todos os dez
+arquivos rodam na CI — que agora **falha se um `test_*.py` novo ficar de fora da
+lista**, porque arquivo esquecido não fica vermelho, fica invisível.
+
+Passam em Windows e em Linux — verificado num contêiner
 `python:3.12-slim`, porque o núcleo vai rodar em Linux na VPS.
 
 ## O servidor deixou de executar comando (etapa 7 do DERVS)
@@ -392,6 +396,91 @@ variáveis só para extrair **nomes** de variável. Quem autentica no GitHub é 
   próprio vigia grava em `~/.claude/state/vigia`: mesma verdade, zero execução.
 - **Nome de repositório remoto** é validado contra o alfabeto do GitHub antes de
   entrar na consulta GraphQL.
+
+## O painel deixa de ser de uma máquina só (etapa 8 do DERVS)
+
+Seis tabelas novas em `banco.py`, e nenhuma rota ainda encosta nelas. É de
+propósito: a etapa 8 constrói o **esquema**, a etapa 9 constrói o **login**. O
+esquema vem antes porque errar a forma de uma tabela depois custa migrar dado e
+rotacionar segredo; errar a ordem só custa esperar.
+
+| Tabela | Para quê |
+|---|---|
+| `usuario` | Conta: e-mail, senha (hash de scrypt) e o segredo do segundo fator, **cifrado**. |
+| `sessao` | Quem está logado agora. Guarda o **hash** do cookie, nunca o cookie. |
+| `maquina` | Cada computador que reporta ao painel. Guarda o **hash** do token do agente. |
+| `pareamento` | O código de seis dígitos que casa uma máquina com uma conta. Guarda o HMAC do código, com prazo e teto de tentativas. |
+| `projeto_conectado` | Que projetos cada máquina enxerga. Ver de novo não duplica. |
+| `pendencia_arquivada` | O sumiço definitivo de um alerta — **com motivo e data obrigatórios**. |
+
+### Três decisões que valem ser ditas
+
+**Nenhum segredo entra em claro, desde o primeiro dia.** Senha vira hash de
+`scrypt` com sal próprio; cookie e token de agente viram hash de SHA-256; código
+de pareamento vira HMAC com a chave do cofre; o segredo do segundo fator entra
+cifrado. A tentação era deixar isso "para a etapa 9, quando o login existir" — e
+o preço dessa espera seria migrar dado e rotacionar segredo depois, com conta de
+gente já dentro. A cifra é de biblioteca padrão (HMAC-SHA256 em modo contador,
+mais um selo HMAC), porque este projeto não tem dependência externa e a CI cobra
+isso. Texto adulterado é **recusado**, nunca devolvido como lixo.
+
+**A chave do cofre não é versionada, e não nasce sozinha em qualquer lugar.**
+`cofre.chave` está no `.gitignore` — versionar a chave é o mesmo que não ter
+chave — e o programa só o cria quando o ambiente é explicitamente local. As três
+variáveis que mandam nisso estão logo abaixo.
+
+**Arquivar exige motivo**, e a regra mora **no banco**, não só no Python:
+`pendencia_arquivada` tem um `CHECK` que recusa motivo em branco, e desarquivar
+carimba a volta em vez de apagar a linha. Invariante de negócio que vive fora do
+banco é uma promessa, não uma regra — hoje há um escritor, daqui a duas etapas
+há três. Alerta que some para sempre
+sem rastro é pior que o "esconder por 24 h" que ele substitui: daqui a três meses
+ninguém consegue responder por que aquilo parou de aparecer.
+
+### A chave do cofre, e por que ela se recusa a nascer sozinha no servidor
+
+Duas variáveis de ambiente mandam nisso:
+
+| Variável | Para quê |
+|---|---|
+| `DERVS_COFRE` | A chave, em texto. **Mínimo de 32 caracteres** — abaixo disso uma frase se quebra fora do ar, a partir de uma cópia do `hub.db`. Gere com `python -c "import secrets;print(secrets.token_urlsafe(32))"`. |
+| `DERVS_AMBIENTE` | `local` autoriza o programa a criar um `cofre.chave` sozinho nesta máquina. Em qualquer outro valor — inclusive vazio — ele **recusa subir** em vez de inventar uma chave. |
+| `DERVS_COFRE_ARQUIVO` | Tira o `cofre.chave` da pasta servida. Importa na etapa 16: um `root /app` no nginx entregaria a chave mestra por HTTP. |
+
+O motivo da recusa: se a variável for esquecida no servidor e o programa
+fabricar outra chave, **todo segredo de segundo fator já guardado vira
+"adulterado" e todo código de pareamento para de casar — sem uma linha de
+aviso**. Falhar na subida é barulhento e reversível; falhar assim é silencioso
+e caro. A chave também é derivada com `scrypt`, não com um SHA-256 solto: SHA-256
+custa nada por palpite, e o selo do próprio texto cifrado confirma o acerto.
+
+### Voltar atrás da etapa 8 exige apagar o `hub.db` — e isso custa
+
+O código anterior a esta etapa **quebra** num banco já migrado: o `silenciar`
+antigo usa `ON CONFLICT(id)`, que não casa mais com a chave. E quebra do pior
+jeito: a leitura continua funcionando, então o painel abre normalmente e só o
+"x" estoura — parece que voltar deu certo.
+
+O `hub.db` é descartável para `medida` e `pendencia_vida`, que a próxima coleta
+refaz. **Não é** para `historico` e `gasto`: são séries no tempo, e valor de
+ontem não se recoleta. Apagar o banco para voltar atrás custa o histórico
+inteiro e a conta de gasto do Actions — justamente o que o painel usa para
+mostrar tendência.
+
+### O `x` de 24 h ganhou dono — e isso era um defeito de segurança
+
+`pendencia_estado` tinha `id` como chave primária e mais nada. Com um usuário
+isso funciona. Com dois, o "x" de um **esconde o alerta do outro**, e não há
+rota que conserte: o defeito está na forma da tabela. A revisão de segurança da
+etapa 7 anotou isso como IDOR por desenho de esquema e mandou consertar aqui, na
+migração — que é o único momento barato.
+
+A chave passou a ser `(id, usuario_id)`. O SQLite não sabe trocar chave primária,
+então `banco.migrar()` reconstrói a tabela; o que já estava lá vira do **dono
+local** (`usuario_id = 0`), que é exatamente o que era — a decisão do dono desta
+máquina. A migração roda em toda conexão, é barata (um `PRAGMA table_info`) e
+inofensiva na segunda vez. Provado num `hub.db` do dia 26/08: a linha sobreviveu,
+e o `x` da tela continua gravando.
 
 ## A memória do tempo — o painel passa a lembrar de ontem
 

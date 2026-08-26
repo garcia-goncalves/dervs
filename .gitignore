@@ -7,3 +7,7 @@ __pycache__/
 # saida de curl usada para inspecionar a API a mao
 d.json
 dados_tmp.json
+
+# A chave do cofre nasce sozinha nesta maquina. Versionar a chave e o mesmo
+# que nao ter chave: quem clona o repositorio decifra o segredo do 2FA.
+cofre.chave

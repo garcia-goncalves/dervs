@@ -16,7 +16,12 @@ concorrencia e o historico, nao o esquema.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
+import os
+import secrets
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +32,14 @@ BANCO = AQUI / "hub.db"
 INFRA = "_infra"          # projeto sintetico: containers e portas da maquina
 QUOTA = "_quota"          # projeto sintetico: cota de minutos do Actions, da CONTA
 CAMADAS = ("local", "github", "pesado")
+
+# Dono das linhas que nasceram antes de existir conta. Nao e um usuario de
+# verdade — por isso `usuario_id` das tabelas de decisao NAO tem chave
+# estrangeira para `usuario`: o zero precisa continuar valendo.
+DONO_LOCAL = 0
+
+# Seis digitos sao um milhao de possibilidades. O teto e o que impede chutar.
+MAX_TENTATIVAS_PAREAMENTO = 5
 
 ESQUEMA = """
 CREATE TABLE IF NOT EXISTS medida (
@@ -46,10 +59,27 @@ CREATE INDEX IF NOT EXISTS ix_historico ON historico (chave, medido_em);
 
 -- Silenciar uma pendencia e decisao do dono, nao do coletor: por isso vive no
 -- banco e sobrevive a recoleta.
+--
+-- O dono da linha entrou na etapa 8. Antes a chave era so o `id`: com dois
+-- usuarios, o "x" de um escondia o alerta do outro, e isso e IDOR por desenho
+-- de esquema — nao ha rota que conserte. Banco velho e reconstruido por
+-- `migrar()`, e o que estava la vira do DONO_LOCAL.
+--
+-- A ordem da chave e (usuario_id, id), nao o contrario: toda consulta comeca
+-- por "as deste usuario". O SQLite nao troca chave primaria, entao inverter
+-- depois custaria uma segunda reconstrucao de tabela — e reconstrucao e a
+-- operacao mais arriscada que existe aqui.
+--
+-- `usuario_id` NAO tem chave estrangeira: o DONO_LOCAL = 0 nao e um usuario de
+-- verdade e precisa continuar valendo. O preco disso e que apagar uma conta NAO
+-- limpa esta tabela: quem for atender "apague meus dados" tem de lembrar dela e
+-- da `pendencia_arquivada` na mao.
 CREATE TABLE IF NOT EXISTS pendencia_estado (
-    id             TEXT PRIMARY KEY,
+    id             TEXT NOT NULL,
+    usuario_id     INTEGER NOT NULL DEFAULT 0,
     silenciada_ate TEXT,
-    anotado_em     TEXT NOT NULL
+    anotado_em     TEXT NOT NULL,
+    PRIMARY KEY (usuario_id, id)
 );
 
 -- A vida de cada pendencia: quando nasceu, quando foi vista pela ultima vez e
@@ -106,6 +136,106 @@ CREATE TABLE IF NOT EXISTS gasto (
     custo_usd    REAL NOT NULL DEFAULT 0.0
 );
 CREATE INDEX IF NOT EXISTS ix_gasto_dia ON gasto (quando);
+
+-- ---------------------------------------------------------------------------
+-- Etapa 8: as seis tabelas que tiram o HUB de uma maquina so.
+--
+-- Regra que vale para todas: SEGREDO NAO ENTRA EM CLARO. Senha vira hash de
+-- scrypt, cookie e token de agente viram hash de SHA-256, codigo de pareamento
+-- vira HMAC com a chave do cofre, e o segredo do segundo fator entra cifrado.
+-- Deixar isso "para a etapa 9" custaria migrar dado e rotacionar segredo.
+-- ---------------------------------------------------------------------------
+
+-- O `CHECK (id <> 0)` nao e paranoia: o SQLite aceita id explicito mesmo com
+-- AUTOINCREMENT, e uma conta de id 0 herdaria todo silenciamento e todo
+-- arquivamento do DONO_LOCAL. Grátis agora, reconstrucao de tabela depois.
+CREATE TABLE IF NOT EXISTS usuario (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id <> 0),
+    email              TEXT NOT NULL UNIQUE CHECK (length(trim(email)) > 0),
+    nome               TEXT NOT NULL DEFAULT '',
+    senha_hash         TEXT NOT NULL,
+    totp_segredo       TEXT,                   -- CIFRADO. Nunca em claro.
+    -- NULL = segundo fator nao configurado. A etapa 9 nega toda rota de dado a
+    -- quem esta assim; comecar em NULL e o que faz a negativa ser o padrao.
+    totp_confirmado_em TEXT,
+    criado_em          TEXT NOT NULL,
+    desativado_em      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sessao (
+    id               TEXT PRIMARY KEY,   -- hash do cookie, nunca o cookie
+    usuario_id       INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    criado_em        TEXT NOT NULL,
+    -- O formato e cobrado no banco porque a comparacao e por TEXTO. Misturar
+    -- "…08:00Z" com "…08:00+00:00" inverte o resultado: o mesmo instante, e o
+    -- sufixo Z sempre "vence" — uma sessao gravada assim valeria alem do prazo.
+    -- Use `banco.prazo()` para produzir este valor.
+    expira_em        TEXT NOT NULL
+                     CHECK (expira_em LIKE '____-__-__T__:__:__+00:00'),
+    -- Senha conferida e segundo fator conferido sao dois momentos. Sessao com
+    -- este campo em NULL passou so pela senha.
+    segundo_fator_em TEXT,
+    encerrada_em     TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_sessao_dono ON sessao (usuario_id, expira_em);
+
+CREATE TABLE IF NOT EXISTS maquina (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id  INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    nome        TEXT NOT NULL DEFAULT '',
+    token_hash  TEXT NOT NULL UNIQUE,   -- hash do token do agente
+    criado_em   TEXT NOT NULL,
+    visto_em    TEXT,                   -- ultimo alo do agente; o selo da 10 le daqui
+    revogada_em TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_maquina_dono ON maquina (usuario_id);
+
+CREATE TABLE IF NOT EXISTS pareamento (
+    codigo_hash TEXT PRIMARY KEY,       -- HMAC do codigo de seis digitos
+    usuario_id  INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    criado_em   TEXT NOT NULL,
+    expira_em   TEXT NOT NULL
+                CHECK (expira_em LIKE '____-__-__T__:__:__+00:00'),
+    -- Chute contra ESTE codigo. Nao e o teto de forca bruta da instalacao: esse
+    -- e por origem (IP/sessao) e mora na rota, na etapa 11. Contar aqui o chute
+    -- que nao casou com codigo nenhum deixava um usuario matar o pareamento do
+    -- outro, e isso e negacao de servico entre contas.
+    tentativas  INTEGER NOT NULL DEFAULT 0,
+    usado_em    TEXT,
+    -- SET NULL, nao CASCADE: apagar a maquina nao pode apagar o registro de
+    -- que aquele codigo foi usado. Sem isto, `DELETE FROM maquina` era recusado
+    -- e a conta ficava com maquina que ninguem conseguia remover.
+    maquina_id  INTEGER REFERENCES maquina(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS projeto_conectado (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    maquina_id   INTEGER NOT NULL REFERENCES maquina(id) ON DELETE CASCADE,
+    projeto      TEXT NOT NULL CHECK (length(trim(projeto)) > 0),
+    caminho      TEXT NOT NULL DEFAULT '',
+    visto_em     TEXT NOT NULL,
+    arquivado_em TEXT,
+    UNIQUE (maquina_id, projeto)
+);
+
+-- O irmao definitivo do "esconder por 24 h". MOTIVO E DATA SAO OBRIGATORIOS:
+-- arquivamento permanente sem rastro e pior que o silencio temporario que ele
+-- substitui — ninguem consegue depois responder "por que isso sumiu?".
+--
+-- O CHECK existe porque "exige motivo" nao pode morar so no Python: hoje ha um
+-- escritor, e daqui a duas etapas ha tres. Invariante de negocio que vive fora
+-- do banco e uma promessa, nao uma regra.
+--
+-- Como em `pendencia_estado`, `usuario_id` nao tem chave estrangeira (o zero
+-- precisa valer) — e por isso apagar uma conta nao limpa esta tabela.
+CREATE TABLE IF NOT EXISTS pendencia_arquivada (
+    id              TEXT NOT NULL,
+    usuario_id      INTEGER NOT NULL DEFAULT 0,
+    motivo          TEXT NOT NULL CHECK (length(trim(motivo)) > 0),
+    arquivado_em    TEXT NOT NULL,
+    desarquivado_em TEXT,
+    PRIMARY KEY (usuario_id, id)
+);
 """
 
 
@@ -113,14 +243,271 @@ def agora() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def conectar() -> sqlite3.Connection:
-    con = sqlite3.connect(BANCO, timeout=15)
+def conectar(caminho=None) -> sqlite3.Connection:
+    con = sqlite3.connect(BANCO if caminho is None else caminho, timeout=15)
     con.row_factory = sqlite3.Row
     # WAL: o servidor le enquanto o coletor escreve, sem um travar o outro.
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA busy_timeout=15000")
+    # Sem isto o ON DELETE CASCADE do esquema e so comentario bonito: o SQLite
+    # nasce com chave estrangeira DESLIGADA, e por conexao.
+    con.execute("PRAGMA foreign_keys=ON")
+    # A migracao vem ANTES do esquema, e a ordem nao e estetica. Se viesse
+    # depois, um `CREATE TABLE IF NOT EXISTS` recriaria a `pendencia_estado`
+    # vazia no formato novo; `migrar()` veria a coluna `usuario_id` presente,
+    # devolveria na hora, e o dado antigo ficaria inalcancavel para sempre.
+    migrar(con)
     con.executescript(ESQUEMA)
     return con
+
+
+def criar(caminho=None) -> None:
+    """Cria (ou atualiza) o banco e fecha. Serve de comando de conferencia."""
+    conectar(caminho).close()
+
+
+def migrar(con: sqlite3.Connection) -> None:
+    """Leva um hub.db anterior a etapa 8 para o esquema de hoje.
+
+    Roda em TODA conexao, entao tem de ser barata e inofensiva na segunda vez —
+    a checagem e um `PRAGMA table_info`, que nao toca o disco.
+
+    Uma migracao so, por enquanto: `pendencia_estado` ganhou dono. O SQLite nao
+    sabe trocar chave primaria, entao a tabela e reconstruida; o que ja estava
+    la vira do DONO_LOCAL, que e exatamente o que era — a decisao do dono desta
+    maquina.
+    """
+    forma = list(con.execute("PRAGMA table_info(pendencia_estado)"))
+    if not forma:
+        return                                   # banco novo: o ESQUEMA ja faz certo
+    colunas = {l[1] for l in forma}
+    # A condicao olha a CHAVE, nao a existencia da coluna. Um banco que passou
+    # por uma versao intermediaria desta etapa tem `usuario_id` mas com a chave
+    # na ordem errada — e essa e a hora de arrumar, porque a proxima chance
+    # custaria outra reconstrucao de tabela.
+    chave = [l[1] for l in sorted((l for l in forma if l[5]), key=lambda l: l[5])]
+    if chave == ["usuario_id", "id"]:
+        return
+    tinha_dono = "usuario_id" in colunas
+    # Reconstrucao com FK desligada: e o procedimento que o proprio SQLite
+    # recomenda, e aqui nao ha nada apontando para esta tabela. O pragma e por
+    # conexao e nao vaza para os outros processos.
+    con.execute("PRAGMA foreign_keys=OFF")
+    try:
+        # TUDO OU NADA. `executescript` faria COMMIT implicito e rodaria os
+        # quatro comandos como quatro transacoes soltas: uma queda entre o DROP
+        # e o RENAME apagaria a tabela e deixaria a copia orfa, sem excecao
+        # nenhuma e sem nunca tentar de novo. BEGIN IMMEDIATE tambem pega o
+        # lock de escrita ANTES de decidir, o que resolve a corrida de graca.
+        con.execute("BEGIN IMMEDIATE")
+        con.execute("DROP TABLE IF EXISTS pendencia_estado_nova")
+        con.execute("""CREATE TABLE pendencia_estado_nova (
+                id             TEXT NOT NULL,
+                usuario_id     INTEGER NOT NULL DEFAULT 0,
+                silenciada_ate TEXT,
+                anotado_em     TEXT NOT NULL,
+                PRIMARY KEY (usuario_id, id))""")
+        con.execute("INSERT INTO pendencia_estado_nova"
+                    " (id, usuario_id, silenciada_ate, anotado_em)"
+                    " SELECT id, %s, silenciada_ate, anotado_em FROM pendencia_estado"
+                    % ("usuario_id" if tinha_dono else "0"))
+        con.execute("DROP TABLE pendencia_estado")
+        con.execute("ALTER TABLE pendencia_estado_nova RENAME TO pendencia_estado")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.execute("PRAGMA foreign_keys=ON")
+
+
+# --------------------------------------------------------------------------
+# O cofre: o que transforma segredo em coisa que pode morar numa tabela.
+# --------------------------------------------------------------------------
+
+MIN_COFRE = 32          # caracteres. Abaixo disso da para quebrar offline.
+_CHAVE_EM_MEMORIA = None
+
+
+def _derivar(bruto: bytes) -> bytes:
+    """scrypt, nao SHA-256.
+
+    Um SHA-256 puro custa nada por palpite, e o selo do proprio blob confirma o
+    acerto: uma frase digitada por gente cai em bilhoes de tentativas por
+    segundo, offline, a partir de uma copia do hub.db. O scrypt cobra memoria
+    de quem chuta. O sal e fixo de proposito — ele separa este uso de qualquer
+    outro, e nao ha nada onde guardar um sal por chave.
+    """
+    return hashlib.scrypt(bruto, salt=b"dervs/cofre/v1", n=16384, r=8, p=1, dklen=32)
+
+
+def caminho_do_cofre() -> Path:
+    """Onde mora a chave. `DERVS_COFRE_ARQUIVO` tira ela da pasta servida.
+
+    Na etapa 16 isto importa de verdade: um `root /app` no nginx serviria a
+    chave mestra por HTTP. Hoje `servir.py` so entrega quatro arquivos por lista
+    fechada, entao nao vaza — mas o padrao certo e a chave nascer fora.
+    """
+    fora = os.environ.get("DERVS_COFRE_ARQUIVO")
+    return Path(fora) if fora else AQUI / "cofre.chave"
+
+
+def chave_do_cofre() -> bytes:
+    """32 bytes derivados de `DERVS_COFRE` ou de um arquivo local.
+
+    RECUSA CRIAR A CHAVE SOZINHA fora do ambiente local. Fabricar outra chave
+    porque a variavel foi esquecida no servidor e falhar por cima: todo segredo
+    de segundo fator ja guardado viraria "adulterado", e todo codigo de
+    pareamento pararia de casar, sem uma linha de aviso. Melhor nao subir.
+    """
+    global _CHAVE_EM_MEMORIA
+    if _CHAVE_EM_MEMORIA is not None:
+        return _CHAVE_EM_MEMORIA
+    bruto = (os.environ.get("DERVS_COFRE") or "").strip()
+    if bruto:
+        if len(bruto) < MIN_COFRE:
+            raise ValueError(
+                "DERVS_COFRE tem %d caracteres e precisa de %d. Gere um valor "
+                "aleatorio de verdade:\n"
+                '  python -c "import secrets;print(secrets.token_urlsafe(32))"'
+                % (len(bruto), MIN_COFRE))
+        _CHAVE_EM_MEMORIA = _derivar(bruto.encode("utf-8"))
+        return _CHAVE_EM_MEMORIA
+    arquivo = caminho_do_cofre()
+    if not arquivo.exists():
+        if os.environ.get("DERVS_AMBIENTE") != "local":
+            raise RuntimeError(
+                "nao ha chave de cofre e este nao e o ambiente local, entao eu "
+                "nao vou inventar uma.\n"
+                "  No servidor: defina DERVS_COFRE (>= %d caracteres).\n"
+                "  Nesta maquina: defina DERVS_AMBIENTE=local e eu crio %s."
+                % (MIN_COFRE, arquivo))
+        # O_EXCL, nao `exists()` + `write`: o coletor e o servidor abrem o banco
+        # ao mesmo tempo, e os dois veriam "nao existe". O ultimo a escrever
+        # venceria, e o que o primeiro cifrasse no intervalo era perdido.
+        try:
+            fd = os.open(arquivo, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(secrets.token_bytes(32))
+        except FileExistsError:
+            pass                         # outro processo ganhou; a dele serve
+    _CHAVE_EM_MEMORIA = _derivar(arquivo.read_bytes())
+    return _CHAVE_EM_MEMORIA
+
+
+def _b64(b: bytes) -> str:
+    return base64.b64encode(b).decode("ascii")
+
+
+def _fluxo(chave: bytes, nonce: bytes, quantos: int) -> bytes:
+    """Sequencia pseudoaleatoria por HMAC, do tamanho pedido (modo contador)."""
+    saida = b""
+    contador = 0
+    while len(saida) < quantos:
+        saida += hmac.new(chave, nonce + contador.to_bytes(4, "big"),
+                          hashlib.sha256).digest()
+        contador += 1
+    return saida[:quantos]
+
+
+def cifrar(claro: str, contexto: str = "") -> str:
+    """Devolve 'v1$nonce$cifra$selo'. Sem biblioteca externa, por decisao do projeto.
+
+    Duas chaves derivadas da mesma raiz — uma cifra, outra sela. Cifrar sem
+    selar deixaria o texto adulteravel sem ninguem perceber.
+
+    `contexto` entra no selo e AMARRA o blob ao lugar dele. Sem isso, copiar o
+    `totp_segredo` da linha de um usuario para a de outro decifra normalmente —
+    exige escrita no banco para explorar, mas custa uma linha para fechar.
+    """
+    raiz = chave_do_cofre()
+    k_cifra = hmac.new(raiz, b"cifra", hashlib.sha256).digest()
+    k_selo = hmac.new(raiz, b"selo", hashlib.sha256).digest()
+    nonce = secrets.token_bytes(16)
+    dados = claro.encode("utf-8")
+    cifra = bytes(a ^ b for a, b in zip(dados, _fluxo(k_cifra, nonce, len(dados))))
+    selo = hmac.new(k_selo, nonce + cifra + (contexto or "").encode("utf-8"),
+                    hashlib.sha256).digest()
+    return "v1$%s$%s$%s" % (_b64(nonce), _b64(cifra), _b64(selo))
+
+
+def decifrar(blob: str, contexto: str = "") -> str:
+    """Recusa o que foi adulterado ou movido de lugar. Nunca devolve lixo."""
+    partes = (blob or "").split("$")
+    if len(partes) != 4:
+        raise ValueError("texto cifrado ilegivel: esperava 4 partes, veio %d"
+                         % len(partes))
+    versao, nonce_b, cifra_b, selo_b = partes
+    if versao != "v1":
+        raise ValueError("versao de cifra desconhecida: %r" % versao)
+    try:
+        nonce = base64.b64decode(nonce_b, validate=True)
+        cifra = base64.b64decode(cifra_b, validate=True)
+        selo = base64.b64decode(selo_b, validate=True)
+    except Exception as e:
+        raise ValueError("texto cifrado ilegivel") from e
+    raiz = chave_do_cofre()
+    k_selo = hmac.new(raiz, b"selo", hashlib.sha256).digest()
+    esperado = hmac.new(k_selo, nonce + cifra + (contexto or "").encode("utf-8"),
+                        hashlib.sha256).digest()
+    if not hmac.compare_digest(selo, esperado):
+        raise ValueError("texto cifrado adulterado, movido de lugar, ou chave errada")
+    k_cifra = hmac.new(raiz, b"cifra", hashlib.sha256).digest()
+    return bytes(a ^ b for a, b in
+                 zip(cifra, _fluxo(k_cifra, nonce, len(cifra)))).decode("utf-8")
+
+
+def prazo(segundos: int) -> str:
+    """O UNICO jeito certo de produzir `expira_em`.
+
+    O banco compara prazo por TEXTO. Quem montar a string a mao e escrever "Z"
+    em vez de "+00:00" grava uma sessao que sobrevive ao proprio vencimento —
+    o mesmo instante, e o sufixo Z sempre "vence" na comparacao.
+    """
+    from datetime import timedelta
+    return (datetime.now(timezone.utc) + timedelta(seconds=segundos)
+            ).isoformat(timespec="seconds")
+
+
+def novo_codigo(digitos: int = 6) -> str:
+    """Codigo de pareamento. Aleatorio de verdade, com zero a esquerda preservado."""
+    return str(secrets.randbelow(10 ** digitos)).zfill(digitos)
+
+
+def hash_senha(senha: str) -> str:
+    """scrypt com sal proprio. Sem sal, duas contas com a mesma senha se denunciam."""
+    sal = secrets.token_bytes(16)
+    bruto = hashlib.scrypt(senha.encode("utf-8"), salt=sal, n=16384, r=8, p=1, dklen=32)
+    return "scrypt$16384$8$1$%s$%s" % (_b64(sal), _b64(bruto))
+
+
+def conferir_senha(senha: str, guardado: str) -> bool:
+    """Falso para senha errada E para registro torto. Nunca levanta erro."""
+    try:
+        marca, n, r, p, sal_b, esperado_b = (guardado or "").split("$")
+        if marca != "scrypt":
+            return False
+        bruto = hashlib.scrypt(senha.encode("utf-8"), salt=base64.b64decode(sal_b),
+                               n=int(n), r=int(r), p=int(p), dklen=32)
+        return hmac.compare_digest(bruto, base64.b64decode(esperado_b))
+    except Exception:
+        return False
+
+
+def novo_token() -> str:
+    """Token de sessao ou de agente: aleatorio de verdade, url-seguro."""
+    return secrets.token_urlsafe(32)
+
+
+def hash_token(token: str) -> str:
+    """SHA-256 puro: o token ja tem entropia de sobra, nao precisa de hash lento."""
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def hash_codigo(codigo: str) -> str:
+    """HMAC, nao hash puro: seis digitos sao chutaveis a partir de um banco vazado."""
+    return hmac.new(chave_do_cofre(), (codigo or "").encode("utf-8"),
+                    hashlib.sha256).hexdigest()
 
 
 def gravar(projeto: str, camada: str, dados: dict, con=None) -> None:
@@ -205,29 +592,36 @@ def anotar_historico(chave: str, valor: float, con=None) -> None:
             con.close()
 
 
-def silenciadas(con=None) -> dict:
+def silenciadas(con=None, usuario_id: int = DONO_LOCAL, agora_iso: str = "") -> dict:
+    """O que este usuario mandou esconder e ainda esta no prazo.
+
+    `con` continua sendo o primeiro parametro por compatibilidade: `servir.py`
+    chama `silenciadas(con)` posicionalmente, e mudar a ordem quebraria a
+    unica rota de escrita do painel sem nenhum teste reclamar.
+    """
     fechar = con is None
     con = con or conectar()
     try:
-        agora_iso = agora()
+        corte = agora_iso or agora()
         return {l["id"]: l["silenciada_ate"] for l in
                 con.execute("SELECT id, silenciada_ate FROM pendencia_estado "
-                            "WHERE silenciada_ate IS NOT NULL AND silenciada_ate > ?",
-                            (agora_iso,))}
+                            "WHERE usuario_id = ? AND silenciada_ate IS NOT NULL "
+                            "AND silenciada_ate > ?", (usuario_id, corte))}
     finally:
         if fechar:
             con.close()
 
 
-def silenciar(pid: str, ate_iso: str, con=None) -> None:
+def silenciar(pid: str, ate_iso: str, con=None, usuario_id: int = DONO_LOCAL) -> None:
     fechar = con is None
     con = con or conectar()
     try:
         con.execute(
-            "INSERT INTO pendencia_estado (id, silenciada_ate, anotado_em) VALUES (?,?,?) "
-            "ON CONFLICT(id) DO UPDATE SET silenciada_ate=excluded.silenciada_ate, "
-            "anotado_em=excluded.anotado_em",
-            (pid, ate_iso, agora()))
+            "INSERT INTO pendencia_estado (id, usuario_id, silenciada_ate, anotado_em)"
+            " VALUES (?,?,?,?)"
+            " ON CONFLICT(id, usuario_id) DO UPDATE SET"
+            " silenciada_ate=excluded.silenciada_ate, anotado_em=excluded.anotado_em",
+            (pid, usuario_id, ate_iso, agora()))
         con.commit()
     finally:
         if fechar:
@@ -351,6 +745,360 @@ def gasto_do_dia(dia: str, con=None) -> float:
             " WHERE terminado_em IS NOT NULL AND substr(terminado_em, 1, 10) = ?",
             (dia,)).fetchone()
         return float(linha["total"] or 0.0)
+    finally:
+        if fechar:
+            con.close()
+
+
+# --------------------------------------------------------------------------
+# Etapa 8: conta, sessao, maquina, pareamento, projeto e arquivamento.
+#
+# Sao acessos finos de proposito. A REGRA de quem pode o que e da etapa 9;
+# aqui mora so o que a tabela precisa para nao nascer torta.
+# --------------------------------------------------------------------------
+
+def _normalizar_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def criar_usuario(email: str, senha: str, nome: str = "", con=None) -> int:
+    """Devolve o id. E-mail repetido levanta IntegrityError — nao vira silencio."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        cur = con.execute(
+            "INSERT INTO usuario (email, nome, senha_hash, criado_em) VALUES (?,?,?,?)",
+            (_normalizar_email(email), nome or "", hash_senha(senha), agora()))
+        con.commit()
+        return int(cur.lastrowid)
+    finally:
+        if fechar:
+            con.close()
+
+
+# As colunas que podem sair daqui. NAO inclui `senha_hash` nem `totp_segredo`:
+# um `SELECT *` bastava para a etapa 9 devolver os dois num JSON sem ninguem
+# reparar. Quem precisa da senha pede por `credencial_por_email`, e ai a
+# intencao esta escrita no nome da funcao.
+COLUNAS_USUARIO = ("id", "email", "nome", "totp_confirmado_em",
+                   "criado_em", "desativado_em")
+
+
+def usuario_por_email(email: str, con=None):
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute(
+            "SELECT %s FROM usuario WHERE email = ? AND desativado_em IS NULL"
+            % ", ".join(COLUNAS_USUARIO), (_normalizar_email(email),)).fetchone()
+        return dict(l) if l else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def credencial_por_email(email: str, con=None):
+    """O caminho do login, e so ele. Devolve (id, senha_hash) ou None."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute("SELECT id, senha_hash FROM usuario"
+                        " WHERE email = ? AND desativado_em IS NULL",
+                        (_normalizar_email(email),)).fetchone()
+        return (l["id"], l["senha_hash"]) if l else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def guardar_totp(usuario_id: int, segredo: str, con=None) -> None:
+    """Guarda CIFRADO e deixa o `confirmado_em` em branco: guardar nao e conferir."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("UPDATE usuario SET totp_segredo = ?, totp_confirmado_em = NULL"
+                    " WHERE id = ?",
+                    (cifrar(segredo, contexto="totp:%d" % usuario_id), usuario_id))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def ler_totp(usuario_id: int, con=None):
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute("SELECT totp_segredo FROM usuario WHERE id = ?",
+                        (usuario_id,)).fetchone()
+        return decifrar(l[0], contexto="totp:%d" % usuario_id) if l and l[0] else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def confirmar_totp(usuario_id: int, con=None) -> None:
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("UPDATE usuario SET totp_confirmado_em = ? WHERE id = ?",
+                    (agora(), usuario_id))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def abrir_sessao(usuario_id: int, cookie: str, expira_em: str, con=None) -> None:
+    """Grava o HASH do cookie. Vazar o banco nao pode equivaler a vazar as sessoes."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("INSERT INTO sessao (id, usuario_id, criado_em, expira_em)"
+                    " VALUES (?,?,?,?)",
+                    (hash_token(cookie), usuario_id, agora(), expira_em))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def sessao_valida(cookie: str, agora_iso: str = "", con=None):
+    """Sessao viva DE CONTA VIVA.
+
+    O `JOIN` nao e enfeite: sem ele, desativar uma conta nao derruba quem ja
+    esta dentro — o cookie no navegador continua valendo ate o prazo, que a
+    etapa 9 vai medir em horas. Fechar a conta tem de fechar a porta.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute(
+            "SELECT s.* FROM sessao s JOIN usuario u ON u.id = s.usuario_id"
+            " WHERE s.id = ? AND s.encerrada_em IS NULL AND s.expira_em > ?"
+            " AND u.desativado_em IS NULL",
+            (hash_token(cookie), agora_iso or agora())).fetchone()
+        return dict(l) if l else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def confirmar_segundo_fator(cookie: str, cookie_novo: str = "", con=None) -> str:
+    """Sobe a sessao de "so senha" para "senha + segundo fator".
+
+    TROCA O COOKIE ao subir de nivel, e devolve o novo. Manter o mesmo
+    identificador de antes e depois de autenticar e o que faz fixacao de sessao
+    funcionar: quem plantou o cookie antes do login continua dentro depois dele.
+    Passar `cookie_novo` vazio mantem o cookie — use so em teste.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        if cookie_novo:
+            con.execute("UPDATE sessao SET id = ?, segundo_fator_em = ? WHERE id = ?",
+                        (hash_token(cookie_novo), agora(), hash_token(cookie)))
+        else:
+            con.execute("UPDATE sessao SET segundo_fator_em = ? WHERE id = ?",
+                        (agora(), hash_token(cookie)))
+        con.commit()
+        return cookie_novo or cookie
+    finally:
+        if fechar:
+            con.close()
+
+
+def encerrar_sessao(cookie: str, con=None) -> None:
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("UPDATE sessao SET encerrada_em = ? WHERE id = ?",
+                    (agora(), hash_token(cookie)))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def abrir_pareamento(usuario_id: int, codigo: str, expira_em: str, con=None) -> None:
+    """INSERT puro, NUNCA `INSERT OR REPLACE`.
+
+    Com `REPLACE`, dois usuarios sorteando o mesmo codigo de seis digitos ao
+    mesmo tempo faziam a linha do primeiro ser apagada em silencio — e a maquina
+    dele nascia dentro da conta do segundo, com os projetos e os alertas junto.
+    Colisao agora levanta `IntegrityError`: quem chamou sorteia outro codigo.
+    Barulho onde havia silencio.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("INSERT INTO pareamento"
+                    " (codigo_hash, usuario_id, criado_em, expira_em) VALUES (?,?,?,?)",
+                    (hash_codigo(codigo), usuario_id, agora(), expira_em))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def usar_pareamento(codigo: str, nome_maquina: str = "", agora_iso: str = "", con=None):
+    """Casa uma maquina com a conta e devolve o token do agente — UMA vez so.
+
+    O token e devolvido aqui e em nenhum outro lugar: a tabela guarda so o hash.
+
+    O PROPRIO UPDATE E A GUARDA. Um `SELECT` que decide e um `INSERT` depois
+    correm fora da mesma transacao: dois agentes resgatando o codigo no mesmo
+    instante viam os dois `usado_em IS NULL`, e um codigo de uso unico virava
+    dois acessos permanentes a conta. Aqui quem nao levar `rowcount == 1` perdeu.
+
+    NAO HA CONTADOR GLOBAL DE CHUTE. Um codigo solto nao diz de quem ele seria,
+    entao contar o chute errado contra todos os pareamentos abertos deixava
+    qualquer um matar o pareamento de todo mundo com cinco requisicoes. O teto
+    de forca bruta e por ORIGEM e mora na rota, na etapa 11 — junto com o prazo
+    curto, e o que segura seis digitos.
+    """
+    fechar = con is None
+    con = con or conectar()
+    corte = agora_iso or agora()
+    try:
+        cur = con.execute(
+            "UPDATE pareamento SET usado_em = ? WHERE codigo_hash = ?"
+            " AND usado_em IS NULL AND expira_em > ? AND tentativas < ?",
+            (corte, hash_codigo(codigo), corte, MAX_TENTATIVAS_PAREAMENTO))
+        if cur.rowcount != 1:
+            con.rollback()
+            return None
+        dono = con.execute("SELECT usuario_id FROM pareamento WHERE codigo_hash = ?",
+                           (hash_codigo(codigo),)).fetchone()["usuario_id"]
+        token = novo_token()
+        maq = con.execute(
+            "INSERT INTO maquina (usuario_id, nome, token_hash, criado_em, visto_em)"
+            " VALUES (?,?,?,?,?)",
+            (dono, nome_maquina or "", hash_token(token), agora(), corte))
+        con.execute("UPDATE pareamento SET maquina_id = ? WHERE codigo_hash = ?",
+                    (maq.lastrowid, hash_codigo(codigo)))
+        con.commit()
+        return token
+    finally:
+        if fechar:
+            con.close()
+
+
+def maquina_por_token(token: str, con=None):
+    """Maquina viva DE CONTA VIVA — mesmo motivo do `JOIN` em `sessao_valida`."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute(
+            "SELECT m.* FROM maquina m JOIN usuario u ON u.id = m.usuario_id"
+            " WHERE m.token_hash = ? AND m.revogada_em IS NULL"
+            " AND u.desativado_em IS NULL", (hash_token(token),)).fetchone()
+        return dict(l) if l else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def revogar_maquina(maquina_id: int, con=None) -> None:
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("UPDATE maquina SET revogada_em = ? WHERE id = ?",
+                    (agora(), maquina_id))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def ver_projeto(maquina_id: int, projeto: str, caminho: str = "",
+                visto_em: str = "", con=None) -> None:
+    """O agente diz que o projeto existe ali. Ver de novo NAO duplica, e
+    desarquiva: projeto que voltou a aparecer voltou a existir."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute(
+            "INSERT INTO projeto_conectado (maquina_id, projeto, caminho, visto_em)"
+            " VALUES (?,?,?,?)"
+            " ON CONFLICT(maquina_id, projeto) DO UPDATE SET"
+            " caminho=excluded.caminho, visto_em=excluded.visto_em, arquivado_em=NULL",
+            (maquina_id, projeto, caminho or "", visto_em or agora()))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def projetos_da_maquina(maquina_id: int, con=None) -> list:
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return [dict(l) for l in con.execute(
+            "SELECT * FROM projeto_conectado WHERE maquina_id = ?"
+            " AND arquivado_em IS NULL ORDER BY projeto", (maquina_id,))]
+    finally:
+        if fechar:
+            con.close()
+
+
+def arquivar_projeto(maquina_id: int, projeto: str, con=None) -> None:
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("UPDATE projeto_conectado SET arquivado_em = ?"
+                    " WHERE maquina_id = ? AND projeto = ?",
+                    (agora(), maquina_id, projeto))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def arquivar(pid: str, usuario_id: int = DONO_LOCAL, motivo: str = "", con=None) -> None:
+    """Some com a pendencia para sempre — e por isso EXIGE motivo.
+
+    Sumico sem motivo registrado nao tem volta explicavel: daqui a tres meses
+    ninguem consegue responder por que aquele alerta parou de aparecer.
+    """
+    motivo = (motivo or "").strip()
+    if not motivo:
+        raise ValueError("arquivar sem motivo nao e permitido: o rastro e o ponto")
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute(
+            "INSERT INTO pendencia_arquivada (id, usuario_id, motivo, arquivado_em)"
+            " VALUES (?,?,?,?)"
+            " ON CONFLICT(id, usuario_id) DO UPDATE SET motivo=excluded.motivo,"
+            " arquivado_em=excluded.arquivado_em, desarquivado_em=NULL",
+            (pid, usuario_id, motivo, agora()))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def desarquivar(pid: str, usuario_id: int = DONO_LOCAL, con=None) -> None:
+    """Carimba a volta em vez de apagar a linha: o rastro vale tambem para o desfazer."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("UPDATE pendencia_arquivada SET desarquivado_em = ?"
+                    " WHERE id = ? AND usuario_id = ?", (agora(), pid, usuario_id))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def arquivadas(usuario_id: int = DONO_LOCAL, con=None) -> set:
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return {l[0] for l in con.execute(
+            "SELECT id FROM pendencia_arquivada WHERE usuario_id = ?"
+            " AND desarquivado_em IS NULL", (usuario_id,))}
     finally:
         if fechar:
             con.close()

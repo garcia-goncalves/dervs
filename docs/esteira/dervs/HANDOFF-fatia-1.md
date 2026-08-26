@@ -1,8 +1,7 @@
-# Handoff — DERVS Fatia 1, etapas 1 a 7 concluídas
+# Handoff — DERVS Fatia 1, etapas 1 a 8 concluídas
 
 Gravado em 26/08/2026, atualizado no fim do dia.
-Estado: `main@81424f6`, árvore limpa, tudo no GitHub, CI verde.
-**Etapas 1 a 7 concluídas.** A próxima é a 8.
+**Etapas 1 a 8 concluídas.** A próxima é a 9.
 
 ## ATENÇÃO — A PASTA MUDOU
 
@@ -12,7 +11,8 @@ O trabalho agora acontece em **`C:\Users\Desktop\source\repos\dervs`**
 - Repositório: `github.com/garcia-goncalves/dervs` — privado, `main` protegida.
 - A memória do Claude foi migrada para o slug `C--Users-Desktop-source-repos-dervs`.
 - `source\painel-projetos` ficou **congelado de propósito** — ponto de retorno.
-  O processo em `localhost:4777` ainda roda de lá.
+  O processo em `localhost:4777` roda **desta** pasta desde 26/08 — foi
+  reiniciado daqui na etapa 8.
 
 ## FEITO (etapas 1 a 6, todas com prova rodada)
 
@@ -88,12 +88,127 @@ deixou de embarcar `execucao.py` e `fila.py`.
 `execucao.py` e `fila.py` continuam no repositório, 182 testes verdes, **sem
 rota apontando** — de propósito, pela trava de diff de `fila.py:229`.
 
-## A RETOMAR — ETAPA 8
+## ETAPA 8 — CONCLUÍDA (26/08/2026, branch `etapa-8-banco`)
 
-Plano: `docs/superpowers/plans/dervs-fatia-1.md`, seção "## 8" — banco
-multiusuário, pareamento e arquivamento permanente. Depois: 9 (login + 2FA,
-disputa `servir.py` com a 7, já mesclada) · 10 · 11 · 12 · 13→14→15 (as telas)
-· 16 (publicação) · 17.
+`banco.py` ganhou seis tabelas — `usuario`, `sessao`, `maquina`, `pareamento`,
+`projeto_conectado`, `pendencia_arquivada` — e o `hub.db` passou de 6 para 12.
+`test_banco.py` é novo: 65 testes, na CI.
+
+**Nenhuma rota encosta nelas ainda, de propósito.** A 8 constrói o esquema, a 9
+constrói o login. O esquema vem antes porque errar a forma de uma tabela depois
+custa migrar dado e rotacionar segredo; errar a ordem só custa esperar.
+
+**As três armadilhas do plano, fechadas:**
+
+1. **Nenhum segredo em claro, desde o primeiro dia.** Senha vira hash de
+   `scrypt` com sal próprio; cookie de sessão e token do agente viram hash de
+   SHA-256; código de pareamento vira HMAC com a chave do cofre; o segredo do
+   segundo fator entra cifrado. A cifra é de biblioteca padrão (HMAC-SHA256 em
+   modo contador + selo HMAC, encrypt-then-MAC) porque o projeto não tem
+   dependência externa e a CI cobra isso. Texto adulterado é **recusado**.
+   A chave vem de `DERVS_COFRE` ou de um `cofre.chave` local, no `.gitignore`.
+2. **Arquivar exige motivo**, e desarquivar carimba a volta em vez de apagar a
+   linha.
+3. **`pendencia_estado` ganhou dono.** Era IDOR por desenho de esquema: a chave
+   era só o `id`, então o "x" de um usuário escondia o alerta do outro. Virou
+   `(id, usuario_id)`. O SQLite não troca chave primária, então `banco.migrar()`
+   reconstrói a tabela; o que já estava lá vira do dono local (`usuario_id = 0`).
+
+**O plano errava a prova.** Ele manda rodar `banco.criar()` e `banco.CAMINHO`;
+nenhum dos dois existia — o esquema era aplicado dentro de `conectar()` e o
+caminho se chama `BANCO`. `criar()` passou a existir; a prova usa `BANCO`.
+
+**Provado:** 65 testes novos OK, **519 no total**, os dez arquivos verdes · as 12
+tabelas listadas · o `hub.db` real do dia 26/08 migrado sem perder linha · o
+servidor reiniciado e o **"x" da tela clicado de verdade**, gravando com
+`usuario_id = 0`.
+
+**Dois defeitos que só apareceram porque o teste veio antes:**
+`pareamento.maquina_id` referenciava `maquina(id)` sem `ON DELETE`, e apagar uma
+máquina pareada era recusado pelo banco (virou `SET NULL`); e a chave
+estrangeira precisava de `PRAGMA foreign_keys=ON` **por conexão**, sem o qual
+todo `ON DELETE CASCADE` do esquema era só comentário bonito.
+
+**A CI ganhou um vigia da própria lista.** Os testes são listados à mão, um
+passo cada, para o nome na tela do GitHub dizer o que quebrou. O preço disso é
+esquecer o arquivo novo — e arquivo esquecido não fica vermelho, fica invisível.
+Agora a CI reprova se algum `test_*.py` ficar de fora.
+
+### O que as duas revisões pegaram na etapa 8 (e todas foram corrigidas)
+
+Segurança e banco revisaram em paralelo. **As duas apontaram os mesmos dois
+bloqueantes**, e as duas os provaram executando código, não lendo.
+
+**Bloqueante 1 — o pareamento entregava a máquina de um usuário para a conta do
+outro, em silêncio.** `abrir_pareamento` usava `INSERT OR REPLACE`, e o hash do
+código é chave primária: dois usuários sorteando o mesmo código de seis dígitos
+faziam a linha do primeiro ser apagada **sem erro nenhum**. Ele então digitava o
+código que a própria tela mostrou, e a máquina dele nascia dentro da conta do
+segundo — com projetos, caminhos e alertas junto. Virou `INSERT` puro: colisão
+levanta erro, e quem chamou sorteia outro código. Barulho onde havia silêncio.
+
+**Bloqueante 2 — a migração não era tudo-ou-nada, e uma queda no meio travava o
+banco para sempre.** `executescript` faz *commit* implícito e não abre transação:
+os quatro comandos rodavam soltos. Uma queda entre o `DROP` e o `RENAME` (queda
+de energia, `Ctrl+C`, ou o próprio `vigia-vscode.py`, que **mata processo de
+rotina**) deixava a cópia órfã no disco, e a partir daí `conectar()` estourava em
+**toda** chamada — servidor e coletores fora do ar até alguém apagar a tabela na
+mão. Agora é `BEGIN IMMEDIATE` + comandos um a um + `commit`, com `rollback` no
+erro, e um `DROP IF EXISTS` da sobra. O `BEGIN IMMEDIATE` pega o *lock* de
+escrita antes de decidir, o que resolve a corrida de graça.
+
+**Mais quatro, que só a revisão de segurança viu:**
+
+- **Cinco chutes de um estranho matavam o pareamento de todo mundo.** O contador
+  de tentativas não tinha alvo: um código errado incrementava **todas** as linhas
+  abertas, de todas as contas. Negação de serviço de um usuário sobre o outro,
+  com cinco requisições. O contador global saiu. O teto de força bruta é por
+  origem e mora na rota — **é obrigação da etapa 11**, e está anotado aqui porque
+  seis dígitos sem ele são varríveis.
+- **`DERVS_COFRE` virava chave mestra com um único SHA-256.** Sem KDF, uma frase
+  digitada por gente cai em bilhões de tentativas por segundo, fora do ar, a
+  partir de uma cópia do `hub.db` — e aí todo segredo de segundo fator se abre.
+  Virou `scrypt`, com mínimo de 32 caracteres e a receita de gerar na mensagem
+  de erro.
+- **O cofre nascia sozinho, em silêncio, e falhava aberto.** Variável esquecida
+  no servidor e o programa fabricava outra chave: todo segredo já guardado
+  viraria "adulterado", sem uma linha de aviso. Agora ele só cria a chave quando
+  `DERVS_AMBIENTE=local`, com `O_EXCL` (o coletor e o servidor abrem o banco ao
+  mesmo tempo, e os dois viam "não existe"), e guarda em memória.
+- **Sessão de conta desativada continuava valendo.** `usuario_por_email` filtrava
+  `desativado_em`, mas `sessao_valida` e `maquina_por_token` não olhavam o dono:
+  fechar a conta não derrubava quem já estava dentro. Ganharam `JOIN`.
+
+**E cinco menores, todas feitas porque forma de tabela é cara depois:** chave
+primária invertida para `(usuario_id, id)`, que é a ordem das consultas reais;
+`CHECK` no motivo, no e-mail, no nome do projeto e no formato do prazo;
+`CHECK (id <> 0)` no usuário, que impedia uma conta herdar tudo do dono local;
+`usuario_por_email` deixou de fazer `SELECT *` e devolver senha e segredo;
+a cifra passou a amarrar o blob ao dono, e o cookie é trocado ao subir para o
+segundo fator.
+
+**Uma coisa que a revisão de banco fez e vale registrar:** ela apagou o
+`cofre.chave` da pasta ao fim dos testes dela. Não custou nada — havia zero
+usuários e zero segredos guardados —, mas se houvesse, o dado ficaria
+indecifrável. Agente de revisão com permissão de escrita no disco do projeto é
+um risco real, e este foi o aviso barato.
+
+**Para a etapa 9, herdado daqui:** `usuario.totp_confirmado_em` nasce `NULL` e
+`sessao.segundo_fator_em` nasce `NULL`. É o que faz a negativa ser o padrão —
+a 9 só precisa recusar quem está assim, não inventar o estado.
+
+## A RETOMAR — ETAPA 9
+
+Plano: `docs/superpowers/plans/dervs-fatia-1.md`, seção "## 9" — autenticação:
+sessão, senha, segundo fator **obrigatório** e cadastro fechado (`POST
+/api/registro` devolve 403). Depois: 10 · 11 · 12 · 13→14→15 (as telas) · 16
+(publicação) · 17.
+
+A 9 disputa `servir.py` com a 7, que já está mesclada — o caminho está livre.
+As tabelas de que ela precisa já existem (etapa 8) e já nascem negando: quem não
+tem `totp_confirmado_em` e quem não tem `segundo_fator_em` na sessão está fora
+por padrão. O `TOKEN` de boot de `servir.py:111-113` sai de cena; ele é
+anti-CSRF e **não pode** virar credencial de usuário.
 
 ## PARA A ETAPA 16 — o que a revisão de segurança deixou anotado
 
@@ -109,10 +224,11 @@ Nada disso é defeito do que já foi feito; é o roteiro de expor o painel.
    403. O risco não é o 403, é a pressa que faz alguém relaxar para "aceita
    qualquer coisa". Allowlist explícita do domínio, e `X-Forwarded-Host` fora
    da decisão.
-3. `pendencia_estado` **não tem coluna de dono** — com múltiplos usuários, é
-   IDOR por desenho de esquema. Conserta-se na migration da etapa 8, não na
-   rota. E o `TOKEN` é um só por processo, injetado em toda página: serve de
-   anti-CSRF e **não pode** virar credencial de usuário.
+3. ~~`pendencia_estado` **não tem coluna de dono**~~ — **FEITO na etapa 8.** A
+   chave virou `(id, usuario_id)` e `banco.migrar()` reconstrói o banco antigo.
+   Continua valendo o resto do item: o `TOKEN` é um só por processo, injetado
+   em toda página; serve de anti-CSRF e **não pode** virar credencial de
+   usuário. Quem substitui o `TOKEN` é a etapa 9.
 4. A página não manda **nenhum** cabeçalho de segurança (sem CSP, sem
    `frame-ancestors`, sem `nosniff`). O token vive dentro do HTML.
 5. Nada tem limite de taxa, e `/api/dados` recalcula as regras a cada chamada.
@@ -151,7 +267,8 @@ Nada disso é defeito do que já foi feito; é o roteiro de expor o painel.
 
 ## NÚMEROS REAIS (os documentos da esteira erravam)
 
-- **500** funções de teste em 8 arquivos `test_*.py` **na raiz** (não em `tests/`).
+- **519** funções de teste em 10 arquivos `test_*.py` **na raiz** (não em `tests/`),
+  medidas em 26/08 depois da etapa 8. Eram 500 em 8 arquivos antes dela.
   A CI reporta 483 pelo runner do unittest. Não são "452".
 - **18** rótulos em `regras.ROTULO_REGRA`. Não são "16".
 - `projects.json` não existe. `casos.json` existe.
