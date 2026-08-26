@@ -2,7 +2,13 @@
 
 O HUB do dev é um painel local: uma página só, servida pelo seu próprio
 computador, que mostra o estado dos seus projetos (git, Docker, CI, alertas de
-segurança, gasto do Claude) e deixa você agir sobre as pendências por botão.
+segurança, gasto do Claude).
+
+**Desde a etapa 7 do DERVS (26/08/2026), ele só mostra — não age.** As rotas
+que rodavam `git push`, `docker compose up`, abriam o VS Code e disparavam uma
+sessão do Claude foram removidas, porque este painel vai passar a rodar num
+servidor exposto à internet. O que sobrou de botão: esconder um alerta por 24 h
+e trocar o tema.
 
 ## Links
 
@@ -11,19 +17,26 @@ DESTE PROJETO
   Painel ........... http://localhost:4777
   Banco de dados ... hub.db (arquivo SQLite na raiz do projeto)
 
-DEPENDÊNCIA EXTERNA (não é deste projeto, mas o painel usa)
-  Grafo do código .. http://localhost:9749   (codebase-memory-mcp)
 ```
+
+O grafo de código (`codebase-memory-mcp`, porta 9749) **não é mais dependência
+deste projeto**. O painel embutia a tela dele por procuração; esse proxy saiu na
+etapa 7. Ele continua existindo como ferramenta do Claude Code, à parte.
 
 **O que não existe, e por quê:**
 
 - **Não tem `/api/health`.** O painel é uma página só; a prova de que subiu é a
   raiz responder HTTP 200.
-- **Não tem tela de login.** O servidor escuta apenas em `127.0.0.1`, ou seja,
-  só o seu próprio computador alcança. Contra o risco real — outro site aberto
-  no seu navegador disparando um comando aqui — a proteção é um **token
-  sorteado a cada vez que o painel sobe**, injetado só na página que o servidor
-  entrega.
+- **Não tem tela de login** — ainda. O servidor escuta apenas em `127.0.0.1`,
+  ou seja, só o seu próprio computador alcança. A única rota que escreve
+  (`/api/silenciar`, o "x" que esconde um alerta) exige um **token sorteado a
+  cada vez que o painel sobe**, injetado só na página que o servidor entrega.
+
+  **Atenção para a etapa 16:** o `/api/dados` não tem autenticação nenhuma e
+  devolve o caminho absoluto das suas pastas. Quem segura isso hoje é escutar só
+  em `127.0.0.1`. Trocar esse endereço para aceitar a internet **antes** de as
+  etapas 8 e 9 (banco multiusuário e login) estarem prontas publicaria o painel
+  inteiro para leitura anônima.
 - **Não tem Postgres nem Docker próprio.** O painel guarda tudo num arquivo
   SQLite (`hub.db`). Ele *observa* os containers dos outros projetos, mas não
   sobe nenhum.
@@ -87,8 +100,8 @@ O sintoma é o painel não subir e o log acusar endereço em uso. Duas saídas:
 ## Depois de reiniciar o painel, recarregue a aba
 
 O token é sorteado a cada inicialização. Uma aba aberta desde antes do reinício
-fica com o token antigo e os botões de ação param de funcionar. **Aperte F5 na
-página** e volta ao normal.
+fica com o token antigo e o "x" de esconder alerta para de funcionar. **Aperte
+F5 na página** e volta ao normal.
 
 ## Credenciais
 
