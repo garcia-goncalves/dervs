@@ -295,7 +295,22 @@ class ServidorDeVerdade(unittest.TestCase):
     def test_com_sessao_a_pagina_e_o_painel(self):
         corpo = self.pedir("/", cookies=self.com_sessao()).corpo
         self.assertNotIn("Sala de Leitura", corpo)
-        self.assertNotIn("__TOKEN__", corpo)
+        # Marca nao substituida vaza na cara do dono e some com o anti-CSRF.
+        for marca in ("__TOKEN__", "__FAIXA__", "__PORTA_ABERTA__"):
+            self.assertNotIn(marca, corpo, marca)
+
+    def test_o_painel_local_avisa_que_a_entrada_nao_pediu_senha(self):
+        """Quem esta vendo esta tela entrou por uma porta sem senha, e precisa
+        saber disso: a mesma tela no servidor exige GitHub."""
+        corpo = self.pedir("/", cookies=self.com_sessao()).corpo
+        self.assertIn('class="faixa-local"', corpo)
+        antigo = servir.E_LOCAL
+        servir.E_LOCAL = False
+        try:
+            self.assertNotIn('class="faixa-local"',
+                             self.pedir("/", cookies=self.com_sessao()).corpo)
+        finally:
+            servir.E_LOCAL = antigo
 
     def test_sessao_encerrada_para_de_valer(self):
         cookies = self.com_sessao()

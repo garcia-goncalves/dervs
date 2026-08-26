@@ -58,6 +58,9 @@ body{margin:0;background:var(--bg);color:var(--texto);font-family:var(--sans);
   font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
 a{color:var(--acento)}
 .env{max-width:1200px;margin:0 auto;padding:20px 22px 80px}
+/* A faixa de ambiente. So aparece fora do servidor: quem esta vendo esta
+   tela entrou por uma porta que nao pede senha, e precisa saber disso. */
+.faixa-local{background:#3a2a05;color:#f0d488;border-bottom:1px solid #5c4409;text-align:center;padding:7px 12px;font-size:12px;letter-spacing:.14em;text-transform:uppercase}
 
 header.topo{display:flex;align-items:flex-end;justify-content:space-between;
   gap:20px;flex-wrap:wrap;margin-bottom:20px}
@@ -262,6 +265,7 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
 </style>
 </head>
 <body>
+__FAIXA__
 <div class="env">
   <header class="topo">
     <div>

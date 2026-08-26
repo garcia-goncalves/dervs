@@ -384,6 +384,8 @@ class Hub(SimpleHTTPRequestHandler):
     # A faixa e o aviso: quem ve isto esta olhando dado de mentira.
     BOTAO_LOCAL = ('<a class="entrar" href="/entrar/local" rel="nofollow">'
                    "Entrar &#183; ambiente local</a>")
+    FAIXA_LOCAL = ('<div class="faixa-local">Ambiente local &#183; entrada sem '
+                   "senha</div>")
 
     def _pagina(self):
         """Tres estados, e a diferenca entre eles e o que protege a entrada.
@@ -398,7 +400,9 @@ class Hub(SimpleHTTPRequestHandler):
         """
         sessao = self._sessao()
         if sessao is not None:
-            return self._html_de(PAGINA, {"__TOKEN__": self._csrf_da_sessao(sessao)})
+            return self._html_de(PAGINA, {
+                "__TOKEN__": self._csrf_da_sessao(sessao),
+                "__FAIXA__": self.FAIXA_LOCAL if E_LOCAL else ""})
         if not self._cortina_aberta():
             return self._html_de(PAGINA_CORTINA, {"__PORTA_ABERTA__": ""})
         portas = []
