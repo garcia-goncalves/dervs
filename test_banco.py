@@ -122,10 +122,10 @@ class Esquema(unittest.TestCase):
             "SELECT name FROM sqlite_master WHERE type='table' "
             "AND name NOT LIKE 'sqlite_%'"))
 
-    def test_as_doze_tabelas_existem(self):
+    def test_as_catorze_tabelas_existem(self):
         self.assertEqual(self.tabelas(), [
-            "fila", "gasto", "historico", "maquina", "medida",
-            "pareamento", "pendencia_arquivada", "pendencia_estado",
+            "credencial", "fila", "gasto", "historico", "instalacao", "maquina",
+            "medida", "pareamento", "pendencia_arquivada", "pendencia_estado",
             "pendencia_vida", "projeto_conectado", "sessao", "usuario"])
 
     def test_as_seis_tabelas_antigas_nao_perderam_coluna(self):
@@ -170,22 +170,34 @@ class Usuario(unittest.TestCase):
             banco.criar_usuario("DONO@teste.local", "outra", con=self.con)
 
     def test_usuario_recem_criado_esta_sem_segundo_fator(self):
-        """A etapa 9 nega toda rota de dado a quem esta assim. Comeca assim."""
-        u = banco.usuario_por_email("dono@teste.local", con=self.con)
-        self.assertIsNone(u["totp_confirmado_em"])
+        """A etapa 9 nega toda rota de dado a quem esta assim. Comeca assim.
+
+        Desde que o segredo saiu da `usuario`, "sem segundo fator" e a AUSENCIA
+        de uma credencial de TOTP — a negativa continua sendo o padrao, agora
+        por nao existir linha nenhuma em vez de por uma coluna em NULL.
+        """
+        self.assertEqual(
+            self.con.execute("SELECT COUNT(*) FROM credencial"
+                             " WHERE usuario_id=? AND tipo='totp'",
+                             (self.uid,)).fetchone()[0], 0)
 
     def test_o_segredo_do_segundo_fator_nao_fica_em_claro_na_tabela(self):
         banco.guardar_totp(self.uid, "JBSWY3DPEHPK3PXP", con=self.con)
-        cru = self.con.execute("SELECT totp_segredo FROM usuario WHERE id=?",
+        cru = self.con.execute("SELECT segredo_hash FROM credencial"
+                               " WHERE usuario_id=? AND tipo='totp'",
                                (self.uid,)).fetchone()[0]
         self.assertNotIn("JBSWY3DPEHPK3PXP", cru)
         self.assertEqual(banco.ler_totp(self.uid, con=self.con), "JBSWY3DPEHPK3PXP")
 
     def test_confirmar_o_segundo_fator_carimba_a_data(self):
         banco.guardar_totp(self.uid, "JBSWY3DPEHPK3PXP", con=self.con)
+        self.assertIsNone(self.con.execute(
+            "SELECT usado_em FROM credencial WHERE usuario_id=? AND tipo='totp'",
+            (self.uid,)).fetchone()[0], "guardar nao pode equivaler a conferir")
         banco.confirmar_totp(self.uid, con=self.con)
-        u = banco.usuario_por_email("dono@teste.local", con=self.con)
-        self.assertIsNotNone(u["totp_confirmado_em"])
+        self.assertIsNotNone(self.con.execute(
+            "SELECT usado_em FROM credencial WHERE usuario_id=? AND tipo='totp'",
+            (self.uid,)).fetchone()[0])
 
     def test_usuario_que_nao_existe_devolve_nada_e_nao_explode(self):
         self.assertIsNone(banco.usuario_por_email("ninguem@teste.local", con=self.con))
@@ -542,9 +554,12 @@ class NadaDeSegredoNaSaida(unittest.TestCase):
     def test_o_segredo_cifrado_de_um_nao_serve_na_linha_do_outro(self):
         """A cifra amarra o blob ao dono. Copiar de linha em linha nao decifra."""
         outro = banco.criar_usuario("outro@teste.local", "teste1234", con=self.con)
-        blob = self.con.execute("SELECT totp_segredo FROM usuario WHERE id=?",
+        blob = self.con.execute("SELECT segredo_hash FROM credencial"
+                                " WHERE usuario_id=? AND tipo='totp'",
                                 (self.uid,)).fetchone()[0]
-        self.con.execute("UPDATE usuario SET totp_segredo=? WHERE id=?", (blob, outro))
+        self.con.execute("INSERT INTO credencial (usuario_id, tipo, identificador,"
+                         " segredo_hash, criado_em) VALUES (?,'totp',?,?,?)",
+                         (outro, str(outro), blob, banco.agora()))
         self.con.commit()
         with self.assertRaises(ValueError):
             banco.ler_totp(outro, con=self.con)
@@ -706,6 +721,212 @@ class MigracaoInterrompida(unittest.TestCase):
                 c.execute("SELECT COUNT(*) FROM pendencia_estado").fetchone()[0], 1)
         finally:
             c.close()
+
+class MigracaoParaCredencial(unittest.TestCase):
+    """Um hub.db da etapa 8 abre no esquema da 9 sem perder usuario nem segredo.
+
+    Senha e TOTP eram COLUNAS da `usuario`. Isso amarra a pessoa a um jeito de
+    entrar, e uma conta que so usa GitHub nao tem senha nenhuma para pos ali.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.caminho = str(Path(self.dir.name) / "hub.db")
+        self.addCleanup(self.dir.cleanup)
+
+    def _banco_da_etapa_8(self):
+        """Recria a forma ANTIGA na mao.
+
+        Nao importe o esquema de hoje aqui: o teste tem de descrever o passado,
+        senao ele para de testar migracao no dia em que o esquema mudar de novo.
+        """
+        c = sqlite3.connect(self.caminho)
+        c.executescript("""
+            CREATE TABLE usuario (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id <> 0),
+                email              TEXT NOT NULL UNIQUE,
+                nome               TEXT NOT NULL DEFAULT '',
+                senha_hash         TEXT NOT NULL,
+                totp_segredo       TEXT,
+                totp_confirmado_em TEXT,
+                criado_em          TEXT NOT NULL,
+                desativado_em      TEXT);
+            CREATE TABLE sessao (
+                id               TEXT PRIMARY KEY,
+                usuario_id       INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+                criado_em        TEXT NOT NULL,
+                expira_em        TEXT NOT NULL,
+                segundo_fator_em TEXT,
+                encerrada_em     TEXT);
+        """)
+        c.execute("INSERT INTO usuario (email, nome, senha_hash, totp_segredo,"
+                  " totp_confirmado_em, criado_em) VALUES (?,?,?,?,?,?)",
+                  ("thiago@teste.local", "Thiago", "scrypt$aaa", "cifrado$bbb",
+                   iso(AGORA), iso(AGORA)))
+        # Uma filha apontando para a usuario: se a reconstrucao deixar orfao, e
+        # aqui que aparece.
+        c.execute("INSERT INTO sessao (id, usuario_id, criado_em, expira_em)"
+                  " VALUES ('h1', 1, ?, ?)", (iso(AGORA), iso(AGORA)))
+        c.commit()
+        c.close()
+
+    def test_usuario_sobrevive_e_segredos_viram_credencial(self):
+        self._banco_da_etapa_8()
+        con = banco.conectar(self.caminho)
+        try:
+            u = con.execute("SELECT id, email FROM usuario").fetchall()
+            self.assertEqual(len(u), 1)
+            self.assertEqual(u[0]["email"], "thiago@teste.local")
+            colunas = {l[1] for l in con.execute("PRAGMA table_info(usuario)")}
+            self.assertNotIn("senha_hash", colunas)
+            self.assertNotIn("totp_segredo", colunas)
+            self.assertNotIn("totp_confirmado_em", colunas)
+            cred = {l["tipo"]: l["segredo_hash"] for l in
+                    con.execute("SELECT tipo, segredo_hash FROM credencial"
+                                " WHERE usuario_id = ?", (u[0]["id"],))}
+            self.assertEqual(cred["senha"], "scrypt$aaa")
+            self.assertEqual(cred["totp"], "cifrado$bbb")
+        finally:
+            con.close()
+
+    def test_a_sessao_antiga_nao_fica_orfa(self):
+        self._banco_da_etapa_8()
+        con = banco.conectar(self.caminho)
+        try:
+            self.assertEqual(list(con.execute("PRAGMA foreign_key_check")), [])
+            self.assertEqual(
+                con.execute("SELECT usuario_id FROM sessao").fetchone()[0], 1)
+        finally:
+            con.close()
+
+    def test_migracao_e_idempotente(self):
+        self._banco_da_etapa_8()
+        banco.conectar(self.caminho).close()
+        banco.conectar(self.caminho).close()
+        con = banco.conectar(self.caminho)
+        try:
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM credencial").fetchone()[0], 2)
+        finally:
+            con.close()
+
+    def test_dois_usuarios_nao_reivindicam_o_mesmo_github(self):
+        con = banco.conectar(self.caminho)
+        try:
+            a = con.execute("INSERT INTO usuario (email, criado_em) VALUES (?,?)",
+                            ("a@teste.local", iso(AGORA))).lastrowid
+            b = con.execute("INSERT INTO usuario (email, criado_em) VALUES (?,?)",
+                            ("b@teste.local", iso(AGORA))).lastrowid
+            con.execute("INSERT INTO credencial (usuario_id, tipo, identificador,"
+                        " criado_em) VALUES (?,'github','4242',?)", (a, iso(AGORA)))
+            with self.assertRaises(sqlite3.IntegrityError):
+                con.execute("INSERT INTO credencial (usuario_id, tipo, identificador,"
+                            " criado_em) VALUES (?,'github','4242',?)", (b, iso(AGORA)))
+        finally:
+            con.close()
+
+    def test_tipo_de_credencial_inventado_e_recusado(self):
+        con = banco.conectar(self.caminho)
+        try:
+            uid = con.execute("INSERT INTO usuario (email, criado_em) VALUES (?,?)",
+                              ("c@teste.local", iso(AGORA))).lastrowid
+            with self.assertRaises(sqlite3.IntegrityError):
+                con.execute("INSERT INTO credencial (usuario_id, tipo, identificador,"
+                            " criado_em) VALUES (?,'sei-la','x',?)", (uid, iso(AGORA)))
+        finally:
+            con.close()
+
+    def test_apagar_usuario_leva_a_credencial_junto(self):
+        con = banco.conectar(self.caminho)
+        try:
+            uid = con.execute("INSERT INTO usuario (email, criado_em) VALUES (?,?)",
+                              ("d@teste.local", iso(AGORA))).lastrowid
+            con.execute("INSERT INTO credencial (usuario_id, tipo, identificador,"
+                        " criado_em) VALUES (?,'github','555',?)", (uid, iso(AGORA)))
+            con.execute("DELETE FROM usuario WHERE id = ?", (uid,))
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM credencial").fetchone()[0], 0)
+        finally:
+            con.close()
+
+    def test_instalacao_admite_uma_linha_so(self):
+        con = banco.conectar(self.caminho)
+        try:
+            con.execute("INSERT OR IGNORE INTO instalacao (id, criada_em)"
+                        " VALUES (1, ?)", (iso(AGORA),))
+            with self.assertRaises(sqlite3.IntegrityError):
+                con.execute("INSERT INTO instalacao (id, criada_em) VALUES (2, ?)",
+                            (iso(AGORA),))
+        finally:
+            con.close()
+
+
+class AcessoPorGithub(unittest.TestCase):
+    """Quem entra pelo GitHub nao tem senha, e o casamento e pelo id numerico."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.con = banco.conectar(str(Path(self.dir.name) / "hub.db"))
+        self.addCleanup(self.con.close)
+
+    def test_conta_sem_senha_e_valida(self):
+        uid = banco.criar_usuario("thiago@teste.local", con=self.con)
+        self.assertIsNone(banco.credencial_por_email("thiago@teste.local",
+                                                     con=self.con))
+        self.assertIsNotNone(banco.usuario_por_email("thiago@teste.local",
+                                                     con=self.con))
+        banco.ligar_github(uid, "4242", con=self.con)
+        self.assertEqual(banco.usuario_por_github("4242", con=self.con)["id"], uid)
+
+    def test_a_conta_com_senha_continua_achavel_pela_porta_de_emergencia(self):
+        uid = banco.criar_usuario("andre@teste.local", "teste1234", con=self.con)
+        achado = banco.credencial_por_email("andre@teste.local", con=self.con)
+        self.assertIsNotNone(achado)
+        self.assertEqual(achado[0], uid)
+        self.assertTrue(banco.conferir_senha("teste1234", achado[1]))
+
+    def test_github_desconhecido_devolve_none(self):
+        self.assertIsNone(banco.usuario_por_github("999999", con=self.con))
+
+    def test_conta_desativada_nao_entra_por_github(self):
+        uid = banco.criar_usuario("desligado@teste.local", con=self.con)
+        banco.ligar_github(uid, "777", con=self.con)
+        self.con.execute("UPDATE usuario SET desativado_em = ? WHERE id = ?",
+                         (banco.agora(), uid))
+        self.con.commit()
+        self.assertIsNone(banco.usuario_por_github("777", con=self.con))
+
+    def test_credencial_revogada_nao_entra(self):
+        uid = banco.criar_usuario("rafael@teste.local", con=self.con)
+        banco.ligar_github(uid, "888", con=self.con)
+        self.con.execute("UPDATE credencial SET revogada_em = ?"
+                         " WHERE tipo='github' AND identificador='888'",
+                         (banco.agora(),))
+        self.con.commit()
+        self.assertIsNone(banco.usuario_por_github("888", con=self.con))
+
+    def test_a_saida_nao_traz_segredo_nenhum(self):
+        uid = banco.criar_usuario("s@teste.local", "teste1234", con=self.con)
+        banco.ligar_github(uid, "1234", con=self.con)
+        banco.guardar_totp(uid, "JBSWY3DPEHPK3PXP", con=self.con)
+        u = banco.usuario_por_github("1234", con=self.con)
+        self.assertEqual(set(u), set(banco.COLUNAS_USUARIO))
+        for proibido in ("senha_hash", "segredo_hash", "totp_segredo"):
+            self.assertNotIn(proibido, u)
+
+    def test_o_mesmo_github_em_duas_contas_e_recusado(self):
+        a = banco.criar_usuario("a2@teste.local", con=self.con)
+        b = banco.criar_usuario("b2@teste.local", con=self.con)
+        banco.ligar_github(a, "5150", con=self.con)
+        with self.assertRaises(sqlite3.IntegrityError):
+            banco.ligar_github(b, "5150", con=self.con)
+
+    def test_espaco_em_volta_do_id_nao_cria_conta_paralela(self):
+        uid = banco.criar_usuario("e@teste.local", con=self.con)
+        banco.ligar_github(uid, "  606  ", con=self.con)
+        self.assertEqual(banco.usuario_por_github("606", con=self.con)["id"], uid)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

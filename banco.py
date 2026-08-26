@@ -149,17 +149,52 @@ CREATE INDEX IF NOT EXISTS ix_gasto_dia ON gasto (quando);
 -- O `CHECK (id <> 0)` nao e paranoia: o SQLite aceita id explicito mesmo com
 -- AUTOINCREMENT, e uma conta de id 0 herdaria todo silenciamento e todo
 -- arquivamento do DONO_LOCAL. Grátis agora, reconstrucao de tabela depois.
+-- A `usuario` diz QUEM a pessoa e, e so isso. Como ela prova quem e mora na
+-- `credencial`, la embaixo. Ate a etapa 8 a senha e o segredo do TOTP eram
+-- colunas daqui, e isso amarrava cada pessoa a UM jeito de entrar — uma conta
+-- que so usa GitHub nao tem senha nenhuma para por aqui, e obrigar uma seria
+-- inventar segredo sem dono.
 CREATE TABLE IF NOT EXISTS usuario (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id <> 0),
     email              TEXT NOT NULL UNIQUE CHECK (length(trim(email)) > 0),
     nome               TEXT NOT NULL DEFAULT '',
-    senha_hash         TEXT NOT NULL,
-    totp_segredo       TEXT,                   -- CIFRADO. Nunca em claro.
-    -- NULL = segundo fator nao configurado. A etapa 9 nega toda rota de dado a
-    -- quem esta assim; comecar em NULL e o que faz a negativa ser o padrao.
-    totp_confirmado_em TEXT,
     criado_em          TEXT NOT NULL,
     desativado_em      TEXT
+);
+
+-- As maneiras que uma pessoa tem de provar quem e. Uma pessoa pode ter varias.
+-- E esta separacao que faz chave de acesso (passkey) entrar na Fatia 2 como
+-- acrescimo em vez de reescrita.
+CREATE TABLE IF NOT EXISTS credencial (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id    INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    tipo          TEXT NOT NULL CHECK (tipo IN ('github','senha','totp','passkey')),
+    -- Chave externa da identidade. github: o id NUMERICO, em texto — nunca o
+    -- login, que pode ser trocado e liberado para outra pessoa registrar.
+    -- senha/totp: o proprio usuario_id em texto, o que faz o UNIQUE abaixo
+    -- garantir "uma senha por pessoa" de graca.
+    identificador TEXT NOT NULL,
+    -- github: NULL, nao ha segredo a guardar. senha: scrypt. totp: CIFRADO.
+    segredo_hash  TEXT,
+    criado_em     TEXT NOT NULL,
+    -- NULL = nunca usada. Para 'totp' este campo faz o papel do antigo
+    -- `totp_confirmado_em`: a negativa continua sendo o padrao.
+    usado_em      TEXT,
+    revogada_em   TEXT,
+    -- A peca central: dois usuarios nao reivindicam o mesmo id do GitHub, e
+    -- ninguem tem duas senhas.
+    UNIQUE (tipo, identificador)
+);
+CREATE INDEX IF NOT EXISTS ix_credencial_dono ON credencial (usuario_id, tipo);
+
+-- Uma linha, e so uma: a configuracao desta instalacao do DERVS. Hoje guarda
+-- so a impressao digital da combinacao da cortina — os seis digitos que a
+-- pagina de entrada pede antes de admitir que existe um sistema aqui.
+CREATE TABLE IF NOT EXISTS instalacao (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    combinacao_hash TEXT,     -- scrypt dos seis digitos. NULL = ainda nao gerada.
+    combinacao_em   TEXT,
+    criada_em       TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS sessao (
@@ -267,12 +302,22 @@ def criar(caminho=None) -> None:
 
 
 def migrar(con: sqlite3.Connection) -> None:
-    """Leva um hub.db anterior a etapa 8 para o esquema de hoje.
+    """Leva um hub.db antigo para o esquema de hoje.
 
-    Roda em TODA conexao, entao tem de ser barata e inofensiva na segunda vez —
-    a checagem e um `PRAGMA table_info`, que nao toca o disco.
+    Roda em TODA conexao, entao cada passo tem de ser barato e inofensivo na
+    segunda vez — a checagem e um `PRAGMA table_info`, que nao toca o disco.
 
-    Uma migracao so, por enquanto: `pendencia_estado` ganhou dono. O SQLite nao
+    Uma funcao por migracao, e todas chamadas aqui. Nao junte duas num `if` so:
+    cada uma tem a propria condicao de "ja rodou", e uma sair na frente da outra
+    com `return` deixaria a seguinte sem rodar nunca — foi exatamente o risco de
+    ter posto a segunda no fim do corpo da primeira.
+    """
+    _migrar_pendencia_estado(con)
+    _migrar_credencial(con)
+
+
+def _migrar_pendencia_estado(con: sqlite3.Connection) -> None:
+    """`pendencia_estado` ganhou dono (etapa 8). O SQLite nao
     sabe trocar chave primaria, entao a tabela e reconstruida; o que ja estava
     la vira do DONO_LOCAL, que e exatamente o que era — a decisao do dono desta
     maquina.
@@ -313,6 +358,88 @@ def migrar(con: sqlite3.Connection) -> None:
                     % ("usuario_id" if tinha_dono else "0"))
         con.execute("DROP TABLE pendencia_estado")
         con.execute("ALTER TABLE pendencia_estado_nova RENAME TO pendencia_estado")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.execute("PRAGMA foreign_keys=ON")
+
+
+# A `credencial` precisa existir ANTES da reconstrucao da `usuario` la embaixo,
+# e o ESQUEMA so roda DEPOIS de toda a migracao. Entao o texto dela mora aqui,
+# numa constante, e o ESQUEMA repete a mesma forma — duas copias do mesmo
+# CREATE, de proposito: a do ESQUEMA e a documentacao do banco de hoje, esta e
+# a ferramenta da migracao. Se uma mudar, a outra muda junto.
+_CREATE_CREDENCIAL = """CREATE TABLE IF NOT EXISTS credencial (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id    INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    tipo          TEXT NOT NULL CHECK (tipo IN ('github','senha','totp','passkey')),
+    identificador TEXT NOT NULL,
+    segredo_hash  TEXT,
+    criado_em     TEXT NOT NULL,
+    usado_em      TEXT,
+    revogada_em   TEXT,
+    UNIQUE (tipo, identificador))"""
+
+
+def _migrar_credencial(con: sqlite3.Connection) -> None:
+    """Tira senha e TOTP de dentro da `usuario` (etapa 9).
+
+    A condicao de "ja rodou" e a ausencia da coluna `senha_hash`. Cinco tabelas
+    apontam para a `usuario`, entao a reconstrucao termina com um
+    `foreign_key_check` ANTES do commit: se alguma filha ficaria orfa, e agora
+    que se descobre, com rollback ainda possivel.
+    """
+    forma = list(con.execute("PRAGMA table_info(usuario)"))
+    if not forma:
+        return                                # banco novo: o ESQUEMA ja faz certo
+    colunas = {l[1] for l in forma}
+    if "senha_hash" not in colunas:
+        return                                # ja migrado
+    tinha_totp = "totp_segredo" in colunas
+    # Reconstrucao com FK desligada: e o procedimento que o proprio SQLite
+    # recomenda. O pragma e por conexao e nao vaza para os outros processos.
+    con.execute("PRAGMA foreign_keys=OFF")
+    try:
+        # TUDO OU NADA. `executescript` daria COMMIT implicito entre os passos e
+        # rodaria cada comando como uma transacao solta: uma queda entre o DROP
+        # e o RENAME apagaria a `usuario` e deixaria as cinco filhas apontando
+        # para uma tabela que nao existe mais, sem excecao nenhuma e sem nunca
+        # tentar de novo. BEGIN IMMEDIATE tambem pega o lock de escrita ANTES de
+        # decidir, o que resolve a corrida de graca.
+        con.execute("BEGIN IMMEDIATE")
+        con.execute("DROP TABLE IF EXISTS usuario_nova")
+        con.execute("""CREATE TABLE usuario_nova (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id <> 0),
+                email         TEXT NOT NULL UNIQUE CHECK (length(trim(email)) > 0),
+                nome          TEXT NOT NULL DEFAULT '',
+                criado_em     TEXT NOT NULL,
+                desativado_em TEXT)""")
+        con.execute("INSERT INTO usuario_nova"
+                    " (id, email, nome, criado_em, desativado_em)"
+                    " SELECT id, email, nome, criado_em, desativado_em FROM usuario")
+        con.execute(_CREATE_CREDENCIAL)
+        # `INSERT OR IGNORE` e o que torna esta migracao repetivel: se ela ja
+        # rodou pela metade em outra subida, a linha existente e respeitada em
+        # vez de estourar no UNIQUE.
+        con.execute("INSERT OR IGNORE INTO credencial"
+                    " (usuario_id, tipo, identificador, segredo_hash, criado_em)"
+                    " SELECT id, 'senha', CAST(id AS TEXT), senha_hash, criado_em"
+                    "   FROM usuario"
+                    "  WHERE senha_hash IS NOT NULL AND senha_hash <> ''")
+        if tinha_totp:
+            con.execute("INSERT OR IGNORE INTO credencial"
+                        " (usuario_id, tipo, identificador, segredo_hash,"
+                        "  criado_em, usado_em)"
+                        " SELECT id, 'totp', CAST(id AS TEXT), totp_segredo,"
+                        "        criado_em, totp_confirmado_em"
+                        "   FROM usuario WHERE totp_segredo IS NOT NULL")
+        con.execute("DROP TABLE usuario")
+        con.execute("ALTER TABLE usuario_nova RENAME TO usuario")
+        sobra = list(con.execute("PRAGMA foreign_key_check"))
+        if sobra:
+            raise sqlite3.IntegrityError("migracao deixaria orfao: %r" % (sobra[:3],))
         con.commit()
     except Exception:
         con.rollback()
@@ -761,27 +888,34 @@ def _normalizar_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
-def criar_usuario(email: str, senha: str, nome: str = "", con=None) -> int:
-    """Devolve o id. E-mail repetido levanta IntegrityError — nao vira silencio."""
+def criar_usuario(email: str, senha: str = None, nome: str = "", con=None) -> int:
+    """Devolve o id. E-mail repetido levanta IntegrityError — nao vira silencio.
+
+    `senha=None` e o caminho normal da etapa 9: quem entra por GitHub nao tem
+    senha nenhuma, e obrigar uma seria inventar segredo sem dono.
+    """
     fechar = con is None
     con = con or conectar()
     try:
         cur = con.execute(
-            "INSERT INTO usuario (email, nome, senha_hash, criado_em) VALUES (?,?,?,?)",
-            (_normalizar_email(email), nome or "", hash_senha(senha), agora()))
+            "INSERT INTO usuario (email, nome, criado_em) VALUES (?,?,?)",
+            (_normalizar_email(email), nome or "", agora()))
+        uid = int(cur.lastrowid)
+        if senha:
+            con.execute("INSERT INTO credencial (usuario_id, tipo, identificador,"
+                        " segredo_hash, criado_em) VALUES (?,'senha',?,?,?)",
+                        (uid, str(uid), hash_senha(senha), agora()))
         con.commit()
-        return int(cur.lastrowid)
+        return uid
     finally:
         if fechar:
             con.close()
 
 
-# As colunas que podem sair daqui. NAO inclui `senha_hash` nem `totp_segredo`:
-# um `SELECT *` bastava para a etapa 9 devolver os dois num JSON sem ninguem
-# reparar. Quem precisa da senha pede por `credencial_por_email`, e ai a
-# intencao esta escrita no nome da funcao.
-COLUNAS_USUARIO = ("id", "email", "nome", "totp_confirmado_em",
-                   "criado_em", "desativado_em")
+# As colunas que podem sair daqui. Nenhum segredo mora mais nesta tabela — eles
+# foram para a `credencial` na etapa 9 —, mas a lista continua explicita porque
+# um `SELECT *` volta a vazar no dia em que alguem acrescentar uma coluna.
+COLUNAS_USUARIO = ("id", "email", "nome", "criado_em", "desativado_em")
 
 
 def usuario_por_email(email: str, con=None):
@@ -798,12 +932,19 @@ def usuario_por_email(email: str, con=None):
 
 
 def credencial_por_email(email: str, con=None):
-    """O caminho do login, e so ele. Devolve (id, senha_hash) ou None."""
+    """A PORTA DE EMERGENCIA, e so ela. Devolve (id, senha_hash) ou None.
+
+    Desde a etapa 9 o caminho normal e o GitHub, e conta criada por convite nao
+    tem credencial de senha nenhuma — entao None aqui e o esperado, nao um erro.
+    """
     fechar = con is None
     con = con or conectar()
     try:
-        l = con.execute("SELECT id, senha_hash FROM usuario"
-                        " WHERE email = ? AND desativado_em IS NULL",
+        l = con.execute("SELECT u.id AS id, c.segredo_hash AS senha_hash"
+                        "  FROM usuario u"
+                        "  JOIN credencial c ON c.usuario_id = u.id"
+                        " WHERE u.email = ? AND u.desativado_em IS NULL"
+                        "   AND c.tipo = 'senha' AND c.revogada_em IS NULL",
                         (_normalizar_email(email),)).fetchone()
         return (l["id"], l["senha_hash"]) if l else None
     finally:
@@ -811,14 +952,59 @@ def credencial_por_email(email: str, con=None):
             con.close()
 
 
-def guardar_totp(usuario_id: int, segredo: str, con=None) -> None:
-    """Guarda CIFRADO e deixa o `confirmado_em` em branco: guardar nao e conferir."""
+def ligar_github(usuario_id: int, github_id: str, con=None) -> None:
+    """Amarra uma conta a um id NUMERICO do GitHub. Nunca ao login em texto.
+
+    Login do GitHub pode ser trocado, e o nome antigo fica livre para outra
+    pessoa registrar. Casar por texto e entregar a conta a quem pegar o nome
+    abandonado.
+    """
     fechar = con is None
     con = con or conectar()
     try:
-        con.execute("UPDATE usuario SET totp_segredo = ?, totp_confirmado_em = NULL"
-                    " WHERE id = ?",
-                    (cifrar(segredo, contexto="totp:%d" % usuario_id), usuario_id))
+        con.execute("INSERT INTO credencial (usuario_id, tipo, identificador,"
+                    " criado_em) VALUES (?,'github',?,?)",
+                    (int(usuario_id), str(github_id).strip(), agora()))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def usuario_por_github(github_id: str, con=None):
+    """Conta ATIVA com credencial ATIVA, ou None. Nao diz qual das duas faltou.
+
+    Motivo diferente por causa diferente e o que transforma uma tela de login
+    numa lista de quem existe.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute(
+            "SELECT %s FROM usuario u JOIN credencial c ON c.usuario_id = u.id"
+            " WHERE c.tipo = 'github' AND c.identificador = ?"
+            "   AND c.revogada_em IS NULL AND u.desativado_em IS NULL"
+            % ", ".join("u.%s AS %s" % (c, c) for c in COLUNAS_USUARIO),
+            (str(github_id).strip(),)).fetchone()
+        return dict(l) if l else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def guardar_totp(usuario_id: int, segredo: str, con=None) -> None:
+    """Guarda CIFRADO e deixa o `usado_em` em branco: guardar nao e conferir."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        # Uma credencial de TOTP por pessoa: o UNIQUE (tipo, identificador) ja
+        # garante isso, e o REPLACE e o que deixa trocar o autenticador sem
+        # precisar apagar a anterior a mao.
+        con.execute("INSERT OR REPLACE INTO credencial"
+                    " (usuario_id, tipo, identificador, segredo_hash, criado_em)"
+                    " VALUES (?,'totp',?,?,?)",
+                    (usuario_id, str(usuario_id),
+                     cifrar(segredo, contexto="totp:%d" % usuario_id), agora()))
         con.commit()
     finally:
         if fechar:
@@ -829,8 +1015,10 @@ def ler_totp(usuario_id: int, con=None):
     fechar = con is None
     con = con or conectar()
     try:
-        l = con.execute("SELECT totp_segredo FROM usuario WHERE id = ?",
-                        (usuario_id,)).fetchone()
+        l = con.execute("SELECT segredo_hash FROM credencial"
+                        " WHERE tipo = 'totp' AND identificador = ?"
+                        "   AND revogada_em IS NULL",
+                        (str(usuario_id),)).fetchone()
         return decifrar(l[0], contexto="totp:%d" % usuario_id) if l and l[0] else None
     finally:
         if fechar:
@@ -838,11 +1026,13 @@ def ler_totp(usuario_id: int, con=None):
 
 
 def confirmar_totp(usuario_id: int, con=None) -> None:
+    """`usado_em` faz o papel do antigo `totp_confirmado_em`."""
     fechar = con is None
     con = con or conectar()
     try:
-        con.execute("UPDATE usuario SET totp_confirmado_em = ? WHERE id = ?",
-                    (agora(), usuario_id))
+        con.execute("UPDATE credencial SET usado_em = ?"
+                    " WHERE tipo = 'totp' AND identificador = ?",
+                    (agora(), str(usuario_id)))
         con.commit()
     finally:
         if fechar:
