@@ -1,0 +1,19 @@
+# Fim de linha: LF em todo o repositorio, no indice e no disco.
+# O painel-projetos era MISTO (13 arquivos com CRLF no indice) e isso ja
+# fez conferencia mentir nesta casa. Aqui nasce uniforme, de proposito.
+* text=auto eol=lf
+
+# Binarios: nunca normalizar, nunca tentar diff de texto.
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+*.db binary
+
+# SVG e texto, mas o diff dele nao ajuda ninguem.
+*.svg text eol=lf -diff
