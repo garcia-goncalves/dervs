@@ -60,10 +60,18 @@ lista de contas da tabela `credencial`. Ver
 | `DERVS_COFRE_ARQUIVO` | tira a `cofre.chave` da pasta servida (etapa 16) | ambiente do servidor |
 | `DERVS_GITHUB_ID` | Client ID do OAuth App — **é público** | pode ser versionado |
 | `DERVS_GITHUB_SECRET` | Client Secret — **segredo** | só dentro do servidor |
+| `DERVS_GITHUB_TOKEN` | token de leitura do **coletor** — **segredo** | só dentro do servidor |
 | `DERVS_PROXIES_CONFIAVEIS` | IPs autorizados a dizer de quem é o pedido (etapa 16) | ambiente do servidor |
 
 Sem `DERVS_GITHUB_ID`/`DERVS_GITHUB_SECRET`, `/entrar/github` responde **404** e
 o botão nem aparece. Botão que leva a erro é pior que botão que não existe.
+
+`DERVS_GITHUB_TOKEN` é de outra coisa: é como o **coletor** lê o GitHub. Nesta
+máquina ele não é necessário — sem a variável, o coletor usa o `gh` que o dono
+já logou aqui. No servidor o `gh` não existe e não pode existir (guardaria a
+identidade pessoal do dono numa máquina sozinha na internet), então lá a
+variável é obrigatória. Como criá-la:
+[`docs/operacao/token-do-coletor.md`](docs/operacao/token-do-coletor.md).
 
 Conta nova só por comando, nunca pela web:
 
@@ -97,7 +105,7 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `test_servir.py` | 6 testes: a linha de comando, e o amarre entre o que a tela busca e o que o servidor serve. `python test_servir.py`. |
 | `test_rotas.py` | 11 testes — **o vigia**: importa `servir` e prova que nenhuma rota executa comando. `python test_rotas.py`. |
 | `coletar.py` | Camada **local**: git, Docker, portas, idade do grafo, memória, variáveis. |
-| `coletar_github.py` | Camada **github**: CI, PRs, alertas, o site no ar e o último deploy. Uma consulta GraphQL em lote. |
+| `coletar_github.py` | Camada **github**: CI, PRs, **issues abertas**, alertas, o site no ar e o último deploy. Uma consulta GraphQL em lote, para todos os repositórios. |
 | `test_coletar.py` | 94 testes dos pedaços dos coletores que já erraram. `python test_coletar.py`. |
 | `coletar_pesado.py` | Camada **pesado**: cota do Actions e `npm audit`. |
 | `test_coletar_pesado.py` | 12 testes da auditoria de dependência. `python test_coletar_pesado.py`. |
@@ -311,6 +319,44 @@ teste JavaScript, e instalar um quebraria "zero dependência, zero build". Foi
 verificada no navegador em 24/08/2026 com estes casos: `dents`, `wsmed`,
 `ajudei saude`, `subir`, `grafo`, `tema`, termo sem resultado, e navegação por
 seta com volta ao fim da lista.
+
+## A coluna "A fazer", e o alerta que se anuncia velho (etapa 12)
+
+O painel passou a trazer as **issues abertas** de cada repositório, na mesma
+consulta que já ia buscar CI e pedidos de alteração — não numa consulta a mais.
+Isso não é economia de estilo: a cota de minutos desta conta já estourou uma
+vez, e uma pergunta por repositório multiplicaria a conta por 15.
+
+**Issue aberta não virou pendência, e isso é decisão.** Todo repositório vivo
+tem issue aberta o tempo todo; 15 alertas iguais na caixa de entrada ensinam o
+dono a ignorar a caixa inteira, inclusive o alerta que importava. Issue é um
+*fato do projeto*, então mora na tabela, na coluna **A fazer**, com três
+estados que não se confundem:
+
+| O que aparece | O que quer dizer |
+|---|---|
+| um número | tantas issues abertas; clicar abre a lista no GitHub |
+| `—` | conferi, não há nenhuma |
+| `?` | **não consegui ler** — falta permissão, ou a consulta veio pela metade |
+
+### O alerta de segurança que não pode ser apagado nem mentir
+
+Quando o coletor não consegue reler os alertas de um repositório (o token
+perdeu a permissão, o campo veio nulo), ele **mantém o último número
+conhecido**. Zerar apagaria da tela um alerta real — e "93 alertas abertos"
+virando silêncio por um piscar de rede é o pior defeito possível aqui.
+
+Mas manter calado é pior que zerar: o painel republicaria uma medição de
+semanas atrás como se fosse de agora, para sempre. Por isso o número
+preservado carrega a própria idade (`lido_em`, o carimbo da medição — nunca o
+carimbo da linha do banco, que é reescrito a cada rodada) e a pendência passa a
+dizer:
+
+> 93 alerta(s) de segurança aberto(s) em medconsultoria. Não consigo reler esse
+> número há 26 dia(s), então ele pode estar velho.
+
+E a coleta imprime, no meio de uma rodada bem-sucedida, `aviso: nao consegui
+reler os alertas de segurança de N projeto(s)`.
 
 ## A nota de prontidão, e por que ela mentia
 
