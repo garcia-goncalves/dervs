@@ -219,7 +219,11 @@ def _anotar_a_vida(camada: str) -> None:
     try:
         con = banco.conectar()
         try:
-            e = banco.montar_estado(con)
+            # A MESMA conta que os coletores gravam. Fora do ambiente
+            # local isto vira DONO_LOCAL e o laco nao ve nada: a memoria ainda
+            # e de um inquilino so, e passar a ser de cada conta e trabalho da
+            # etapa 16. DIVIDA NOMEADA, nao esquecimento.
+            e = banco.montar_estado(con, usuario_id=banco.conta_local(con))
             pend = regras.avaliar(e["projetos"], quota=e["quota"],
                                   silenciadas=banco.silenciadas(con),
                                   arquivadas=banco.arquivadas(con=con))
@@ -339,8 +343,26 @@ class Hub(SimpleHTTPRequestHandler):
             return ""
         return pedaco[1].strip()
 
+    # Os IPs de quem tem PERMISSAO de dizer "o cliente de verdade e outro".
+    # Vazio por padrao, e de proposito: se qualquer um pudesse mandar
+    # `X-Forwarded-For`, o teto por origem sumiria — bastaria variar o cabecalho
+    # a cada chute. Na etapa 16 o container fica em 127.0.0.1 atras do nginx do
+    # host, e sem esta lista TODA chamada chegaria como 127.0.0.1, dividindo um
+    # balde unico de cinco tentativas por 15 min: um estranho gastaria o teto de
+    # graca e o dono nunca mais parearia maquina nenhuma. Achado da revisao de
+    # seguranca da etapa 11.
+    PROXIES_CONFIAVEIS = frozenset(
+        p.strip() for p in (os.environ.get("DERVS_PROXIES_CONFIAVEIS") or "").split(",")
+        if p.strip())
+
     def _origem_do_pedido(self) -> str:
-        return self.client_address[0] if self.client_address else "?"
+        de = self.client_address[0] if self.client_address else "?"
+        if de not in self.PROXIES_CONFIAVEIS:
+            return de
+        # O ULTIMO salto e o unico confiavel: o comeco da lista e escrito pelo
+        # cliente e pode ser inventado inteiro.
+        cru = (self.headers.get("X-Forwarded-For") or "").split(",")
+        return (cru[-1].strip() or de) if cru else de
 
     # ---------------------------------------------------------- despacho
     def _caminho(self) -> str:
@@ -353,9 +375,21 @@ class Hub(SimpleHTTPRequestHandler):
         rota = ROTAS.get(self._caminho())
         if rota is None or rota.metodo != metodo:
             return self._json(404, {"erro": "nao existe"})
-        # NEGA POR PADRAO. `acesso` e obrigatorio em toda rota, e `test_rotas.py`
-        # reprova a suite se alguma nascer sem ele — nao ha valor "sem
-        # classificacao" que passe por aqui por descuido.
+        # NEGA POR PADRAO, E AQUI — nao so na CI. O `test_rotas.py` cobra que
+        # toda rota declare `acesso`, mas ele e garantia de suite: uma rota com
+        # "Dado", "maquinas" ou qualquer string fora do conjunto caia por todos
+        # os `if` abaixo e EXECUTAVA sem autenticacao nenhuma. O comentario
+        # antigo afirmava aqui uma propriedade que o codigo nao tinha. Achado da
+        # revisao de seguranca da etapa 11.
+        if rota.acesso not in ACESSOS:
+            return self._json(500, {"erro": "rota mal classificada"})
+        # Zerado ANTES de qualquer decisao, e nao no meio do guarda: o
+        # `http.server` reaproveita a MESMA instancia do handler nos pedidos de
+        # uma conexao keep-alive, entao um atributo de pedido anterior
+        # sobreviveria ate o seguinte — e e assim que se vaza autenticacao entre
+        # requisicoes. Uma saida antecipada acima desta linha deixava o valor
+        # velho de pe.
+        self._maquina = None
         if rota.acesso == "dado" and self._sessao() is None:
             # Sem detalhe e sem nome de projeto nenhum no corpo.
             return self._json(401, {"erro": "entre para ver"})
@@ -363,13 +397,8 @@ class Hub(SimpleHTTPRequestHandler):
         # agente nao tem cookie, nao manda Origin e nao tem token anti-CSRF —
         # ele carrega um token proprio, preso a uma maquina e a uma conta. A
         # classificacao vive na tabela pelo mesmo motivo das outras tres: `if`
-        # dentro da funcao nasce esquecido na rota seguinte.
-        #
-        # Zerado a CADA despacho de proposito: o `http.server` reaproveita a
-        # MESMA instancia do handler para todos os pedidos de uma conexao
-        # keep-alive, entao um atributo de pedido anterior sobreviveria ate o
-        # pedido seguinte — que e como se vaza autenticacao entre requisicoes.
-        self._maquina = None
+        # dentro da funcao nasce esquecido na rota seguinte. O `self._maquina`
+        # ja foi zerado la em cima.
         if rota.acesso == "maquina":
             self._maquina = banco.maquina_por_token(self._token_do_agente())
             if self._maquina is None:
@@ -415,7 +444,12 @@ class Hub(SimpleHTTPRequestHandler):
         """
         con = banco.conectar()
         try:
-            e = banco.montar_estado(con)
+            # `usuario_id` TAMBEM aqui, e nao so nas silenciadas. Sem ele
+            # `montar_estado` lia a tabela `medida` inteira e devolvia os
+            # projetos de TODAS as contas para qualquer sessao. Era o mesmo
+            # IDOR que este docstring diz ter consertado, uma linha acima, na
+            # metade que faltou. Achado da revisao de seguranca da etapa 11.
+            e = banco.montar_estado(con, usuario_id=usuario_id)
             pend = regras.avaliar(e["projetos"], quota=e["quota"],
                                   silenciadas=banco.silenciadas(
                                       con, usuario_id=usuario_id),
@@ -609,7 +643,7 @@ class Hub(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    CONTA_LOCAL = "dono@teste.local"
+    CONTA_LOCAL = banco.CONTA_LOCAL   # uma copia so; ver banco.py
 
     def _entrar_local(self):
         """A porta do AMBIENTE LOCAL, e so dele.
@@ -1054,6 +1088,10 @@ class Hub(SimpleHTTPRequestHandler):
         # A UNICA vez que este token existe fora da maquina que o pediu.
         return self._json(200, {"token": token})
 
+    # 60 relatorios por janela de 15 min = um a cada 15 s. A coleta roda a
+    # cada 60 s, entao sobra folga de quatro vezes para reinicio e ajuste.
+    TETO_DE_RELATORIOS = 60
+
     def _relatorio(self):
         """A medicao de uma maquina entra aqui — e o carimbo de vida junto.
 
@@ -1064,6 +1102,15 @@ class Hub(SimpleHTTPRequestHandler):
         maquina = getattr(self, "_maquina", None)
         if maquina is None:            # cinto, alem do guarda do despacho
             return self._json(401, {"erro": "token de maquina invalido"})
+        # TETO NA INGESTAO. O teto de 300 e POR RELATORIO; nada limitava quantos
+        # relatorios. Com um token vazado, um laco de POST enchia o disco e
+        # deixava `montar_estado` carregando lixo a cada `/api/dados` de todo
+        # mundo. O balde e por MAQUINA, e nao por origem: a maquina legitima tem
+        # IP variavel e o token e o que a identifica.
+        if not cortina.registrar_tentativa(
+                "maquina:%d" % maquina["id"], time.time(),
+                balcao="relatorio", teto=self.TETO_DE_RELATORIOS):
+            return self._json(429, {"erro": "relatorios demais"})
         corpo = self._corpo_json(teto=self.TETO_DO_RELATORIO)
         if corpo is None:
             return self._json(400, {"erro": "corpo invalido"})
@@ -1189,6 +1236,12 @@ class Hub(SimpleHTTPRequestHandler):
 #
 # Rota sem classificacao declarada REPROVA a suite em `test_rotas.py`. A negativa
 # e o padrao inclusive no teste: esquecer de classificar nao pode dar acesso.
+# AS QUATRO CLASSES DE ACESSO, e a lista de verdade. `_despachar` recusa
+# qualquer rota que declare outra coisa, e `test_rotas.py` le DAQUI em vez de
+# repetir o conjunto — duas copias divergem, e a que diverge e sempre a que
+# ninguem le.
+ACESSOS = frozenset(("aberta", "cortina", "dado", "maquina"))
+
 Rota = namedtuple("Rota", "metodo funcao acesso")
 
 ROTAS = {
@@ -1241,7 +1294,8 @@ def main():
     # existe mais em lugar nenhum deste sistema — so a impressao digital, que
     # nao volta a ser numero.
     combinacao = cortina.garantir_combinacao(con)
-    vazio = not banco.montar_estado(con)["projetos"]
+    vazio = not banco.montar_estado(
+        con, usuario_id=banco.conta_local(con))["projetos"]
     con.close()
     if combinacao:
         print("=" * 62)

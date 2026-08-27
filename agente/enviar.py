@@ -27,6 +27,7 @@ import platform
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -74,15 +75,25 @@ def guardar_token(alvo: str, token: str, maquina: str = "") -> Path:
     nada e a heranca do perfil do usuario e o que protege; no Linux e no Mac,
     onde este agente tambem roda, o padrao do sistema deixaria o arquivo legivel
     por qualquer conta da maquina.
+
+    O ARQUIVO NASCE COM 600, em vez de nascer com o padrao do sistema e ser
+    fechado na linha seguinte. Entre um `write_text` e um `chmod` havia uma
+    janela — curta, mas real numa maquina de varias contas — em que o token
+    ficava legivel por qualquer um. E um token que nao vence. Achado da revisao
+    de Python da etapa 11.
     """
     destino = arquivo_do_token()
     destino.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     dados = _lido()
     dados[_chave(alvo)] = {"token": token, "maquina": maquina,
                            "guardado_em": time.strftime("%Y-%m-%dT%H:%M:%S")}
-    destino.write_text(json.dumps(dados, ensure_ascii=False, indent=2),
-                       encoding="utf-8")
+    texto = json.dumps(dados, ensure_ascii=False, indent=2)
+    fd = os.open(destino, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as arq:
+        arq.write(texto)
     try:
+        # O `O_CREAT` so aplica o modo em arquivo NOVO: num arquivo que ja
+        # existia com permissao frouxa, e este chmod que corrige.
         os.chmod(destino, 0o600)
     except OSError:
         pass
@@ -99,6 +110,30 @@ def _chave(alvo: str) -> str:
 
 class ErroDoAlvo(Exception):
     """Falha que o dono precisa LER, e nao um traceback."""
+
+
+# Onde `http://` continua valendo: a maquina do proprio dono, sem rede no meio.
+LOCAIS = ("localhost", "127.0.0.1", "[::1]", "::1")
+
+
+def conferir_alvo(alvo: str) -> str:
+    """`http://` num endereco de fora manda o token em CLARO no cabecalho.
+
+    Uma letra a menos digitada e a credencial da maquina viaja legivel por todo
+    salto do caminho. Achado da revisao de seguranca da etapa 11.
+    """
+    alvo = (alvo or "").strip().rstrip("/")
+    if not alvo:
+        raise ErroDoAlvo("--alvo vazio. Exemplo: --alvo https://dervs.com.br")
+    partes = urllib.parse.urlsplit(alvo)
+    if partes.scheme not in ("http", "https"):
+        raise ErroDoAlvo("o endereco tem de comecar com https:// (ou http:// "
+                         "para o DERVS da sua propria maquina). Veio: %r" % alvo)
+    if partes.scheme == "http" and (partes.hostname or "") not in LOCAIS:
+        raise ErroDoAlvo(
+            "recusei falar com %s por http://: o token da maquina iria em "
+            "claro, legivel por quem estiver no caminho. Use https://." % alvo)
+    return alvo
 
 
 def _falar(alvo: str, caminho: str, corpo: dict, token: str = "") -> dict:
@@ -191,6 +226,14 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
 
     try:
+        # ANTES de qualquer coisa ir pela rede, inclusive do primeiro
+        # pareamento: o codigo de seis digitos tambem e segredo.
+        a.alvo = conferir_alvo(a.alvo)
+    except ErroDoAlvo as e:
+        print("ENDERECO RECUSADO: %s" % e, file=sys.stderr)
+        return 2
+
+    try:
         if a.codigo:
             parear(a.alvo, a.codigo.strip(), a.nome)
             # O token NAO e impresso. Ele fica no arquivo, e so.
@@ -210,6 +253,14 @@ def main(argv=None) -> int:
             if r.get("cortados"):
                 print("AVISO: o alvo cortou %s projeto(s) por exceder o teto "
                       "dele." % r["cortados"], file=sys.stderr)
+            # `invalidos` e outra coisa: nome vazio, nome reservado, ou entrada
+            # que nem e dicionario. Sem esta linha um bug de serializacao AQUI
+            # ficaria invisivel dos dois lados — o alvo recusa em silencio e o
+            # agente imprime a conta cheia.
+            if r.get("invalidos"):
+                print("AVISO: o alvo RECUSOU %s entrada(s) por nome vazio, "
+                      "reservado ou formato errado." % r["invalidos"],
+                      file=sys.stderr)
         except ErroDoAlvo as e:
             # Erro de rede num laco nao pode matar o agente: a internet cai, e o
             # que interessa e ele voltar sozinho quando ela voltar.

@@ -130,7 +130,8 @@ def main():
     try:
         quota = coleta_quota()
         if quota:
-            banco.gravar(banco.QUOTA, "pesado", quota, con)
+            banco.gravar(banco.QUOTA, "pesado", quota, con,
+                         usuario_id=banco.conta_local(con))
             banco.anotar_historico("actions_minutos", quota["minutos"], con)
             print("cota do Actions: %d%% (%d de %d min)"
                   % (quota["pct"], quota["minutos"], quota["cota"]))
@@ -150,7 +151,8 @@ def main():
             # camada nunca rodou". Sem essa marca a regra 17 nao acorda, e o
             # invariante 2 do motor (ausencia nao e falha) continua de pe.
             banco.gravar(repo.name, "pesado",
-                         {"deps_inseguras": deps, "auditoria_falhou": deps is None}, con)
+                         {"deps_inseguras": deps, "auditoria_falhou": deps is None},
+                         con, usuario_id=banco.conta_local(con))
             if deps is None:
                 cegos.append(repo.name)
             else:
@@ -159,6 +161,7 @@ def main():
         if cegos:
             print("npm audit NAO respondeu em %d (nao conte como zero): %s"
                   % (len(cegos), ", ".join(cegos[:8])))
+        con.commit()          # ver coletar.py: quem abriu a conexao commita
     finally:
         con.close()
     return 0

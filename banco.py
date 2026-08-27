@@ -37,6 +37,11 @@ CAMADAS = ("local", "github", "pesado")
 # verdade — por isso `usuario_id` das tabelas de decisao NAO tem chave
 # estrangeira para `usuario`: o zero precisa continuar valendo.
 DONO_LOCAL = 0
+# A conta que a porta `/entrar/local` abre. Ela e a dona da coleta DESTA
+# maquina: os coletores gravam nela, e nao num `DONO_LOCAL` que sessao nenhuma
+# consegue ler. E conta de TESTE, e por isso `conta_local()` so a cria em
+# ambiente local — no servidor ninguem roda coletor, quem alimenta e o agente.
+CONTA_LOCAL = "dono@teste.local"
 
 # Seis digitos sao um milhao de possibilidades. O teto e o que impede chutar.
 MAX_TENTATIVAS_PAREAMENTO = 5
@@ -49,14 +54,29 @@ MAX_PROJETOS_POR_RELATORIO = 300
 MAX_NOME_DE_PROJETO = 200
 MAX_CAMINHO = 500
 MAX_AVISOS = 30
+# As duas linhas de sistema que moram na mesma tabela `medida`. Relatorio de
+# maquina nao pode escrever nelas — ver `receber_relatorio`.
+RESERVADOS = (INFRA, QUOTA)
+# Quantos projetos DISTINTOS uma conta pode acumular na `medida`. O teto de
+# relatorio nao segura disco: 300 nomes NOVOS por envio, mil envios, e o volume
+# do servidor acaba. Ver `receber_relatorio`.
+MAX_PROJETOS_POR_CONTA = 1000
 
 ESQUEMA = """
+-- `usuario_id` NA CHAVE. Sem ele a medicao era um balcao unico: duas contas
+-- com um projeto de mesmo nome — "site", "api" — se sobrescreviam pelo
+-- ON CONFLICT, e `ler_tudo` devolvia a tabela inteira para qualquer sessao. Uma
+-- maquina pareada por uma conta escrevia por cima do alerta de outra, e revogar
+-- a maquina nao desfazia. Achado BLOQUEANTE das revisoes de banco e de
+-- seguranca da etapa 11, com prova rodada. Sem chave estrangeira pelo mesmo
+-- motivo das outras tabelas com dono: DONO_LOCAL = 0 nao e conta de verdade.
 CREATE TABLE IF NOT EXISTS medida (
-    projeto   TEXT NOT NULL,
-    camada    TEXT NOT NULL,
-    medido_em TEXT NOT NULL,
-    dados     TEXT NOT NULL,
-    PRIMARY KEY (projeto, camada)
+    usuario_id INTEGER NOT NULL DEFAULT 0,
+    projeto    TEXT NOT NULL,
+    camada     TEXT NOT NULL,
+    medido_em  TEXT NOT NULL,
+    dados      TEXT NOT NULL,
+    PRIMARY KEY (usuario_id, projeto, camada)
 );
 
 CREATE TABLE IF NOT EXISTS historico (
@@ -381,6 +401,7 @@ def migrar(con: sqlite3.Connection) -> None:
     """
     _migrar_pendencia_estado(con)
     _migrar_credencial(con)
+    _migrar_medida(con)
 
 
 # As tabelas que apontam para `usuario`. A migracao confere so estas: varrer o
@@ -474,6 +495,72 @@ def _migrar_pendencia_estado(con: sqlite3.Connection) -> None:
                     % ("usuario_id" if tinha_dono else "0"))
         con.execute("DROP TABLE pendencia_estado")
         con.execute("ALTER TABLE pendencia_estado_nova RENAME TO pendencia_estado")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        _religar_fk(con)
+
+
+def _dono_da_medida_antiga(con: sqlite3.Connection) -> int:
+    """A conta local, se ela ja existir neste banco; senao, `DONO_LOCAL`.
+
+    Le direto em vez de chamar `conta_local()`: aqui NAO se cria conta nenhuma —
+    a migracao roda em toda conexao, inclusive no servidor.
+    """
+    try:
+        l = con.execute("SELECT id FROM usuario WHERE email = ?"
+                        " AND desativado_em IS NULL", (CONTA_LOCAL,)).fetchone()
+    except sqlite3.Error:
+        return DONO_LOCAL              # banco anterior a `usuario`: nao ha dono
+    return l["id"] if l else DONO_LOCAL
+
+
+def _migrar_medida(con: sqlite3.Connection) -> None:
+    """`medida` ganhou dono (etapa 11, correcao). Mesmo procedimento da
+    `pendencia_estado`: o SQLite nao troca chave primaria, entao a tabela e
+    reconstruida, e o que ja estava la vira do DONO_LOCAL — que e exatamente o
+    que era, a medicao desta maquina.
+    """
+    forma = list(con.execute("PRAGMA table_info(medida)"))
+    if not forma:
+        return                                   # banco novo: o ESQUEMA ja faz certo
+    chave = [l[1] for l in sorted((l for l in forma if l[5]), key=lambda l: l[5])]
+    if chave == ["usuario_id", "projeto", "camada"]:
+        return
+    con.execute("PRAGMA foreign_keys=OFF")
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        # RELIDO DENTRO DA TRANSACAO: a leitura la em cima aconteceu antes do
+        # lock, e dois processos subindo juntos leriam os dois "preciso migrar".
+        # E a licao ja paga na `pendencia_estado`.
+        forma = list(con.execute("PRAGMA table_info(medida)"))
+        chave = [l[1] for l in sorted((l for l in forma if l[5]),
+                                      key=lambda l: l[5])]
+        if chave == ["usuario_id", "projeto", "camada"]:
+            con.rollback()
+            return
+        tinha_dono = "usuario_id" in {l[1] for l in forma}
+        # PARA QUEM VAI LER, e nao para o zero. Em ambiente local quem abre o
+        # painel e a conta `CONTA_LOCAL`; entregar a ela e o unico jeito de a
+        # medicao antiga continuar aparecendo. No servidor essa conta nao
+        # existe, e ai o destino e o zero mesmo.
+        destino = "0" if tinha_dono else str(_dono_da_medida_antiga(con))
+        con.execute("DROP TABLE IF EXISTS medida_nova")
+        con.execute("""CREATE TABLE medida_nova (
+                usuario_id INTEGER NOT NULL DEFAULT 0,
+                projeto    TEXT NOT NULL,
+                camada     TEXT NOT NULL,
+                medido_em  TEXT NOT NULL,
+                dados      TEXT NOT NULL,
+                PRIMARY KEY (usuario_id, projeto, camada))""")
+        con.execute("INSERT INTO medida_nova"
+                    " (usuario_id, projeto, camada, medido_em, dados)"
+                    " SELECT %s, projeto, camada, medido_em, dados FROM medida"
+                    % ("usuario_id" if tinha_dono else destino))
+        con.execute("DROP TABLE medida")
+        con.execute("ALTER TABLE medida_nova RENAME TO medida")
         con.commit()
     except Exception:
         con.rollback()
@@ -791,29 +878,49 @@ def hash_codigo(codigo: str) -> str:
                     hashlib.sha256).hexdigest()
 
 
-def gravar(projeto: str, camada: str, dados: dict, con=None) -> None:
+def gravar(projeto: str, camada: str, dados: dict, con=None, *,
+           usuario_id: int) -> None:
+    """`usuario_id` E OBRIGATORIO, e de proposito nao tem padrao.
+
+    Um padrao `DONO_LOCAL` aqui seria a mesma armadilha que `silenciadas` foi na
+    etapa 8: quem esquecesse de passar escreveria no balcao do dono local sem
+    erro nenhum. Sem padrao, esquecer nao roda.
+
+    SO COMMITA QUEM ABRIU A CONEXAO. Commitar tambem com um `con` vindo de fora
+    quebrava a transacao de quem chamou: `receber_relatorio` prometia "numa
+    transacao so" e na pratica fazia um commit por projeto.
+    """
     fechar = con is None
     con = con or conectar()
     try:
         con.execute(
-            "INSERT INTO medida (projeto, camada, medido_em, dados) VALUES (?,?,?,?) "
-            "ON CONFLICT(projeto, camada) DO UPDATE SET medido_em=excluded.medido_em, "
-            "dados=excluded.dados",
-            (projeto, camada, agora(), json.dumps(dados, ensure_ascii=False)),
+            "INSERT INTO medida (usuario_id, projeto, camada, medido_em, dados)"
+            " VALUES (?,?,?,?,?)"
+            " ON CONFLICT(usuario_id, projeto, camada) DO UPDATE SET"
+            " medido_em=excluded.medido_em, dados=excluded.dados",
+            (usuario_id, projeto, camada, agora(),
+             json.dumps(dados, ensure_ascii=False)),
         )
-        con.commit()
+        if fechar:
+            con.commit()
     finally:
         if fechar:
             con.close()
 
 
-def ler_tudo(con=None) -> dict:
-    """Devolve {projeto: {camada: {"medido_em": iso, "dados": {...}}}}."""
+def ler_tudo(con=None, *, usuario_id: int) -> dict:
+    """{projeto: {camada: {"medido_em": iso, "dados": {...}}}} DAQUELA CONTA.
+
+    Sem o `WHERE` esta funcao era o vazamento: devolvia a tabela inteira, e
+    `_estado` mandava tudo para qualquer sessao. `usuario_id` sem padrao pelo
+    mesmo motivo de `gravar`.
+    """
     fechar = con is None
     con = con or conectar()
     try:
         fora: dict = {}
-        for l in con.execute("SELECT projeto, camada, medido_em, dados FROM medida"):
+        for l in con.execute("SELECT projeto, camada, medido_em, dados FROM medida"
+                             " WHERE usuario_id = ?", (usuario_id,)):
             fora.setdefault(l["projeto"], {})[l["camada"]] = {
                 "medido_em": l["medido_em"],
                 "dados": json.loads(l["dados"]),
@@ -824,7 +931,7 @@ def ler_tudo(con=None) -> dict:
             con.close()
 
 
-def montar_estado(con=None) -> dict:
+def montar_estado(con=None, *, usuario_id: int) -> dict:
     """As tres camadas remontadas no formato que o motor de regras consome.
 
     Cada camada carrega o proprio "medido_em". E o que permite a tela dizer
@@ -834,7 +941,7 @@ def montar_estado(con=None) -> dict:
     fechar = con is None
     con = con or conectar()
     try:
-        tudo = ler_tudo(con)
+        tudo = ler_tudo(con, usuario_id=usuario_id)
         infra = tudo.pop(INFRA, {}).get("local", {})
         projetos = []
         for nome, camadas in sorted(tudo.items()):
@@ -1040,6 +1147,32 @@ def gasto_do_dia(dia: str, con=None) -> float:
 
 def _normalizar_email(email: str) -> str:
     return (email or "").strip().lower()
+
+
+def conta_local(con=None) -> int:
+    """O id da conta desta maquina, criando-a se ainda nao existir.
+
+    FORA DO AMBIENTE LOCAL DEVOLVE `DONO_LOCAL` e nao cria nada: a conta e de
+    teste, e o servidor recusa conta de teste por verificacao de ambiente. La
+    ninguem roda coletor — quem escreve na `medida` e o agente, por HTTP, com a
+    conta de quem pareou a maquina.
+    """
+    if (os.environ.get("DERVS_AMBIENTE") or "").strip().lower() != "local":
+        return DONO_LOCAL
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute("SELECT id FROM usuario WHERE email = ?"
+                        " AND desativado_em IS NULL", (CONTA_LOCAL,)).fetchone()
+        if l is not None:
+            return l["id"]
+        uid = criar_usuario(CONTA_LOCAL, nome="Dono (ambiente local)", con=con)
+        if fechar:
+            con.commit()
+        return uid
+    finally:
+        if fechar:
+            con.close()
 
 
 def criar_usuario(email: str, senha: str = None, nome: str = "", con=None) -> int:
@@ -1307,9 +1440,15 @@ def usar_pareamento(codigo: str, nome_maquina: str = "", agora_iso: str = "", co
     corte = agora_iso or agora()
     try:
         cur = con.execute(
+            # NAO HA `AND tentativas < ?` AQUI, e nao e esquecimento: nada
+            # neste repositorio incrementa `pareamento.tentativas`, entao a
+            # condicao era sempre verdadeira e fingia existir um teto dentro do
+            # banco. Quem lesse este SQL podia remover o teto da rota — o unico
+            # que existe de verdade — achando que havia dois. Achado da revisao
+            # de seguranca da etapa 11.
             "UPDATE pareamento SET usado_em = ? WHERE codigo_hash = ?"
-            " AND usado_em IS NULL AND expira_em > ? AND tentativas < ?",
-            (corte, hash_codigo(codigo), corte, MAX_TENTATIVAS_PAREAMENTO))
+            " AND usado_em IS NULL AND expira_em > ?",
+            (corte, hash_codigo(codigo), corte))
         if cur.rowcount != 1:
             con.rollback()
             return None
@@ -1408,25 +1547,62 @@ def receber_relatorio(maquina_id: int, projetos: list, infra=None,
     fechar = con is None
     con = con or conectar()
     try:
-        vistos, cortados = set(), 0
+        # O DONO VEM DA MAQUINA, NAO DE QUEM CHAMOU. A rota ja achou a maquina
+        # pelo token; reler o dono aqui deixa uma fonte de verdade so, e nao ha
+        # parametro `usuario_id` para um chamador futuro preencher errado.
+        dono = con.execute("SELECT usuario_id FROM maquina WHERE id = ?",
+                           (maquina_id,)).fetchone()
+        if dono is None:
+            raise ValueError("maquina %r nao existe" % (maquina_id,))
+        usuario_id = dono["usuario_id"]
+        # UMA transacao, agora de verdade. Antes o docstring prometia e o codigo
+        # nao cumpria: `gravar`, `ver_projeto` e `arquivar_projeto` commitavam
+        # cada um, entao um relatorio de 300 projetos eram 600 commits e 300
+        # estados intermediarios visiveis para quem estivesse com o painel
+        # aberto — o painel mostrava "150 projetos" com cara de numero certo.
+        # IMMEDIATE, e nao a transacao implicita do modulo, porque a implicita
+        # nasce DEFERRED e a promocao para escrita pode voltar BUSY sem esperar
+        # o `busy_timeout`.
+        propria = not con.in_transaction
+        if propria:
+            con.execute("BEGIN IMMEDIATE")
+        # TETO ACUMULADO, e nao so por relatorio: sem ele um token vazado
+        # gravava nomes aleatorios novos a cada envio e o disco crescia sem fim.
+        # Nome que JA existe continua atualizando normalmente — o teto so barra
+        # a criacao do 1001.
+        ja_tem = {l[0] for l in con.execute(
+            "SELECT DISTINCT projeto FROM medida WHERE usuario_id = ?",
+            (usuario_id,))}
+        vistos, cortados, invalidos = set(), 0, 0
         for p in projetos:
             if not isinstance(p, dict):
+                invalidos += 1
                 continue
             nome = str(p.get("nome") or "").strip()[:MAX_NOME_DE_PROJETO]
-            if not nome:
+            # NOME RESERVADO NAO ENTRA. `INFRA` e `QUOTA` sao linhas de sistema
+            # dentro da mesma tabela: um projeto chamado `_infra` sequestrava o
+            # bloco de infraestrutura do painel — "Docker OK, nada quebrado" —
+            # escrito por quem mandou o relatorio. Achado da revisao de
+            # seguranca da etapa 11.
+            if not nome or nome in RESERVADOS:
+                invalidos += 1
                 continue
             if len(vistos) >= MAX_PROJETOS_POR_RELATORIO and nome not in vistos:
                 cortados += 1
                 continue
+            if nome not in ja_tem and len(ja_tem) >= MAX_PROJETOS_POR_CONTA:
+                cortados += 1
+                continue
+            ja_tem.add(nome)
             vistos.add(nome)
-            gravar(nome, "local", p, con)
+            gravar(nome, "local", p, con, usuario_id=usuario_id)
             ver_projeto(maquina_id, nome,
                         str(p.get("caminho") or "")[:MAX_CAMINHO], con=con)
         if isinstance(infra, dict):
             infra = dict(infra)
             if avisos:
                 infra["avisos"] = [str(a)[:500] for a in avisos[:MAX_AVISOS]]
-            gravar(INFRA, "local", infra, con)
+            gravar(INFRA, "local", infra, con, usuario_id=usuario_id)
         if vistos:
             for antigo in projetos_da_maquina(maquina_id, con=con):
                 if antigo["projeto"] not in vistos:
@@ -1434,11 +1610,17 @@ def receber_relatorio(maquina_id: int, projetos: list, infra=None,
         con.execute("UPDATE maquina SET visto_em = ? WHERE id = ?",
                     (agora(), maquina_id))
         con.commit()
-        # `cortados` VOLTA na resposta em vez de sumir. Truncagem silenciosa e a
-        # mesma mentira por omissao de tudo mais neste projeto: o agente
-        # imprimiria "enviado: 300 projetos" achando que mandou os 340.
+        # `cortados` e `invalidos` VOLTAM na resposta em vez de sumir. Truncagem
+        # silenciosa e a mesma mentira por omissao de tudo mais neste projeto: o
+        # agente imprimiria "enviado: 300 projetos" achando que mandou os 340.
+        # `invalidos` nasceu porque `cortados` contava so o estouro do teto —
+        # entrada malformada sumia sem contagem nenhuma, e um bug de
+        # serializacao do lado do agente ficaria invisivel dos dois lados.
         return {"projetos": len(vistos), "infra": isinstance(infra, dict),
-                "cortados": cortados}
+                "cortados": cortados, "invalidos": invalidos}
+    except Exception:
+        con.rollback()
+        raise
     finally:
         if fechar:
             con.close()
@@ -1457,7 +1639,8 @@ def ver_projeto(maquina_id: int, projeto: str, caminho: str = "",
             " ON CONFLICT(maquina_id, projeto) DO UPDATE SET"
             " caminho=excluded.caminho, visto_em=excluded.visto_em, arquivado_em=NULL",
             (maquina_id, projeto, caminho or "", visto_em or agora()))
-        con.commit()
+        if fechar:                    # ver `gravar`: nao quebre a transacao alheia
+            con.commit()
     finally:
         if fechar:
             con.close()
@@ -1482,7 +1665,8 @@ def arquivar_projeto(maquina_id: int, projeto: str, con=None) -> None:
         con.execute("UPDATE projeto_conectado SET arquivado_em = ?"
                     " WHERE maquina_id = ? AND projeto = ?",
                     (agora(), maquina_id, projeto))
-        con.commit()
+        if fechar:                    # ver `gravar`: nao quebre a transacao alheia
+            con.commit()
     finally:
         if fechar:
             con.close()

@@ -930,9 +930,14 @@ def main():
     # falhar, os outros continuam com data honesta em vez de herdar a do lote.
     con = banco.conectar()
     try:
+        dono = banco.conta_local(con)
         for pr in projetos:
-            banco.gravar(pr["nome"], "local", pr, con)
-        banco.gravar(banco.INFRA, "local", infra, con)
+            banco.gravar(pr["nome"], "local", pr, con, usuario_id=dono)
+        banco.gravar(banco.INFRA, "local", infra, con, usuario_id=dono)
+        # O commit e daqui: `gravar` so commita quando ABRIU a conexao, para nao
+        # quebrar a transacao de quem chamou. Sem esta linha a coleta inteira
+        # seria descartada no `close()` — em silencio.
+        con.commit()
     finally:
         con.close()
 

@@ -218,7 +218,7 @@ class TodaRotaDeclaraAcesso(unittest.TestCase):
     # conjunto e a unica forma legitima de acrescentar uma classe de acesso —
     # e por isso os dois testes logo abaixo cobram, nominalmente, que ela
     # signifique alguma coisa no despacho.
-    VALIDOS = {"aberta", "cortina", "dado", "maquina"}
+    VALIDOS = servir.ACESSOS      # a lista mora em servir.py, e so la
 
     def test_toda_rota_declara_acesso(self):
         for caminho, rota in servir.ROTAS.items():

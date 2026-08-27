@@ -444,6 +444,170 @@ class OServidorDeVerdade(unittest.TestCase):
                 "X-Token": servir.Hub._csrf_da_sessao(s)}
 
 
+    # ------------------------------------------------- duas contas, um servidor
+    def _relatar(self, token, projetos, infra=None):
+        return self.pedir("/agente/relatorio", "POST",
+                          {"projetos": projetos, "infra": infra},
+                          cabecalhos={"Authorization": "Token %s" % token})
+
+    def _projetos_vistos(self, uid):
+        r = self.pedir("/api/dados", cookies=self.com_sessao(uid))
+        self.assertEqual(r.status, 200, r.corpo)
+        return {p["nome"]: p for p in r.json["projetos"]}
+
+    def test_o_relatorio_de_uma_conta_nao_toca_o_painel_da_outra(self):
+        """O BLOQUEANTE da revisao, virado teste.
+
+        `medida` tinha chave (projeto, camada) SEM dono, e `ler_tudo` devolvia a
+        tabela inteira. Duas contas com um projeto de mesmo nome — "site", "api",
+        nada exotico — se sobrescreviam pelo ON CONFLICT, e o painel de uma
+        mostrava o numero da outra. Com uma maquina pareada, isso deixou de
+        exigir intervencao humana: passou a acontecer sozinho, a cada relatorio.
+
+        Um alerta real virando zero e a unica coisa que este produto promete
+        nunca fazer.
+        """
+        meu = self.parear(self.uid)
+        dele = self.parear(self.outro)
+
+        r = self._relatar(meu, [{"nome": "site", "alertas": 7, "de": "mim"}])
+        self.assertEqual(r.status, 200, r.corpo)
+        r = self._relatar(dele, [{"nome": "site", "alertas": 0, "de": "vizinho"}])
+        self.assertEqual(r.status, 200, r.corpo)
+
+        meus = self._projetos_vistos(self.uid)
+        dele_ve = self._projetos_vistos(self.outro)
+        self.assertEqual(meus["site"]["de"], "mim",
+                         "o relatorio do vizinho sobrescreveu o meu projeto")
+        self.assertEqual(meus["site"]["alertas"], 7,
+                         "meu alerta virou o numero do vizinho")
+        self.assertEqual(dele_ve["site"]["de"], "vizinho")
+
+    def test_uma_conta_nao_enxerga_o_projeto_da_outra(self):
+        """A outra metade do mesmo furo: alem de sobrescrever, VAZAVA.
+
+        `/api/dados` devolvia a `medida` inteira para qualquer sessao, com
+        `usuario_id` filtrando so o que estava silenciado e arquivado.
+        """
+        meu = self.parear(self.uid)
+        dele = self.parear(self.outro)
+        self._relatar(meu, [{"nome": "so-meu", "alertas": 1}])
+        self._relatar(dele, [{"nome": "so-dele", "alertas": 1}])
+
+        self.assertNotIn("so-dele", self._projetos_vistos(self.uid),
+                         "vi um projeto que nao e da minha conta")
+        self.assertNotIn("so-meu", self._projetos_vistos(self.outro))
+
+    def test_relatorio_nao_escreve_no_bloco_de_infra(self):
+        """`_infra` e `_quota` sao linhas de sistema dentro da mesma tabela.
+
+        Um projeto chamado `_infra` caia no `gravar(INFRA, ...)` e sequestrava o
+        bloco de infraestrutura do painel — "Docker OK, nada quebrado" escrito
+        por quem mandou o relatorio.
+        """
+        token = self.parear(self.uid)
+        r = self._relatar(token,
+                          [{"nome": banco.INFRA, "docker_mudo": False,
+                            "containers": []},
+                           {"nome": banco.QUOTA, "pct": 0},
+                           {"nome": "de-verdade"}],
+                          infra={"docker_mudo": True, "containers": []})
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertEqual(r.json["projetos"], 1, "nome reservado entrou")
+        self.assertEqual(r.json["invalidos"], 2,
+                         "os reservados sumiram sem contagem: %s" % r.corpo)
+        d = self.pedir("/api/dados", cookies=self.com_sessao(self.uid)).json
+        self.assertTrue(d["infra"]["docker_mudo"],
+                        "o relatorio reescreveu o bloco de infra")
+
+    def test_o_que_veio_malformado_e_contado(self):
+        """`cortados` contava so o estouro do teto de 300. Entrada malformada
+        sumia sem contagem nenhuma, e um bug de serializacao do lado do agente
+        ficava invisivel dos dois lados — a mesma mentira por omissao que o
+        proprio `cortados` existe para evitar."""
+        token = self.parear(self.uid)
+        r = self._relatar(token, ["nao sou dicionario", {"nome": ""},
+                                  {"nome": "bom"}])
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertEqual((r.json["projetos"], r.json["invalidos"]), (1, 2),
+                         r.corpo)
+
+
+    # ------------------------------------------------ teto e classificacao
+    def test_a_ingestao_tem_teto_por_maquina(self):
+        """Sem teto, um token vazado enchia o disco do servidor num laco.
+
+        O teto de 300 e POR RELATORIO; nada limitava quantos relatorios. O balde
+        e por MAQUINA e nao por origem: a maquina legitima muda de IP, e o token
+        e o que a identifica.
+        """
+        token = self.parear(self.uid)
+        teto = servir.Hub.TETO_DE_RELATORIOS
+        vistos = [self._relatar(token, [{"nome": "p%d" % i}]).status
+                  for i in range(teto + 2)]
+        self.assertEqual(vistos[:teto], [200] * teto, vistos)
+        self.assertEqual(vistos[teto:], [429, 429],
+                         "o relatorio %d passou: nao ha teto de ingestao."
+                         % (teto + 1))
+
+    def test_o_teto_de_uma_maquina_nao_tranca_a_outra(self):
+        """Balde por maquina. Uma maquina barulhenta nao pode calar a do
+        vizinho — seria negacao de servico de graca."""
+        meu, dele = self.parear(self.uid), self.parear(self.outro)
+        for i in range(servir.Hub.TETO_DE_RELATORIOS):
+            self._relatar(meu, [{"nome": "p%d" % i}])
+        self.assertEqual(self._relatar(meu, [{"nome": "x"}]).status, 429)
+        self.assertEqual(self._relatar(dele, [{"nome": "x"}]).status, 200)
+
+    def test_rota_mal_classificada_nao_executa(self):
+        """NEGAR POR PADRAO em tempo de execucao, e nao so na CI.
+
+        `test_rotas.py` cobra que toda rota declare `acesso`, mas ele e garantia
+        de suite: uma rota com "Dado" — maiuscula trocada — caia por todos os
+        `if` do despacho e EXECUTAVA sem autenticacao nenhuma.
+        """
+        servir.ROTAS["/teste/mal-classificada"] = servir.Rota(
+            "GET", servir.Hub._pagina, "Dado")
+        self.addCleanup(servir.ROTAS.pop, "/teste/mal-classificada", None)
+        r = self.pedir("/teste/mal-classificada")
+        self.assertEqual(r.status, 500, "rota fora das 4 classes executou")
+
+
+class OEnderecoDoAlvo(unittest.TestCase):
+    """`--alvo` sem https manda o token em claro no cabecalho."""
+
+    def test_http_para_fora_e_recusado(self):
+        for alvo in ("http://dervs.com.br", "http://192.168.1.9:4777"):
+            with self.assertRaises(enviar.ErroDoAlvo, msg=alvo):
+                enviar.conferir_alvo(alvo)
+
+    def test_http_na_propria_maquina_continua_valendo(self):
+        self.assertEqual(enviar.conferir_alvo("http://localhost:4777/"),
+                         "http://localhost:4777")
+        self.assertEqual(enviar.conferir_alvo("http://127.0.0.1:4777"),
+                         "http://127.0.0.1:4777")
+
+    def test_https_passa_e_o_resto_nao(self):
+        self.assertEqual(enviar.conferir_alvo(" https://dervs.com.br/ "),
+                         "https://dervs.com.br")
+        for ruim in ("", "dervs.com.br", "ftp://dervs.com.br"):
+            with self.assertRaises(enviar.ErroDoAlvo, msg=repr(ruim)):
+                enviar.conferir_alvo(ruim)
+
+
+class OArquivoDoToken(unittest.TestCase):
+    """Ele nasce fechado, e nao aberto com um chmod na linha seguinte."""
+
+    @unittest.skipIf(os.name == "nt", "permissao POSIX nao existe no Windows")
+    def test_nasce_com_600(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            antes = enviar.arquivo_do_token
+            enviar.arquivo_do_token = lambda: Path(pasta) / "sub" / "agente.json"
+            self.addCleanup(setattr, enviar, "arquivo_do_token", antes)
+            destino = enviar.guardar_token("https://x", "segredo", "maquina")
+            self.assertEqual(oct(destino.stat().st_mode & 0o777), "0o600")
+
+
 class OAgenteNaoEscutaPorta(unittest.TestCase):
     """O agente roda na máquina do dono, atrás do roteador dele. Abrir porta
     ali é a diferença entre "reporta para fora" e "aceita de fora"."""
