@@ -330,10 +330,19 @@ def _gh_graphql(consulta: str):
     if _token():
         try:
             resposta = _http_github("graphql", {"query": consulta})
-        except Exception:            # noqa: BLE001 — rede, HTTP, TLS, JSON
-            # A excecao NAO entra na mensagem: ela carrega a URL, e a URL pode
+        except Exception as e:       # noqa: BLE001 — rede, HTTP, TLS, JSON
+            # A EXCECAO NAO ENTRA NA MENSAGEM: ela carrega a URL, e a URL pode
             # carregar o token de quem montou a requisicao errado um dia.
-            return None, "a API do GitHub nao respondeu"
+            #
+            # Mas so "nao respondeu" nao serve no SERVIDOR, onde nao ha ninguem
+            # olhando o terminal: nao separa token vencido (401) de GitHub fora
+            # do ar (5xx) nem de rede caida (sem codigo). O CODIGO da resposta e
+            # um numero de tres digitos que o GitHub devolveu — nao e segredo, e
+            # e o que torna o erro diagnosticavel de longe.
+            codigo = getattr(e, "code", None)
+            return None, ("a API do GitHub respondeu HTTP %s" % codigo
+                          if isinstance(codigo, int)
+                          else "a API do GitHub nao respondeu")
         if not isinstance(resposta, dict):
             return None, "resposta da API do GitHub nao era JSON de objeto"
         return resposta.get("data") or {}, None
@@ -543,6 +552,12 @@ def traduz(no: dict, com_vulns: bool) -> dict:
     }
 
 
+def _diga(motivo: str) -> None:
+    """Fala na saida de erro, se houver uma. Sob pythonw nao ha, e tudo bem."""
+    if sys.stderr is not None:
+        print("issues_abertas: %s" % motivo, file=sys.stderr)
+
+
 def issues_abertas(slug: str):
     """As issues abertas de UM repositorio. `None` quando nao deu para saber.
 
@@ -555,10 +570,19 @@ def issues_abertas(slug: str):
     tela comemorar um repositorio que ela nao conseguiu ler.
     """
     if not slug or "/" not in slug:
+        _diga("slug invalido: falta o dono antes da barra")
         return None
-    dados, _erro = _gh_graphql(_consulta({"r0": slug}, com_vulns=False))
+    dados, erro = _gh_graphql(_consulta({"r0": slug}, com_vulns=False))
+    if erro:
+        # O MOTIVO VAI PARA A TELA, o retorno continua `None`. Quem roda isto
+        # esta investigando por que um repositorio nao aparece; devolver `None`
+        # calado esconde justamente a resposta que ele veio buscar.
+        _diga(erro)
+        return None
     no = (dados or {}).get("r0")
     if not no:
+        _diga("o GitHub nao devolveu esse repositorio: nome errado, "
+              "ou o token nao alcanca ele")
         return None
     return traduz(no, com_vulns=False)["issues"]
 

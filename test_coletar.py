@@ -9,6 +9,7 @@ pior tipo de defeito num painel.
 """
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import time
@@ -18,6 +19,29 @@ from pathlib import Path
 
 import coletar
 import coletar_github
+
+_TOKEN_DE_FORA = None
+
+
+def setUpModule():
+    """Tira o token do ambiente ANTES de qualquer teste deste arquivo.
+
+    Sem isto, numa maquina onde a variavel esteja exportada (o servidor, ou um
+    terminal em que alguem exportou para testar), o coletor passa a falar com o
+    GitHub DE VERDADE. Um teste futuro que troque so o `subprocess.run` para
+    simular o `gh` acharia que esta isolado e estaria batendo na rede — indo bem
+    ou mal conforme a internet do dia. Teste que depende da maquina nao e teste,
+    e este arquivo ja levou essa licao uma vez (ver
+    `test_sem_a_pasta_de_repositorios_ainda_devolve_o_hub`).
+    """
+    global _TOKEN_DE_FORA
+    _TOKEN_DE_FORA = os.environ.pop(coletar_github.VAR_TOKEN_NO_AMBIENTE, None)
+
+
+def tearDownModule():
+    os.environ.pop(coletar_github.VAR_TOKEN_NO_AMBIENTE, None)
+    if _TOKEN_DE_FORA is not None:
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = _TOKEN_DE_FORA
 
 
 class NomeDoDb(unittest.TestCase):
@@ -983,6 +1007,31 @@ class IssuesAbertas(unittest.TestCase):
         self._com_gh_falso(({}, None))
         self.assertIsNone(coletar_github.issues_abertas("dono/repo"))
 
+    def test_a_falha_diz_o_motivo_em_vez_de_so_devolver_none(self):
+        """E ferramenta de CONFERENCIA: `None` calado nao ajuda quem confere.
+
+        Quem roda isto na linha de comando esta investigando por que um
+        repositorio nao aparece. Receber `None` sem motivo esconde justamente a
+        resposta (token vencido? rede? sem permissao?). O retorno continua
+        `None` — quem muda e o que sai na tela.
+        """
+        import io
+        import contextlib
+        self._com_gh_falso((None, "a API do GitHub respondeu HTTP 401"))
+        saida = io.StringIO()
+        with contextlib.redirect_stderr(saida):
+            self.assertIsNone(coletar_github.issues_abertas("dono/repo"))
+        self.assertIn("401", saida.getvalue())
+
+    def test_sucesso_nao_suja_a_saida(self):
+        import io
+        import contextlib
+        self._com_gh_falso(({"r0": self._no([])}, None))
+        saida = io.StringIO()
+        with contextlib.redirect_stderr(saida):
+            coletar_github.issues_abertas("dono/repo")
+        self.assertEqual(saida.getvalue(), "")
+
     def test_slug_sem_barra_devolve_none_sem_ir_a_rede(self):
         def explode(_):
             raise AssertionError("foi a rede com slug invalido")
@@ -1089,6 +1138,99 @@ class TokenDoColetor(unittest.TestCase):
     def test_subir_de_pasta_e_recusado(self):
         for veneno in ("repos/a/../../x", "../x", "repos/a/..", "/../x"):
             self.assertIsNone(coletar_github._url_da_api(veneno), veneno)
+
+    # ----------------------------------------------- a requisicao de verdade
+    #
+    # ATE AQUI ESTES TESTES TROCAVAM `_http_github` POR UM DUBLE — ou seja,
+    # substituiam a propria funcao sob suspeita antes de chama-la. A funcao que
+    # monta a URL, o verbo e o cabecalho `Authorization` nunca rodava em teste
+    # nenhum: um espaco faltando em "Bearer " ou um GET onde devia ser POST
+    # passaria pelos 926 testes e so apareceria no servidor, onde nao ha `gh`
+    # de reserva. Achado pelo revisor de Python em 27/08/2026.
+    def _opener_falso(self, corpo=b'{"ok": true}'):
+        """Intercepta no ultimo degrau possivel: quem abre a conexao."""
+        vistos = []
+
+        class _Resposta:
+            def __enter__(self_): return self_
+            def __exit__(self_, *a): return False
+            def read(self_): return corpo
+
+        class _Abridor:
+            def open(self_, pedido, timeout=None):
+                vistos.append({"pedido": pedido, "timeout": timeout})
+                return _Resposta()
+
+        original = coletar_github.urllib.request.build_opener
+        coletar_github.urllib.request.build_opener = lambda *a, **k: _Abridor()
+        self.addCleanup(setattr, coletar_github.urllib.request,
+                        "build_opener", original)
+        return vistos
+
+    def test_a_leitura_vai_com_get_no_endereco_certo(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        vistos = self._opener_falso()
+        coletar_github._http_github("repos/dono/repo/actions/workflows")
+        pedido = vistos[0]["pedido"]
+        self.assertEqual(pedido.get_method(), "GET")
+        self.assertEqual(pedido.full_url,
+                         "https://api.github.com/repos/dono/repo/actions/workflows")
+
+    def test_o_cabecalho_leva_o_token_no_formato_que_o_github_exige(self):
+        """"Bearer" e o token, separados por UM espaco. Sem o espaco, e 401."""
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        vistos = self._opener_falso()
+        coletar_github._http_github("repos/dono/repo")
+        self.assertEqual(vistos[0]["pedido"].get_header("Authorization"),
+                         "Bearer token-de-mentira-para-teste")
+
+    def test_a_consulta_graphql_vai_com_post_e_o_corpo_em_json(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        vistos = self._opener_falso()
+        coletar_github._http_github("graphql", {"query": "query { x }"})
+        pedido = vistos[0]["pedido"]
+        self.assertEqual(pedido.get_method(), "POST")
+        self.assertEqual(json.loads(pedido.data.decode("utf-8")),
+                         {"query": "query { x }"})
+        self.assertEqual(pedido.get_header("Content-type"), "application/json")
+
+    def test_a_resposta_volta_decodificada(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        self._opener_falso(b'{"total_count": 3}')
+        self.assertEqual(coletar_github._http_github("repos/a/b"),
+                         {"total_count": 3})
+
+    def test_caminho_recusado_nao_chega_a_abrir_conexao(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        vistos = self._opener_falso()
+        with self.assertRaises(ValueError):
+            coletar_github._http_github("https://evil.com/roubar")
+        self.assertEqual(vistos, [], "abriu conexao para um caminho recusado")
+
+    # ------------------------------------------- o erro tem de dizer o que foi
+    def test_o_erro_diz_o_codigo_http_sem_dizer_o_token(self):
+        """No servidor nao ha ninguem olhando o terminal.
+
+        Uma mensagem unica para tudo ("nao respondeu") nao separa token vencido
+        de GitHub fora do ar. O CODIGO da resposta nao e segredo e resolve isso.
+        """
+        segredo = "valor-de-mentira-que-nao-pode-vazar"
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = segredo
+        self._sem_subprocess()
+        self._http_falso(erro=urllib.error.HTTPError(
+            "https://api.github.com/graphql?x=" + segredo, 401,
+            "Bad credentials", {}, None))
+        _dados, erro = coletar_github._gh_graphql("query { x }")
+        self.assertIn("401", erro)
+        self.assertNotIn(segredo, erro)
+
+    def test_falha_sem_codigo_http_nao_inventa_numero(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        self._sem_subprocess()
+        self._http_falso(erro=urllib.error.URLError("sem rede"))
+        _dados, erro = coletar_github._gh_graphql("query { x }")
+        self.assertNotIn("401", erro)
+        self.assertTrue(erro)
 
     def test_a_comparacao_do_github_tem_tres_pontos_e_e_valida(self):
         """`compare/sha...branch` e caminho legitimo da API — e o drift inteiro.
