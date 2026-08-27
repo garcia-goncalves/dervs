@@ -41,6 +41,29 @@ o servidor rodar hoje à noite se o app der trabalho. Está no fim do documento.
 
 ---
 
+## O que ja existe (feito em 27/08/2026)
+
+O app **ja foi criado e instalado**. Os dois valores publicos:
+
+| Valor | Conteudo |
+|---|---|
+| **App ID** | `4739197` |
+| **Installation ID** | `157015815` |
+| Nome no GitHub | `DERVS coletor` (`dervs-coletor`) |
+| Onde administrar | <https://github.com/organizations/garcia-goncalves/settings/apps/dervs-coletor> |
+
+Permissoes concedidas, todas `Read-only`: Metadata (obrigatoria), Contents,
+Issues, Pull requests, Actions e Dependabot alerts. Webhook desligado.
+Instalado em `garcia-goncalves`, **All repositories**.
+
+O que **falta**: a chave privada (`.pem`) chegar ao cofre de segredos e ao
+servidor, e a troca chave -> token de instalacao no codigo.
+
+O passo a passo abaixo fica como registro de **como** isso foi feito — e serve
+para refazer, se um dia o app precisar ser recriado.
+
+---
+
 ## Caminho recomendado: o GitHub App
 
 ### 1. Criar

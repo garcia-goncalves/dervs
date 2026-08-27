@@ -25,6 +25,33 @@ local**, que não precisa de app nenhum.
 
 ---
 
+## O que ja existe (feito em 27/08/2026)
+
+O OAuth App **do servidor** ja foi registrado:
+
+| Valor | Conteudo |
+|---|---|
+| Nome | `DERVS` |
+| **Client ID** (`DERVS_GITHUB_ID`) | `Ov23litdc9CRv44T2KTM` |
+| Homepage | `https://dervs.com.br` |
+| Callback | `https://dervs.com.br/entrar/github/retorno` |
+| Device Flow | desligado |
+| Onde administrar | <https://github.com/settings/applications/3820865> |
+
+O **Client Secret** foi gerado e gravado no cofre do repositorio como
+`DERVS_GITHUB_SECRET` (Settings -> Secrets and variables -> Actions). Ele nunca
+passou por conversa nem por arquivo do repositorio.
+
+O Client ID tambem esta gravado como *variable* `DERVS_GITHUB_ID` no mesmo lugar.
+
+**Falta**: as duas variaveis chegarem ao ambiente do servidor, e convidar cada
+pessoa pela tabela `credencial` (secao "Depois: liberar quem entra").
+
+**Nao existe** app para `localhost`: na maquina do dono a porta
+**Entrar - ambiente local** ja resolve, e app de teste seria superficie a toa.
+
+---
+
 ## Passo a passo
 
 **1.** Abra <https://github.com/settings/developers> e clique em

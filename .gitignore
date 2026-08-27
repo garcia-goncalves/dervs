@@ -14,3 +14,6 @@ cofre.chave
 
 # Rascunho de execucao de plano (superpowers). Nao e codigo, nao e historico.
 .superpowers/
+
+# chave privada de GitHub App - nunca versionar
+*.pem
