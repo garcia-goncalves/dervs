@@ -387,14 +387,20 @@ __FAIXA__
   </div>
 
   <div class="pd-corpo">
-    <!-- O aviso de UMA chave so. Ele nao e decoracao: uma chave de acesso e um
-         aparelho de distancia do bloqueio total, e o unico momento em que da
-         para resolver isso e ANTES de o aparelho sumir. -->
-    <p class="pd-cobra" id="pd-cobra" hidden>
-      Você tem só uma forma de entrar. Se este aparelho sumir ou for formatado,
-      ninguém abre esta conta. Cadastre uma segunda — o celular serve — ou gere
-      os códigos de papel abaixo.
-    </p>
+    <!-- O aviso da forma que falta. Nao e decoracao: uma credencial so e uma
+         perda de distancia do bloqueio total, e o unico momento de resolver
+         isso e ANTES de a perda acontecer.
+
+         O TEXTO E ESCRITO PELO JS, e nao fixo aqui, porque ZERO e UM sao
+         situacoes diferentes e a versao fixa mentia na primeira: com nenhuma
+         chave cadastrada ela dizia "voce tem so uma forma de entrar".
+
+         E ele NAO afirma mais que formatar o PC tranca a conta. Onde a chave
+         mora depende de o navegador te-la guardado no chip da maquina ou num
+         gerenciador que sincroniza — no segundo caso ela sobrevive ao format, e
+         o servidor nao tem como saber qual dos dois foi. Afirmar o pior como
+         se fosse certo e o mesmo erro de afirmar o melhor. -->
+    <p class="pd-cobra" id="pd-cobra" hidden></p>
 
     <h3 class="pd-titulo">Chaves de acesso</h3>
     <p class="pd-nota">
@@ -1195,12 +1201,35 @@ function pdQuando(iso) {
   return isNaN(d) ? "—" : "usada em " + d.toLocaleDateString("pt-BR");
 }
 
+/* Zero e um sao situacoes diferentes, e o aviso tem de dizer a verdade nas
+   duas. A versao anterior era texto fixo e mentia na primeira: com nenhuma
+   chave cadastrada, ela dizia "voce tem so uma forma de entrar".
+
+   E ele nao afirma mais que formatar o PC tranca a conta. Se o navegador
+   guardou a chave num gerenciador que sincroniza, ela sobrevive ao format; se
+   guardou no chip da maquina, nao. O servidor nao tem como saber qual dos dois
+   foi — o unico sinal seria o AAGUID do fabricante, que a norma manda usar so
+   como dica visual e que nao coletamos. Entao o texto fala do que e certo (a
+   perda tranca) sem inventar onde a perda aconteceria. */
+function pdCobrar(d) {
+  const p = $("#pd-cobra");
+  const nenhuma = d.chaves.length === 0;
+  p.hidden = !d.cobrar_a_segunda || d.restantes > 0;
+  p.textContent = nenhuma
+    ? "Você ainda não cadastrou nenhuma chave de acesso. Hoje entra pela porta "
+      + "do ambiente local, que não existe no servidor. Cadastre a primeira "
+      + "abaixo, ou gere os códigos de papel."
+    : "Você tem uma forma de entrar só. Se ela se perder, ninguém abre esta "
+      + "conta — e não há recuperação por e-mail aqui, de propósito. Cadastre "
+      + "uma segunda (o celular serve) ou gere os códigos de papel abaixo.";
+}
+
 async function pdCarregar() {
   let d;
   try { d = await (await fetch("/api/chaves")).json(); }
   catch { pdDizer("não deu para ler a lista.", true); return; }
 
-  $("#pd-cobra").hidden = !d.cobrar_a_segunda || d.restantes > 0;
+  pdCobrar(d);
   $("#pd-restantes").textContent = d.restantes;
   const lista = $("#pd-lista");
   lista.textContent = "";
