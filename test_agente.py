@@ -166,6 +166,52 @@ class OPareamentoNoBanco(unittest.TestCase):
                          ["a"])
 
 
+class MaquinaAutorizadaNaoEMaquinaConfiavel(unittest.TestCase):
+    """Token vazado, ou agente adulterado, escreve o que quiser neste banco.
+
+    Achado da releitura de segurança desta etapa: pareamento diz *quem* é, e
+    não que o conteúdo é são. Sem teto, um relatório repetido enche o disco do
+    servidor e deixa o painel ilegível com dez mil projetos inventados.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self._antigo, banco.BANCO = banco.BANCO, Path(self.dir.name) / "hub.db"
+        self.addCleanup(lambda: setattr(banco, "BANCO", self._antigo))
+        self.con = banco.conectar()
+        self.addCleanup(self.con.close)
+        uid = banco.criar_usuario("dono@teste.local", con=self.con)
+        codigo = banco.novo_codigo(6)
+        banco.abrir_pareamento(uid, codigo, banco.prazo(600), con=self.con)
+        self.maq = banco.maquina_por_token(
+            banco.usar_pareamento(codigo, con=self.con), con=self.con)
+
+    def test_ha_teto_de_projetos_por_relatorio(self):
+        demais = banco.MAX_PROJETOS_POR_RELATORIO + 40
+        r = banco.receber_relatorio(
+            self.maq["id"], [{"nome": "p%d" % n} for n in range(demais)],
+            None, con=self.con)
+        self.assertEqual(r["projetos"], banco.MAX_PROJETOS_POR_RELATORIO)
+        # E o corte NÃO é silencioso: "enviado: 300 projetos" pareceria a conta
+        # inteira, e o agente imprime o aviso a partir deste número.
+        self.assertEqual(r["cortados"], 40)
+
+    def test_nome_e_caminho_gigantes_sao_cortados(self):
+        banco.receber_relatorio(self.maq["id"],
+                                [{"nome": "n" * 5000, "caminho": "c" * 9000}],
+                                None, con=self.con)
+        p = banco.projetos_da_maquina(self.maq["id"], con=self.con)[0]
+        self.assertEqual(len(p["projeto"]), banco.MAX_NOME_DE_PROJETO)
+        self.assertEqual(len(p["caminho"]), banco.MAX_CAMINHO)
+
+    def test_lixo_no_lugar_de_projeto_e_ignorado_sem_estourar(self):
+        r = banco.receber_relatorio(
+            self.maq["id"], ["texto solto", None, 42, {"nome": ""}, {"nome": "ok"}],
+            None, con=self.con)
+        self.assertEqual(r["projetos"], 1)
+
+
 class _Resposta:
     def __init__(self, status, corpo, cookies=()):
         self.status, self.corpo = status, corpo

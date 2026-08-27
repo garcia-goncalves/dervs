@@ -41,6 +41,15 @@ DONO_LOCAL = 0
 # Seis digitos sao um milhao de possibilidades. O teto e o que impede chutar.
 MAX_TENTATIVAS_PAREAMENTO = 5
 
+# Tetos do que chega de uma maquina pareada. Uma maquina autorizada nao e uma
+# maquina confiavel: token vazado, ou agente adulterado, escreve o que quiser
+# neste banco. Sem teto, um relatorio de 4 MB repetido enche o disco do servidor
+# e deixa o painel ilegivel com dez mil linhas de projeto inventado.
+MAX_PROJETOS_POR_RELATORIO = 300
+MAX_NOME_DE_PROJETO = 200
+MAX_CAMINHO = 500
+MAX_AVISOS = 30
+
 ESQUEMA = """
 CREATE TABLE IF NOT EXISTS medida (
     projeto   TEXT NOT NULL,
@@ -1399,20 +1408,24 @@ def receber_relatorio(maquina_id: int, projetos: list, infra=None,
     fechar = con is None
     con = con or conectar()
     try:
-        vistos = set()
+        vistos, cortados = set(), 0
         for p in projetos:
             if not isinstance(p, dict):
                 continue
-            nome = str(p.get("nome") or "").strip()
+            nome = str(p.get("nome") or "").strip()[:MAX_NOME_DE_PROJETO]
             if not nome:
+                continue
+            if len(vistos) >= MAX_PROJETOS_POR_RELATORIO and nome not in vistos:
+                cortados += 1
                 continue
             vistos.add(nome)
             gravar(nome, "local", p, con)
-            ver_projeto(maquina_id, nome, str(p.get("caminho") or ""), con=con)
+            ver_projeto(maquina_id, nome,
+                        str(p.get("caminho") or "")[:MAX_CAMINHO], con=con)
         if isinstance(infra, dict):
             infra = dict(infra)
             if avisos:
-                infra["avisos"] = list(avisos)
+                infra["avisos"] = [str(a)[:500] for a in avisos[:MAX_AVISOS]]
             gravar(INFRA, "local", infra, con)
         if vistos:
             for antigo in projetos_da_maquina(maquina_id, con=con):
@@ -1421,7 +1434,11 @@ def receber_relatorio(maquina_id: int, projetos: list, infra=None,
         con.execute("UPDATE maquina SET visto_em = ? WHERE id = ?",
                     (agora(), maquina_id))
         con.commit()
-        return {"projetos": len(vistos), "infra": isinstance(infra, dict)}
+        # `cortados` VOLTA na resposta em vez de sumir. Truncagem silenciosa e a
+        # mesma mentira por omissao de tudo mais neste projeto: o agente
+        # imprimiria "enviado: 300 projetos" achando que mandou os 340.
+        return {"projetos": len(vistos), "infra": isinstance(infra, dict),
+                "cortados": cortados}
     finally:
         if fechar:
             con.close()

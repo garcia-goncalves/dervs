@@ -204,6 +204,12 @@ def main(argv=None) -> int:
         try:
             r = enviar_uma_vez(a.alvo)
             print("enviado: %s projetos -> %s" % (r.get("projetos", "?"), a.alvo))
+            # O alvo tem teto de projetos por relatorio. Se ele cortou, quem
+            # roda o agente PRECISA saber: sem esta linha, "enviado: 300
+            # projetos" pareceria a conta inteira.
+            if r.get("cortados"):
+                print("AVISO: o alvo cortou %s projeto(s) por exceder o teto "
+                      "dele." % r["cortados"], file=sys.stderr)
         except ErroDoAlvo as e:
             # Erro de rede num laco nao pode matar o agente: a internet cai, e o
             # que interessa e ele voltar sozinho quando ela voltar.
