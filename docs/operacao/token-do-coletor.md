@@ -56,8 +56,9 @@ Permissoes concedidas, todas `Read-only`: Metadata (obrigatoria), Contents,
 Issues, Pull requests, Actions e Dependabot alerts. Webhook desligado.
 Instalado em `garcia-goncalves`, **All repositories**.
 
-O que **falta**: a chave privada (`.pem`) chegar ao cofre de segredos e ao
-servidor, e a troca chave -> token de instalacao no codigo.
+O que **falta**: a chave privada chegar ao servidor — que ainda nao existe. A
+troca chave -> token de instalacao **ja esta no codigo** (`github_app.py`), e a
+secao "Como saber que deu certo", no fim, diz o que aparece quando ela funciona.
 
 O passo a passo abaixo fica como registro de **como** isso foi feito — e serve
 para refazer, se um dia o app precisar ser recriado.
@@ -145,18 +146,39 @@ trocável a um segredo escondido.
 
 ---
 
-## O que ainda falta do meu lado
+## Como o sistema usa isso — as três portas, nesta ordem
 
-**O código de hoje aceita um token pronto**, na variável de ambiente
-`DERVS_GITHUB_TOKEN`, e já foi provado contra o GitHub de verdade (as issues e a
-medida de publicação atrasada vêm iguais pelos dois caminhos).
+O coletor tenta três coisas, e para na primeira que funciona:
 
-**O que ainda não existe** é a troca automática: um GitHub App não entrega um
-token direto — ele entrega uma chave com a qual o sistema pede, de hora em hora,
-um token novo. Essa peça (assinar o pedido com a chave `.pem` e renovar antes de
-vencer) é a próxima tarefa, e **só posso terminá-la depois que os três valores
-acima existirem** — sem eles não há contra o que provar que funciona, e neste
-projeto código sem prova não é código pronto.
+| Ordem | O que ele procura | Onde isso vale |
+|---|---|---|
+| 1º | `DERVS_GITHUB_TOKEN`, um token pronto | saída de emergência |
+| 2º | o **GitHub App**: `DERVS_GITHUB_APP_ID` + `DERVS_GITHUB_INSTALLATION_ID` + `DERVS_GITHUB_APP_KEY` | o **servidor** |
+| 3º | o `gh` que você já logou | a **sua máquina** |
+
+Faltando uma variável do meio, ele **não reclama e não cai**: desce para o `gh`.
+Isso é de propósito — na sua máquina a ausência é o normal, e um aviso a cada
+vinte minutos treinaria você a ignorar avisos.
+
+### A troca chave → token, que agora existe
+
+Um GitHub App não entrega um token: entrega uma chave privada. Com ela, o
+sistema **assina um bilhete** que diz "sou o app 4739197", manda para o GitHub, e
+recebe de volta um token que vale **uma hora**. Quando falta pouco para vencer,
+ele pede outro. Nada disso aparece para você.
+
+Quem faz é o `github_app.py`. Duas coisas dele valem saber:
+
+- **A conta foi escrita à mão**, porque o Python não traz essa matemática pronta
+  e o projeto não usa biblioteca de fora. Por isso ela é conferida contra o
+  **OpenSSL**: o teste assina uma frase conhecida e exige que o resultado seja
+  igual, byte a byte, ao que o OpenSSL produziu. Se um dia divergir num único
+  byte, a CI fica vermelha — não o servidor, às três da manhã.
+- **A chave nunca é impressa, gravada nem posta em mensagem de erro.** Quando a
+  troca falha, a frase que aparece diz o motivo e nada mais.
+
+O que **ainda falta**, e não depende de código: levar as duas variáveis públicas
+e os dois segredos para dentro do servidor — que ainda não existe.
 
 Enquanto isso, o painel na sua máquina segue funcionando pelo `gh`, exatamente
 como antes.
