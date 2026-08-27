@@ -1412,12 +1412,65 @@ class TokenDoColetor(unittest.TestCase):
         coletar_github.main()
         self.assertEqual(gravados[0]["vulns"]["total"], 93,
                          "apagou 93 alertas reais porque o campo veio vazio")
+        # Linha sem carimbo de leitura: ancora no carimbo da linha, que aqui e
+        # de ontem. A idade em si tem testes proprios logo abaixo.
+        self.assertEqual(gravados[0]["vulns"]["lido_em"],
+                         "2026-08-26T10:00:00+00:00")
         # E — o outro lado da mesma moeda — o numero preservado tem de CHEGAR
         # A TELA marcado como velho. Guardar a idade num campo que ninguem le
         # e o painel republicando medida de 26 dias atras como se fosse de
         # agora, para sempre, enquanto a permissao nao voltar.
-        self.assertGreater(gravados[0]["vulns"]["dias_sem_reler"], 0,
-                           "preservou o numero sem dizer que ele e velho")
+        self.assertEqual(gravados[0]["vulns"]["dias_sem_reler"], 1)
+
+    def _rodada_preservando(self, vulns_no_banco, medido_em):
+        """Uma rodada em que o GitHub nao devolve os alertas deste projeto."""
+        import banco
+        gravados = []
+        for alvo, nome, valor in (
+                (banco, "ler_tudo", lambda **k: {"projeto": {
+                    "local": {"dados": {"git": {"remoto_slug": "dono/repo"}}},
+                    "github": {"medido_em": medido_em,
+                               "dados": {"vulns": vulns_no_banco}}}}),
+                (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
+                (banco, "conta_local", lambda *a, **k: 1),
+                (banco, "gravar",
+                 lambda nome_, camada, dados, con, **k: gravados.append(dados)),
+                (coletar_github, "mede_deploy", lambda *a, **k: {}),
+                (coletar_github, "_gh_graphql", lambda q: (
+                    {"r0": {"nameWithOwner": "dono/repo",
+                            "url": "https://github.com/dono/repo",
+                            "defaultBranchRef": {"name": "main", "target": {}},
+                            "vulnerabilityAlerts": None}}, None))):
+            self.addCleanup(setattr, alvo, nome, getattr(alvo, nome))
+            setattr(alvo, nome, valor)
+        coletar_github.main()
+        return gravados[0]["vulns"]
+
+    def test_a_idade_do_alerta_conta_da_ULTIMA_LEITURA_e_nao_da_ultima_rodada(self):
+        """O defeito que passou por baixo de um teste verde.
+
+        `medido_em` e o carimbo da LINHA da camada github, e o banco reescreve
+        essa linha em TODA rodada bem-sucedida — CI, PRs, issues e publicacao
+        continuam sendo gravados mesmo quando os alertas nao vieram. Ancorar a
+        idade nele dava zero para sempre, desde a primeira rodada: o aviso
+        existia, era testado, e nunca disparava. O unico carimbo que nao e
+        reescrito e o que a propria medicao carrega.
+        """
+        vulns = self._rodada_preservando(
+            {"total": 93, "url": "u", "lido_em": "2026-08-01T10:00:00+00:00"},
+            medido_em="2026-08-27T10:00:00+00:00")   # a linha foi gravada agora
+        self.assertGreater(vulns["dias_sem_reler"], 20,
+                           "contou da ultima rodada, nao da ultima leitura")
+        self.assertEqual(vulns["lido_em"], "2026-08-01T10:00:00+00:00",
+                         "mexeu no carimbo da leitura")
+
+    def test_medida_antiga_sem_carimbo_ganha_um_e_passa_a_envelhecer(self):
+        """Linha gravada antes deste campo existir nao pode ficar em zero eterno."""
+        vulns = self._rodada_preservando(
+            {"total": 93, "url": "u"},                # sem `lido_em`
+            medido_em="2026-08-20T10:00:00+00:00")
+        self.assertEqual(vulns["lido_em"], "2026-08-20T10:00:00+00:00")
+        self.assertGreater(vulns["dias_sem_reler"], 0)
 
     def test_repositorio_medido_com_zero_alertas_nao_puxa_valor_velho(self):
         """Medi e nao ha nenhum e diferente de nao consegui medir.
@@ -1498,12 +1551,16 @@ class TokenDoColetor(unittest.TestCase):
         self._http_falso({"data": {"r0": {"nameWithOwner": "a/b"}},
                           "errors": [{"type": "FORBIDDEN",
                                       "path": ["r0", "vulnerabilityAlerts"]}]})
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
+        # NA SAIDA NORMAL: resposta parcial e uma rodada que termina em 0, e
+        # no caminho de SUCESSO o `servir.py` registra o `stdout` e descarta o
+        # `stderr`. Escrito na saida de erro, este aviso so existiria para quem
+        # rodasse o coletor a mao no terminal.
+        saida = io.StringIO()
+        with contextlib.redirect_stdout(saida):
             dados, erro = coletar_github._gh_graphql("query { x }")
         self.assertIsNone(erro)
         self.assertTrue(dados)
-        self.assertIn("FORBIDDEN", err.getvalue())
+        self.assertIn("FORBIDDEN", saida.getvalue())
 
     def test_o_motivo_da_falha_sai_pelo_cano_que_o_servidor_le(self):
         """`servir.py` guarda `r.stderr` e DESCARTA o `stdout`.

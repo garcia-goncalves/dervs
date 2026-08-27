@@ -423,8 +423,13 @@ def _gh_graphql(consulta: str):
                 # seguranca velha como se fosse fresca, e o operador perdia o
                 # unico aviso que existia. Fica com o dado, mas diz o que
                 # faltou.
-                _diga("segui com o que veio, mas o GitHub recusou parte da "
-                      "consulta (%s)" % _tipos_do_erro(resposta["errors"]))
+                # NA SAIDA NORMAL, e nao em `_diga`. Resposta parcial e, por
+                # definicao, uma rodada que termina em 0 — e no caminho de
+                # SUCESSO o `servir.py` registra o `stdout` e joga o `stderr`
+                # fora. Escrito em `_diga`, este aviso so existiria para quem
+                # rodasse o coletor a mao no terminal.
+                print("aviso: segui com o que veio, mas o GitHub recusou parte "
+                      "da consulta (%s)" % _tipos_do_erro(resposta["errors"]))
                 return dados, None
             return None, "a API do GitHub recusou a consulta (%s)" % _tipos_do_erro(
                 resposta["errors"])
@@ -648,7 +653,12 @@ def traduz(no: dict, com_vulns: bool) -> dict:
         "issues": issues,
         "issues_total": total_issues if isinstance(total_issues, int) else None,
         "issues_url": url + "/issues",
-        "vulns": (dict(alertas, url=url + "/security/dependabot")
+        # `lido_em` e o carimbo DESTA leitura, e viaja dentro do proprio
+        # `vulns`. E ele que sobrevive quando o valor e preservado numa rodada
+        # em que os alertas nao vieram — e por isso e o unico relogio confiavel
+        # para dizer ha quanto tempo este numero nao e relido.
+        "vulns": (dict(alertas, url=url + "/security/dependabot",
+                       lido_em=AGORA.isoformat(timespec="seconds"))
                   if alertas else {}),
     }
 
@@ -771,9 +781,22 @@ def main():
                     # mostrava. Numero preservado sem carimbo visivel e o
                     # painel republicando medida de semanas atras como se fosse
                     # de agora, para sempre, enquanto a permissao nao voltar.
-                    novo["vulns"] = dict(
-                        anterior,
-                        dias_sem_reler=_dias(antes.get("medido_em")) or 0)
+                    # A ANCORA E `lido_em`, O CARIMBO DA PROPRIA MEDICAO — nao
+                    # o `medido_em` da linha. O banco reescreve `medido_em` em
+                    # TODA rodada bem-sucedida, e estas rodadas SAO
+                    # bem-sucedidas: CI, PRs, issues e publicacao continuam
+                    # sendo gravados; so os alertas e que nao vieram. Ancorado
+                    # nele, `dias_sem_reler` dava zero para sempre, desde a
+                    # primeira rodada — o aviso existia, tinha teste, e nunca
+                    # disparava. O teste era verde porque simulava um estado que
+                    # a operacao real nunca produz.
+                    #
+                    # Linha antiga, gravada antes deste campo existir, ganha o
+                    # carimbo AGORA e passa a envelhecer a partir daqui: e o
+                    # mais velho que da para afirmar sem inventar.
+                    lido = anterior.get("lido_em") or antes.get("medido_em")
+                    novo["vulns"] = dict(anterior, lido_em=lido,
+                                         dias_sem_reler=_dias(lido))
                     reusados.append(nome)
             local = ((tudo.get(nome) or {}).get("local") or {}).get("dados") or {}
             antes_gh = ((tudo.get(nome) or {}).get("github") or {}).get("dados") or {}
@@ -828,9 +851,15 @@ def main():
         # registra o `stdout` justamente no caminho de sucesso. E o sinal de
         # que alguma coisa esta errada com a permissao do token, num dia em que
         # nada mais grita.
+        nomes = sorted(reusados)
+        # A lista e cortada, e o corte se ANUNCIA: "(a, b, c, d, e)" com 17
+        # projetos parece a lista inteira, e quem le acha que sabe quais sao.
+        lista = ", ".join(nomes[:5])
+        if len(nomes) > 5:
+            lista += " e mais %d" % (len(nomes) - 5)
         print("aviso: nao consegui reler os alertas de segurança de %d "
               "projeto(s) (%s) — mantive o último número conhecido, marcado "
-              "como velho." % (len(reusados), ", ".join(sorted(reusados)[:5])))
+              "como velho." % (len(nomes), lista))
 
     print("ok: %d repositorios do GitHub atualizados%s"
           % (gravados, "" if com_vulns else " (sem alertas de segurança)"))
