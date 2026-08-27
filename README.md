@@ -106,7 +106,9 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `test_rotas.py` | 11 testes — **o vigia**: importa `servir` e prova que nenhuma rota executa comando. `python test_rotas.py`. |
 | `coletar.py` | Camada **local**: git, Docker, portas, idade do grafo, memória, variáveis. |
 | `coletar_github.py` | Camada **github**: CI, PRs, **issues abertas**, alertas, o site no ar e o último deploy. Uma consulta GraphQL em lote, para todos os repositórios. |
-| `test_coletar.py` | 94 testes dos pedaços dos coletores que já erraram. `python test_coletar.py`. |
+| `test_coletar.py` | 165 testes dos pedaços dos coletores que já erraram, inclusive a escolha entre token pronto, GitHub App e `gh`. `python test_coletar.py`. |
+| `github_app.py` | Troca a **chave privada** do GitHub App por um token de uma hora, e renova antes de vencer. Assinatura RS256 escrita à mão — o projeto não usa biblioteca de fora. |
+| `test_github_app.py` | 19 testes. O principal exige que a assinatura seja **igual byte a byte à do OpenSSL**: conta de criptografia testada só com o que ela mesma produziu não está testada. `python test_github_app.py`. |
 | `coletar_pesado.py` | Camada **pesado**: cota do Actions e `npm audit`. |
 | `test_coletar_pesado.py` | 12 testes da auditoria de dependência. `python test_coletar_pesado.py`. |
 | `fila.py` | A fila desacompanhada. **Sem rota apontando para ela** desde a etapa 7 — fica no repositório de propósito. |

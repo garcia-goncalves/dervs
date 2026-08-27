@@ -61,7 +61,7 @@ jobs:
           exit $erro
 
       - name: Compila
-        run: python -m py_compile banco.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py agente/__init__.py agente/enviar.py
+        run: python -m py_compile banco.py github_app.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py agente/__init__.py agente/enviar.py
 
       # Os testes abaixo sao listados A MAO, um passo cada, porque cada nome na
       # tela do GitHub diz o que quebrou sem ninguem abrir o log. O preco disso
@@ -96,6 +96,15 @@ jobs:
       # unico que garante que a conferencia de assinatura ainda confere.
       - name: Curva P-256
         run: python test_p256.py
+
+      # A assinatura RSA do GitHub App, tambem escrita a mao, e pela mesma
+      # razao: o Python nao traz RSA e o projeto nao adota dependencia. O vetor
+      # vem de FORA — chave e assinatura produzidas pelo OpenSSL 3.5.4. Se a
+      # nossa conta discordar do OpenSSL num byte, este passo fica vermelho, e
+      # e a unica coisa entre um defeito aqui e um `401` sem explicacao no
+      # servidor.
+      - name: Assinatura do GitHub App
+        run: python test_github_app.py
 
       # A camada WebAuthn: CBOR, chave COSE, dados do autenticador, cadastro,
       # entrada, e o contador que pega passkey copiada. Todo parser aqui trata

@@ -19,6 +19,7 @@ from pathlib import Path
 
 import coletar
 import coletar_github
+import github_app
 
 _TOKEN_DE_FORA = None
 
@@ -1617,6 +1618,116 @@ class TokenDoColetor(unittest.TestCase):
             "repos/dono/repo/compare/abc1234...main")
         self.assertEqual(
             url, "https://api.github.com/repos/dono/repo/compare/abc1234...main")
+
+
+class OColetorTrocaAChavePorToken(unittest.TestCase):
+    """Etapa 12, ultima peca: sem `DERVS_GITHUB_TOKEN`, o app entra no lugar.
+
+    Ordem das tres portas, e ela importa:
+
+    1. token pronto no ambiente — a saida de emergencia, e o que ja existia;
+    2. o GitHub App (App ID + Installation ID + chave privada) — o caminho do
+       SERVIDOR, que nao depende de ninguem estar sentado aqui;
+    3. o `gh` — a maquina do dono, que nao muda em nada.
+
+    A chave usada aqui e a mesma de `test_github_app.py`: gerada para teste, e
+    nao abre nada. Importada em vez de copiada de proposito — duas copias de um
+    vetor viram duas verdades no dia em que uma for corrigida.
+    """
+
+    VARIAVEIS = ("DERVS_GITHUB_TOKEN", "DERVS_GITHUB_APP_ID",
+                 "DERVS_GITHUB_INSTALLATION_ID", "DERVS_GITHUB_APP_KEY")
+
+    def setUp(self):
+        from test_github_app import PEM_PKCS1
+        self.chave = PEM_PKCS1
+        self.antes = {v: os.environ.get(v) for v in self.VARIAVEIS}
+        for v in self.VARIAVEIS:
+            os.environ.pop(v, None)
+        coletar_github.esquecer_o_app()
+        self.pedidos = []
+        self.original = github_app._pedir_ao_github
+
+        def falso(url, jwt, teto):
+            self.pedidos.append(url)
+            return {"token": "ghs-mentira",
+                    "expires_at": "2099-01-01T00:00:00Z"}
+
+        github_app._pedir_ao_github = falso
+
+    def tearDown(self):
+        github_app._pedir_ao_github = self.original
+        for v, valor in self.antes.items():
+            os.environ.pop(v, None)
+            if valor is not None:
+                os.environ[v] = valor
+        coletar_github.esquecer_o_app()
+
+    def _ligar_o_app(self):
+        os.environ["DERVS_GITHUB_APP_ID"] = "4739197"
+        os.environ["DERVS_GITHUB_INSTALLATION_ID"] = "157015815"
+        os.environ["DERVS_GITHUB_APP_KEY"] = self.chave
+
+    def test_com_o_app_no_ambiente_o_token_vem_da_troca(self):
+        self._ligar_o_app()
+        self.assertEqual(coletar_github._token(), "ghs-mentira")
+        self.assertEqual(
+            self.pedidos,
+            ["https://api.github.com/app/installations/157015815/access_tokens"])
+
+    def test_o_token_pronto_tem_prioridade_sobre_o_app(self):
+        """A saida de emergencia existe para ser usada sem desconfigurar o app."""
+        self._ligar_o_app()
+        os.environ["DERVS_GITHUB_TOKEN"] = "token-de-mentira-para-teste"
+        self.assertEqual(coletar_github._token(), "token-de-mentira-para-teste")
+        self.assertEqual(self.pedidos, [])
+
+    def test_a_troca_acontece_uma_vez_e_nao_a_cada_consulta(self):
+        """`_token()` e chamado varias vezes por coleta. Um token por hora."""
+        self._ligar_o_app()
+        for _ in range(5):
+            coletar_github._token()
+        self.assertEqual(len(self.pedidos), 1)
+
+    def test_ambiente_pela_metade_cai_no_gh_em_vez_de_estourar(self):
+        """Primeiro deploy esquece uma variavel. Isso nao pode derrubar nada."""
+        os.environ["DERVS_GITHUB_APP_ID"] = "4739197"
+        self.assertEqual(coletar_github._token(), "")
+        self.assertEqual(self.pedidos, [])
+
+    def test_chave_ilegivel_nao_estoura_e_nao_vira_token(self):
+        self._ligar_o_app()
+        os.environ["DERVS_GITHUB_APP_KEY"] = "isto nao e uma chave"
+        self.assertEqual(coletar_github._token(), "")
+        self.assertEqual(self.pedidos, [])
+
+    def test_o_token_do_app_chega_inteiro_ao_cabecalho(self):
+        """Prova o caminho todo: sem isto, provei a troca e nao o uso dela."""
+        self._ligar_o_app()
+        vistos = []
+
+        class Resposta:
+            def __enter__(self_):
+                return self_
+
+            def __exit__(self_, *a):
+                return False
+
+            def read(self_):
+                return b"{}"
+
+        original = coletar_github.urllib.request.OpenerDirector.open
+
+        def espiar(self_, pedido, timeout=None):
+            vistos.append(pedido.get_header("Authorization"))
+            return Resposta()
+
+        coletar_github.urllib.request.OpenerDirector.open = espiar
+        try:
+            coletar_github._http_github("repos/dono/repo")
+        finally:
+            coletar_github.urllib.request.OpenerDirector.open = original
+        self.assertEqual(vistos, ["Bearer ghs-mentira"])
 
 
 if __name__ == "__main__":

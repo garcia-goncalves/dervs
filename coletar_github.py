@@ -17,15 +17,18 @@ Roda em processo separado do coletar.py de proposito: aquele mede o disco a cada
 
 QUEM AUTENTICA
 
-Dois caminhos, nesta ordem. Com `DERVS_GITHUB_TOKEN` no ambiente, este arquivo
-fala com a API do GitHub direto — e o caminho do SERVIDOR, onde nao ha `gh`
-logado nem pode haver. Sem a variavel, cai no `gh` que o dono ja logou na
+Tres caminhos, nesta ordem. Com `DERVS_GITHUB_TOKEN` no ambiente, este arquivo
+fala com a API do GitHub direto — e a saida de emergencia. Sem ele, mas com o
+GitHub App configurado (`DERVS_GITHUB_APP_ID`, `DERVS_GITHUB_INSTALLATION_ID` e
+`DERVS_GITHUB_APP_KEY`), o `github_app.py` troca a chave privada por um token
+de instalacao e renova de hora em hora — e o caminho do SERVIDOR, onde nao ha
+`gh` logado nem pode haver. Sem nada disso, cai no `gh` que o dono ja logou na
 maquina dele, e nada muda para ele.
 
-O token e LIDO do ambiente e vai para o cabecalho da requisicao. Nao e gravado,
-nao e impresso, e nao entra em mensagem de erro — todas as mensagens que saem
-daqui sao escritas por nos, nunca repassadas da excecao. Como o token nasce,
-onde ele mora e como se troca: `docs/operacao/token-do-coletor.md`.
+Nem o token nem a chave sao gravados, impressos ou postos em mensagem de erro —
+todas as mensagens que saem daqui sao escritas por nos, nunca repassadas da
+excecao. Como os tres valores nascem, onde moram e como se trocam:
+`docs/operacao/token-do-coletor.md`.
 
     python coletar_github.py
 """
@@ -43,6 +46,8 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
+
+import github_app
 
 import banco
 
@@ -256,25 +261,72 @@ def _consulta(slugs: dict, com_vulns: bool) -> str:
 
 # ------------------------------------------------------- quem autentica aqui
 #
-# DOIS CAMINHOS, e a ordem importa.
+# TRES CAMINHOS, e a ordem importa.
 #
-# 1. TOKEN NO AMBIENTE (`DERVS_GITHUB_TOKEN`) — o caminho do SERVIDOR. La nao
-#    existe `gh` logado, nem pode existir: o `gh` e a ferramenta que o dono
-#    autenticou na maquina DELE, e amarrar a coleta a isso e amarrar o produto
-#    a uma pessoa estar sentada aqui. O token vem de um GitHub App instalado na
-#    organizacao (ver docs/operacao/token-do-coletor.md).
-# 2. O `gh` — o caminho da MAQUINA DO DONO, que continua funcionando sem
-#    configurar nada. Sem token no ambiente, nada muda para ele.
+# 1. TOKEN PRONTO NO AMBIENTE (`DERVS_GITHUB_TOKEN`) — a saida de emergencia.
+#    Serve para o servidor rodar hoje a noite com um token pessoal, sem
+#    desconfigurar nada. Vem primeiro justamente para isso: quem o define esta
+#    depurando, e quer que ele valha.
+# 2. O GITHUB APP (`DERVS_GITHUB_APP_ID` + `DERVS_GITHUB_INSTALLATION_ID` +
+#    `DERVS_GITHUB_APP_KEY`) — o caminho do SERVIDOR, e o normal. O app tem
+#    identidade propria, so de leitura, revogavel num clique, e nao gasta a
+#    cota pessoal do dono. A chave privada nao E um token: com ela pedimos um
+#    token novo de hora em hora, e quem faz essa troca e o `github_app.py`.
+# 3. O `gh` — o caminho da MAQUINA DO DONO, que continua funcionando sem
+#    configurar nada. Sem nada no ambiente, nada muda para ele.
 #
-# O TOKEN NAO E LIDO, NAO E IMPRESSO E NAO E GUARDADO por este arquivo alem do
+# No servidor nao existe `gh` logado, nem pode existir: o `gh` e a ferramenta
+# que o dono autenticou na maquina DELE, e amarrar a coleta a isso e amarrar o
+# produto a uma pessoa estar sentada aqui. O roteiro dos tres valores esta em
+# docs/operacao/token-do-coletor.md.
+#
+# NEM O TOKEN NEM A CHAVE SAO IMPRESSOS OU GRAVADOS por este arquivo alem do
 # cabecalho da requisicao. Toda mensagem de erro que sai daqui e escrita por
 # nos, nunca repassada da excecao: `URLError` carrega a URL, e URL de API pode
 # carregar o que o chamador pos nela.
 VAR_TOKEN_NO_AMBIENTE = "DERVS_GITHUB_TOKEN"
+VAR_APP_ID = "DERVS_GITHUB_APP_ID"
+VAR_INSTALACAO = "DERVS_GITHUB_INSTALLATION_ID"
+VAR_CHAVE_DO_APP = "DERVS_GITHUB_APP_KEY"
 API = "https://api.github.com/"
 # So o que a API do GitHub usa em caminho de recurso. Barra inicial some antes
 # desta peneira; `//`, `..` e esquema completo caem aqui.
 CAMINHO_API = re.compile(r"[A-Za-z0-9._~/-]+(\?[A-Za-z0-9._~=&%-]*)?$")
+
+
+# O app fica guardado entre chamadas porque `_token()` e chamado varias vezes
+# por coleta e o token de instalacao vale uma hora — pedir um por consulta
+# queimaria cota sem entregar nada. E o `Coletor` que decide quando renovar.
+_APP_GUARDADO = None
+
+
+def esquecer_o_app() -> None:
+    """Descarta o app guardado, para que o ambiente seja lido de novo.
+
+    Existe para o teste e para o dia em que alguem trocar a chave sem reiniciar
+    o processo. Nao e usado no caminho normal.
+    """
+    global _APP_GUARDADO
+    _APP_GUARDADO = None
+
+
+def _app():
+    """O GitHub App montado do ambiente, ou `None` se ele nao esta configurado.
+
+    Ambiente pela metade — o caso comum no primeiro deploy — devolve `None` sem
+    reclamar e sem guardar nada: quem chama cai no `gh`, e o unico jeito de
+    saber que faltou uma variavel e a coleta nao trazer os numeros. Reclamar
+    aqui encheria o log da maquina do dono, onde a ausencia e o normal.
+    """
+    global _APP_GUARDADO
+    if _APP_GUARDADO is None:
+        ident = (os.environ.get(VAR_APP_ID) or "").strip()
+        instalacao = (os.environ.get(VAR_INSTALACAO) or "").strip()
+        chave = os.environ.get(VAR_CHAVE_DO_APP) or ""
+        if not (ident and instalacao and chave.strip()):
+            return None
+        _APP_GUARDADO = github_app.Coletor(ident, instalacao, chave)
+    return _APP_GUARDADO
 
 
 def _token() -> str:
@@ -300,7 +352,12 @@ def _token() -> str:
         _diga("o valor de %s tem caractere que nao vai em cabecalho HTTP; "
               "ignorei" % VAR_TOKEN_NO_AMBIENTE)
         return ""
-    return t
+    if t:
+        return t
+    # Sem token pronto, o GitHub App. A troca chave -> token acontece la, e
+    # falha fechada: `None` vira "" e a coleta cai no `gh` como sempre caiu.
+    app = _app()
+    return (app.token() or "") if app is not None else ""
 
 
 def _url_da_api(caminho: str):

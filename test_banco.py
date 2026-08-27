@@ -435,18 +435,27 @@ class SilenciarPorDono(unittest.TestCase):
     def tearDown(self):
         self.con.close()
 
+    # `agora_iso` fixo nos dois testes abaixo pelo mesmo motivo do terceiro, e
+    # a falta dele era uma bomba-relogio: `AGORA` e 26/08/2026, `daqui(hours=24)`
+    # e 27/08, e sem `agora_iso` a comparacao era contra o relogio DE VERDADE.
+    # Os dois passaram por um dia e ficaram vermelhos sozinhos em 27/08/2026,
+    # sem ninguem tocar em banco.py — CI vermelha por data, que e o defeito mais
+    # caro de diagnosticar porque nao aparece em nenhum diff.
     def test_o_x_de_um_usuario_nao_esconde_o_alerta_do_outro(self):
         banco.silenciar("grafo_velho:dervs", daqui(hours=24), usuario_id=self.a,
                         con=self.con)
-        self.assertIn("grafo_velho:dervs", banco.silenciadas(usuario_id=self.a,
-                                                             con=self.con))
-        self.assertEqual(banco.silenciadas(usuario_id=self.b, con=self.con), {})
+        self.assertIn("grafo_velho:dervs",
+                      banco.silenciadas(usuario_id=self.a, agora_iso=iso(AGORA),
+                                        con=self.con))
+        self.assertEqual(banco.silenciadas(usuario_id=self.b, agora_iso=iso(AGORA),
+                                           con=self.con), {})
 
     def test_sem_dizer_o_dono_a_linha_e_do_dono_local(self):
         """Compatibilidade: o painel de uma maquina so continua funcionando."""
         banco.silenciar("g:d", daqui(hours=24), con=self.con)
-        self.assertIn("g:d", banco.silenciadas(con=self.con))
-        self.assertEqual(banco.silenciadas(usuario_id=self.a, con=self.con), {})
+        self.assertIn("g:d", banco.silenciadas(agora_iso=iso(AGORA), con=self.con))
+        self.assertEqual(banco.silenciadas(usuario_id=self.a, agora_iso=iso(AGORA),
+                                           con=self.con), {})
 
     def test_dois_usuarios_silenciam_a_mesma_pendencia_sem_um_apagar_o_outro(self):
         # `agora_iso` fixo de proposito: sem ele o teste depende da hora em que
