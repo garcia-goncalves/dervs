@@ -781,6 +781,21 @@ class OSegredoNaoVaiJuntoComASessao(unittest.TestCase):
         self.assertIn("ANTHROPIC_API_KEY",
                       execucao.ambiente_da_filha(self.BASE))
 
+    def test_o_token_do_coletor_nao_passa_para_a_sessao_filha(self):
+        """Ele so e barrado porque o NOME dele tem "token" dentro.
+
+        `ambiente_da_filha` peneira por pedaco do nome. `DERVS_GITHUB_TOKEN`
+        casa; um `DERVS_GH` inocente passaria intacto e entregaria a credencial
+        de leitura de TODOS os repositorios da organizacao a uma sessao que
+        roda codigo de terceiro. Este teste amarra a variavel ao nome, para que
+        a renomeacao quebre aqui em vez de vazar calada.
+        """
+        import coletar_github
+        base = dict(self.BASE)
+        base[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira"
+        self.assertNotIn(coletar_github.VAR_TOKEN_NO_AMBIENTE,
+                         execucao.ambiente_da_filha(base))
+
     def test_o_ambiente_de_verdade_nao_explode(self):
         self.assertIn("PATH", {k.upper(): v
                                for k, v in execucao.ambiente_da_filha().items()})

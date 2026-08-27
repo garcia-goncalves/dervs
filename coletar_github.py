@@ -15,8 +15,17 @@ alertas de vulnerabilidade dos 16 de uma vez, gastando pontos do orcamento de
 Roda em processo separado do coletar.py de proposito: aquele mede o disco a cada
 60 s e nao pode ficar esperando a rede.
 
-O TOKEN nunca aparece aqui: quem autentica e o `gh` que o dono ja logou. Este
-arquivo nao le, nao grava e nao imprime segredo nenhum.
+QUEM AUTENTICA
+
+Dois caminhos, nesta ordem. Com `DERVS_GITHUB_TOKEN` no ambiente, este arquivo
+fala com a API do GitHub direto — e o caminho do SERVIDOR, onde nao ha `gh`
+logado nem pode haver. Sem a variavel, cai no `gh` que o dono ja logou na
+maquina dele, e nada muda para ele.
+
+O token e LIDO do ambiente e vai para o cabecalho da requisicao. Nao e gravado,
+nao e impresso, e nao entra em mensagem de erro — todas as mensagens que saem
+daqui sao escritas por nos, nunca repassadas da excecao. Como o token nasce,
+onde ele mora e como se troca: `docs/operacao/token-do-coletor.md`.
 
     python coletar_github.py
 """
@@ -212,6 +221,10 @@ PEDACO = """
     pullRequests(states: OPEN, first: 5, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes { number title url updatedAt isDraft }
     }
+    issues(states: OPEN, first: 10, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      nodes { number title url updatedAt }
+    }
     %(vulns)s
   }
 """
@@ -241,7 +254,187 @@ def _consulta(slugs: dict, com_vulns: bool) -> str:
     return "query {\n" + "\n".join(partes) + "\n}"
 
 
+# ------------------------------------------------------- quem autentica aqui
+#
+# DOIS CAMINHOS, e a ordem importa.
+#
+# 1. TOKEN NO AMBIENTE (`DERVS_GITHUB_TOKEN`) — o caminho do SERVIDOR. La nao
+#    existe `gh` logado, nem pode existir: o `gh` e a ferramenta que o dono
+#    autenticou na maquina DELE, e amarrar a coleta a isso e amarrar o produto
+#    a uma pessoa estar sentada aqui. O token vem de um GitHub App instalado na
+#    organizacao (ver docs/operacao/token-do-coletor.md).
+# 2. O `gh` — o caminho da MAQUINA DO DONO, que continua funcionando sem
+#    configurar nada. Sem token no ambiente, nada muda para ele.
+#
+# O TOKEN NAO E LIDO, NAO E IMPRESSO E NAO E GUARDADO por este arquivo alem do
+# cabecalho da requisicao. Toda mensagem de erro que sai daqui e escrita por
+# nos, nunca repassada da excecao: `URLError` carrega a URL, e URL de API pode
+# carregar o que o chamador pos nela.
+VAR_TOKEN_NO_AMBIENTE = "DERVS_GITHUB_TOKEN"
+API = "https://api.github.com/"
+# So o que a API do GitHub usa em caminho de recurso. Barra inicial some antes
+# desta peneira; `//`, `..` e esquema completo caem aqui.
+CAMINHO_API = re.compile(r"[A-Za-z0-9._~/-]+(\?[A-Za-z0-9._~=&%-]*)?$")
+
+
+def _token() -> str:
+    """O token do ambiente, ou "" se ele nao serve para ir num cabecalho.
+
+    O `.strip()` limpa as PONTAS. Um token colado com quebra de linha no MEIO
+    passa por ele e faz o `http.client` levantar `ValueError` com o valor do
+    cabecalho dentro — isto e, com o token.
+
+    Hoje essa excecao NAO chega a lugar nenhum: as duas chamadas de
+    `_http_github` a engolem sem repassar. Isto e defesa em profundidade, para
+    o dia em que alguem acrescentar um `raise` ou um log ali. Nenhum formato de
+    token do GitHub e afetado: `ghp_`, `ghs_`, `github_pat_` e o JWT do App sao
+    todos ASCII imprimiveis.
+
+    Recusar aqui derruba para o `gh`, que no SERVIDOR nao existe — entao a
+    recusa fala, senao o operador so ve "gh nao respondeu" e procura no lugar
+    errado.
+    """
+    t = (os.environ.get(VAR_TOKEN_NO_AMBIENTE) or "").strip()
+    if t and not (t.isascii() and t.isprintable()):
+        # O token NAO entra na mensagem, obviamente. Nem o tamanho dele.
+        _diga("o valor de %s tem caractere que nao vai em cabecalho HTTP; "
+              "ignorei" % VAR_TOKEN_NO_AMBIENTE)
+        return ""
+    return t
+
+
+def _url_da_api(caminho: str):
+    """`repos/a/b` -> URL da API do GitHub. `None` se o caminho nao serve.
+
+    A checagem existe porque o caminho e montado com `slug`, que vem do
+    `casos.json` e da propria API. Sem ela, um slug com `..` ou com `//host`
+    apontaria esta funcao para outro servidor levando o `Authorization` junto —
+    e entregar o token e pior que falhar a coleta.
+    """
+    # UMA barra inicial e conveniencia; duas sao `//host`, que e outro endereco.
+    # Comer as duas com `lstrip` transformava um caminho malformado em caminho
+    # bom calado — e calado e como um defeito destes chega em producao.
+    c = (caminho or "")[1:] if (caminho or "").startswith("/") else (caminho or "")
+    if not c or c.startswith("/") or not CAMINHO_API.fullmatch(c):
+        return None
+    # `..` como PEDACO do caminho e subir de pasta. `..` no meio de um pedaco
+    # nao e: `compare/abc123...main` — a comparacao que mede o drift inteiro —
+    # tem tres pontos, e recusar por texto deixava a regra 16 muda em silencio.
+    if ".." in c.split("?", 1)[0].split("/"):
+        return None
+    return API + c
+
+
+def _http_github(caminho: str, corpo=None, teto=90):
+    """GET (ou POST com `corpo`) na API do GitHub, com o token do ambiente.
+
+    Devolve o JSON decodificado. Levanta em qualquer falha — quem chama traduz.
+    """
+    url = _url_da_api(caminho)
+    if not url:
+        raise ValueError("caminho de API recusado")
+    dados = json.dumps(corpo).encode("utf-8") if corpo is not None else None
+    pedido = urllib.request.Request(
+        url, data=dados, method="POST" if dados else "GET",
+        headers={"Authorization": "Bearer " + _token(),
+                 "Accept": "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28",
+                 "User-Agent": AGENTE,
+                 **({"Content-Type": "application/json"} if dados else {})})
+    # Sem seguir desvio: um 302 levaria o cabecalho `Authorization` — o token —
+    # para o host que o outro lado escolher. E a mesma licao do agente.
+    abridor = urllib.request.build_opener(_SemRedirecionar)
+    with abridor.open(pedido, timeout=teto) as resp:
+        return json.loads(resp.read().decode("utf-8", "replace"))
+
+
+# O `type` do erro do GraphQL e enum FECHADO do GitHub, e cada um destes pede
+# uma acao diferente de quem opera: arrumar o nome no casos.json, pedir
+# permissao no App, ou simplesmente esperar. Chegarem todos como a mesma frase
+# deixa o operador sem saber qual das tres fazer.
+#
+# LISTA BRANCA, e nao repasse: o que nao esta aqui e texto de fora, e texto de
+# fora nao entra em mensagem que vai para a tela do painel. O `message` do erro
+# — que e frase livre — nunca passa.
+TIPOS_DE_ERRO = ("NOT_FOUND", "FORBIDDEN", "RATE_LIMITED", "SERVICE_UNAVAILABLE",
+                 "INTERNAL", "MAX_NODE_LIMIT_EXCEEDED", "TIMEOUT")
+
+
+def _tipos_do_erro(erros) -> str:
+    vistos = []
+    for e in erros or []:
+        t = (e or {}).get("type")
+        if t in TIPOS_DE_ERRO and t not in vistos:
+            vistos.append(t)
+    return ", ".join(vistos) if vistos else "motivo que nao reconheco"
+
+
 def _gh_graphql(consulta: str):
+    if _token():
+        try:
+            resposta = _http_github("graphql", {"query": consulta})
+        except Exception as e:       # noqa: BLE001 — rede, HTTP, TLS, JSON
+            # A EXCECAO NAO ENTRA NA MENSAGEM: ela carrega a URL, e a URL pode
+            # carregar o token de quem montou a requisicao errado um dia.
+            #
+            # Mas so "nao respondeu" nao serve no SERVIDOR, onde nao ha ninguem
+            # olhando o terminal: nao separa token vencido (401) de GitHub fora
+            # do ar (5xx) nem de rede caida (sem codigo). O CODIGO da resposta e
+            # um numero de tres digitos que o GitHub devolveu — nao e segredo, e
+            # e o que torna o erro diagnosticavel de longe.
+            codigo = getattr(e, "code", None)
+            return None, ("a API do GitHub respondeu HTTP %s" % codigo
+                          if isinstance(codigo, int)
+                          else "a API do GitHub nao respondeu")
+        if not isinstance(resposta, dict):
+            return None, "resposta da API do GitHub nao era JSON de objeto"
+        # O GRAPHQL FALHA COM CODIGO 200. O motivo vem aqui dentro, e nao no
+        # codigo HTTP: consulta recusada, repositorio inexistente, limite de uso
+        # estourado, permissao negada para UM campo — tudo isso chega como 200
+        # com `errors` preenchido, muitas vezes junto de dado parcial.
+        #
+        # O caminho do `gh` fechava isto de graca (ele sai com codigo != 0).
+        # Sem esta linha, o caminho HTTP aceitava a falha como sucesso, e a
+        # revisao de seguranca mediu as duas consequencias: uma coleta
+        # inteiramente falhada imprimia "ok: 0 repositorios atualizados" e saia
+        # com 0; e uma falha PARCIAL — token sem permissao de ler alertas —
+        # gravava `vulns: {}` por cima de alertas reais, sem acionar a segunda
+        # consulta que existe exatamente para esse caso.
+        #
+        # MAS ERRO NAO E O MESMO QUE FRACASSO. O caso mais banal desta consulta
+        # e um repositorio renomeado, transferido ou arquivado: o GitHub devolve
+        # os outros 16 COMPLETOS e um `NOT_FOUND` do lado. A primeira versao
+        # desta correcao descartava tudo, e isso congelava CI, PR, issues,
+        # alertas, site e publicacao de TODOS os projetos por causa de um nome
+        # trocado — a cada 20 minutos, para sempre. Trocar um defeito por outro
+        # do mesmo tamanho, na direcao contraria.
+        #
+        # Regra: sobrou repositorio util, seguimos com ele. Nao sobrou nenhum,
+        # e falha de verdade. Quem cuida do campo que veio pela metade (alertas
+        # sem permissao) e `main`, repositorio a repositorio.
+        dados = resposta.get("data") or {}
+        if resposta.get("errors"):
+            if any(v for v in dados.values()):
+                # SOBROU DADO, mas alguma coisa faltou — e o caso tipico e o
+                # pior: o token perdeu a permissao de ler alertas, o
+                # repositorio vem inteiro so com `vulnerabilityAlerts: null`, e
+                # a rodada parece um sucesso. Aceitar CALADO era o defeito da
+                # correcao anterior: o painel republicava uma medicao de
+                # seguranca velha como se fosse fresca, e o operador perdia o
+                # unico aviso que existia. Fica com o dado, mas diz o que
+                # faltou.
+                # NA SAIDA NORMAL, e nao em `_diga`. Resposta parcial e, por
+                # definicao, uma rodada que termina em 0 — e no caminho de
+                # SUCESSO o `servir.py` registra o `stdout` e joga o `stderr`
+                # fora. Escrito em `_diga`, este aviso so existiria para quem
+                # rodasse o coletor a mao no terminal.
+                print("aviso: segui com o que veio, mas o GitHub recusou parte "
+                      "da consulta (%s)" % _tipos_do_erro(resposta["errors"]))
+                return dados, None
+            return None, "a API do GitHub recusou a consulta (%s)" % _tipos_do_erro(
+                resposta["errors"])
+        return dados, None
+
     try:
         r = subprocess.run(["gh", "api", "graphql", "-f", "query=" + consulta],
                            capture_output=True, text=True, encoding="utf-8",
@@ -257,7 +450,13 @@ def _gh_graphql(consulta: str):
 
 
 def _gh_json(caminho: str, teto=30):
-    """GET na API REST do GitHub pelo `gh` ja autenticado. None quando falha."""
+    """GET na API REST do GitHub. None quando falha — ver `_gh_graphql`."""
+    if _token():
+        try:
+            return _http_github(caminho, teto=teto)
+        except Exception:            # noqa: BLE001 — 404 aqui e resposta valida
+            return None
+
     try:
         r = subprocess.run(["gh", "api", caminho], capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=teto,
@@ -316,9 +515,14 @@ def mede_deploy(slug: str, branch: str) -> dict:
 
 def _dias(iso: str):
     try:
-        return max(0, (AGORA - datetime.fromisoformat(iso.replace("Z", "+00:00"))).days)
-    except (ValueError, AttributeError):
+        t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except (ValueError, AttributeError, TypeError):
         return 0
+    # Carimbo sem fuso subtraido de um com fuso levanta TypeError. Tratar como
+    # UTC e o mesmo criterio de `regras._idade`.
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return max(0, (AGORA - t).days)
 
 
 # O GitHub responde CRITICAL/HIGH/MODERATE/LOW; a tela fala minusculo.
@@ -385,7 +589,12 @@ def _resume_alertas(bloco: dict) -> dict:
 
 def traduz(no: dict, com_vulns: bool) -> dict:
     """Um repositorio do GraphQL -> o que as regras consomem."""
-    url = no.get("url", "")
+    # `or ""` e nao `.get(url, "")`: o default do `.get` so vale para chave
+    # AUSENTE. Chave presente com valor nulo devolve None, e `None + "/actions"`
+    # estoura. Hoje o esquema do GitHub declara estes campos como nao-nulos,
+    # entao nao e alcancavel — mas a aceitacao de resposta PARCIAL, logo acima,
+    # e a primeira via que entrega no incompleto a esta funcao.
+    url = no.get("url") or ""
     ramo = no.get("defaultBranchRef") or {}
     alvo = ramo.get("target") or {}
     rollup = alvo.get("statusCheckRollup") or {}
@@ -401,8 +610,35 @@ def traduz(no: dict, com_vulns: bool) -> dict:
     alertas = (_resume_alertas(no.get("vulnerabilityAlerts") or {})
                if com_vulns else {})
 
+    # AS ISSUES ABERTAS — o "eu sei o que falta" do painel.
+    #
+    # Vem no MESMO campo da mesma consulta que ja ia buscar CI e PRs: nao ha
+    # uma ida a rede a mais por causa disto, e nao pode haver (a cota desta
+    # conta ja estourou uma vez).
+    #
+    # DUAS VERDADES DIFERENTES, e trocar uma pela outra e o painel mentindo:
+    #   `issues_total` diz QUANTAS ha — e a contagem completa, vinda do GitHub.
+    #   `issues` diz QUAIS sao, e traz no maximo 10. Contar esta lista para
+    #     dizer "faltam N" daria 10 num repositorio com 40 abertas.
+    # Sem o campo na resposta (permissao negada, consulta degradada), o total e
+    # None: NAO MEDI e uma coisa, "nao ha nenhuma" e outra.
+    #
+    # `titulo` E TEXTO CRU DE TERCEIRO — quem abre uma issue num repositorio do
+    # dono escolhe o que vai escrito ali. Ele pode ficar gravado, mas NAO pode
+    # chegar ao campo `detalhe` de uma pendencia: esse campo entra no prompt da
+    # sessao do botao "Resolver", que roda com Bash auto-aprovado. Foi assim que
+    # o titulo de PR virou injecao de prompt uma vez (ver regras.py, regra 9).
+    # Hoje nenhuma regra le `issues` e a tela usa so `issues_total`/`issues_url`.
+    # O aviso fica AQUI, onde o campo nasce, e nao so onde ele e consumido.
+    bloco_issues = no.get("issues")
+    issues = []
+    for it in ((bloco_issues or {}).get("nodes") or []):
+        issues.append({"numero": it.get("number"), "titulo": it.get("title", "")[:120],
+                       "url": it.get("url", ""), "dias": _dias(it.get("updatedAt", ""))})
+    total_issues = (bloco_issues or {}).get("totalCount")
+
     return {
-        "slug": no.get("nameWithOwner", ""),
+        "slug": no.get("nameWithOwner") or "",
         "url": url,
         "branch_padrao": ramo.get("name", ""),
         # ERROR e FAILURE viram falha; PENDING e EXPECTED nao sao pendencia (ainda
@@ -414,9 +650,56 @@ def traduz(no: dict, com_vulns: bool) -> dict:
                "url": url + "/actions",
                "quando": ""},
         "prs": prs,
-        "vulns": (dict(alertas, url=url + "/security/dependabot")
+        "issues": issues,
+        "issues_total": total_issues if isinstance(total_issues, int) else None,
+        "issues_url": url + "/issues",
+        # `lido_em` e o carimbo DESTA leitura, e viaja dentro do proprio
+        # `vulns`. E ele que sobrevive quando o valor e preservado numa rodada
+        # em que os alertas nao vieram — e por isso e o unico relogio confiavel
+        # para dizer ha quanto tempo este numero nao e relido.
+        "vulns": (dict(alertas, url=url + "/security/dependabot",
+                       lido_em=AGORA.isoformat(timespec="seconds"))
                   if alertas else {}),
     }
+
+
+def _diga(motivo: str) -> None:
+    """Fala na SAIDA DE ERRO, se houver uma. Sob pythonw nao ha, e tudo bem.
+
+    Saida de erro e nao saida normal porque e dali que o `servir.py` tira o
+    motivo quando o coletor falha — o `stdout` ele descarta.
+    """
+    if sys.stderr is not None:
+        print("coletar_github: %s" % motivo, file=sys.stderr)
+
+
+def issues_abertas(slug: str):
+    """As issues abertas de UM repositorio. `None` quando nao deu para saber.
+
+    Ferramenta de conferencia, para a linha de comando — a coleta de verdade
+    passa por `main()`, que pega os 17 de uma vez. Reusa a mesma consulta e o
+    mesmo tradutor de proposito: se um dia o formato mudar, muda nos dois.
+
+    A distincao que importa: `[]` quer dizer "conferi, nao ha nada aberto", e
+    `None` quer dizer "nao consegui conferir". Devolver `[]` na falha faria a
+    tela comemorar um repositorio que ela nao conseguiu ler.
+    """
+    if not slug or "/" not in slug:
+        _diga("slug invalido: falta o dono antes da barra")
+        return None
+    dados, erro = _gh_graphql(_consulta({"r0": slug}, com_vulns=False))
+    if erro:
+        # O MOTIVO VAI PARA A TELA, o retorno continua `None`. Quem roda isto
+        # esta investigando por que um repositorio nao aparece; devolver `None`
+        # calado esconde justamente a resposta que ele veio buscar.
+        _diga(erro)
+        return None
+    no = (dados or {}).get("r0")
+    if not no:
+        _diga("o GitHub nao devolveu esse repositorio: nome errado, "
+              "ou o token nao alcanca ele")
+        return None
+    return traduz(no, com_vulns=False)["issues"]
 
 
 def main():
@@ -439,18 +722,28 @@ def main():
     dados, erro = _gh_graphql(_consulta(slugs, com_vulns=True))
     com_vulns = True
     if dados is None:
-        # A primeira consulta pode falhar por falta de permissao para ler alertas,
-        # mas tambem por rede, timeout ou limite de uso — daqui nao da para
-        # distinguir. Tentamos sem esse campo, porque CI e PR valem por si.
+        # A primeira consulta pode falhar por falta de permissao para ler
+        # alertas — e ai a segunda, sem esse campo, salva a rodada: CI e PR
+        # valem por si.
+        #
+        # VALE TENTAR ATE CONTRA LIMITE DE COTA. O limite do GraphQL e por
+        # PONTOS calculados por consulta, e o custo aqui e dominado pelo campo
+        # de alertas — 100 alertas em cada um dos 17 apelidos —, que e
+        # justamente o que a segunda consulta NAO pede. Ela e a barata: cabe no
+        # saldo em boa parte das vezes em que a primeira nao coube. Desistir
+        # congelaria CI, PR, issues, site e publicacao dos 17 durante toda a
+        # janela do limite, a cada 20 minutos.
         dados, erro2 = _gh_graphql(_consulta(slugs, com_vulns=False))
         com_vulns = False
         if dados is None:
-            print("FALHA ao consultar o GitHub: %s / %s" % (erro, erro2))
+            print("FALHA ao consultar o GitHub: %s / %s" % (erro, erro2),
+                  file=sys.stderr)
             return 1
         print("aviso: vim sem os alertas de segurança nesta rodada (%s)" % erro)
 
     con = banco.conectar()
     gravados = 0
+    reusados = []          # projetos cujo numero de alertas nao deu para reler
     try:
         # FORA DO LACO: dentro, era um SELECT por repositorio, e no primeiro
         # giro de um banco novo o `criar_usuario` de dentro commitava a
@@ -461,15 +754,50 @@ def main():
             if not no:
                 continue                   # repo sumiu ou sem acesso: fica sem camada
             novo = traduz(no, com_vulns)
-            if not com_vulns:
-                # NAO medimos alertas nesta rodada. Gravar {} aqui apagaria do
-                # painel um alerta de seguranca REAL que ja estava no banco —
-                # um blip de rede as 20h faria "93 alertas abertos" virar silencio
-                # ate a proxima coleta boa. Carregamos o valor anterior e dizemos
-                # de quando ele e, para a tela poder mostrar que esta velho.
+            # NAO MEDIMOS OS ALERTAS DESTE REPOSITORIO. Gravar {} aqui apagaria
+            # do painel um alerta de seguranca REAL que ja estava no banco — um
+            # blip de rede as 20h faria "93 alertas abertos" virar silencio ate
+            # a proxima coleta boa. Carregamos o valor anterior e dizemos de
+            # quando ele e, para a tela poder mostrar que esta velho.
+            #
+            # A checagem e POR REPOSITORIO, e nao por rodada. Por rodada
+            # (`if not com_vulns`) so cobria a consulta inteira ter caido para a
+            # versao sem alertas. O caso que escapava: o token perde a permissao
+            # de ler alertas e o GitHub devolve o repositorio COMPLETO, so com
+            # `vulnerabilityAlerts: null` — rodada bem-sucedida, campo vazio,
+            # 93 alertas apagados em silencio.
+            #
+            # `vulns` vazio quer dizer NAO MEDI, sempre: um repositorio com zero
+            # alertas devolve `{"total": 0}`, que e dicionario cheio. As duas
+            # coisas nunca se confundem aqui.
+            if not novo.get("vulns"):
                 antes = ((tudo.get(nome) or {}).get("github") or {})
-                novo["vulns"] = (antes.get("dados") or {}).get("vulns") or {}
-                novo["vulns_medido_em"] = antes.get("medido_em")
+                anterior = (antes.get("dados") or {}).get("vulns") or {}
+                if anterior:
+                    # A IDADE VAI DENTRO DO PROPRIO `vulns`, porque e ali que
+                    # `regras.py` le. A versao anterior guardava num campo
+                    # `vulns_medido_em` que NINGUEM lia — o comentario prometia
+                    # "para a tela poder mostrar que esta velho" e a tela nunca
+                    # mostrava. Numero preservado sem carimbo visivel e o
+                    # painel republicando medida de semanas atras como se fosse
+                    # de agora, para sempre, enquanto a permissao nao voltar.
+                    # A ANCORA E `lido_em`, O CARIMBO DA PROPRIA MEDICAO — nao
+                    # o `medido_em` da linha. O banco reescreve `medido_em` em
+                    # TODA rodada bem-sucedida, e estas rodadas SAO
+                    # bem-sucedidas: CI, PRs, issues e publicacao continuam
+                    # sendo gravados; so os alertas e que nao vieram. Ancorado
+                    # nele, `dias_sem_reler` dava zero para sempre, desde a
+                    # primeira rodada — o aviso existia, tinha teste, e nunca
+                    # disparava. O teste era verde porque simulava um estado que
+                    # a operacao real nunca produz.
+                    #
+                    # Linha antiga, gravada antes deste campo existir, ganha o
+                    # carimbo AGORA e passa a envelhecer a partir daqui: e o
+                    # mais velho que da para afirmar sem inventar.
+                    lido = anterior.get("lido_em") or antes.get("medido_em")
+                    novo["vulns"] = dict(anterior, lido_em=lido,
+                                         dias_sem_reler=_dias(lido))
+                    reusados.append(nome)
             local = ((tudo.get(nome) or {}).get("local") or {}).get("dados") or {}
             antes_gh = ((tudo.get(nome) or {}).get("github") or {}).get("dados") or {}
 
@@ -503,6 +831,35 @@ def main():
         con.commit()          # ver coletar.py: quem abriu a conexao commita
     finally:
         con.close()
+
+    if not gravados:
+        # HAVIA repositorios na lista (`if not slugs` ja saiu la em cima) e
+        # nenhum foi gravado. Isso nao e uma coleta vazia, e uma coleta que
+        # falhou: repositorio sumiu, token sem alcance, apelido que nao voltou.
+        # Imprimir "ok: 0" e sair com 0 declara sucesso sobre nada — e no
+        # servidor quem le nao e a linha, e o codigo de saida.
+        # NA SAIDA DE ERRO, e nao na saida normal: `servir.py` guarda
+        # `r.stderr` quando o coletor sai != 0 e joga fora o `stdout`. Escrito
+        # em `print()` comum, este motivo existia e ia para o cano que ninguem
+        # le — o painel dizia "a coleta falhou. Motivo:" e nada depois.
+        print("FALHA: consultei o GitHub e nao consegui atualizar nenhum dos "
+              "%d repositorios." % len(slugs), file=sys.stderr)
+        return 1
+
+    if reusados:
+        # NA SAIDA NORMAL de proposito: a rodada deu certo, e `servir.py`
+        # registra o `stdout` justamente no caminho de sucesso. E o sinal de
+        # que alguma coisa esta errada com a permissao do token, num dia em que
+        # nada mais grita.
+        nomes = sorted(reusados)
+        # A lista e cortada, e o corte se ANUNCIA: "(a, b, c, d, e)" com 17
+        # projetos parece a lista inteira, e quem le acha que sabe quais sao.
+        lista = ", ".join(nomes[:5])
+        if len(nomes) > 5:
+            lista += " e mais %d" % (len(nomes) - 5)
+        print("aviso: nao consegui reler os alertas de segurança de %d "
+              "projeto(s) (%s) — mantive o último número conhecido, marcado "
+              "como velho." % (len(nomes), lista))
 
     print("ok: %d repositorios do GitHub atualizados%s"
           % (gravados, "" if com_vulns else " (sem alertas de segurança)"))
