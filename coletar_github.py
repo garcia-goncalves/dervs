@@ -282,12 +282,25 @@ def _token() -> str:
 
     O `.strip()` limpa as PONTAS. Um token colado com quebra de linha no MEIO
     passa por ele e faz o `http.client` levantar `ValueError` com o valor do
-    cabecalho dentro — isto e, com o token. Essa mensagem tem caminho ate o
-    painel (o servidor guarda a saida de erro do coletor em `falhas_de_coleta`).
-    Recusar aqui fecha o canal na origem, e "" simplesmente volta para o `gh`.
+    cabecalho dentro — isto e, com o token.
+
+    Hoje essa excecao NAO chega a lugar nenhum: as duas chamadas de
+    `_http_github` a engolem sem repassar. Isto e defesa em profundidade, para
+    o dia em que alguem acrescentar um `raise` ou um log ali. Nenhum formato de
+    token do GitHub e afetado: `ghp_`, `ghs_`, `github_pat_` e o JWT do App sao
+    todos ASCII imprimiveis.
+
+    Recusar aqui derruba para o `gh`, que no SERVIDOR nao existe — entao a
+    recusa fala, senao o operador so ve "gh nao respondeu" e procura no lugar
+    errado.
     """
     t = (os.environ.get(VAR_TOKEN_NO_AMBIENTE) or "").strip()
-    return t if t.isascii() and t.isprintable() else ""
+    if t and not (t.isascii() and t.isprintable()):
+        # O token NAO entra na mensagem, obviamente. Nem o tamanho dele.
+        _diga("o valor de %s tem caractere que nao vai em cabecalho HTTP; "
+              "ignorei" % VAR_TOKEN_NO_AMBIENTE)
+        return ""
+    return t
 
 
 def _url_da_api(caminho: str):
@@ -335,6 +348,27 @@ def _http_github(caminho: str, corpo=None, teto=90):
         return json.loads(resp.read().decode("utf-8", "replace"))
 
 
+# O `type` do erro do GraphQL e enum FECHADO do GitHub, e cada um destes pede
+# uma acao diferente de quem opera: arrumar o nome no casos.json, pedir
+# permissao no App, ou simplesmente esperar. Chegarem todos como a mesma frase
+# deixa o operador sem saber qual das tres fazer.
+#
+# LISTA BRANCA, e nao repasse: o que nao esta aqui e texto de fora, e texto de
+# fora nao entra em mensagem que vai para a tela do painel. O `message` do erro
+# — que e frase livre — nunca passa.
+TIPOS_DE_ERRO = ("NOT_FOUND", "FORBIDDEN", "RATE_LIMITED", "SERVICE_UNAVAILABLE",
+                 "INTERNAL", "MAX_NODE_LIMIT_EXCEEDED", "TIMEOUT")
+
+
+def _tipos_do_erro(erros) -> str:
+    vistos = []
+    for e in erros or []:
+        t = (e or {}).get("type")
+        if t in TIPOS_DE_ERRO and t not in vistos:
+            vistos.append(t)
+    return ", ".join(vistos) if vistos else "motivo que nao reconheco"
+
+
 def _gh_graphql(consulta: str):
     if _token():
         try:
@@ -367,10 +401,24 @@ def _gh_graphql(consulta: str):
         # gravava `vulns: {}` por cima de alertas reais, sem acionar a segunda
         # consulta que existe exatamente para esse caso.
         #
-        # O CONTEUDO de `errors` nao entra na mensagem: e texto do outro lado.
+        # MAS ERRO NAO E O MESMO QUE FRACASSO. O caso mais banal desta consulta
+        # e um repositorio renomeado, transferido ou arquivado: o GitHub devolve
+        # os outros 16 COMPLETOS e um `NOT_FOUND` do lado. A primeira versao
+        # desta correcao descartava tudo, e isso congelava CI, PR, issues,
+        # alertas, site e publicacao de TODOS os projetos por causa de um nome
+        # trocado — a cada 20 minutos, para sempre. Trocar um defeito por outro
+        # do mesmo tamanho, na direcao contraria.
+        #
+        # Regra: sobrou repositorio util, seguimos com ele. Nao sobrou nenhum,
+        # e falha de verdade. Quem cuida do campo que veio pela metade (alertas
+        # sem permissao) e `main`, repositorio a repositorio.
+        dados = resposta.get("data") or {}
         if resposta.get("errors"):
-            return None, "a API do GitHub respondeu com erro na consulta"
-        return resposta.get("data") or {}, None
+            if any(v for v in dados.values()):
+                return dados, None
+            return None, "a API do GitHub recusou a consulta (%s)" % _tipos_do_erro(
+                resposta["errors"])
+        return dados, None
 
     try:
         r = subprocess.run(["gh", "api", "graphql", "-f", "query=" + consulta],
@@ -586,9 +634,13 @@ def traduz(no: dict, com_vulns: bool) -> dict:
 
 
 def _diga(motivo: str) -> None:
-    """Fala na saida de erro, se houver uma. Sob pythonw nao ha, e tudo bem."""
+    """Fala na SAIDA DE ERRO, se houver uma. Sob pythonw nao ha, e tudo bem.
+
+    Saida de erro e nao saida normal porque e dali que o `servir.py` tira o
+    motivo quando o coletor falha — o `stdout` ele descarta.
+    """
     if sys.stderr is not None:
-        print("issues_abertas: %s" % motivo, file=sys.stderr)
+        print("coletar_github: %s" % motivo, file=sys.stderr)
 
 
 def issues_abertas(slug: str):
@@ -640,13 +692,23 @@ def main():
     dados, erro = _gh_graphql(_consulta(slugs, com_vulns=True))
     com_vulns = True
     if dados is None:
-        # A primeira consulta pode falhar por falta de permissao para ler alertas,
-        # mas tambem por rede, timeout ou limite de uso — daqui nao da para
-        # distinguir. Tentamos sem esse campo, porque CI e PR valem por si.
+        # A primeira consulta pode falhar por falta de permissao para ler
+        # alertas — e ai a segunda, sem esse campo, salva a rodada: CI e PR
+        # valem por si.
+        #
+        # MAS NAO INSISTA CONTRA UM LIMITE DE USO. Se o GitHub acabou de dizer
+        # que estamos no teto, repetir a consulta dobra o gasto contra uma API
+        # que ja recusou — a cada 20 minutos, na conta cuja cota ja estourou uma
+        # vez. Aqui a segunda ida nao tem nenhuma chance de ir melhor.
+        if "RATE_LIMITED" in (erro or ""):
+            print("FALHA ao consultar o GitHub: %s. Nao repeti a consulta "
+                  "para nao gastar cota a toa." % erro, file=sys.stderr)
+            return 1
         dados, erro2 = _gh_graphql(_consulta(slugs, com_vulns=False))
         com_vulns = False
         if dados is None:
-            print("FALHA ao consultar o GitHub: %s / %s" % (erro, erro2))
+            print("FALHA ao consultar o GitHub: %s / %s" % (erro, erro2),
+                  file=sys.stderr)
             return 1
         print("aviso: vim sem os alertas de segurança nesta rodada (%s)" % erro)
 
@@ -662,15 +724,28 @@ def main():
             if not no:
                 continue                   # repo sumiu ou sem acesso: fica sem camada
             novo = traduz(no, com_vulns)
-            if not com_vulns:
-                # NAO medimos alertas nesta rodada. Gravar {} aqui apagaria do
-                # painel um alerta de seguranca REAL que ja estava no banco —
-                # um blip de rede as 20h faria "93 alertas abertos" virar silencio
-                # ate a proxima coleta boa. Carregamos o valor anterior e dizemos
-                # de quando ele e, para a tela poder mostrar que esta velho.
+            # NAO MEDIMOS OS ALERTAS DESTE REPOSITORIO. Gravar {} aqui apagaria
+            # do painel um alerta de seguranca REAL que ja estava no banco — um
+            # blip de rede as 20h faria "93 alertas abertos" virar silencio ate
+            # a proxima coleta boa. Carregamos o valor anterior e dizemos de
+            # quando ele e, para a tela poder mostrar que esta velho.
+            #
+            # A checagem e POR REPOSITORIO, e nao por rodada. Por rodada
+            # (`if not com_vulns`) so cobria a consulta inteira ter caido para a
+            # versao sem alertas. O caso que escapava: o token perde a permissao
+            # de ler alertas e o GitHub devolve o repositorio COMPLETO, so com
+            # `vulnerabilityAlerts: null` — rodada bem-sucedida, campo vazio,
+            # 93 alertas apagados em silencio.
+            #
+            # `vulns` vazio quer dizer NAO MEDI, sempre: um repositorio com zero
+            # alertas devolve `{"total": 0}`, que e dicionario cheio. As duas
+            # coisas nunca se confundem aqui.
+            if not novo.get("vulns"):
                 antes = ((tudo.get(nome) or {}).get("github") or {})
-                novo["vulns"] = (antes.get("dados") or {}).get("vulns") or {}
-                novo["vulns_medido_em"] = antes.get("medido_em")
+                anterior = (antes.get("dados") or {}).get("vulns") or {}
+                if anterior:
+                    novo["vulns"] = anterior
+                    novo["vulns_medido_em"] = antes.get("medido_em")
             local = ((tudo.get(nome) or {}).get("local") or {}).get("dados") or {}
             antes_gh = ((tudo.get(nome) or {}).get("github") or {}).get("dados") or {}
 
@@ -711,8 +786,12 @@ def main():
         # falhou: repositorio sumiu, token sem alcance, apelido que nao voltou.
         # Imprimir "ok: 0" e sair com 0 declara sucesso sobre nada — e no
         # servidor quem le nao e a linha, e o codigo de saida.
+        # NA SAIDA DE ERRO, e nao na saida normal: `servir.py` guarda
+        # `r.stderr` quando o coletor sai != 0 e joga fora o `stdout`. Escrito
+        # em `print()` comum, este motivo existia e ia para o cano que ninguem
+        # le — o painel dizia "a coleta falhou. Motivo:" e nada depois.
         print("FALHA: consultei o GitHub e nao consegui atualizar nenhum dos "
-              "%d repositorios." % len(slugs))
+              "%d repositorios." % len(slugs), file=sys.stderr)
         return 1
 
     print("ok: %d repositorios do GitHub atualizados%s"
