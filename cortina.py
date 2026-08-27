@@ -178,7 +178,8 @@ def _assinar(ate: str, chave: bytes) -> str:
 # aceitavel para uma cortina. Persistir daria a quem chuta um jeito de encher o
 # disco de outra pessoa.
 
-def registrar_tentativa(origem: str, agora_s: float) -> bool:
+def registrar_tentativa(origem: str, agora_s: float,
+                        balcao: str = "cortina") -> bool:
     """Anota a tentativa e diz se ela pode ser conferida. UMA funcao so.
 
     Antes eram duas — `pode_tentar` e `anotar_tentativa` —, cada uma pegando o
@@ -191,10 +192,16 @@ def registrar_tentativa(origem: str, agora_s: float) -> bool:
     dizendo que o teto por origem e o que a segura. Teto que so vale
     sequencialmente nao segura nada. Havia ainda o custo — cada conferencia paga
     um `scrypt` de ~16 MiB, e duzentos em paralelo sao uns 3 GiB.
+
+    O `balcao` separa as filas (etapa das portas de entrada). Sem ele, errar a
+    chave de acesso cinco vezes gastava o teto da cortina, e o dono ficava
+    trancado do lado de fora sem entender por que — foi exatamente o que
+    aconteceu com ele em 26/08/2026, por outro caminho. Cada porta conta o
+    proprio chute; o teto continua sendo POR ORIGEM dentro de cada uma.
     """
     with _trava:
         _podar(agora_s)
-        vistas = _tentativas.setdefault(origem, [])
+        vistas = _tentativas.setdefault((balcao, origem), [])
         if len(vistas) >= TETO:
             return False
         vistas.append(agora_s)
@@ -203,7 +210,7 @@ def registrar_tentativa(origem: str, agora_s: float) -> bool:
 
 def origens_lembradas() -> set:
     with _trava:
-        return set(_tentativas)
+        return {origem for _, origem in _tentativas}
 
 
 def zerar_tentativas() -> None:
@@ -213,9 +220,9 @@ def zerar_tentativas() -> None:
 
 def _podar(agora_s: float) -> None:
     """Sem isto o dicionario cresce por IP ate o processo morrer."""
-    for origem in list(_tentativas):
-        recentes = [t for t in _tentativas[origem] if agora_s - t < JANELA]
+    for chave in list(_tentativas):
+        recentes = [t for t in _tentativas[chave] if agora_s - t < JANELA]
         if recentes:
-            _tentativas[origem] = recentes
+            _tentativas[chave] = recentes
         else:
-            del _tentativas[origem]
+            del _tentativas[chave]

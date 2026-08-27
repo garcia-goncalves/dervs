@@ -18,9 +18,29 @@ Abre em **http://localhost:4777**. `Ctrl+C` encerra.
 **A primeira tela não é o painel.** Desde a etapa 9 o `/` é uma capa — um
 teclado de seis dígitos e nada que diga o que este sistema é. Na sua máquina a
 combinação é **`000000`**, fixa e escrita aqui de propósito: local é ambiente de
-mentira, e dado de teste não é segredo. Digite, e aparece o botão
-**Entrar · ambiente local**, que abre uma sessão para `dono@teste.local` sem
-senha nenhuma.
+mentira, e dado de teste não é segredo. Digite, e aparece o **menu de portas**.
+
+**As quatro portas**, na ordem em que a tela as oferece:
+
+| Porta | O que é | Quando aparece |
+|---|---|---|
+| **Chave de acesso** | passkey: o aparelho assina, o PIN do Windows (ou a digital) destranca | sempre |
+| **Entrar com GitHub** | a conta do GitHub, com o 2FA que ela já tem | só com o OAuth App registrado |
+| **Código do papel** | um dos dez códigos de uso único, anotados antes | sempre |
+| **Entrar · ambiente local** | sessão para `dono@teste.local`, sem senha | só com `DERVS_AMBIENTE=local` |
+
+**Chave de acesso não é digital.** Digital e rosto são só a maneira de
+destrancar a chave *dentro* do aparelho — num PC sem câmera e sem leitor, quem
+destranca é o **PIN do Windows Hello**, e a chave mora no chip TPM da placa.
+Sem TPM, o navegador mostra um QR, o celular confirma com a digital, e a chave
+mora no celular. A chave privada nunca sai do aparelho: é por isso que passkey
+é imune a site falso — num endereço parecido o navegador simplesmente não
+encontra chave nenhuma para oferecer.
+
+Cadastrar, apelidar e remover chaves é dentro do painel, no botão
+**Formas de entrar**. É lá também que se geram os dez códigos de papel — eles
+aparecem **uma vez só**. Detalhes e a razão de cada escolha em
+[`docs/operacao/formas-de-entrar.md`](docs/operacao/formas-de-entrar.md).
 
 `DERVS_AMBIENTE=local` é obrigatório: sem ela o cofre se recusa a criar a
 `cofre.chave` e a porta local some. As duas coisas falham fechadas de propósito
@@ -28,8 +48,9 @@ senha nenhuma.
 uma conta pronta.
 
 No servidor é outra história: a combinação é **sorteada na primeira subida e
-impressa uma única vez no log**, e a única porta é **Entrar com GitHub**, contra
-a lista de contas da tabela `credencial`. Ver
+impressa uma única vez no log**, a porta local **não existe na tabela de rotas**,
+e o que resta são chave de acesso, GitHub e código do papel — todos contra a
+lista de contas da tabela `credencial`. Ver
 [`docs/operacao/registrar-app-github.md`](docs/operacao/registrar-app-github.md).
 
 | Variável | Para quê | Onde vive |

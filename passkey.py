@@ -43,6 +43,7 @@ import hmac
 import json
 import re
 import secrets
+import threading
 
 import p256
 
@@ -389,6 +390,74 @@ def conferir_entrada(client_data_json, authenticator_data, assinatura, chave,
     if not p256.conferir_bytes(chave, assinado, assinatura):
         return None
     return {"contador": lido["contador"]}
+
+
+# ------------------------------------------------- onde o desafio fica guardado
+#
+# POR QUE NAO NUM COOKIE ASSINADO, que e como a cortina guarda o selo dela: o
+# selo da cortina PODE ser reapresentado dentro do prazo — e um passe de dez
+# minutos. O desafio nao pode ser reapresentado NUNCA, e uso unico de verdade
+# exige alguem lembrando o que ja foi gasto. Cookie assinado nao esquece.
+#
+# EM MEMORIA, e reiniciar o servidor esquece tudo. E aceitavel: o pior efeito e
+# quem estava no meio do login apertar o botao de novo. Persistir daria a quem
+# chega de fora um jeito de encher o disco de outra pessoa, uma linha por
+# pedido — o mesmo raciocinio do contador da cortina.
+
+PRAZO_DO_DESAFIO = 300      # segundos; login e ida ao PIN cabem folgados
+TETO_DE_DESAFIOS = 500      # sem teto, pedir desafio em laco enche a memoria
+
+
+class Desafios:
+    """Os desafios abertos. Uso unico: resgatar APAGA."""
+
+    def __init__(self, prazo: int = PRAZO_DO_DESAFIO,
+                 teto: int = TETO_DE_DESAFIOS):
+        self._prazo, self._teto = prazo, teto
+        self._abertos = {}
+        # O servidor e `ThreadingHTTPServer`: dois logins simultaneos mexeriam
+        # neste dicionario ao mesmo tempo.
+        self._trava = threading.Lock()
+
+    def abrir(self, agora_s: float):
+        """Devolve (senha_do_bilhete, desafio). O bilhete vai num cookie."""
+        with self._trava:
+            self._podar(agora_s)
+            if len(self._abertos) >= self._teto:
+                # Cheio: o mais velho sai. Recusar em vez disso deixaria quem
+                # enche a memoria trancar o login de todo mundo.
+                self._abertos.pop(next(iter(self._abertos)), None)
+            bilhete = secrets.token_urlsafe(18)
+            desafio = novo_desafio()
+            self._abertos[bilhete] = (desafio, agora_s + self._prazo)
+            return bilhete, desafio
+
+    def resgatar(self, bilhete, agora_s: float):
+        """O desafio daquele bilhete, UMA vez. None se nao existe ou venceu."""
+        if not isinstance(bilhete, str) or not bilhete:
+            return None
+        with self._trava:
+            self._podar(agora_s)
+            # `pop`, e nao `get`: e o pop que faz o uso ser unico. Com `get`, a
+            # mesma resposta capturada entraria de novo dentro do prazo.
+            achado = self._abertos.pop(bilhete, None)
+        if achado is None:
+            return None
+        desafio, ate = achado
+        return desafio if agora_s <= ate else None
+
+    def quantos(self) -> int:
+        with self._trava:
+            return len(self._abertos)
+
+    def esquecer_tudo(self) -> None:
+        with self._trava:
+            self._abertos.clear()
+
+    def _podar(self, agora_s: float) -> None:
+        for bilhete in [b for b, (_, ate) in self._abertos.items()
+                        if agora_s > ate]:
+            del self._abertos[bilhete]
 
 
 def contador_ok(guardado: int, novo: int) -> bool:

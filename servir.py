@@ -59,6 +59,7 @@ import http.cookies
 import json
 import os
 import secrets
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -74,6 +75,7 @@ import autenticacao
 import banco
 import cortina
 import memoria
+import passkey
 import regras
 
 
@@ -98,6 +100,10 @@ PAGINA = AQUI / "index.html"
 # A capa. Quem chega sem sessao ve ESTA pagina, e ela nao contem formulario de
 # login nenhum — o botao de entrar so e enviado depois da combinacao certa.
 PAGINA_CORTINA = AQUI / "index-cortina.html"
+# O menu de portas, injetado DENTRO da capa e so depois da combinacao certa.
+# Arquivo separado pelo mesmo motivo que a capa nao traz o botao de entrar: o
+# que nao e enviado nao aparece no Ctrl+U de quem ainda nao passou pela cortina.
+PAGINA_PORTAS = AQUI / "portas.html"
 
 AMBIENTE = (os.environ.get("DERVS_AMBIENTE") or "").strip().lower()
 E_LOCAL = AMBIENTE == "local"
@@ -153,6 +159,11 @@ ONDE_VOLTAR = "/entrar/github/retorno"
 # Folego da ida ao GitHub. Dez minutos nao bastam: no meio dela cabe uma tela de
 # login e um segundo fator digitado do celular.
 MINUTOS_DA_IDA = 30
+
+# Os desafios de uso unico das chaves de acesso. Um por processo, em memoria:
+# reiniciar o servidor faz quem estava no meio do login apertar o botao de novo,
+# e so. Ver a classe em passkey.py para por que nao e um cookie assinado.
+DESAFIOS = passkey.Desafios()
 
 _travas = {c: threading.Lock() for c in COLETORES}
 _ultima_falha: dict = {}
@@ -405,11 +416,17 @@ class Hub(SimpleHTTPRequestHandler):
             "falhas_de_coleta": dict(_ultima_falha),   # copia: o vivo muda em outra thread
         }
 
-    BOTAO_ENTRAR = ('<a class="entrar" href="/entrar/github" rel="nofollow">'
-                    "Entrar com GitHub</a>")
+    # A chave de acesso vem PRIMEIRO, e e a unica sem `secundaria`: e a porta
+    # recomendada do desenho. As outras existem para o dia em que ela nao serve.
+    BOTAO_CHAVE = ('<button class="entrar" type="button" data-porta="chave">'
+                   "Entrar com chave de acesso</button>")
+    BOTAO_ENTRAR = ('<a class="entrar secundaria" href="/entrar/github"'
+                    ' rel="nofollow">Entrar com GitHub</a>')
+    BOTAO_CODIGO = ('<button class="entrar secundaria" type="button"'
+                    ' data-porta="codigo">Usar um c&#243;digo do papel</button>')
     # A faixa e o aviso: quem ve isto esta olhando dado de mentira.
-    BOTAO_LOCAL = ('<a class="entrar" href="/entrar/local" rel="nofollow">'
-                   "Entrar &#183; ambiente local</a>")
+    BOTAO_LOCAL = ('<a class="entrar secundaria" href="/entrar/local"'
+                   ' rel="nofollow">Entrar &#183; ambiente local</a>')
     FAIXA_LOCAL = ('<div class="faixa-local">Ambiente local &#183; entrada sem '
                    "senha</div>")
 
@@ -431,13 +448,33 @@ class Hub(SimpleHTTPRequestHandler):
                 "__FAIXA__": self.FAIXA_LOCAL if E_LOCAL else ""})
         if not self._cortina_aberta():
             return self._html_de(PAGINA_CORTINA, {"__PORTA_ABERTA__": ""})
-        portas = []
-        if GITHUB_ID and GITHUB_SECRET:
-            portas.append(self.BOTAO_ENTRAR)
-        if E_LOCAL:
-            portas.append(self.BOTAO_LOCAL)
         return self._html_de(PAGINA_CORTINA,
-                             {"__PORTA_ABERTA__": "\n".join(portas)})
+                             {"__PORTA_ABERTA__": self._menu_de_portas()})
+
+    def _menu_de_portas(self) -> str:
+        """O menu que so existe depois da cortina. Vazio se faltar o arquivo.
+
+        A chave de acesso e o codigo do papel aparecem SEMPRE: os dois vivem
+        neste banco, sem depender de nada registrado fora. Quem nao tiver chave
+        cadastrada descobre ao clicar — e nao antes, porque dizer "voce nao tem
+        chave" a quem so passou pela cortina ja e contar algo sobre a conta.
+
+        O GitHub aparece so com aplicativo registrado: botao que responde 404 e
+        pior que botao ausente. E a porta local, so no ambiente local.
+        """
+        botoes = [self.BOTAO_CHAVE]
+        if GITHUB_ID and GITHUB_SECRET:
+            botoes.append(self.BOTAO_ENTRAR)
+        botoes.append(self.BOTAO_CODIGO)
+        if E_LOCAL:
+            botoes.append(self.BOTAO_LOCAL)
+        try:
+            molde = PAGINA_PORTAS.read_text(encoding="utf-8")
+        except OSError:
+            # Falha FECHADA na tela: sem o molde, a capa aparece sem porta
+            # nenhuma em vez de aparecer quebrada.
+            return ""
+        return molde.replace("__BOTOES__", "\n    ".join(botoes))
 
     def _html_de(self, caminho, trocas):
         try:
@@ -604,6 +641,271 @@ class Hub(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    # ------------------------------------------------- as portas de entrada
+    #
+    # Quatro caminhos para a mesma sessao, e a cortina continua antes de todos.
+    # O desenho esta em docs/superpowers/specs/2026-08-26-portas-de-entrada-design.md.
+    #
+    # A REGRA QUE VALE PARA AS TRES ROTAS DE ENTRAR: a resposta e a MESMA para
+    # todo tipo de fracasso. Credencial que nao existe, assinatura errada,
+    # desafio vencido, conta desativada — tudo devolve o mesmo 401 com o mesmo
+    # texto. Motivo diferente por causa diferente transforma a tela de login
+    # numa lista de quem existe, e "essa credencial nao esta cadastrada" ja
+    # confirma que as outras estao.
+
+    RECUSA = {"erro": "nao deu"}
+
+    def _rp_id(self) -> str:
+        """O dominio a que a chave fica amarrada — sem a porta.
+
+        Sai do `Host`, que `_despachar` ja conferiu contra `HOSTS_OK`. Fixar
+        "localhost" aqui faria toda chave cadastrada parar de funcionar no dia
+        em que a etapa 16 puser o sistema em dervs.com.br.
+        """
+        return (self.headers.get("Host") or "").split(":", 1)[0].lower()
+
+    def _corpo_json(self, teto: int = 64 * 1024):
+        """O corpo do pedido como dicionario, ou None. Nunca levanta."""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            corpo = json.loads(self.rfile.read(min(n, teto)) or b"{}")
+        except (ValueError, OSError):
+            return None
+        return corpo if isinstance(corpo, dict) else None
+
+    def _texto_do_corpo(self, corpo, campo: str, teto: int = 4096) -> str:
+        """Um campo de texto do corpo, com teto. String vazia se torto."""
+        valor = (corpo or {}).get(campo)
+        if not isinstance(valor, str) or len(valor) > teto:
+            return ""
+        return valor
+
+    def _bytes_do_corpo(self, corpo, campo: str):
+        """Um campo base64url do corpo, ja decodificado. None se torto."""
+        return passkey.de_b64url(self._texto_do_corpo(corpo, campo,
+                                                      teto=passkey.TETO_DO_B64))
+
+    def _csrf_ok(self, sessao) -> bool:
+        return secrets.compare_digest(self.headers.get("X-Token") or "",
+                                      self._csrf_da_sessao(sessao))
+
+    def _handle_do_usuario(self, usuario_id: int) -> str:
+        """O identificador que vai para DENTRO do autenticador, e la fica.
+
+        Nao e o id do banco: o autenticador guarda este valor e alguns o
+        mostram na tela de escolha de conta. Derivado com a chave do cofre,
+        entao e estavel (a mesma conta gera sempre o mesmo) sem carregar o
+        numero da linha para fora do servidor.
+        """
+        return passkey.b64url(hmac.new(
+            banco.chave_do_cofre(), ("passkey|%d" % usuario_id).encode("utf-8"),
+            hashlib.sha256).digest())
+
+    def _dar_sessao(self, usuario_id: int):
+        """Abre a sessao completa e poe o cookie. O fim feliz das tres portas."""
+        con = banco.conectar()
+        try:
+            cookie = banco.novo_token()
+            banco.abrir_sessao(usuario_id, cookie,
+                               banco.prazo(autenticacao.HORAS_DE_SESSAO * 3600),
+                               con=con)
+            # Rotaciona o identificador ao autenticar: e o que impede fixacao de
+            # sessao, onde quem plantou o cookie antes continua dentro depois.
+            final = banco.confirmar_segundo_fator(cookie, banco.novo_token(),
+                                                  con=con)
+        finally:
+            con.close()
+        self._por_cookie("sessao", final, autenticacao.HORAS_DE_SESSAO * 3600)
+
+    # --------------------------------------------------- porta 1: a chave
+    #
+    # Sem `allowCredentials` de proposito. Mandar a lista de credenciais de uma
+    # conta ANTES de a pessoa provar quem e entrega quantas chaves ela tem e os
+    # ids delas a quem so digitou a cortina. A chave e descobrivel: o proprio
+    # autenticador sabe qual oferecer.
+
+    def _chave_desafio(self):
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        origem, agora_s = self._origem_do_pedido(), time.time()
+        if not cortina.registrar_tentativa(origem, agora_s, balcao="passkey"):
+            return self._json(429, self.RECUSA)
+        bilhete, desafio = DESAFIOS.abrir(agora_s)
+        self._por_cookie("desafio", bilhete, passkey.PRAZO_DO_DESAFIO)
+        return self._json(200, {"desafio": passkey.b64url(desafio),
+                                "rp_id": self._rp_id(),
+                                "segundos": passkey.PRAZO_DO_DESAFIO})
+
+    def _entrar_chave(self):
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        agora_s = time.time()
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), agora_s,
+                                           balcao="passkey"):
+            return self._json(429, self.RECUSA)
+        corpo = self._corpo_json(teto=passkey.TETO_DO_CORPO * 4)
+        # O bilhete morre aqui, deu certo ou nao: um desafio que sobrevive ao
+        # fracasso e um desafio que pode ser tentado de novo.
+        desafio = DESAFIOS.resgatar(self._ler_cookie("desafio"), agora_s)
+        self._apagar_cookie("desafio")
+        if corpo is None or desafio is None:
+            return self._json(401, self.RECUSA)
+
+        cred_id = self._texto_do_corpo(corpo, "cred_id", teto=2048)
+        cliente = self._bytes_do_corpo(corpo, "cliente")
+        autenticador = self._bytes_do_corpo(corpo, "autenticador")
+        assinatura = self._bytes_do_corpo(corpo, "assinatura")
+        if not cred_id or cliente is None or autenticador is None \
+                or assinatura is None:
+            return self._json(401, self.RECUSA)
+
+        guardada = banco.chave_de_acesso(cred_id)
+        if guardada is None:
+            return self._json(401, self.RECUSA)
+        lido = passkey.conferir_entrada(cliente, autenticador, assinatura,
+                                        guardada["chave"], desafio,
+                                        self._rp_id(), ORIGENS_OK)
+        if lido is None:
+            return self._json(401, self.RECUSA)
+        # O contador so vale se for o BANCO a decidir: conferir aqui e gravar
+        # depois deixa duas copias da mesma chave passarem juntas.
+        if not banco.usar_chave_de_acesso(guardada["id"], lido["contador"]):
+            return self._json(401, self.RECUSA)
+        self._dar_sessao(guardada["usuario_id"])
+        return self._json(200, {"ok": True})
+
+    # ------------------------------------------ porta 3: codigo do papel
+    #
+    # A rota se chama /entrar/codigo, e nao /entrar/recuperacao, porque
+    # "recuperaCAO" casa com a lista de bloqueio de `test_rotas.py` — a lista
+    # que impede uma rota de executar comando na maquina do dono. O vigia
+    # reprovou o nome e o nome mudou; afrouxar a lista para caber um nome
+    # bonito seria afrouxar a unica coisa que impede a etapa 7 de voltar atras.
+
+    def _entrar_codigo(self):
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="codigo"):
+            return self._json(429, self.RECUSA)
+        corpo = self._corpo_json(teto=4096)
+        if corpo is None:
+            return self._json(401, self.RECUSA)
+        uid = banco.usar_codigo_de_recuperacao(
+            self._texto_do_corpo(corpo, "codigo", teto=200))
+        if uid is None:
+            return self._json(401, self.RECUSA)
+        self._dar_sessao(uid)
+        # `restantes` volta so para quem ACERTOU, e ai nao ha o que vazar: quem
+        # esta dentro ja pode ver isso na tela de chaves.
+        return self._json(200, {"ok": True,
+                                "restantes": banco.codigos_restantes(uid)})
+
+    # ------------------------------------------- as chaves, ja la dentro
+
+    def _chaves(self):
+        sessao = self._sessao()
+        uid = sessao["usuario_id"]
+        con = banco.conectar()
+        try:
+            chaves = banco.chaves_de_acesso(uid, con=con)
+            restantes = banco.codigos_restantes(uid, con=con)
+        finally:
+            con.close()
+        return self._json(200, {
+            "chaves": chaves, "restantes": restantes,
+            # A regra dura do desenho: ninguem fica com UMA so. Uma chave e um
+            # aparelho de distancia do bloqueio total, e quem decide o texto da
+            # cobranca e a tela — aqui so vai o fato.
+            "cobrar_a_segunda": len(chaves) < 2,
+            "tem_codigos": restantes > 0})
+
+    def _chave_cadastro_desafio(self):
+        sessao = self._sessao()
+        if not self._csrf_ok(sessao):
+            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+        bilhete, desafio = DESAFIOS.abrir(time.time())
+        self._por_cookie("desafio", bilhete, passkey.PRAZO_DO_DESAFIO)
+        con = banco.conectar()
+        try:
+            l = con.execute("SELECT email, nome FROM usuario WHERE id = ?",
+                            (sessao["usuario_id"],)).fetchone()
+        finally:
+            con.close()
+        if l is None:
+            return self._json(403, {"erro": "entre de novo"})
+        return self._json(200, {
+            "desafio": passkey.b64url(desafio), "rp_id": self._rp_id(),
+            "usuario": {"id": self._handle_do_usuario(sessao["usuario_id"]),
+                        "nome": l["email"], "mostrar": l["nome"] or l["email"]},
+            # Os ids que o navegador deve RECUSAR cadastrar de novo. Sem isto, o
+            # mesmo aparelho vira duas linhas na lista e o dono nao sabe qual
+            # remover.
+            "ja_tenho": [c["cred_id"] for c in
+                         banco.chaves_de_acesso(sessao["usuario_id"])]})
+
+    def _chave_cadastrar(self):
+        sessao = self._sessao()
+        if not self._csrf_ok(sessao):
+            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+        corpo = self._corpo_json(teto=passkey.TETO_DO_CORPO * 4)
+        desafio = DESAFIOS.resgatar(self._ler_cookie("desafio"), time.time())
+        self._apagar_cookie("desafio")
+        if corpo is None or desafio is None:
+            return self._json(400, {"erro": "tente de novo"})
+        cliente = self._bytes_do_corpo(corpo, "cliente")
+        atestado = self._bytes_do_corpo(corpo, "atestado")
+        if cliente is None or atestado is None:
+            return self._json(400, {"erro": "tente de novo"})
+        novo = passkey.conferir_cadastro(cliente, atestado, desafio,
+                                         self._rp_id(), ORIGENS_OK)
+        if novo is None:
+            return self._json(400, {"erro": "o aparelho nao completou o cadastro"})
+        apelido = self._texto_do_corpo(corpo, "apelido", teto=60).strip()
+        try:
+            banco.guardar_chave_de_acesso(
+                sessao["usuario_id"], passkey.b64url(novo["cred_id"]),
+                novo["chave"], apelido=apelido or "sem apelido",
+                contador=novo["contador"])
+        except sqlite3.IntegrityError:
+            # Ja cadastrada. Nao e erro do dono, e a resposta diz isso — aqui
+            # ele JA esta autenticado, entao nao ha oraculo a proteger.
+            return self._json(409, {"erro": "este aparelho ja esta cadastrado"})
+        return self._json(200, {"ok": True})
+
+    def _chave_remover(self):
+        sessao = self._sessao()
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        if not self._csrf_ok(sessao):
+            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+        corpo = self._corpo_json(teto=4096)
+        if corpo is None:
+            return self._json(400, {"erro": "pedido invalido"})
+        try:
+            alvo = int(corpo.get("id"))
+        except (TypeError, ValueError):
+            return self._json(400, {"erro": "faltou o id da chave"})
+        # O dono vai na clausula do UPDATE, dentro de `banco`: sem ele, mandar
+        # um id vizinho apaga a chave da outra pessoa.
+        if not banco.revogar_chave_de_acesso(alvo, sessao["usuario_id"]):
+            return self._json(404, {"erro": "essa chave nao e sua"})
+        return self._json(200, {"ok": True,
+                                "restam": len(banco.chaves_de_acesso(
+                                    sessao["usuario_id"]))})
+
+    def _codigos_gerar(self):
+        sessao = self._sessao()
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        if not self._csrf_ok(sessao):
+            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+        # A UNICA vez que estes codigos existem em claro fora do papel do dono.
+        # Nao vao para log, nao voltam numa segunda chamada, nao ficam no banco.
+        return self._json(200, {
+            "codigos": banco.gerar_codigos_de_recuperacao(sessao["usuario_id"]),
+            "aviso": "anote agora; eles nao aparecem de novo"})
+
     def _sair(self):
         # `SameSite=Lax` ja impede o cookie de acompanhar um POST de outro site,
         # entao um pedido forjado chegaria sem sessao e nao encerraria nada. O
@@ -726,6 +1028,18 @@ ROTAS = {
     "/sair":                    Rota("POST", Hub._sair,           "aberta"),
     "/api/dados":               Rota("GET",  Hub._dados,          "dado"),
     "/api/silenciar":           Rota("POST", Hub._silenciar,      "dado"),
+
+    # As portas de entrada. As tres primeiras sao "cortina" — quem chega ainda
+    # nao tem sessao, e e para isso que elas existem. As quatro de baixo sao
+    # "dado": so mexe nas proprias chaves quem ja provou ser dono da conta.
+    "/entrar/chave/desafio":    Rota("POST", Hub._chave_desafio,   "cortina"),
+    "/entrar/chave":            Rota("POST", Hub._entrar_chave,    "cortina"),
+    "/entrar/codigo":           Rota("POST", Hub._entrar_codigo,     "cortina"),
+    "/api/chaves":              Rota("GET",  Hub._chaves,          "dado"),
+    "/api/chaves/desafio":      Rota("POST", Hub._chave_cadastro_desafio, "dado"),
+    "/api/chaves/cadastrar":    Rota("POST", Hub._chave_cadastrar, "dado"),
+    "/api/chaves/remover":      Rota("POST", Hub._chave_remover,   "dado"),
+    "/api/codigos/gerar":       Rota("POST", Hub._codigos_gerar,    "dado"),
 }
 ROTAS.update({caminho: Rota("GET", Hub._estatico, "aberta")
               for caminho in ESTATICOS_OK})

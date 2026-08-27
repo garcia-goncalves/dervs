@@ -578,6 +578,74 @@ class ODesafio(unittest.TestCase):
         self.assertEqual(len(vistos), 200)
 
 
+class OGuardaDesafios(unittest.TestCase):
+    """O desafio e de USO UNICO, e uso unico exige alguem lembrando o gasto.
+
+    E por isso que ele nao mora num cookie assinado, que e como a cortina guarda
+    o selo dela: o selo PODE ser reapresentado dentro do prazo — e um passe de
+    dez minutos. Cookie assinado nao esquece, e desafio tem de esquecer.
+    """
+
+    def setUp(self):
+        self.guarda = passkey.Desafios(prazo=100, teto=5)
+
+    def test_abre_e_resgata(self):
+        bilhete, desafio = self.guarda.abrir(1000)
+        self.assertEqual(self.guarda.resgatar(bilhete, 1001), desafio)
+
+    def test_o_desafio_tem_tamanho_de_norma(self):
+        _, desafio = self.guarda.abrir(1000)
+        self.assertGreaterEqual(len(desafio), passkey.DESAFIO_MINIMO)
+
+    def test_resgatar_duas_vezes_nao_vale(self):
+        """O coracao: sem isto, a mesma resposta capturada entra de novo."""
+        bilhete, _ = self.guarda.abrir(1000)
+        self.guarda.resgatar(bilhete, 1001)
+        self.assertIsNone(self.guarda.resgatar(bilhete, 1002))
+
+    def test_vencido_nao_vale(self):
+        bilhete, _ = self.guarda.abrir(1000)
+        self.assertIsNone(self.guarda.resgatar(bilhete, 1101))
+
+    def test_no_limite_do_prazo_ainda_vale(self):
+        bilhete, desafio = self.guarda.abrir(1000)
+        self.assertEqual(self.guarda.resgatar(bilhete, 1100), desafio)
+
+    def test_bilhete_inventado_nao_vale(self):
+        self.guarda.abrir(1000)
+        self.assertIsNone(self.guarda.resgatar("nao-existe", 1001))
+
+    def test_bilhete_que_nao_e_texto_nao_derruba(self):
+        for lixo in (None, 0, b"x", [], {}):
+            self.assertIsNone(self.guarda.resgatar(lixo, 1001))
+
+    def test_dois_bilhetes_nao_se_misturam(self):
+        b1, d1 = self.guarda.abrir(1000)
+        b2, d2 = self.guarda.abrir(1000)
+        self.assertNotEqual(d1, d2)
+        self.assertEqual(self.guarda.resgatar(b2, 1001), d2)
+        self.assertEqual(self.guarda.resgatar(b1, 1001), d1)
+
+    def test_os_vencidos_saem_da_memoria(self):
+        for _ in range(3):
+            self.guarda.abrir(1000)
+        self.guarda.abrir(2000)
+        self.assertEqual(self.guarda.quantos(), 1)
+
+    def test_o_teto_nao_deixa_a_memoria_crescer(self):
+        """Sem teto, pedir desafio em laco enche a memoria do servidor."""
+        for _ in range(50):
+            self.guarda.abrir(1000)
+        self.assertLessEqual(self.guarda.quantos(), 5)
+
+    def test_encher_nao_tranca_quem_chega_depois(self):
+        """Recusar quando cheio deixaria qualquer um matar o login de todos."""
+        for _ in range(50):
+            self.guarda.abrir(1000)
+        bilhete, desafio = self.guarda.abrir(1000)
+        self.assertEqual(self.guarda.resgatar(bilhete, 1001), desafio)
+
+
 class OArquivoInteiro(unittest.TestCase):
     """A trava contra o defeito de 26/08: `if __name__` no meio do arquivo."""
 

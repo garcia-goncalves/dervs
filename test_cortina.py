@@ -193,6 +193,48 @@ class Teto(unittest.TestCase):
         self.assertNotIn("10.0.0.1", cortina.origens_lembradas())
         self.assertIn("10.0.0.2", cortina.origens_lembradas())
 
+
+class CadaPortaTemAPropriaFila(unittest.TestCase):
+    """Errar numa porta nao pode gastar o teto da outra.
+
+    Em 26/08/2026 o dono ficou preso do lado de fora da propria maquina com a
+    chave certa na mao, porque um teto compartilhado tinha estourado. Com as
+    portas de entrada sao quatro caminhos; se todos contassem na mesma fila,
+    quem errasse o codigo de recuperacao trancaria tambem a chave de acesso, e
+    a tela nao teria como explicar isso a ninguem.
+    """
+
+    def setUp(self):
+        cortina.zerar_tentativas()
+        self.addCleanup(cortina.zerar_tentativas)
+
+    def test_estourar_uma_porta_nao_fecha_a_outra(self):
+        for _ in range(cortina.TETO):
+            cortina.registrar_tentativa("10.0.0.1", 100.0, balcao="codigo")
+        self.assertFalse(cortina.registrar_tentativa("10.0.0.1", 100.0,
+                                                     balcao="codigo"))
+        self.assertTrue(cortina.registrar_tentativa("10.0.0.1", 100.0,
+                                                    balcao="passkey"))
+
+    def test_a_cortina_continua_sendo_o_balcao_padrao(self):
+        """Chamada antiga, sem `balcao`, tem de cair na mesma fila de sempre."""
+        for _ in range(cortina.TETO):
+            cortina.registrar_tentativa("10.0.0.1", 100.0)
+        self.assertFalse(cortina.registrar_tentativa("10.0.0.1", 100.0,
+                                                     balcao="cortina"))
+
+    def test_a_origem_continua_separando_dentro_da_porta(self):
+        for _ in range(cortina.TETO):
+            cortina.registrar_tentativa("10.0.0.1", 100.0, balcao="passkey")
+        self.assertTrue(cortina.registrar_tentativa("10.0.0.2", 100.0,
+                                                    balcao="passkey"))
+
+    def test_a_poda_limpa_as_duas_filas(self):
+        cortina.registrar_tentativa("10.0.0.1", 100.0, balcao="passkey")
+        cortina.registrar_tentativa("10.0.0.1", 100.0, balcao="codigo")
+        cortina.registrar_tentativa("10.0.0.9", 100.0 + cortina.JANELA * 3)
+        self.assertEqual(cortina.origens_lembradas(), {"10.0.0.9"})
+
     def test_string_longa_nao_paga_scrypt(self):
         """`conferir` recebia qualquer coisa ate 1 KiB e pagava um scrypt de
         ~16 MiB por ela. A forma e fixa e conhecida: barra-se pela forma."""
