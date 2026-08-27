@@ -44,6 +44,14 @@ variável em `.env`), monta um relatório e **manda** para o endereço do DERVS.
    | `o codigo de seis digitos nao serve` | passou dos dez minutos, ou já foi usado | gerar outro no painel |
    | `o alvo recusou por excesso de tentativas` | cinco erros seguidos daquele endereço | esperar quinze minutos |
    | `nao consegui falar com …` | endereço errado, ou sem internet | conferir o endereço |
+   | `recusei falar com … por http://` | o endereço veio sem o **s** de `https` | trocar para `https://` |
+   | `relatorios demais` | mais de 60 envios em quinze minutos daquela máquina | usar `--intervalo` de 60 s ou mais |
+
+   **O `https://` não é frescura.** O token da máquina viaja num cabeçalho do
+   pedido. Por `http://` ele vai legível para qualquer um que esteja no caminho
+   — o wi-fi do café, o provedor, o roteador da empresa. O agente recusa em vez
+   de deixar acontecer. A única exceção é o DERVS da sua própria máquina
+   (`http://localhost:4777`), onde não há caminho nenhum entre os dois.
 
 3. De volta ao painel, a máquina aparece na lista com o carimbo de quando
    reportou pela última vez.
@@ -56,6 +64,23 @@ python -m agente.enviar --alvo https://SEU-DERVS --intervalo 600
 
 Ele mede e manda de dez em dez minutos, e não morre se a internet cair — volta
 sozinho quando ela voltar.
+
+**Não desça de 15 segundos.** O servidor aceita 60 envios por máquina a cada
+quinze minutos e responde `relatorios demais` a partir daí. O teto existe para
+um token roubado não encher o disco do servidor num laço; dez minutos, ou um
+minuto, passam com folga de sobra.
+
+## O que o alvo pode recusar do seu relatório
+
+Duas contagens voltam no fim de cada envio, e as duas viram aviso na tela:
+
+| Aviso | O que quer dizer |
+|---|---|
+| `o alvo cortou N projeto(s)` | você tem mais de 300 projetos, ou mais de mil na conta — o excedente não entrou |
+| `o alvo RECUSOU N entrada(s)` | nome vazio, nome reservado (`_infra`, `_quota`) ou formato errado |
+
+Elas aparecem separadas de propósito. "Cortado" é limite seu; "recusado" é
+formato errado, e provavelmente um defeito a investigar.
 
 ## Onde mora o token, e por que ali
 

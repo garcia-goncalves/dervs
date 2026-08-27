@@ -420,7 +420,7 @@ def traduz(no: dict, com_vulns: bool) -> dict:
 
 
 def main():
-    tudo = banco.ler_tudo()
+    tudo = banco.ler_tudo(usuario_id=banco.conta_local())
     slugs, por_alias = {}, {}
     for nome, camadas in sorted(tudo.items()):
         if nome == banco.INFRA:
@@ -452,6 +452,10 @@ def main():
     con = banco.conectar()
     gravados = 0
     try:
+        # FORA DO LACO: dentro, era um SELECT por repositorio, e no primeiro
+        # giro de um banco novo o `criar_usuario` de dentro commitava a
+        # transacao do coletor pela metade.
+        dono = banco.conta_local(con)
         for alias, nome in por_alias.items():
             no = dados.get(alias)
             if not no:
@@ -494,8 +498,9 @@ def main():
             dep = mede_deploy(novo["slug"], novo["branch_padrao"] or "main")
             novo["deploy"] = dep or antes_gh.get("deploy") or {}
 
-            banco.gravar(nome, "github", novo, con)
+            banco.gravar(nome, "github", novo, con, usuario_id=dono)
             gravados += 1
+        con.commit()          # ver coletar.py: quem abriu a conexao commita
     finally:
         con.close()
 

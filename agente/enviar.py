@@ -27,6 +27,7 @@ import platform
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -74,18 +75,33 @@ def guardar_token(alvo: str, token: str, maquina: str = "") -> Path:
     nada e a heranca do perfil do usuario e o que protege; no Linux e no Mac,
     onde este agente tambem roda, o padrao do sistema deixaria o arquivo legivel
     por qualquer conta da maquina.
+
+    ESCREVE NUM TEMPORARIO E TROCA POR CIMA. Duas razoes, as duas apontadas por
+    revisao:
+
+    1. O modo do `os.open` so vale para arquivo NOVO. Escrever direto no destino
+       que ja existe com permissao frouxa deixava o token exposto entre a
+       escrita e o `chmod` — e o `chmod` falha em silencio. Um temporario criado
+       com `O_EXCL` NUNCA existe antes, entao nasce sempre com 600.
+    2. `os.replace` e atomico. Escrever por cima com `O_TRUNC` significava que
+       uma queda no meio da escrita perdia TODOS os tokens desta maquina, e nao
+       so o que estava entrando.
     """
     destino = arquivo_do_token()
     destino.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     dados = _lido()
     dados[_chave(alvo)] = {"token": token, "maquina": maquina,
                            "guardado_em": time.strftime("%Y-%m-%dT%H:%M:%S")}
-    destino.write_text(json.dumps(dados, ensure_ascii=False, indent=2),
-                       encoding="utf-8")
+    texto = json.dumps(dados, ensure_ascii=False, indent=2)
+    passagem = destino.with_name(destino.name + ".novo")
     try:
-        os.chmod(destino, 0o600)
+        passagem.unlink()             # sobra de uma queda anterior
     except OSError:
         pass
+    fd = os.open(passagem, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as arq:
+        arq.write(texto)
+    os.replace(passagem, destino)
     return destino
 
 
@@ -101,6 +117,59 @@ class ErroDoAlvo(Exception):
     """Falha que o dono precisa LER, e nao um traceback."""
 
 
+# Onde `http://` continua valendo: a maquina do proprio dono, sem rede no meio.
+LOCAIS = ("localhost", "127.0.0.1", "::1")
+
+
+def conferir_alvo(alvo: str) -> str:
+    """`http://` num endereco de fora manda o token em CLARO no cabecalho.
+
+    Uma letra a menos digitada e a credencial da maquina viaja legivel por todo
+    salto do caminho. Achado da revisao de seguranca da etapa 11.
+    """
+    alvo = (alvo or "").strip().rstrip("/")
+    if not alvo:
+        raise ErroDoAlvo("--alvo vazio. Exemplo: --alvo https://dervs.com.br")
+    try:
+        partes = urllib.parse.urlsplit(alvo)
+    except ValueError as e:
+        # Sem isto o dono levava um traceback: `main` so captura `ErroDoAlvo`.
+        raise ErroDoAlvo("nao entendi o endereco %r (%s)" % (alvo, e)) from None
+    if partes.fragment or partes.query:
+        # `--alvo http://x#y` passava e depois engolia o caminho na
+        # concatenacao de `_falar`, virando um 404 sem explicacao.
+        raise ErroDoAlvo("o endereco do DERVS nao leva `?` nem `#`. Veio: %r"
+                         % alvo)
+    if partes.scheme not in ("http", "https"):
+        raise ErroDoAlvo("o endereco tem de comecar com https:// (ou http:// "
+                         "para o DERVS da sua propria maquina). Veio: %r" % alvo)
+    if partes.scheme == "http" and (partes.hostname or "") not in LOCAIS:
+        raise ErroDoAlvo(
+            "recusei falar com %s por http://: o token da maquina iria em "
+            "claro, legivel por quem estiver no caminho. Use https://." % alvo)
+    return alvo
+
+
+class _SemRedirecionar(urllib.request.HTTPRedirectHandler):
+    """O `urlopen` segue redirecionamento LEVANDO o `Authorization` junto.
+
+    O `HTTPRedirectHandler` do CPython repassa todos os cabecalhos menos
+    `content-length` e `content-type`, sem tirar o `Authorization` na troca de
+    host. Um 302 do alvo para `http://outro-host/` entregava o token da maquina
+    em texto — e quem controla o alvo hoje so tem o HASH dele. Achado da revisao
+    da correcao.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ErroDoAlvo(
+            "o alvo respondeu com um desvio (%s) para %s, e eu nao sigo desvio: "
+            "o cabecalho com o token da maquina iria junto. Confira o endereco."
+            % (code, newurl))
+
+
+_ABRIDOR = urllib.request.build_opener(_SemRedirecionar)
+
+
 def _falar(alvo: str, caminho: str, corpo: dict, token: str = "") -> dict:
     dados = json.dumps(corpo, ensure_ascii=False).encode("utf-8")
     pedido = urllib.request.Request(
@@ -109,7 +178,7 @@ def _falar(alvo: str, caminho: str, corpo: dict, token: str = "") -> dict:
     if token:
         pedido.add_header("Authorization", "Token " + token)
     try:
-        with urllib.request.urlopen(pedido, timeout=ESPERA) as r:
+        with _ABRIDOR.open(pedido, timeout=ESPERA) as r:
             return json.loads(r.read(TETO_DA_RESPOSTA) or b"{}")
     except urllib.error.HTTPError as e:
         raise ErroDoAlvo(_explicar(caminho, e.code)) from None
@@ -191,6 +260,14 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
 
     try:
+        # ANTES de qualquer coisa ir pela rede, inclusive do primeiro
+        # pareamento: o codigo de seis digitos tambem e segredo.
+        a.alvo = conferir_alvo(a.alvo)
+    except ErroDoAlvo as e:
+        print("ENDERECO RECUSADO: %s" % e, file=sys.stderr)
+        return 2
+
+    try:
         if a.codigo:
             parear(a.alvo, a.codigo.strip(), a.nome)
             # O token NAO e impresso. Ele fica no arquivo, e so.
@@ -210,6 +287,14 @@ def main(argv=None) -> int:
             if r.get("cortados"):
                 print("AVISO: o alvo cortou %s projeto(s) por exceder o teto "
                       "dele." % r["cortados"], file=sys.stderr)
+            # `invalidos` e outra coisa: nome vazio, nome reservado, ou entrada
+            # que nem e dicionario. Sem esta linha um bug de serializacao AQUI
+            # ficaria invisivel dos dois lados — o alvo recusa em silencio e o
+            # agente imprime a conta cheia.
+            if r.get("invalidos"):
+                print("AVISO: o alvo RECUSOU %s entrada(s) por nome vazio, "
+                      "reservado ou formato errado." % r["invalidos"],
+                      file=sys.stderr)
         except ErroDoAlvo as e:
             # Erro de rede num laco nao pode matar o agente: a internet cai, e o
             # que interessa e ele voltar sozinho quando ela voltar.

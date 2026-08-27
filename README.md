@@ -60,6 +60,7 @@ lista de contas da tabela `credencial`. Ver
 | `DERVS_COFRE_ARQUIVO` | tira a `cofre.chave` da pasta servida (etapa 16) | ambiente do servidor |
 | `DERVS_GITHUB_ID` | Client ID do OAuth App — **é público** | pode ser versionado |
 | `DERVS_GITHUB_SECRET` | Client Secret — **segredo** | só dentro do servidor |
+| `DERVS_PROXIES_CONFIAVEIS` | IPs autorizados a dizer de quem é o pedido (etapa 16) | ambiente do servidor |
 
 Sem `DERVS_GITHUB_ID`/`DERVS_GITHUB_SECRET`, `/entrar/github` responde **404** e
 o botão nem aparece. Botão que leva a erro é pior que botão que não existe.
@@ -502,6 +503,7 @@ Duas variáveis de ambiente mandam nisso:
 | `DERVS_COFRE` | A chave, em texto. **Mínimo de 32 caracteres** — abaixo disso uma frase se quebra fora do ar, a partir de uma cópia do `hub.db`. Gere com `python -c "import secrets;print(secrets.token_urlsafe(32))"`. |
 | `DERVS_AMBIENTE` | `local` autoriza o programa a criar um `cofre.chave` sozinho nesta máquina. Em qualquer outro valor — inclusive vazio — ele **recusa subir** em vez de inventar uma chave. |
 | `DERVS_COFRE_ARQUIVO` | Tira o `cofre.chave` da pasta servida. Importa na etapa 16: um `root /app` no nginx entregaria a chave mestra por HTTP. |
+| `DERVS_PROXIES_CONFIAVEIS` | Lista de IPs, separados por vírgula, autorizados a mandar `X-Forwarded-For`. **Vazia por padrão, e tem de continuar vazia sem proxy na frente**: se qualquer um pudesse dizer de onde veio o pedido, o teto de tentativas sumiria — bastaria variar o cabeçalho a cada chute. Importa na etapa 16: atrás do nginx, **toda** chamada chega como `127.0.0.1`, e sem esta variável o teto de cinco tentativas por quinze minutos vira um balde único para o mundo inteiro. Um estranho gastaria o teto de graça, e o dono nunca mais parearia máquina nenhuma. |
 
 O motivo da recusa: se a variável for esquecida no servidor e o programa
 fabricar outra chave, **todo segredo de segundo fator já guardado vira

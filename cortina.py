@@ -179,7 +179,7 @@ def _assinar(ate: str, chave: bytes) -> str:
 # disco de outra pessoa.
 
 def registrar_tentativa(origem: str, agora_s: float,
-                        balcao: str = "cortina") -> bool:
+                        balcao: str = "cortina", teto: int = None) -> bool:
     """Anota a tentativa e diz se ela pode ser conferida. UMA funcao so.
 
     Antes eram duas — `pode_tentar` e `anotar_tentativa` —, cada uma pegando o
@@ -198,11 +198,17 @@ def registrar_tentativa(origem: str, agora_s: float,
     trancado do lado de fora sem entender por que — foi exatamente o que
     aconteceu com ele em 26/08/2026, por outro caminho. Cada porta conta o
     proprio chute; o teto continua sendo POR ORIGEM dentro de cada uma.
+
+    O `teto` proprio existe para balcoes que nao sao chute de segredo: a
+    ingestao do agente e uma delas, e o teto de chute (5 no servidor) trancaria
+    a maquina legitima, que reporta a cada minuto.
     """
     with _trava:
         _podar(agora_s)
         vistas = _tentativas.setdefault((balcao, origem), [])
-        if len(vistas) >= TETO:
+        # `None` e nao `0`: com o sentinela zero, alguem escreveria `teto=0`
+        # querendo "bloqueia tudo" e ganharia o padrao.
+        if len(vistas) >= (TETO if teto is None else teto):
             return False
         vistas.append(agora_s)
         return True
