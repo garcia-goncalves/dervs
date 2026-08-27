@@ -1390,11 +1390,16 @@ class TokenDoColetor(unittest.TestCase):
         repositorio. Entao a protecao passa a ser por REPOSITORIO.
         """
         import banco
+        import datetime as _dt
+        # DATA RELATIVA AO RELOGIO, e nao literal. Com data fixa este teste
+        # passava por acaso de calendario e amanhecia vermelho no dia seguinte
+        # — e CI que fica vermelha sozinha ensina o time a ignorar CI vermelha.
+        ontem = (coletar_github.AGORA - _dt.timedelta(days=1)).isoformat()
         gravados = []
         for alvo, nome, valor in (
                 (banco, "ler_tudo", lambda **k: {"projeto": {
                     "local": {"dados": {"git": {"remoto_slug": "dono/repo"}}},
-                    "github": {"medido_em": "2026-08-26T10:00:00+00:00",
+                    "github": {"medido_em": ontem,
                                "dados": {"vulns": {"total": 93, "url": "u"}}}}}),
                 (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
                 (banco, "conta_local", lambda *a, **k: 1),
@@ -1414,8 +1419,7 @@ class TokenDoColetor(unittest.TestCase):
                          "apagou 93 alertas reais porque o campo veio vazio")
         # Linha sem carimbo de leitura: ancora no carimbo da linha, que aqui e
         # de ontem. A idade em si tem testes proprios logo abaixo.
-        self.assertEqual(gravados[0]["vulns"]["lido_em"],
-                         "2026-08-26T10:00:00+00:00")
+        self.assertEqual(gravados[0]["vulns"]["lido_em"], ontem)
         # E — o outro lado da mesma moeda — o numero preservado tem de CHEGAR
         # A TELA marcado como velho. Guardar a idade num campo que ninguem le
         # e o painel republicando medida de 26 dias atras como se fosse de
@@ -1502,6 +1506,10 @@ class TokenDoColetor(unittest.TestCase):
         coletar_github.main()
         self.assertEqual(gravados[0]["vulns"]["total"], 0)
         self.assertNotIn("dias_sem_reler", gravados[0]["vulns"])
+        # E a medicao NOVA carimba a si mesma. Sem esta linha, apagar o
+        # `lido_em` de `traduz` deixava a suite inteira verde — a peca central
+        # da ancora de idade nao tinha um unico teste.
+        self.assertIn("lido_em", gravados[0]["vulns"])
 
     def test_limite_de_cota_ainda_tenta_a_consulta_barata(self):
         """A segunda consulta e a BARATA, e o limite do GraphQL e por pontos.

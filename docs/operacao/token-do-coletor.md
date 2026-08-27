@@ -170,8 +170,29 @@ Se o token estiver errado ou sem permissão, ela imprime, sem nunca mostrar o
 token:
 
 ```
-FALHA ao consultar o GitHub: a API do GitHub nao respondeu / a API do GitHub nao respondeu
+FALHA ao consultar o GitHub: a API do GitHub respondeu HTTP 401 / a API do GitHub respondeu HTTP 401
 ```
+
+O número no fim é o que separa um problema do outro, e vale decorar:
+
+| O que aparece | O que é |
+|---|---|
+| `HTTP 401` | o token venceu, foi revogado, ou está errado |
+| `HTTP 403` | o token é válido mas não tem a permissão pedida |
+| `recusou a consulta (NOT_FOUND)` | um repositório foi renomeado ou saiu da organização |
+| `recusou a consulta (FORBIDDEN)` | falta uma das permissões da tabela acima |
+| `recusou a consulta (RATE_LIMITED)` | bateu no teto de uso; ele se refaz sozinho em uma hora |
+| `nao respondeu` | rede, DNS ou o GitHub fora do ar — não é com você |
+
+E se aparecer, no meio de uma coleta que deu certo:
+
+```
+aviso: nao consegui reler os alertas de segurança de 3 projeto(s) (...) — mantive o último número conhecido, marcado como velho.
+```
+
+isso quer dizer que falta a permissão **Dependabot alerts**. O painel continua
+mostrando o último número que ele conheceu, com a ressalva "não consigo reler
+esse número há N dias" junto — de propósito: zerar apagaria um alerta real.
 
 ## Se der errado
 
