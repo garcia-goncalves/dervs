@@ -278,6 +278,57 @@ CREATE TABLE IF NOT EXISTS pendencia_arquivada (
     desarquivado_em TEXT,
     PRIMARY KEY (usuario_id, id)
 );
+
+-- ---------------------------------------------------------------------------
+-- As portas de entrada (desenho de 26/08/2026).
+--
+-- POR QUE NAO CABEM NA `credencial`, que ate tem 'passkey' na lista de tipos:
+--
+--   chave_de_acesso     tem um campo que MUDA a cada uso — o contador de
+--                       assinaturas, que e a unica defesa contra passkey
+--                       copiada. A `credencial` nao tem coluna para isso, e
+--                       enfiar um contador em `segredo_hash` seria mentir
+--                       sobre o que a coluna guarda.
+--   codigo_recuperacao  sao DEZ linhas por pessoa, e o UNIQUE (tipo,
+--                       identificador) da `credencial` a limita a uma.
+--
+-- E o mais importante: NAO HA SEGREDO EM NENHUMA DAS DUAS. A primeira guarda a
+-- chave PUBLICA, que so serve para conferir assinatura e nao abre nada. A
+-- segunda guarda impressao digital. Uma copia inteira do hub.db nao entrega a
+-- conta de ninguem — e essa e a diferenca entre isto e guardar senha.
+CREATE TABLE IF NOT EXISTS chave_de_acesso (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id  INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    -- O id que o autenticador deu a esta credencial, em base64url. UNIQUE
+    -- global, e nao por usuario: duas contas reivindicando a mesma credencial
+    -- e sequestro de conta, nao um detalhe de indice.
+    cred_id     TEXT NOT NULL UNIQUE CHECK (length(trim(cred_id)) > 0),
+    -- As coordenadas da chave PUBLICA, em hexadecimal. Texto, e nao INTEGER:
+    -- sao numeros de 256 bits, e o INTEGER do SQLite tem 64.
+    chave_x     TEXT NOT NULL,
+    chave_y     TEXT NOT NULL,
+    apelido     TEXT NOT NULL DEFAULT '',
+    contador    INTEGER NOT NULL DEFAULT 0 CHECK (contador >= 0),
+    criado_em   TEXT NOT NULL,
+    usado_em    TEXT,
+    revogada_em TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_chave_dono
+    ON chave_de_acesso (usuario_id, revogada_em);
+
+-- Dez codigos de uso unico, mostrados UMA vez. A saida de emergencia do dia em
+-- que o celular quebra e o PC morre no mesmo mes. Sem eles, "login sem senha"
+-- com duas pessoas e uma conta a um aparelho de distancia de ficar trancada
+-- para sempre — e aqui nao ha recuperacao por e-mail, de proposito.
+CREATE TABLE IF NOT EXISTS codigo_recuperacao (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id  INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    codigo_hash TEXT NOT NULL UNIQUE,
+    criado_em   TEXT NOT NULL,
+    usado_em    TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_codigo_dono
+    ON codigo_recuperacao (usuario_id, usado_em);
 """
 
 
@@ -325,7 +376,8 @@ def migrar(con: sqlite3.Connection) -> None:
 
 # As tabelas que apontam para `usuario`. A migracao confere so estas: varrer o
 # banco inteiro faria um orfao antigo, de outra tabela, travar toda subida.
-FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento")
+FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento",
+                     "chave_de_acesso", "codigo_recuperacao")
 
 
 def _orfaos(con: sqlite3.Connection) -> int:
@@ -1383,6 +1435,259 @@ def arquivadas(usuario_id: int = DONO_LOCAL, con=None) -> set:
         return {l[0] for l in con.execute(
             "SELECT id FROM pendencia_arquivada WHERE usuario_id = ?"
             " AND desarquivado_em IS NULL", (usuario_id,))}
+    finally:
+        if fechar:
+            con.close()
+
+
+# ----------------------------------------------------- as chaves de acesso
+#
+# A chave PUBLICA de uma passkey. Ela nao abre nada: serve so para conferir uma
+# assinatura feita pelo aparelho de quem entra. Quem levar este banco inteiro
+# nao entra na conta de ninguem com o que esta aqui.
+
+def guardar_chave_de_acesso(usuario_id: int, cred_id: str, chave,
+                            apelido: str = "", contador: int = 0,
+                            con=None) -> int:
+    """Grava uma chave de acesso nova e devolve o id da linha.
+
+    `cred_id` repetido levanta `IntegrityError` de proposito, e o UNIQUE e
+    global: se duas contas pudessem reivindicar a mesma credencial, entrar na
+    segunda seria entrar na primeira. Mesmo raciocinio do `INSERT` puro de
+    `abrir_pareamento` — barulho onde havia silencio.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        cur = con.execute(
+            "INSERT INTO chave_de_acesso"
+            " (usuario_id, cred_id, chave_x, chave_y, apelido, contador,"
+            "  criado_em) VALUES (?,?,?,?,?,?,?)",
+            (usuario_id, (cred_id or "").strip(), "%x" % chave[0],
+             "%x" % chave[1], (apelido or "").strip()[:60], max(0, contador),
+             agora()))
+        con.commit()
+        return cur.lastrowid
+    finally:
+        if fechar:
+            con.close()
+
+
+def chave_de_acesso(cred_id: str, con=None):
+    """A chave viva, de conta viva. None se nao existe, foi revogada ou o dono saiu.
+
+    O `JOIN` com `usuario` e o mesmo de `sessao_valida`: desativar uma conta tem
+    de fechar a porta no mesmo instante, e nao no dia em que alguem lembrar de
+    revogar chave por chave.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute(
+            "SELECT c.id, c.usuario_id, c.chave_x, c.chave_y, c.apelido,"
+            "       c.contador"
+            "  FROM chave_de_acesso c JOIN usuario u ON u.id = c.usuario_id"
+            " WHERE c.cred_id = ? AND c.revogada_em IS NULL"
+            "   AND u.desativado_em IS NULL", ((cred_id or "").strip(),)
+        ).fetchone()
+        if not l:
+            return None
+        return {"id": l["id"], "usuario_id": l["usuario_id"],
+                "apelido": l["apelido"], "contador": l["contador"],
+                "chave": (int(l["chave_x"], 16), int(l["chave_y"], 16))}
+    finally:
+        if fechar:
+            con.close()
+
+
+def chaves_de_acesso(usuario_id: int, con=None) -> list:
+    """A lista para a TELA. Sem a chave publica: o que nao sai nao vaza."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return [{"id": l["id"], "cred_id": l["cred_id"],
+                 "apelido": l["apelido"], "criado_em": l["criado_em"],
+                 "usado_em": l["usado_em"]}
+                for l in con.execute(
+                    "SELECT id, cred_id, apelido, criado_em, usado_em"
+                    "  FROM chave_de_acesso"
+                    " WHERE usuario_id = ? AND revogada_em IS NULL"
+                    " ORDER BY criado_em", (usuario_id,))]
+    finally:
+        if fechar:
+            con.close()
+
+
+def usar_chave_de_acesso(id_: int, contador: int, con=None) -> bool:
+    """Anota o uso e AVANCA o contador. False se o contador nao andou.
+
+    O PROPRIO UPDATE E A GUARDA, e isto nao e estilo. Conferir em Python e
+    gravar depois deixa uma janela entre a decisao e a escrita: duas copias da
+    mesma passkey entrando no mesmo instante passariam as duas pela checagem
+    antes de qualquer uma gravar, que e exatamente o que o contador existe para
+    pegar. Mesmo desenho de `usar_pareamento`: quem nao levar `rowcount == 1`
+    perdeu.
+
+    A condicao tem duas metades, e a segunda e a excecao prevista na norma:
+    autenticador que nao implementa contador manda zero para sempre, e ai nao ha
+    o que comparar. Note a assimetria — zero-para-sempre passa, mas quem JA
+    contou e volta a zero e regressao, e cai fora. `passkey.contador_ok` decide
+    o mesmo em Python, e `test_o_banco_e_o_python_concordam` cobra que as duas
+    nao se separem.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        cur = con.execute(
+            "UPDATE chave_de_acesso SET contador = ?, usado_em = ?"
+            " WHERE id = ? AND revogada_em IS NULL"
+            "   AND (? > contador OR (contador = 0 AND ? = 0))",
+            (max(0, contador), agora(), id_, contador, contador))
+        con.commit()
+        return cur.rowcount == 1
+    finally:
+        if fechar:
+            con.close()
+
+
+def revogar_chave_de_acesso(id_: int, usuario_id: int, con=None) -> bool:
+    """Tira uma chave de circulacao. False se ela nao e desta conta.
+
+    `usuario_id` na clausula NAO e redundante com a checagem da rota: e o
+    IDOR classico de rota de remocao, onde o id da linha vem do navegador e
+    quem manda um numero vizinho apaga a chave do outro.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        cur = con.execute(
+            "UPDATE chave_de_acesso SET revogada_em = ?"
+            " WHERE id = ? AND usuario_id = ? AND revogada_em IS NULL",
+            (agora(), id_, usuario_id))
+        con.commit()
+        return cur.rowcount == 1
+    finally:
+        if fechar:
+            con.close()
+
+
+# ------------------------------------------------- os codigos de recuperacao
+#
+# Alfabeto sem 0/O e sem 1/I/L: estes codigos sao para ser LIDOS DE UM PAPEL e
+# digitados por uma pessoa. Zero confundido com O nao e erro de quem digita, e
+# sim de quem escolheu o alfabeto.
+
+ALFABETO_DE_RECUPERACAO = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+GRUPOS_DO_CODIGO = 4
+LETRAS_POR_GRUPO = 5
+CODIGOS_DE_RECUPERACAO = 10
+
+
+def novo_codigo_de_recuperacao() -> str:
+    """20 letras em quatro grupos: cerca de 99 bits. `secrets`, nunca `random`.
+
+    Entropia alta e o que permite guardar isto como HMAC rapido em vez de
+    scrypt: nao ha teto de tentativa por conta neste caminho (contar chute
+    errado contra a conta deixaria qualquer um trancar o dono), entao quem
+    segura e o tamanho do espaco, nao a lentidao do hash.
+    """
+    letras = [secrets.choice(ALFABETO_DE_RECUPERACAO)
+              for _ in range(GRUPOS_DO_CODIGO * LETRAS_POR_GRUPO)]
+    return "-".join("".join(letras[i:i + LETRAS_POR_GRUPO])
+                    for i in range(0, len(letras), LETRAS_POR_GRUPO))
+
+
+def _normalizar_codigo(codigo) -> str:
+    """Tira tracinho, espaco e caixa. Quem copia de um papel erra os tres.
+
+    Isto NAO afrouxa nada: o que sobra tem de bater letra a letra com um codigo
+    sorteado de 99 bits. Afrouxar seria aceitar prefixo ou parte.
+    """
+    if not isinstance(codigo, str):
+        return ""
+    limpo = "".join(c for c in codigo.upper() if c.isalnum())
+    return limpo if len(limpo) == GRUPOS_DO_CODIGO * LETRAS_POR_GRUPO else ""
+
+
+def gerar_codigos_de_recuperacao(usuario_id: int,
+                                 quantos: int = CODIGOS_DE_RECUPERACAO,
+                                 con=None) -> list:
+    """Sorteia a lista nova e devolve os codigos EM CLARO — uma vez so.
+
+    Depois desta linha eles nao existem em lugar nenhum deste sistema: a tabela
+    guarda so a impressao digital. Quem chama mostra na tela e esquece.
+
+    Gerar de novo QUEIMA os codigos anteriores que ainda nao foram usados —
+    senao o papel velho continua abrindo a conta, e "gerei codigos novos" viraria
+    falsa sensacao de ter fechado a porta. Os JA USADOS ficam: codigo gasto e
+    evidencia de que alguem entrou por ali, e apagar a linha apaga a evidencia.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("DELETE FROM codigo_recuperacao"
+                    " WHERE usuario_id = ? AND usado_em IS NULL", (usuario_id,))
+        claros = []
+        for _ in range(max(1, quantos)):
+            codigo = novo_codigo_de_recuperacao()
+            con.execute("INSERT INTO codigo_recuperacao"
+                        " (usuario_id, codigo_hash, criado_em) VALUES (?,?,?)",
+                        (usuario_id,
+                         hash_codigo(_normalizar_codigo(codigo)), agora()))
+            claros.append(codigo)
+        con.commit()
+        return claros
+    finally:
+        if fechar:
+            con.close()
+
+
+def usar_codigo_de_recuperacao(codigo, con=None):
+    """Gasta um codigo e devolve o dono. None para qualquer outra coisa.
+
+    O UPDATE decide, pelo mesmo motivo de `usar_chave_de_acesso`: dois pedidos
+    com o mesmo codigo no mesmo instante veriam ambos `usado_em IS NULL`, e um
+    codigo de uso unico viraria duas entradas.
+
+    A conta desativada e conferida DEPOIS de gastar o codigo, e isso e de
+    proposito: gastar e a parte irreversivel, e um codigo apresentado a uma
+    conta morta ja foi exposto — deixa-lo valido seria guardar um segredo que
+    ja andou por ai.
+    """
+    limpo = _normalizar_codigo(codigo)
+    if not limpo:
+        return None
+    fechar = con is None
+    con = con or conectar()
+    try:
+        alvo = hash_codigo(limpo)
+        cur = con.execute(
+            "UPDATE codigo_recuperacao SET usado_em = ?"
+            " WHERE codigo_hash = ? AND usado_em IS NULL", (agora(), alvo))
+        if cur.rowcount != 1:
+            con.rollback()
+            return None
+        l = con.execute(
+            "SELECT c.usuario_id FROM codigo_recuperacao c"
+            "  JOIN usuario u ON u.id = c.usuario_id"
+            " WHERE c.codigo_hash = ? AND u.desativado_em IS NULL",
+            (alvo,)).fetchone()
+        con.commit()
+        return l["usuario_id"] if l else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def codigos_restantes(usuario_id: int, con=None) -> int:
+    """Quantos ainda abrem a conta. A tela avisa quando esta acabando."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return con.execute(
+            "SELECT COUNT(*) c FROM codigo_recuperacao"
+            " WHERE usuario_id = ? AND usado_em IS NULL",
+            (usuario_id,)).fetchone()["c"]
     finally:
         if fechar:
             con.close()

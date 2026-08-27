@@ -168,7 +168,70 @@
     font-size: .8rem;
     letter-spacing: .08em;
   }
-  .entrar:hover { background: #0c1a13; }
+  .entrar:hover:not(:disabled) { background: #0c1a13; }
+
+  /* O <button> precisa do mesmo desenho do <a>: fonte, largura e fundo nao sao
+     herdados por controle de formulario, e sem isto ele apareceria com a fonte
+     do sistema no meio de uma tela monoespacada. */
+  button.entrar {
+    inline-size: 100%;
+    font: inherit;
+    font-size: .8rem;
+    background: none;
+    cursor: pointer;
+  }
+  button.entrar:disabled {
+    color: var(--fraca);
+    border-color: var(--borda);
+    cursor: not-allowed;
+  }
+
+  /* Hierarquia: a porta recomendada fica em verde cheio; as alternativas
+     recuam. O texto de cada uma vem do servidor, e so depois da cortina. */
+  .entrar.secundaria {
+    color: var(--tinta);
+    border-color: var(--borda);
+    margin-block-start: .5rem;
+  }
+  .entrar.secundaria:hover { background: #131c25; }
+
+  .portas { margin-block-start: 1.4rem; }
+  .portas .prompt { margin-block-end: .6rem; }
+  .menu > .entrar:first-child { margin-block-start: 0; }
+
+  .codigo { margin-block-start: 1rem; }
+  .rotulo-codigo {
+    display: block;
+    font-size: .7rem;
+    color: var(--fraca);
+    margin-block-end: .4rem;
+  }
+  .codigo input {
+    inline-size: 100%;
+    font: inherit;
+    font-size: .85rem;
+    letter-spacing: .1em;
+    padding: .7rem;
+    color: var(--tinta);
+    background: #0d141b;
+    border: 1px solid var(--borda);
+    border-radius: .3rem;
+  }
+  .codigo input::placeholder { color: #33424f; }
+  .codigo .entrar { margin-block-start: .6rem; }
+  .dica {
+    font-size: .68rem;
+    color: var(--fraca);
+    margin-block-start: .4rem;
+  }
+
+  .aviso-porta:not(:empty) {
+    margin-block-start: .9rem;
+    font-size: .72rem;
+    color: var(--tinta);
+    border-inline-start: 2px solid var(--neon);
+    padding-inline-start: .6rem;
+  }
 </style>
 </head>
 <body>

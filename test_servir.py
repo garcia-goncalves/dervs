@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import hashlib
 import os
 import re
 import tempfile
@@ -35,6 +36,10 @@ os.environ.setdefault("DERVS_COFRE",
 
 import autenticacao  # noqa: E402
 import banco         # noqa: E402
+# As ferramentas de montagem de resposta WebAuthn vivem em test_passkey.py.
+# Duplica-las aqui criaria duas versoes que divergem no dia em que uma for
+# corrigida — e a que estivesse errada passaria calada.
+import test_passkey as tp  # noqa: E402
 import cortina       # noqa: E402
 import servir        # noqa: E402
 
@@ -72,8 +77,14 @@ class ATelaSoChamaRotaQueExiste(unittest.TestCase):
     `servir.ROTAS`.
     """
 
+    # `portas.html` entra na mesma conta: ele e injetado dentro da capa e busca
+    # tres rotas proprias. Um erro de digitacao ali falha calado na cara do dono
+    # — o botao roda, o servidor responde 404, e a tela nao mostra nada.
+    TELAS = ("index.html", "portas.html")
+
     def _rotas_do_html(self):
-        html = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
+        html = "\n".join((Path(__file__).parent / t).read_text(encoding="utf-8")
+                         for t in self.TELAS)
         # Pega o primeiro argumento de fetch(), que e sempre um literal aqui.
         # Query e concatenacao ficam de fora: a tabela casa so o caminho.
         cruas = re.findall(r'fetch\(\s*"(/[^"?]*)', html)
@@ -524,6 +535,343 @@ class ServidorDeVerdade(unittest.TestCase):
         self.assertNotIn("/api/registro", servir.ROTAS)
         self.assertEqual(self.pedir("/api/registro", "POST", {}).status, 404)
 
+
+    # ==================================================== as portas de entrada
+    #
+    # As portas novas, exercitadas PELO SOQUETE.
+    #
+    #     Nao basta a rota existir na tabela: em 25/08/2026 eu afirmei que uma fila
+    #     funcionava tendo visto so a faixa aparecer na tela, e o botao nunca disparava.
+    #     Aqui um login por chave de acesso acontece de ponta a ponta — desafio pedido
+    #     ao servidor, assinatura feita com uma chave privada de teste, resposta
+    #     conferida pelo `p256.py` que este repositorio escreveu a mao.
+    #
+    #     As ferramentas de montagem vem de `test_passkey.py` de proposito: duplicar o
+    #     montador de CBOR aqui criaria duas versoes que divergem no dia em que uma for
+    #     corrigida.
+
+    def cortina_e_desafio(self):
+        """Passa pela cortina e pede um desafio. Devolve (cookies, desafio)."""
+        cookies = self.abrir_cortina()
+        r = self.pedir("/entrar/chave/desafio", "POST", {}, cookies=cookies)
+        self.assertEqual(r.status, 200, r.corpo)
+        cookies["desafio"] = r.cookies["desafio"]
+        return cookies, tp.passkey.de_b64url(json.loads(r.corpo)["desafio"])
+
+    def _apagar(self, onde: str, valor: str) -> None:
+        """Limpeza que ABRE, COMMITA e FECHA.
+
+        A primeira versao destes testes fazia `banco.conectar().execute(...)`
+        numa lambda de addCleanup: a conexao nunca fechava, e depois de algumas
+        limpezas o servidor de verdade parava de responder no meio de um teste
+        de OUTRA parte do arquivo. Falha em cascata, longe da causa.
+        """
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM %s WHERE cred_id LIKE ?" % onde, (valor,))
+            con.commit()
+        finally:
+            con.close()
+
+    def cadastrar_chave(self, contador=0):
+        """Uma chave por TESTE, com id proprio.
+
+        O banco vive a classe inteira. Com um id fixo, o segundo teste a
+        cadastrar estourava no UNIQUE — e o UNIQUE esta certo: sao duas contas
+        reivindicando a mesma credencial que ele impede.
+        """
+        self.cred_id = tp.passkey.b64url(("cred-%s" % self.id()).encode())
+        self.addCleanup(self._apagar, "chave_de_acesso", self.cred_id)
+        privada, publica = tp._par_de_chaves()
+        banco.guardar_chave_de_acesso(self.uid, self.cred_id, publica,
+                                      apelido="PC de teste", contador=contador)
+        return privada
+
+    def responder(self, privada, desafio, rp_id="127.0.0.1", flags=0x05,
+                  contador=1, origem=None):
+        origem = origem or ("http://127.0.0.1:%d" % self.porta)
+        cliente = tp._client_data("webauthn.get", desafio, origem=origem)
+        aut = tp._dados_do_autenticador(rp_id=rp_id, flags=flags,
+                                        contador=contador)
+        assinatura = tp._assinar(
+            privada, aut + hashlib.sha256(cliente).digest())
+        return {"cred_id": self.cred_id,
+                "cliente": tp.passkey.b64url(cliente),
+                "autenticador": tp.passkey.b64url(aut),
+                "assinatura": tp.passkey.b64url(assinatura)}
+
+    # ------------------------------------------------- a porta antes da hora
+    def test_a_capa_fechada_nao_admite_que_ha_chave_de_acesso(self):
+        """A cortina existe para isto: nada de login viaja antes dela."""
+        corpo = self.pedir("/").corpo.lower()
+        for proibido in ("passkey", "chave de acesso", "webauthn",
+                         "credentials.get", "codigo do papel", "recupera"):
+            self.assertNotIn(proibido, corpo, proibido)
+
+    def test_a_capa_aberta_mostra_o_menu(self):
+        corpo = self.pedir("/", cookies=self.abrir_cortina()).corpo.lower()
+        self.assertIn('data-porta="chave"', corpo)
+        self.assertIn('data-porta="codigo"', corpo)
+
+    def test_sem_cortina_a_rota_do_desafio_nao_existe(self):
+        """404, e nao 403: quem nao passou pela cortina nao descobre a rota."""
+        r = self.pedir("/entrar/chave/desafio", "POST", {})
+        self.assertEqual(r.status, 404)
+
+    def test_sem_cortina_a_rota_de_entrar_nao_existe(self):
+        self.assertEqual(self.pedir("/entrar/chave", "POST", {}).status, 404)
+        self.assertEqual(self.pedir("/entrar/codigo", "POST", {}).status, 404)
+
+    def test_o_desafio_muda_a_cada_pedido(self):
+        cookies = self.abrir_cortina()
+        vistos = set()
+        for _ in range(5):
+            r = self.pedir("/entrar/chave/desafio", "POST", {}, cookies=cookies)
+            vistos.add(json.loads(r.corpo)["desafio"])
+        self.assertEqual(len(vistos), 5)
+
+    def test_pedir_desafio_nao_gasta_tentativa(self):
+        """Pedir desafio nao e chutar, e nao pode custar como chute.
+
+        Quem chuta e `/entrar/chave`, que tem o teto. Se a emissao do desafio
+        contasse, cinco cliques no botao — com a pessoa desistindo do PIN no
+        meio, que nem sequer chega ao servidor — trancariam a conta por 15
+        minutos. E exatamente a falha que prendeu o dono do lado de fora da
+        propria maquina em 26/08, por outro caminho.
+        """
+        cookies = self.abrir_cortina()
+        cortina.zerar_tentativas()
+        for _ in range(cortina.TETO * 3):
+            r = self.pedir("/entrar/chave/desafio", "POST", {}, cookies=cookies)
+            self.assertEqual(r.status, 200)
+
+    def test_o_desafio_nao_aceita_pedido_de_outro_site(self):
+        r = self.pedir("/entrar/chave/desafio", "POST", {},
+                       cookies=self.abrir_cortina(), com_origem=False)
+        self.assertEqual(r.status, 403)
+
+    # ---------------------------------------------------- o caminho feliz
+    def test_uma_chave_de_acesso_ABRE_a_sessao(self):
+        """O teste que prova que a coisa toda funciona de ponta a ponta."""
+        privada = self.cadastrar_chave()
+        cookies, desafio = self.cortina_e_desafio()
+        r = self.pedir("/entrar/chave", "POST",
+                       self.responder(privada, desafio), cookies=cookies)
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertIn("sessao", r.cookies)
+        # E a sessao serve mesmo: a rota de dado responde com ela.
+        dados = self.pedir("/api/dados", cookies={"sessao": r.cookies["sessao"]})
+        self.assertEqual(dados.status, 200)
+
+    def test_o_contador_avanca_no_banco(self):
+        privada = self.cadastrar_chave(contador=1)
+        cookies, desafio = self.cortina_e_desafio()
+        self.pedir("/entrar/chave", "POST",
+                   self.responder(privada, desafio, contador=7), cookies=cookies)
+        guardada = banco.chave_de_acesso(self.cred_id)
+        self.assertEqual(guardada["contador"], 7)
+
+    # ------------------------------------------------------- o que e recusado
+    def test_assinatura_de_outra_chave_nao_entra(self):
+        self.cadastrar_chave()
+        outra, _ = tp._par_de_chaves()
+        cookies, desafio = self.cortina_e_desafio()
+        r = self.pedir("/entrar/chave", "POST",
+                       self.responder(outra, desafio), cookies=cookies)
+        self.assertEqual(r.status, 401)
+        self.assertNotIn("sessao", r.cookies)
+
+    def test_o_desafio_nao_serve_duas_vezes(self):
+        """Uso unico de verdade: a MESMA resposta, valida, nao entra de novo."""
+        privada = self.cadastrar_chave()
+        cookies, desafio = self.cortina_e_desafio()
+        resposta = self.responder(privada, desafio)
+        self.assertEqual(self.pedir("/entrar/chave", "POST", resposta,
+                                    cookies=cookies).status, 200)
+        self.assertEqual(self.pedir("/entrar/chave", "POST", resposta,
+                                    cookies=cookies).status, 401)
+
+    def test_contador_que_volta_atras_nao_entra(self):
+        """A impressao digital de uma chave copiada."""
+        privada = self.cadastrar_chave(contador=9)
+        cookies, desafio = self.cortina_e_desafio()
+        r = self.pedir("/entrar/chave", "POST",
+                       self.responder(privada, desafio, contador=3),
+                       cookies=cookies)
+        self.assertEqual(r.status, 401)
+
+    def test_chave_revogada_nao_entra(self):
+        privada = self.cadastrar_chave()
+        alvo = banco.chave_de_acesso(self.cred_id)["id"]
+        banco.revogar_chave_de_acesso(alvo, self.uid)
+        cookies, desafio = self.cortina_e_desafio()
+        self.assertEqual(self.pedir("/entrar/chave", "POST",
+                                    self.responder(privada, desafio),
+                                    cookies=cookies).status, 401)
+
+    def test_credencial_que_nao_existe_da_a_mesma_resposta_de_assinatura_errada(self):
+        """O anti-oraculo: status e corpo iguais, senao a tela vira uma lista
+        de quem existe."""
+        privada = self.cadastrar_chave()
+        cookies, desafio = self.cortina_e_desafio()
+        boa = self.responder(privada, desafio)
+        inexistente = dict(boa, cred_id=tp.passkey.b64url(b"nunca-vista"))
+        a = self.pedir("/entrar/chave", "POST", inexistente, cookies=cookies)
+        cookies2, desafio2 = self.cortina_e_desafio()
+        outra, _ = tp._par_de_chaves()
+        b = self.pedir("/entrar/chave", "POST",
+                       self.responder(outra, desafio2), cookies=cookies2)
+        self.assertEqual((a.status, a.corpo), (b.status, b.corpo))
+
+    def test_corpo_torto_nao_derruba_o_servidor(self):
+        cookies, _ = self.cortina_e_desafio()
+        for torto in ({}, {"cred_id": "x"}, {"cred_id": "!!", "cliente": "!!"},
+                      {"cred_id": "x", "cliente": "AQ", "autenticador": "AQ",
+                       "assinatura": "AQ"}):
+            r = self.pedir("/entrar/chave", "POST", torto, cookies=cookies)
+            self.assertIn(r.status, (401, 429), repr(torto))
+
+    def test_pedido_de_outro_site_nao_entra(self):
+        privada = self.cadastrar_chave()
+        cookies, desafio = self.cortina_e_desafio()
+        r = self.pedir("/entrar/chave", "POST", self.responder(privada, desafio),
+                       cookies=cookies, com_origem=False)
+        self.assertEqual(r.status, 403)
+
+    # ------------------------------------------------------ codigo do papel
+    def test_o_codigo_do_papel_abre_a_sessao(self):
+        codigo = banco.gerar_codigos_de_recuperacao(self.uid)[0]
+        r = self.pedir("/entrar/codigo", "POST", {"codigo": codigo},
+                       cookies=self.abrir_cortina())
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertIn("sessao", r.cookies)
+        self.assertEqual(json.loads(r.corpo)["restantes"], 9)
+
+    def test_o_mesmo_codigo_nao_abre_duas_vezes(self):
+        codigo = banco.gerar_codigos_de_recuperacao(self.uid)[0]
+        cookies = self.abrir_cortina()
+        self.assertEqual(self.pedir("/entrar/codigo", "POST", {"codigo": codigo},
+                                    cookies=cookies).status, 200)
+        self.assertEqual(self.pedir("/entrar/codigo", "POST", {"codigo": codigo},
+                                    cookies=cookies).status, 401)
+
+    def test_codigo_inventado_nao_abre(self):
+        banco.gerar_codigos_de_recuperacao(self.uid)
+        r = self.pedir("/entrar/codigo", "POST", {"codigo": "AAAAA-BBBBB-CCCCC-DDDDD"},
+                       cookies=self.abrir_cortina())
+        self.assertEqual(r.status, 401)
+        self.assertNotIn("sessao", r.cookies)
+
+    def test_o_teto_de_chute_do_codigo_existe(self):
+        cookies = self.abrir_cortina()
+        cortina.zerar_tentativas()
+        vistos = set()
+        for _ in range(cortina.TETO + 3):
+            vistos.add(self.pedir("/entrar/codigo", "POST", {"codigo": "X"},
+                                  cookies=cookies).status)
+        self.assertIn(429, vistos)
+
+    def test_errar_o_codigo_nao_gasta_o_teto_da_chave(self):
+        """Cada porta tem a propria fila. Sem isto, quem erra o codigo tranca
+        tambem a chave de acesso, e a tela nao teria como explicar isso."""
+        cookies = self.abrir_cortina()
+        cortina.zerar_tentativas()
+        for _ in range(cortina.TETO + 3):
+            self.pedir("/entrar/codigo", "POST", {"codigo": "X"}, cookies=cookies)
+        r = self.pedir("/entrar/chave/desafio", "POST", {}, cookies=cookies)
+        self.assertEqual(r.status, 200)
+
+
+    # ================================================ a gestao, ja la dentro
+    # As rotas de DENTRO do painel: listar, cadastrar, remover, gerar codigos.
+
+    def sessao_e_token(self):
+        cookies = self.com_sessao()
+        con = banco.conectar()
+        try:
+            s = banco.sessao_valida(cookies["sessao"], con=con)
+        finally:
+            con.close()
+        return cookies, servir.Hub._csrf_da_sessao(s)
+
+    def test_a_lista_exige_sessao(self):
+        self.assertEqual(self.pedir("/api/chaves").status, 401)
+
+    def test_a_lista_comeca_vazia_e_cobra_a_segunda(self):
+        corpo = json.loads(self.pedir("/api/chaves",
+                                      cookies=self.com_sessao()).corpo)
+        self.assertEqual(corpo["chaves"], [])
+        self.assertTrue(corpo["cobrar_a_segunda"])
+
+    def test_a_lista_nao_devolve_a_chave_publica(self):
+        self.addCleanup(self._apagar, "chave_de_acesso", "cid-lista")
+        banco.guardar_chave_de_acesso(self.uid, "cid-lista", (7, 9),
+                                      apelido="PC")
+        corpo = json.loads(self.pedir("/api/chaves",
+                                      cookies=self.com_sessao()).corpo)
+        self.assertNotIn("chave_x", corpo["chaves"][0])
+        self.assertNotIn("chave", corpo["chaves"][0])
+
+    def test_com_duas_chaves_para_de_cobrar(self):
+        self.addCleanup(self._apagar, "chave_de_acesso", "cid-duas-%")
+        for i in (1, 2):
+            banco.guardar_chave_de_acesso(self.uid, "cid-duas-%d" % i, (7, 9))
+        corpo = json.loads(self.pedir("/api/chaves",
+                                      cookies=self.com_sessao()).corpo)
+        self.assertFalse(corpo["cobrar_a_segunda"])
+
+    def test_remover_sem_o_token_da_sessao_e_recusado(self):
+        """O anti-CSRF: sessao sozinha nao basta para rota que escreve."""
+        cookies = self.com_sessao()
+        r = self.pedir("/api/chaves/remover", "POST", {"id": 1}, cookies=cookies)
+        self.assertEqual(r.status, 403)
+
+    def test_remover_a_chave_de_outra_conta_nao_funciona(self):
+        self.addCleanup(self._apagar, "chave_de_acesso", "cid-alheia")
+        outro = banco.criar_usuario("alheio@teste.local")
+        alheia = banco.guardar_chave_de_acesso(outro, "cid-alheia", (7, 9))
+        cookies, token = self.sessao_e_token()
+        r = self.pedir("/api/chaves/remover", "POST", {"id": alheia},
+                       cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertEqual(r.status, 404)
+        self.assertIsNotNone(banco.chave_de_acesso("cid-alheia"))
+
+    def test_remover_a_propria_chave_funciona(self):
+        self.addCleanup(self._apagar, "chave_de_acesso", "cid-minha")
+        minha = banco.guardar_chave_de_acesso(self.uid, "cid-minha", (7, 9))
+        cookies, token = self.sessao_e_token()
+        r = self.pedir("/api/chaves/remover", "POST", {"id": minha},
+                       cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertIsNone(banco.chave_de_acesso("cid-minha"))
+
+    def test_o_desafio_de_cadastro_exige_sessao(self):
+        self.assertEqual(self.pedir("/api/chaves/desafio", "POST", {}).status, 401)
+
+    def test_o_desafio_de_cadastro_nao_entrega_o_id_do_banco(self):
+        """O identificador que vai DENTRO do autenticador e derivado, e alguns
+        aparelhos o mostram na tela de escolha de conta."""
+        cookies, token = self.sessao_e_token()
+        r = self.pedir("/api/chaves/desafio", "POST", {}, cookies=cookies,
+                       cabecalhos={"X-Token": token})
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertNotEqual(json.loads(r.corpo)["usuario"]["id"], str(self.uid))
+
+    def test_gerar_codigos_devolve_dez_uma_vez_so(self):
+        cookies, token = self.sessao_e_token()
+        r = self.pedir("/api/codigos/gerar", "POST", {}, cookies=cookies,
+                       cabecalhos={"X-Token": token})
+        self.assertEqual(r.status, 200, r.corpo)
+        primeiros = json.loads(r.corpo)["codigos"]
+        self.assertEqual(len(primeiros), 10)
+        r2 = self.pedir("/api/codigos/gerar", "POST", {}, cookies=cookies,
+                        cabecalhos={"X-Token": token})
+        self.assertFalse(set(primeiros) & set(json.loads(r2.corpo)["codigos"]))
+
+    def test_gerar_codigos_sem_token_e_recusado(self):
+        r = self.pedir("/api/codigos/gerar", "POST", {},
+                       cookies=self.com_sessao())
+        self.assertEqual(r.status, 403)
 
 class _Resposta:
     def __init__(self, status, corpo, cabecalhos, postos):

@@ -89,6 +89,21 @@ jobs:
       - name: Cortina
         run: python test_cortina.py
 
+      # A aritmetica da curva P-256, escrita a mao. Os vetores vem de FORA —
+      # RFC 6979 A.2.5, os mesmos que o NIST publica. Codigo de criptografia
+      # testado so com dado que ele mesmo produziu nao esta testado: prova que
+      # concorda consigo, nao que esta certo. Este passo e barato (0,2 s) e e o
+      # unico que garante que a conferencia de assinatura ainda confere.
+      - name: Curva P-256
+        run: python test_p256.py
+
+      # A camada WebAuthn: CBOR, chave COSE, dados do autenticador, cadastro,
+      # entrada, e o contador que pega passkey copiada. Todo parser aqui trata
+      # o que chega como hostil, e cada recusa tem um teste com o nome do
+      # ataque que ela barra.
+      - name: Chave de acesso
+        run: python test_passkey.py
+
       # O login por GitHub. NENHUM destes testes toca a rede: as funcoes que
       # falam com o GitHub recebem a funcao de abrir URL por parametro, e o
       # teste passa um duble que estoura em URL nao prevista.

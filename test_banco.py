@@ -122,10 +122,17 @@ class Esquema(unittest.TestCase):
             "SELECT name FROM sqlite_master WHERE type='table' "
             "AND name NOT LIKE 'sqlite_%'"))
 
-    def test_as_catorze_tabelas_existem(self):
+    def test_as_dezesseis_tabelas_existem(self):
+        """A lista e escrita a mao de proposito: tabela nova reprova a suite.
+
+        Nao e cerimonia. Uma tabela que aparece sem ninguem notar e uma tabela
+        sem teste, sem migracao pensada e — se guardar dado de pessoa — sem
+        decisao sobre o que acontece quando a conta e apagada.
+        """
         self.assertEqual(self.tabelas(), [
-            "credencial", "fila", "gasto", "historico", "instalacao", "maquina",
-            "medida", "pareamento", "pendencia_arquivada", "pendencia_estado",
+            "chave_de_acesso", "codigo_recuperacao", "credencial", "fila",
+            "gasto", "historico", "instalacao", "maquina", "medida",
+            "pareamento", "pendencia_arquivada", "pendencia_estado",
             "pendencia_vida", "projeto_conectado", "sessao", "usuario"])
 
     def test_as_seis_tabelas_antigas_nao_perderam_coluna(self):
@@ -1078,6 +1085,314 @@ class AcessoPorGithub(unittest.TestCase):
         uid = banco.criar_usuario("e@teste.local", con=self.con)
         banco.ligar_github(uid, "  606  ", con=self.con)
         self.assertEqual(banco.usuario_por_github("606", con=self.con)["id"], uid)
+
+
+# ======================================================================
+# As portas de entrada (chave de acesso e codigo de recuperacao)
+#
+# Duas tabelas novas, e a razao de cada uma estar separada da `credencial`:
+#
+#   chave_de_acesso     precisa de um campo que MUDA a cada uso — o contador de
+#                       assinaturas. A `credencial` nao tem onde por isso, e
+#                       enfiar um contador em `segredo_hash` seria mentir sobre
+#                       o que a coluna guarda.
+#   codigo_recuperacao  sao DEZ linhas por pessoa, e a `credencial` tem um
+#                       UNIQUE (tipo, identificador) que a limita a uma.
+#
+# O que os testes abaixo cobram, alem de "grava e le":
+#
+#   1. NAO HA SEGREDO NESTAS TABELAS. A chave de acesso guarda a chave PUBLICA,
+#      que nao abre nada. O codigo de recuperacao guarda so a impressao digital.
+#      Vazar as duas inteiras nao entrega a conta de ninguem.
+#   2. USO UNICO E ATOMICO. Codigo de recuperacao usado duas vezes ao mesmo
+#      tempo, ou contador que anda para tras, sao os dois caminhos de
+#      transformar uma credencial em varias.
+#   3. A CONTA MORTA NAO ENTRA. Toda leitura junta com `usuario` viva, do mesmo
+#      jeito que `sessao_valida` faz.
+
+class AChaveDeAcesso(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.con = banco.conectar(str(Path(self.tmp) / "hub.db"))
+        self.uid = banco.criar_usuario("chave@teste.local", con=self.con)
+        self.chave = (0x11, 0x22)
+
+    def tearDown(self):
+        self.con.close()
+
+    def guardar(self, cred="cred-a", chave=None, apelido="PC do dono"):
+        return banco.guardar_chave_de_acesso(
+            self.uid, cred, chave or self.chave, apelido=apelido, con=self.con)
+
+    def test_grava_e_le_de_volta(self):
+        self.guardar()
+        lida = banco.chave_de_acesso("cred-a", con=self.con)
+        self.assertEqual(lida["usuario_id"], self.uid)
+        self.assertEqual(lida["chave"], self.chave)
+        self.assertEqual(lida["apelido"], "PC do dono")
+        self.assertEqual(lida["contador"], 0)
+
+    def test_a_chave_publica_volta_como_par_de_inteiros(self):
+        """Sem isto, a rota receberia texto e a conferencia falharia calada."""
+        grande = (2 ** 250 + 7, 2 ** 249 + 13)
+        self.guardar(cred="cred-g", chave=grande)
+        self.assertEqual(banco.chave_de_acesso("cred-g", con=self.con)["chave"],
+                         grande)
+
+    def test_credencial_desconhecida_devolve_none(self):
+        self.assertIsNone(banco.chave_de_acesso("nunca-vista", con=self.con))
+
+    def test_o_mesmo_cred_id_duas_vezes_e_recusado(self):
+        """Dois donos reivindicando a mesma credencial e sequestro de conta."""
+        self.guardar()
+        outro = banco.criar_usuario("outro@teste.local", con=self.con)
+        with self.assertRaises(sqlite3.IntegrityError):
+            banco.guardar_chave_de_acesso(outro, "cred-a", (0x33, 0x44),
+                                          con=self.con)
+
+    def test_lista_as_chaves_do_dono(self):
+        self.guardar(cred="c1", apelido="PC")
+        self.guardar(cred="c2", apelido="celular")
+        apelidos = {c["apelido"] for c in
+                    banco.chaves_de_acesso(self.uid, con=self.con)}
+        self.assertEqual(apelidos, {"PC", "celular"})
+
+    def test_a_lista_nao_mostra_a_chave_de_outro_dono(self):
+        """O IDOR mais obvio, e o que a etapa 8 consertou no esquema."""
+        outro = banco.criar_usuario("vizinho@teste.local", con=self.con)
+        banco.guardar_chave_de_acesso(outro, "c-alheia", (1, 2), con=self.con)
+        self.guardar(cred="c-minha")
+        listadas = [c["cred_id"] for c in
+                    banco.chaves_de_acesso(self.uid, con=self.con)]
+        self.assertEqual(listadas, ["c-minha"])
+
+    def test_a_lista_nao_devolve_a_chave_publica(self):
+        """A tela nao precisa dela, e o que nao sai nao vaza por descuido."""
+        self.guardar()
+        for c in banco.chaves_de_acesso(self.uid, con=self.con):
+            self.assertNotIn("chave", c)
+
+    def test_revogar_tira_da_lista(self):
+        i = self.guardar()
+        self.assertTrue(banco.revogar_chave_de_acesso(i, self.uid, con=self.con))
+        self.assertEqual(banco.chaves_de_acesso(self.uid, con=self.con), [])
+
+    def test_revogada_nao_entra_mais(self):
+        i = self.guardar()
+        banco.revogar_chave_de_acesso(i, self.uid, con=self.con)
+        self.assertIsNone(banco.chave_de_acesso("cred-a", con=self.con))
+
+    def test_ninguem_revoga_a_chave_de_outro(self):
+        """`WHERE id = ?` sem o dono junto e o IDOR classico de rota de remocao."""
+        i = self.guardar()
+        outro = banco.criar_usuario("ladrao@teste.local", con=self.con)
+        self.assertFalse(banco.revogar_chave_de_acesso(i, outro, con=self.con))
+        self.assertIsNotNone(banco.chave_de_acesso("cred-a", con=self.con))
+
+    def test_revogar_duas_vezes_devolve_falso(self):
+        i = self.guardar()
+        banco.revogar_chave_de_acesso(i, self.uid, con=self.con)
+        self.assertFalse(banco.revogar_chave_de_acesso(i, self.uid, con=self.con))
+
+    def test_a_conta_desativada_nao_entra(self):
+        """Mesmo motivo do JOIN em `sessao_valida`: desativar tem de valer ja."""
+        self.guardar()
+        self.con.execute("UPDATE usuario SET desativado_em = ? WHERE id = ?",
+                         (banco.agora(), self.uid))
+        self.con.commit()
+        self.assertIsNone(banco.chave_de_acesso("cred-a", con=self.con))
+
+    def test_apagar_a_conta_leva_as_chaves(self):
+        self.guardar()
+        self.con.execute("DELETE FROM usuario WHERE id = ?", (self.uid,))
+        self.con.commit()
+        self.assertEqual(
+            self.con.execute("SELECT COUNT(*) c FROM chave_de_acesso"
+                             ).fetchone()["c"], 0)
+
+
+class OContadorNoBanco(unittest.TestCase):
+    """O contador de clone so vale se o BANCO o fizer valer.
+
+    Conferir em Python e gravar depois deixa uma janela entre a decisao e a
+    escrita: duas copias da mesma passkey entrando ao mesmo tempo passam as
+    duas pela checagem antes de qualquer uma gravar. Aqui quem decide e o
+    proprio UPDATE, e quem nao levar `rowcount == 1` perdeu — o mesmo desenho
+    de `usar_pareamento`.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.con = banco.conectar(str(Path(self.tmp) / "hub.db"))
+        self.uid = banco.criar_usuario("cont@teste.local", con=self.con)
+        self.id = banco.guardar_chave_de_acesso(self.uid, "cred-c", (1, 2),
+                                                contador=5, con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_avancar_grava(self):
+        self.assertTrue(banco.usar_chave_de_acesso(self.id, 6, con=self.con))
+        self.assertEqual(banco.chave_de_acesso("cred-c", con=self.con)["contador"], 6)
+
+    def test_avancar_marca_o_uso(self):
+        banco.usar_chave_de_acesso(self.id, 6, con=self.con)
+        self.assertIsNotNone(
+            self.con.execute("SELECT usado_em FROM chave_de_acesso WHERE id = ?",
+                             (self.id,)).fetchone()["usado_em"])
+
+    def test_repetir_o_contador_e_recusado(self):
+        self.assertFalse(banco.usar_chave_de_acesso(self.id, 5, con=self.con))
+
+    def test_voltar_e_recusado(self):
+        self.assertFalse(banco.usar_chave_de_acesso(self.id, 4, con=self.con))
+
+    def test_o_contador_nao_muda_quando_recusa(self):
+        banco.usar_chave_de_acesso(self.id, 4, con=self.con)
+        self.assertEqual(banco.chave_de_acesso("cred-c", con=self.con)["contador"], 5)
+
+    def test_chave_revogada_nao_avanca(self):
+        banco.revogar_chave_de_acesso(self.id, self.uid, con=self.con)
+        self.assertFalse(banco.usar_chave_de_acesso(self.id, 99, con=self.con))
+
+    def test_autenticador_que_nao_conta(self):
+        """Zero para sempre e legitimo: a norma preve autenticador sem contador."""
+        i = banco.guardar_chave_de_acesso(self.uid, "cred-z", (1, 2),
+                                          contador=0, con=self.con)
+        self.assertTrue(banco.usar_chave_de_acesso(i, 0, con=self.con))
+
+    def test_o_banco_e_o_python_concordam(self):
+        """Duas regras escritas em dois lugares divergem. Esta trava avisa.
+
+        `passkey.contador_ok` e o UPDATE de `usar_chave_de_acesso` decidem a
+        mesma coisa em linguagens diferentes. Se alguem afrouxar uma e esquecer
+        a outra, e aqui que aparece.
+        """
+        import passkey
+        for guardado in (0, 1, 5):
+            for novo in (0, 1, 5, 6):
+                i = banco.guardar_chave_de_acesso(
+                    self.uid, "par-%d-%d" % (guardado, novo), (1, 2),
+                    contador=guardado, con=self.con)
+                self.assertEqual(
+                    banco.usar_chave_de_acesso(i, novo, con=self.con),
+                    passkey.contador_ok(guardado, novo),
+                    "guardado=%d novo=%d" % (guardado, novo))
+
+
+class OsCodigosDeRecuperacao(unittest.TestCase):
+    """A saida de emergencia que impede a conta de virar pane permanente.
+
+    Sem eles, "login sem senha" com duas pessoas e uma conta a um celular
+    quebrado de distancia de ficar trancada para sempre — e nao ha recuperacao
+    por e-mail neste sistema, de proposito.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.con = banco.conectar(str(Path(self.tmp) / "hub.db"))
+        self.uid = banco.criar_usuario("recup@teste.local", con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_gera_dez(self):
+        self.assertEqual(len(banco.gerar_codigos_de_recuperacao(
+            self.uid, con=self.con)), 10)
+
+    def test_todos_diferentes(self):
+        codigos = banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)
+        self.assertEqual(len(set(codigos)), 10)
+
+    def test_nao_repetem_entre_geracoes(self):
+        a = set(banco.gerar_codigos_de_recuperacao(self.uid, con=self.con))
+        b = set(banco.gerar_codigos_de_recuperacao(self.uid, con=self.con))
+        self.assertFalse(a & b)
+
+    def test_tem_entropia_de_sobra(self):
+        """Codigo curto e chutavel, e este nao tem teto de tentativa por conta."""
+        for c in banco.gerar_codigos_de_recuperacao(self.uid, con=self.con):
+            self.assertGreaterEqual(len(c.replace("-", "")), 16)
+
+    def test_o_codigo_em_claro_nao_fica_no_banco(self):
+        """A prova de que a tabela guarda impressao digital, e nao o codigo."""
+        codigos = banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)
+        cru = open(str(Path(self.tmp) / "hub.db"), "rb").read()
+        for c in codigos:
+            self.assertNotIn(c.encode("ascii"), cru)
+            self.assertNotIn(c.replace("-", "").encode("ascii"), cru)
+
+    def test_o_codigo_abre_a_conta(self):
+        c = banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)[0]
+        self.assertEqual(banco.usar_codigo_de_recuperacao(c, con=self.con),
+                         self.uid)
+
+    def test_uso_unico(self):
+        c = banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)[0]
+        banco.usar_codigo_de_recuperacao(c, con=self.con)
+        self.assertIsNone(banco.usar_codigo_de_recuperacao(c, con=self.con))
+
+    def test_usar_um_nao_gasta_os_outros(self):
+        codigos = banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)
+        banco.usar_codigo_de_recuperacao(codigos[0], con=self.con)
+        self.assertEqual(banco.usar_codigo_de_recuperacao(codigos[1],
+                                                          con=self.con), self.uid)
+
+    def test_codigo_inventado_nao_abre(self):
+        banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)
+        self.assertIsNone(banco.usar_codigo_de_recuperacao("NAO-EXISTE-MESMO",
+                                                           con=self.con))
+
+    def test_codigo_vazio_nao_abre(self):
+        """Falha FECHADA: string vazia nao pode casar com linha nenhuma."""
+        banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)
+        for lixo in ("", None, "   ", "-----"):
+            self.assertIsNone(banco.usar_codigo_de_recuperacao(lixo, con=self.con))
+
+    def test_aceita_digitado_torto(self):
+        """Quem copia do papel erra caixa e tracinho. Isso nao e tentativa errada."""
+        c = banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)[0]
+        torto = "  " + c.lower().replace("-", " ") + "  "
+        self.assertEqual(banco.usar_codigo_de_recuperacao(torto, con=self.con),
+                         self.uid)
+
+    def test_gerar_de_novo_queima_os_antigos(self):
+        """Pediu lista nova, a antiga morre — senao o papel velho continua valendo."""
+        velhos = banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)
+        banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)
+        self.assertIsNone(banco.usar_codigo_de_recuperacao(velhos[0],
+                                                           con=self.con))
+
+    def test_gerar_de_novo_nao_apaga_o_rastro_do_que_foi_usado(self):
+        """Codigo gasto e evidencia. Apagar a linha apaga a evidencia."""
+        velhos = banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)
+        banco.usar_codigo_de_recuperacao(velhos[0], con=self.con)
+        banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)
+        usados = self.con.execute(
+            "SELECT COUNT(*) c FROM codigo_recuperacao WHERE usado_em IS NOT NULL"
+        ).fetchone()["c"]
+        self.assertEqual(usados, 1)
+
+    def test_conta_quantos_sobraram(self):
+        codigos = banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)
+        self.assertEqual(banco.codigos_restantes(self.uid, con=self.con), 10)
+        banco.usar_codigo_de_recuperacao(codigos[0], con=self.con)
+        self.assertEqual(banco.codigos_restantes(self.uid, con=self.con), 9)
+
+    def test_o_codigo_de_um_nao_abre_a_conta_do_outro(self):
+        outro = banco.criar_usuario("outro-r@teste.local", con=self.con)
+        meu = banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)[0]
+        self.assertEqual(banco.usar_codigo_de_recuperacao(meu, con=self.con),
+                         self.uid)
+        self.assertNotEqual(banco.codigos_restantes(outro, con=self.con), 9)
+
+    def test_conta_desativada_nao_entra_por_codigo(self):
+        c = banco.gerar_codigos_de_recuperacao(self.uid, con=self.con)[0]
+        self.con.execute("UPDATE usuario SET desativado_em = ? WHERE id = ?",
+                         (banco.agora(), self.uid))
+        self.con.commit()
+        self.assertIsNone(banco.usar_codigo_de_recuperacao(c, con=self.con))
 
 
 if __name__ == "__main__":
