@@ -1,0 +1,105 @@
+# Conectar uma máquina ao DERVS
+
+*Escrito em 27/08/2026, na etapa 11 da fatia 1.*
+
+O DERVS mostra o estado dos seus projetos. Até aqui ele só sabia dos projetos da
+máquina **onde ele mesmo roda**. O agente muda isso: qualquer computador seu pode
+medir a si mesmo e mandar o resultado para o painel.
+
+## O que o agente faz, em uma frase
+
+Ele olha os repositórios daquela máquina (git, Docker, portas em uso, nomes de
+variável em `.env`), monta um relatório e **manda** para o endereço do DERVS.
+
+## O que ele **não** faz — e isso é o desenho, não uma falta
+
+- **Não escuta porta nenhuma.** Só sai conexão dali. Um agente que aceitasse
+  conexão seria uma porta nova na sua máquina de casa, sem ninguém olhando.
+- **Não recebe comando do painel.** O sentido é sempre da máquina para o painel.
+  Foi exatamente isso que a etapa 7 amputou do servidor, e não volta.
+- **Não manda o valor de segredo nenhum.** Do `.env` sai só o *nome* da
+  variável — a leitura para no sinal de igual.
+
+## Conectar, passo a passo
+
+1. No painel, clique em **Máquinas** e depois em **Gerar o número**.
+   Aparece um número de seis dígitos e a linha pronta para copiar.
+2. Na outra máquina, abra o terminal na pasta do DERVS e cole a linha:
+
+   ```
+   python -m agente.enviar --alvo https://SEU-DERVS --codigo 123456
+   ```
+
+   **Se der certo**, ela imprime duas linhas:
+
+   ```
+   pareado com https://SEU-DERVS. O token ficou em C:\Users\voce\.dervs\agente.json
+   enviado: 17 projetos -> https://SEU-DERVS
+   ```
+
+   **Se der errado**, o motivo vem escrito em português. Os três comuns:
+
+   | O que aparece | O que houve | O que fazer |
+   |---|---|---|
+   | `o codigo de seis digitos nao serve` | passou dos dez minutos, ou já foi usado | gerar outro no painel |
+   | `o alvo recusou por excesso de tentativas` | cinco erros seguidos daquele endereço | esperar quinze minutos |
+   | `nao consegui falar com …` | endereço errado, ou sem internet | conferir o endereço |
+
+3. De volta ao painel, a máquina aparece na lista com o carimbo de quando
+   reportou pela última vez.
+
+## Deixar reportando sozinho
+
+```
+python -m agente.enviar --alvo https://SEU-DERVS --intervalo 600
+```
+
+Ele mede e manda de dez em dez minutos, e não morre se a internet cair — volta
+sozinho quando ela voltar.
+
+## Onde mora o token, e por que ali
+
+O número de seis dígitos vale uma vez e vence em dez minutos. Trocado, ele vira
+um **token** que não vence — e é ele que autoriza os envios seguintes.
+
+O token fica em `~/.dervs/agente.json` (no Windows,
+`C:\Users\<você>\.dervs\agente.json`), com permissão de leitura só para a sua
+conta. **Fora da pasta do projeto, de propósito:** token dentro do repositório é
+token commitado no dia em que alguém rodar `git add -A` com pressa.
+
+Ele também **nunca entra na linha de comando**. Argumento de processo aparece na
+lista de processos da máquina inteira. Por isso não existe `--token`: o código de
+pareamento entra por ali porque é descartável; o token, não.
+
+Para apontar o arquivo para outro lugar: `DERVS_AGENTE_ARQUIVO=/caminho/x.json`.
+
+## Desconectar uma máquina
+
+No painel, **Máquinas → Remover**. O token daquela máquina deixa de valer no
+mesmo instante, e ela só volta com um número novo. Os projetos que ela reportava
+continuam no painel com o último dado medido — some a fonte, não o histórico.
+
+## O que segura seis dígitos
+
+Um milhão de possibilidades é pouco se o chute for de graça. São três travas:
+
+1. **dez minutos** de validade;
+2. **uso único** — código gasto não pareia uma segunda máquina;
+3. **cinco tentativas por origem** a cada quinze minutos, contadas na rota
+   (no seu computador são vinte — ali o dado é de mentira e apertar só atrapalha
+   quem trabalha).
+
+A terceira tem uma sutileza que já custou caro aqui: a conta é **por origem**, e
+não um contador global. Contador global deixaria um estranho trancar o
+pareamento de todo mundo com cinco chutes. E a fila é própria: gastar o teto
+tentando parear **não** tranca a sua entrada pela capa.
+
+## O sinal de vida é o dado
+
+Não existe rota de "estou vivo" separada, e isso é decisão, não esquecimento.
+Com um sinal próprio, uma máquina com a coleta travada continuaria dizendo que
+está viva — e o painel ficaria verde exatamente quando parou de olhar. Aqui o
+carimbo de `visto_em` só anda quando medição de verdade chega.
+
+Ver também: [`formas-de-entrar.md`](formas-de-entrar.md), sobre as portas de
+entrada de **pessoas** (que é outra coisa: máquina tem token, pessoa tem sessão).

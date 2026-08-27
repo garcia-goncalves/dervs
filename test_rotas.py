@@ -213,7 +213,12 @@ class TodaRotaDeclaraAcesso(unittest.TestCase):
     A SUITE. Esquecer de classificar nao pode dar acesso.
     """
 
-    VALIDOS = {"aberta", "cortina", "dado"}
+    # A quarta entrou na etapa 11, e ela e diferente das outras tres: nao e
+    # pessoa do outro lado, e uma MAQUINA com token proprio. Alargar este
+    # conjunto e a unica forma legitima de acrescentar uma classe de acesso —
+    # e por isso os dois testes logo abaixo cobram, nominalmente, que ela
+    # signifique alguma coisa no despacho.
+    VALIDOS = {"aberta", "cortina", "dado", "maquina"}
 
     def test_toda_rota_declara_acesso(self):
         for caminho, rota in servir.ROTAS.items():
@@ -241,6 +246,25 @@ class TodaRotaDeclaraAcesso(unittest.TestCase):
         for caminho in servir.ROTAS:
             if caminho.startswith("/entrar/"):
                 self.assertEqual(servir.ROTAS[caminho].acesso, "cortina", caminho)
+
+    def test_o_que_o_agente_manda_exige_token_de_maquina(self):
+        """A ingestao NAO pode ser "aberta". Ela escreve no banco do dono."""
+        self.assertEqual(servir.ROTAS["/agente/relatorio"].acesso, "maquina")
+
+    def test_a_classe_maquina_e_conferida_no_despacho(self):
+        """Rotulo que ninguem le e pior que rotulo nenhum: da a impressao de
+        haver guarda. O despacho tem de citar a classe e o token."""
+        import inspect
+        fonte = inspect.getsource(servir.Hub._despachar)
+        self.assertIn('rota.acesso == "maquina"', fonte)
+        self.assertIn("maquina_por_token", fonte)
+
+    def test_nenhuma_rota_de_dono_aceita_token_de_maquina(self):
+        """O token do agente vale para reportar, e para mais nada. Se ele
+        abrisse `/api/dados`, um relatorio roubado viraria o painel inteiro."""
+        for caminho, rota in servir.ROTAS.items():
+            if caminho.startswith("/api/") and caminho != "/api/maquinas":
+                self.assertNotEqual(rota.acesso, "maquina", caminho)
 
     def test_nao_existe_rota_de_registro(self):
         """Cadastro fechado. Conta so nasce por `autenticacao.convidar`, que e

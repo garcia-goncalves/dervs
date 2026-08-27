@@ -326,6 +326,19 @@ class Hub(SimpleHTTPRequestHandler):
         return cortina.selo_valido(self._ler_cookie("cortina"), time.time(),
                                    banco.chave_do_cofre())
 
+    def _token_do_agente(self) -> str:
+        """`Authorization: Token <token>`, e so nesse formato.
+
+        Nao aceita o token na query nem no corpo de proposito: a query vai para
+        o log de todo proxy no caminho, e o corpo faria o token viajar junto com
+        um relatorio de megabytes que pode ser truncado no meio pelo teto.
+        """
+        cru = (self.headers.get("Authorization") or "").strip()
+        pedaco = cru.split(None, 1)
+        if len(pedaco) != 2 or pedaco[0].lower() != "token":
+            return ""
+        return pedaco[1].strip()
+
     def _origem_do_pedido(self) -> str:
         return self.client_address[0] if self.client_address else "?"
 
@@ -346,6 +359,21 @@ class Hub(SimpleHTTPRequestHandler):
         if rota.acesso == "dado" and self._sessao() is None:
             # Sem detalhe e sem nome de projeto nenhum no corpo.
             return self._json(401, {"erro": "entre para ver"})
+        # A quarta classe (etapa 11): quem prova ser MAQUINA, e nao pessoa. O
+        # agente nao tem cookie, nao manda Origin e nao tem token anti-CSRF —
+        # ele carrega um token proprio, preso a uma maquina e a uma conta. A
+        # classificacao vive na tabela pelo mesmo motivo das outras tres: `if`
+        # dentro da funcao nasce esquecido na rota seguinte.
+        #
+        # Zerado a CADA despacho de proposito: o `http.server` reaproveita a
+        # MESMA instancia do handler para todos os pedidos de uma conexao
+        # keep-alive, entao um atributo de pedido anterior sobreviveria ate o
+        # pedido seguinte — que e como se vaza autenticacao entre requisicoes.
+        self._maquina = None
+        if rota.acesso == "maquina":
+            self._maquina = banco.maquina_por_token(self._token_do_agente())
+            if self._maquina is None:
+                return self._json(401, {"erro": "token de maquina invalido"})
         if rota.acesso == "cortina" and not self._cortina_aberta():
             # A MESMA resposta de rota inexistente: quem nao passou pela cortina
             # nao pode nem descobrir que esta rota existe.
@@ -935,6 +963,121 @@ class Hub(SimpleHTTPRequestHandler):
             "codigos": banco.gerar_codigos_de_recuperacao(sessao["usuario_id"]),
             "aviso": "anote agora; eles nao aparecem de novo"})
 
+    # ------------------------------------------------- as maquinas (etapa 11)
+    #
+    # TRES PORTAS DO DONO (sessao completa) e DUAS DO AGENTE (token de maquina).
+    # A separacao importa: a do agente nao pode exigir cookie nem Origin, senao
+    # o agente nunca reporta; a do dono nao pode aceitar token de maquina, senao
+    # um relatorio roubado vira acesso ao painel.
+
+    # Dez minutos. Seis digitos sao um milhao de possibilidades, e o que os
+    # segura sao tres coisas: este prazo, o uso unico e o teto de chute por
+    # origem la embaixo. Prazo mais longo e um milhao de tentativas de graca.
+    MINUTOS_DO_CODIGO = 10
+    # O relatorio inteiro de uma maquina com ~20 repositorios. Ha teto porque o
+    # corpo e lido para a memoria antes de virar JSON.
+    TETO_DO_RELATORIO = 4 * 1024 * 1024
+
+    def _maquinas(self):
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        return self._json(200, {
+            "maquinas": banco.maquinas_do_usuario(sessao["usuario_id"])})
+
+    def _maquina_parear(self):
+        """O dono gera o codigo que ele vai digitar na outra maquina."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        if not self._csrf_ok(sessao):
+            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+        # Colisao levanta IntegrityError (ver `banco.abrir_pareamento`): duas
+        # contas sorteando o mesmo numero no mesmo minuto e raro, e silenciar
+        # isso punha a maquina de um dentro da conta do outro. Tenta de novo.
+        for _ in range(5):
+            codigo = banco.novo_codigo(6)
+            try:
+                banco.abrir_pareamento(sessao["usuario_id"], codigo,
+                                       banco.prazo(self.MINUTOS_DO_CODIGO * 60))
+            except sqlite3.IntegrityError:
+                continue
+            return self._json(200, {"codigo": codigo,
+                                    "minutos": self.MINUTOS_DO_CODIGO})
+        return self._json(503, {"erro": "tente de novo em um minuto"})
+
+    def _maquina_remover(self):
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        if not self._csrf_ok(sessao):
+            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+        corpo = self._corpo_json(teto=4096) or {}
+        try:
+            id_ = int(corpo.get("id"))
+        except (TypeError, ValueError):
+            return self._json(400, {"erro": "id invalido"})
+        # `usuario_id` vai para dentro do UPDATE: o id da linha vem do
+        # navegador, e um numero vizinho nao pode revogar a maquina do outro.
+        if not banco.revogar_maquina(id_, sessao["usuario_id"]):
+            return self._json(404, {"erro": "nao existe"})
+        return self._json(200, {"ok": True})
+
+    # ----------------------------------------------------- as duas do agente
+
+    def _parear(self):
+        """A maquina troca o codigo de seis digitos pelo token dela. UMA vez.
+
+        O TETO DE CHUTE POR ORIGEM MORA AQUI, e nao no banco. Era um contador na
+        tabela `pareamento`, e ele foi removido na etapa 8 porque contava o erro
+        contra todos os pareamentos abertos de todas as contas: cinco pedidos de
+        um estranho matavam o pareamento de todo mundo. Contando por origem, o
+        estranho gasta o proprio teto e ninguem mais e afetado. Balcao proprio
+        (`pareamento`) para nao trancar a cortina do dono junto — foi o que
+        aconteceu com ele em 26/08/2026, por outro caminho.
+        """
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="pareamento"):
+            return self._json(429, self.RECUSA)
+        corpo = self._corpo_json(teto=4096) or {}
+        codigo = self._texto_do_corpo(corpo, "codigo", teto=64)
+        nome = self._texto_do_corpo(corpo, "maquina", teto=120)
+        token = banco.usar_pareamento(codigo, nome) if codigo else None
+        if token is None:
+            # A MESMA resposta para codigo errado, vencido e ja usado. Distinguir
+            # diria a quem chuta que aquele numero existiu.
+            return self._json(401, self.RECUSA)
+        # A UNICA vez que este token existe fora da maquina que o pediu.
+        return self._json(200, {"token": token})
+
+    def _relatorio(self):
+        """A medicao de uma maquina entra aqui — e o carimbo de vida junto.
+
+        NAO HA ROTA DE SINAL DE VIDA. O envio de dado E o sinal: com um "estou
+        vivo" separado, uma maquina com a coleta travada continuaria reportando
+        saude, e o painel ficaria verde exatamente quando parou de olhar.
+        """
+        maquina = getattr(self, "_maquina", None)
+        if maquina is None:            # cinto, alem do guarda do despacho
+            return self._json(401, {"erro": "token de maquina invalido"})
+        corpo = self._corpo_json(teto=self.TETO_DO_RELATORIO)
+        if corpo is None:
+            return self._json(400, {"erro": "corpo invalido"})
+        projetos = corpo.get("projetos")
+        if not isinstance(projetos, list):
+            return self._json(400, {"erro": "projetos tem de ser lista"})
+        avisos = corpo.get("avisos")
+        contas = banco.receber_relatorio(
+            maquina["id"], projetos, corpo.get("infra"),
+            avisos if isinstance(avisos, list) else None)
+        resposta = {"ok": True}
+        resposta.update(contas)
+        return self._json(200, resposta)
+
     def _sair(self):
         # `SameSite=Lax` ja impede o cookie de acompanhar um POST de outro site,
         # entao um pedido forjado chegaria sem sessao e nao encerraria nada. O
@@ -1069,6 +1212,17 @@ ROTAS = {
     "/api/chaves/cadastrar":    Rota("POST", Hub._chave_cadastrar, "dado"),
     "/api/chaves/remover":      Rota("POST", Hub._chave_remover,   "dado"),
     "/api/codigos/gerar":       Rota("POST", Hub._codigos_gerar,    "dado"),
+
+    # As maquinas (etapa 11). As tres de cima sao do dono; as duas de baixo sao
+    # do agente, e `maquina` e a quarta classificacao de acesso — token proprio,
+    # sem cookie e sem Origin. `/agente/parear` e "aberta" por necessidade: quem
+    # chega com o codigo de seis digitos ainda nao tem token nenhum, e e por isso
+    # que o teto de chute por origem esta DENTRO dela.
+    "/api/maquinas":            Rota("GET",  Hub._maquinas,        "dado"),
+    "/api/maquinas/parear":     Rota("POST", Hub._maquina_parear,  "dado"),
+    "/api/maquinas/remover":    Rota("POST", Hub._maquina_remover, "dado"),
+    "/agente/parear":           Rota("POST", Hub._parear,          "aberta"),
+    "/agente/relatorio":        Rota("POST", Hub._relatorio,       "maquina"),
 }
 ROTAS.update({caminho: Rota("GET", Hub._estatico, "aberta")
               for caminho in ESTATICOS_OK})

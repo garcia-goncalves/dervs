@@ -1335,13 +1335,93 @@ def maquina_por_token(token: str, con=None):
             con.close()
 
 
-def revogar_maquina(maquina_id: int, con=None) -> None:
+def revogar_maquina(maquina_id: int, usuario_id: int, con=None) -> bool:
+    """Tira uma maquina de circulacao. False se ela nao e desta conta.
+
+    `usuario_id` na clausula NAO e redundante com a checagem da rota, e a
+    assinatura o exige em vez de aceitar como opcional: e o IDOR classico de
+    rota de remocao, onde o id da linha vem do navegador e quem manda um numero
+    vizinho revoga a maquina do outro. Opcional com padrao permissivo seria uma
+    defesa que some no dia em que alguem esquecer de passar o argumento —
+    exatamente o desenho de `revogar_chave_de_acesso`, e pelo mesmo motivo.
+    """
     fechar = con is None
     con = con or conectar()
     try:
-        con.execute("UPDATE maquina SET revogada_em = ? WHERE id = ?",
+        cur = con.execute(
+            "UPDATE maquina SET revogada_em = ? WHERE id = ? AND usuario_id = ?"
+            " AND revogada_em IS NULL", (agora(), maquina_id, usuario_id))
+        con.commit()
+        return cur.rowcount == 1
+    finally:
+        if fechar:
+            con.close()
+
+
+def maquinas_do_usuario(usuario_id: int, con=None) -> list:
+    """As maquinas vivas da conta, com a contagem de projetos de cada uma.
+
+    NAO DEVOLVE `token_hash`. A lista vai para a tela; hash de token na tela e
+    hash de token no cache do navegador, no log do proxy e na captura de tela
+    que o dono manda para pedir ajuda.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return [dict(l) for l in con.execute(
+            "SELECT m.id, m.nome, m.criado_em, m.visto_em,"
+            "       (SELECT COUNT(*) FROM projeto_conectado p"
+            "         WHERE p.maquina_id = m.id AND p.arquivado_em IS NULL)"
+            "       AS projetos"
+            "  FROM maquina m"
+            " WHERE m.usuario_id = ? AND m.revogada_em IS NULL"
+            " ORDER BY m.criado_em", (usuario_id,))]
+    finally:
+        if fechar:
+            con.close()
+
+
+def receber_relatorio(maquina_id: int, projetos: list, infra=None,
+                      avisos=None, con=None) -> dict:
+    """O relatorio de uma maquina, gravado numa transacao so.
+
+    O ENVIO DE DADO E O SINAL DE VIDA, e por isso `visto_em` e carimbado AQUI,
+    depois de a medicao entrar — nunca por uma rota de "estou vivo" separada.
+    Um sinal proprio permite a maquina parecer viva com a medicao parada, que e
+    a pior mentira possivel neste produto: o painel fica verde justamente
+    quando parou de olhar.
+
+    PROJETO QUE SUMIU E ARQUIVADO, MAS LISTA VAZIA NAO ARQUIVA NADA. Coleta que
+    falhou inteira manda `[]`, e tratar isso como "os projetos acabaram" apagaria
+    da tela repositorios que continuam existindo — a mesma familia de defeito de
+    confundir vazio com ausencia de medicao.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        vistos = set()
+        for p in projetos:
+            if not isinstance(p, dict):
+                continue
+            nome = str(p.get("nome") or "").strip()
+            if not nome:
+                continue
+            vistos.add(nome)
+            gravar(nome, "local", p, con)
+            ver_projeto(maquina_id, nome, str(p.get("caminho") or ""), con=con)
+        if isinstance(infra, dict):
+            infra = dict(infra)
+            if avisos:
+                infra["avisos"] = list(avisos)
+            gravar(INFRA, "local", infra, con)
+        if vistos:
+            for antigo in projetos_da_maquina(maquina_id, con=con):
+                if antigo["projeto"] not in vistos:
+                    arquivar_projeto(maquina_id, antigo["projeto"], con=con)
+        con.execute("UPDATE maquina SET visto_em = ? WHERE id = ?",
                     (agora(), maquina_id))
         con.commit()
+        return {"projetos": len(vistos), "infra": isinstance(infra, dict)}
     finally:
         if fechar:
             con.close()
