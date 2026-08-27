@@ -1041,6 +1041,14 @@ class IssuesAbertas(unittest.TestCase):
         self.assertIsNone(coletar_github.issues_abertas("repo-sem-dono"))
 
 
+class _ConexaoDeMentira:
+    """O bastante para `main()` rodar sem banco: ele so commita e fecha."""
+
+    def commit(self): pass
+
+    def close(self): pass
+
+
 class TokenDoColetor(unittest.TestCase):
     """Etapa 12: no servidor nao existe `gh` logado, e nao pode existir.
 
@@ -1231,6 +1239,111 @@ class TokenDoColetor(unittest.TestCase):
         _dados, erro = coletar_github._gh_graphql("query { x }")
         self.assertNotIn("401", erro)
         self.assertTrue(erro)
+
+    # ------------------------------------------------- o erro que vem em 200
+    #
+    # O GRAPHQL DO GITHUB RESPONDE 200 QUANDO A CONSULTA FALHA. O motivo vem no
+    # campo `errors` do corpo, nao no codigo HTTP. O caminho do `gh` fechava
+    # isso de graca (ele sai com codigo != 0); o caminho HTTP nao fechava, e o
+    # revisor de seguranca mediu as duas consequencias:
+    #   - falha TOTAL virava `ok: 0 repositorios atualizados` e saida 0;
+    #   - falha PARCIAL (sem permissao para ler alertas) gravava `vulns: {}` por
+    #     cima de alertas reais, sem acionar a rede de seguranca da 2a consulta.
+    def test_erro_dentro_de_uma_resposta_200_e_falha(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        self._sem_subprocess()
+        self._http_falso({"data": None,
+                          "errors": [{"type": "RATE_LIMITED"}]})
+        dados, erro = coletar_github._gh_graphql("query { x }")
+        self.assertIsNone(dados, "falha do GraphQL passou como sucesso")
+        self.assertTrue(erro)
+
+    def test_erro_parcial_com_dados_juntos_tambem_e_falha(self):
+        """O caso caro: vem dado E vem erro. Aceitar o dado apaga o resto.
+
+        Token sem permissao para alertas devolve os repositorios com
+        `vulnerabilityAlerts: null` e um `errors` do lado. Tratar como sucesso
+        gravava `{}` por cima de "93 alertas abertos" — e a segunda consulta,
+        que existe exatamente para esse caso, nunca rodava.
+        """
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        self._sem_subprocess()
+        self._http_falso({"data": {"r0": {"nameWithOwner": "a/b"}},
+                          "errors": [{"type": "FORBIDDEN"}]})
+        dados, erro = coletar_github._gh_graphql("query { x }")
+        self.assertIsNone(dados)
+        self.assertTrue(erro)
+
+    def test_resposta_boa_sem_campo_de_erro_continua_passando(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        self._sem_subprocess()
+        self._http_falso({"data": {"r0": {"nameWithOwner": "a/b"}}})
+        dados, erro = coletar_github._gh_graphql("query { x }")
+        self.assertEqual(dados, {"r0": {"nameWithOwner": "a/b"}})
+        self.assertIsNone(erro)
+
+    def test_lista_de_erros_vazia_nao_e_erro(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        self._sem_subprocess()
+        self._http_falso({"data": {"r0": {}}, "errors": []})
+        dados, erro = coletar_github._gh_graphql("query { x }")
+        self.assertIsNone(erro)
+        self.assertEqual(dados, {"r0": {}})
+
+    # ------------------------------------------ token malformado nao circula
+    def test_token_com_quebra_de_linha_no_meio_e_recusado(self):
+        """`.strip()` so limpa as pontas.
+
+        Um token colado com quebra de linha no MEIO faz o `http.client`
+        levantar `ValueError` com o VALOR DO CABECALHO dentro — isto e, com o
+        token. Essa mensagem tem caminho ate o painel (`falhas_de_coleta`).
+        Recusar antes de montar a requisicao fecha o canal na origem.
+        """
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "abc\ndef"
+        self.assertEqual(coletar_github._token(), "")
+
+    def test_token_com_caractere_de_controle_e_recusado(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "abc\tdef"
+        self.assertEqual(coletar_github._token(), "")
+
+    def test_token_normal_continua_valendo(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "  ghs-abc_123.XYZ  "
+        self.assertEqual(coletar_github._token(), "ghs-abc_123.XYZ")
+
+    # --------------------------------------- coleta que nao gravou nada falha
+    def _coleta_com(self, resposta_graphql):
+        """Monta o `main()` sem banco e sem rede, com 1 repositorio na lista."""
+        import banco
+        for alvo, nome, valor in (
+                (banco, "ler_tudo", lambda **k: {
+                    "projeto": {"local": {"dados": {
+                        "git": {"remoto_slug": "dono/repo"}}}}}),
+                (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
+                (banco, "conta_local", lambda *a, **k: 1),
+                (banco, "gravar", lambda *a, **k: None),
+                (coletar_github, "_gh_graphql", lambda q: resposta_graphql)):
+            self.addCleanup(setattr, alvo, nome, getattr(alvo, nome))
+            setattr(alvo, nome, valor)
+
+    def test_coleta_que_nao_gravou_nenhum_repositorio_nao_diz_ok(self):
+        """"ok: 0 repositorios atualizados" e sucesso declarado sobre nada.
+
+        No servidor ninguem le essa linha: quem le e o codigo de saida. Sair 0
+        depois de nao gravar nada faz a falha ficar invisivel ate o painel
+        envelhecer sozinho.
+        """
+        self._coleta_com(({}, None))       # respondeu, mas sem o repositorio
+        self.assertNotEqual(coletar_github.main(), 0)
+
+    def test_coleta_que_gravou_continua_saindo_zero(self):
+        self._coleta_com(({"r0": {"nameWithOwner": "dono/repo",
+                                  "url": "https://github.com/dono/repo",
+                                  "defaultBranchRef": {"name": "main",
+                                                       "target": {}}}}, None))
+        original = coletar_github.mede_deploy
+        coletar_github.mede_deploy = lambda *a, **k: {}
+        self.addCleanup(setattr, coletar_github, "mede_deploy", original)
+        self.assertEqual(coletar_github.main(), 0)
 
     def test_a_comparacao_do_github_tem_tres_pontos_e_e_valida(self):
         """`compare/sha...branch` e caminho legitimo da API — e o drift inteiro.

@@ -278,7 +278,16 @@ CAMINHO_API = re.compile(r"[A-Za-z0-9._~/-]+(\?[A-Za-z0-9._~=&%-]*)?$")
 
 
 def _token() -> str:
-    return (os.environ.get(VAR_TOKEN_NO_AMBIENTE) or "").strip()
+    """O token do ambiente, ou "" se ele nao serve para ir num cabecalho.
+
+    O `.strip()` limpa as PONTAS. Um token colado com quebra de linha no MEIO
+    passa por ele e faz o `http.client` levantar `ValueError` com o valor do
+    cabecalho dentro — isto e, com o token. Essa mensagem tem caminho ate o
+    painel (o servidor guarda a saida de erro do coletor em `falhas_de_coleta`).
+    Recusar aqui fecha o canal na origem, e "" simplesmente volta para o `gh`.
+    """
+    t = (os.environ.get(VAR_TOKEN_NO_AMBIENTE) or "").strip()
+    return t if t.isascii() and t.isprintable() else ""
 
 
 def _url_da_api(caminho: str):
@@ -345,6 +354,22 @@ def _gh_graphql(consulta: str):
                           else "a API do GitHub nao respondeu")
         if not isinstance(resposta, dict):
             return None, "resposta da API do GitHub nao era JSON de objeto"
+        # O GRAPHQL FALHA COM CODIGO 200. O motivo vem aqui dentro, e nao no
+        # codigo HTTP: consulta recusada, repositorio inexistente, limite de uso
+        # estourado, permissao negada para UM campo — tudo isso chega como 200
+        # com `errors` preenchido, muitas vezes junto de dado parcial.
+        #
+        # O caminho do `gh` fechava isto de graca (ele sai com codigo != 0).
+        # Sem esta linha, o caminho HTTP aceitava a falha como sucesso, e a
+        # revisao de seguranca mediu as duas consequencias: uma coleta
+        # inteiramente falhada imprimia "ok: 0 repositorios atualizados" e saia
+        # com 0; e uma falha PARCIAL — token sem permissao de ler alertas —
+        # gravava `vulns: {}` por cima de alertas reais, sem acionar a segunda
+        # consulta que existe exatamente para esse caso.
+        #
+        # O CONTEUDO de `errors` nao entra na mensagem: e texto do outro lado.
+        if resposta.get("errors"):
+            return None, "a API do GitHub respondeu com erro na consulta"
         return resposta.get("data") or {}, None
 
     try:
@@ -524,6 +549,14 @@ def traduz(no: dict, com_vulns: bool) -> dict:
     #     dizer "faltam N" daria 10 num repositorio com 40 abertas.
     # Sem o campo na resposta (permissao negada, consulta degradada), o total e
     # None: NAO MEDI e uma coisa, "nao ha nenhuma" e outra.
+    #
+    # `titulo` E TEXTO CRU DE TERCEIRO — quem abre uma issue num repositorio do
+    # dono escolhe o que vai escrito ali. Ele pode ficar gravado, mas NAO pode
+    # chegar ao campo `detalhe` de uma pendencia: esse campo entra no prompt da
+    # sessao do botao "Resolver", que roda com Bash auto-aprovado. Foi assim que
+    # o titulo de PR virou injecao de prompt uma vez (ver regras.py, regra 9).
+    # Hoje nenhuma regra le `issues` e a tela usa so `issues_total`/`issues_url`.
+    # O aviso fica AQUI, onde o campo nasce, e nao so onde ele e consumido.
     bloco_issues = no.get("issues")
     issues = []
     for it in ((bloco_issues or {}).get("nodes") or []):
@@ -671,6 +704,16 @@ def main():
         con.commit()          # ver coletar.py: quem abriu a conexao commita
     finally:
         con.close()
+
+    if not gravados:
+        # HAVIA repositorios na lista (`if not slugs` ja saiu la em cima) e
+        # nenhum foi gravado. Isso nao e uma coleta vazia, e uma coleta que
+        # falhou: repositorio sumiu, token sem alcance, apelido que nao voltou.
+        # Imprimir "ok: 0" e sair com 0 declara sucesso sobre nada — e no
+        # servidor quem le nao e a linha, e o codigo de saida.
+        print("FALHA: consultei o GitHub e nao consegui atualizar nenhum dos "
+              "%d repositorios." % len(slugs))
+        return 1
 
     print("ok: %d repositorios do GitHub atualizados%s"
           % (gravados, "" if com_vulns else " (sem alertas de segurança)"))
