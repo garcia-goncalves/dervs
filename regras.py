@@ -103,7 +103,8 @@ def _do_projeto(p: dict) -> list:
     v = (gh or {}).get("vulns") or {}
     if v.get("total"):
         itens.append(_p(
-            "vulnerabilidade", gravidade_alerta(v), nome, frase_alerta(nome, v),
+            "vulnerabilidade", gravidade_alerta(v), nome,
+            frase_alerta(nome, v) + _ressalva_de_idade(v),
             {"tipo": "abrir_url", "rotulo": "Ver os alertas", "url": v.get("url", "")},
             detalhe=detalhe_alerta(v), risco=risco_alerta(v)))
 
@@ -351,6 +352,22 @@ def gravidade_alerta(v: dict) -> str:
     if not sev or v.get("amostra"):
         return "alta"
     return "alta" if (sev.get("critical") or sev.get("high")) else "media"
+
+
+def _ressalva_de_idade(v: dict) -> str:
+    """" — não consegui reler há N dias", quando o número é reaproveitado.
+
+    O coletor mantém o último número conhecido quando não consegue reler os
+    alertas (token sem permissão, campo negado). Manter é certo: zerar apagaria
+    um alerta real. Mas manter CALADO é pior que zerar — o painel republica uma
+    medição de semanas atrás como se fosse de agora, e ninguém fica sabendo
+    enquanto a permissão não voltar.
+    """
+    dias = v.get("dias_sem_reler")
+    if not isinstance(dias, int) or dias < 1:
+        return ""
+    return (" Não consigo reler esse número há %d dia(s), então ele pode estar "
+            "velho." % dias)
 
 
 def frase_alerta(nome: str, v: dict) -> str:

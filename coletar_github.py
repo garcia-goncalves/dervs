@@ -415,6 +415,16 @@ def _gh_graphql(consulta: str):
         dados = resposta.get("data") or {}
         if resposta.get("errors"):
             if any(v for v in dados.values()):
+                # SOBROU DADO, mas alguma coisa faltou — e o caso tipico e o
+                # pior: o token perdeu a permissao de ler alertas, o
+                # repositorio vem inteiro so com `vulnerabilityAlerts: null`, e
+                # a rodada parece um sucesso. Aceitar CALADO era o defeito da
+                # correcao anterior: o painel republicava uma medicao de
+                # seguranca velha como se fosse fresca, e o operador perdia o
+                # unico aviso que existia. Fica com o dado, mas diz o que
+                # faltou.
+                _diga("segui com o que veio, mas o GitHub recusou parte da "
+                      "consulta (%s)" % _tipos_do_erro(resposta["errors"]))
                 return dados, None
             return None, "a API do GitHub recusou a consulta (%s)" % _tipos_do_erro(
                 resposta["errors"])
@@ -500,9 +510,14 @@ def mede_deploy(slug: str, branch: str) -> dict:
 
 def _dias(iso: str):
     try:
-        return max(0, (AGORA - datetime.fromisoformat(iso.replace("Z", "+00:00"))).days)
-    except (ValueError, AttributeError):
+        t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except (ValueError, AttributeError, TypeError):
         return 0
+    # Carimbo sem fuso subtraido de um com fuso levanta TypeError. Tratar como
+    # UTC e o mesmo criterio de `regras._idade`.
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return max(0, (AGORA - t).days)
 
 
 # O GitHub responde CRITICAL/HIGH/MODERATE/LOW; a tela fala minusculo.
@@ -569,7 +584,12 @@ def _resume_alertas(bloco: dict) -> dict:
 
 def traduz(no: dict, com_vulns: bool) -> dict:
     """Um repositorio do GraphQL -> o que as regras consomem."""
-    url = no.get("url", "")
+    # `or ""` e nao `.get(url, "")`: o default do `.get` so vale para chave
+    # AUSENTE. Chave presente com valor nulo devolve None, e `None + "/actions"`
+    # estoura. Hoje o esquema do GitHub declara estes campos como nao-nulos,
+    # entao nao e alcancavel — mas a aceitacao de resposta PARCIAL, logo acima,
+    # e a primeira via que entrega no incompleto a esta funcao.
+    url = no.get("url") or ""
     ramo = no.get("defaultBranchRef") or {}
     alvo = ramo.get("target") or {}
     rollup = alvo.get("statusCheckRollup") or {}
@@ -613,7 +633,7 @@ def traduz(no: dict, com_vulns: bool) -> dict:
     total_issues = (bloco_issues or {}).get("totalCount")
 
     return {
-        "slug": no.get("nameWithOwner", ""),
+        "slug": no.get("nameWithOwner") or "",
         "url": url,
         "branch_padrao": ramo.get("name", ""),
         # ERROR e FAILURE viram falha; PENDING e EXPECTED nao sao pendencia (ainda
@@ -696,14 +716,13 @@ def main():
         # alertas — e ai a segunda, sem esse campo, salva a rodada: CI e PR
         # valem por si.
         #
-        # MAS NAO INSISTA CONTRA UM LIMITE DE USO. Se o GitHub acabou de dizer
-        # que estamos no teto, repetir a consulta dobra o gasto contra uma API
-        # que ja recusou — a cada 20 minutos, na conta cuja cota ja estourou uma
-        # vez. Aqui a segunda ida nao tem nenhuma chance de ir melhor.
-        if "RATE_LIMITED" in (erro or ""):
-            print("FALHA ao consultar o GitHub: %s. Nao repeti a consulta "
-                  "para nao gastar cota a toa." % erro, file=sys.stderr)
-            return 1
+        # VALE TENTAR ATE CONTRA LIMITE DE COTA. O limite do GraphQL e por
+        # PONTOS calculados por consulta, e o custo aqui e dominado pelo campo
+        # de alertas — 100 alertas em cada um dos 17 apelidos —, que e
+        # justamente o que a segunda consulta NAO pede. Ela e a barata: cabe no
+        # saldo em boa parte das vezes em que a primeira nao coube. Desistir
+        # congelaria CI, PR, issues, site e publicacao dos 17 durante toda a
+        # janela do limite, a cada 20 minutos.
         dados, erro2 = _gh_graphql(_consulta(slugs, com_vulns=False))
         com_vulns = False
         if dados is None:
@@ -714,6 +733,7 @@ def main():
 
     con = banco.conectar()
     gravados = 0
+    reusados = []          # projetos cujo numero de alertas nao deu para reler
     try:
         # FORA DO LACO: dentro, era um SELECT por repositorio, e no primeiro
         # giro de um banco novo o `criar_usuario` de dentro commitava a
@@ -744,8 +764,17 @@ def main():
                 antes = ((tudo.get(nome) or {}).get("github") or {})
                 anterior = (antes.get("dados") or {}).get("vulns") or {}
                 if anterior:
-                    novo["vulns"] = anterior
-                    novo["vulns_medido_em"] = antes.get("medido_em")
+                    # A IDADE VAI DENTRO DO PROPRIO `vulns`, porque e ali que
+                    # `regras.py` le. A versao anterior guardava num campo
+                    # `vulns_medido_em` que NINGUEM lia — o comentario prometia
+                    # "para a tela poder mostrar que esta velho" e a tela nunca
+                    # mostrava. Numero preservado sem carimbo visivel e o
+                    # painel republicando medida de semanas atras como se fosse
+                    # de agora, para sempre, enquanto a permissao nao voltar.
+                    novo["vulns"] = dict(
+                        anterior,
+                        dias_sem_reler=_dias(antes.get("medido_em")) or 0)
+                    reusados.append(nome)
             local = ((tudo.get(nome) or {}).get("local") or {}).get("dados") or {}
             antes_gh = ((tudo.get(nome) or {}).get("github") or {}).get("dados") or {}
 
@@ -793,6 +822,15 @@ def main():
         print("FALHA: consultei o GitHub e nao consegui atualizar nenhum dos "
               "%d repositorios." % len(slugs), file=sys.stderr)
         return 1
+
+    if reusados:
+        # NA SAIDA NORMAL de proposito: a rodada deu certo, e `servir.py`
+        # registra o `stdout` justamente no caminho de sucesso. E o sinal de
+        # que alguma coisa esta errada com a permissao do token, num dia em que
+        # nada mais grita.
+        print("aviso: nao consegui reler os alertas de segurança de %d "
+              "projeto(s) (%s) — mantive o último número conhecido, marcado "
+              "como velho." % (len(reusados), ", ".join(sorted(reusados)[:5])))
 
     print("ok: %d repositorios do GitHub atualizados%s"
           % (gravados, "" if com_vulns else " (sem alertas de segurança)"))

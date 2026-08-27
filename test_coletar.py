@@ -1394,7 +1394,7 @@ class TokenDoColetor(unittest.TestCase):
         for alvo, nome, valor in (
                 (banco, "ler_tudo", lambda **k: {"projeto": {
                     "local": {"dados": {"git": {"remoto_slug": "dono/repo"}}},
-                    "github": {"medido_em": "2026-08-26 10:00:00",
+                    "github": {"medido_em": "2026-08-26T10:00:00+00:00",
                                "dados": {"vulns": {"total": 93, "url": "u"}}}}}),
                 (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
                 (banco, "conta_local", lambda *a, **k: 1),
@@ -1410,10 +1410,14 @@ class TokenDoColetor(unittest.TestCase):
             setattr(alvo, nome, valor)
 
         coletar_github.main()
-        self.assertEqual(gravados[0]["vulns"], {"total": 93, "url": "u"},
+        self.assertEqual(gravados[0]["vulns"]["total"], 93,
                          "apagou 93 alertas reais porque o campo veio vazio")
-        self.assertEqual(gravados[0]["vulns_medido_em"], "2026-08-26 10:00:00",
-                         "manteve o numero sem dizer que ele e velho")
+        # E — o outro lado da mesma moeda — o numero preservado tem de CHEGAR
+        # A TELA marcado como velho. Guardar a idade num campo que ninguem le
+        # e o painel republicando medida de 26 dias atras como se fosse de
+        # agora, para sempre, enquanto a permissao nao voltar.
+        self.assertGreater(gravados[0]["vulns"]["dias_sem_reler"], 0,
+                           "preservou o numero sem dizer que ele e velho")
 
     def test_repositorio_medido_com_zero_alertas_nao_puxa_valor_velho(self):
         """Medi e nao ha nenhum e diferente de nao consegui medir.
@@ -1426,7 +1430,7 @@ class TokenDoColetor(unittest.TestCase):
         for alvo, nome, valor in (
                 (banco, "ler_tudo", lambda **k: {"projeto": {
                     "local": {"dados": {"git": {"remoto_slug": "dono/repo"}}},
-                    "github": {"medido_em": "2026-08-26 10:00:00",
+                    "github": {"medido_em": "2026-08-26T10:00:00+00:00",
                                "dados": {"vulns": {"total": 93, "url": "u"}}}}}),
                 (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
                 (banco, "conta_local", lambda *a, **k: 1),
@@ -1444,14 +1448,17 @@ class TokenDoColetor(unittest.TestCase):
 
         coletar_github.main()
         self.assertEqual(gravados[0]["vulns"]["total"], 0)
-        self.assertNotIn("vulns_medido_em", gravados[0])
+        self.assertNotIn("dias_sem_reler", gravados[0]["vulns"])
 
-    def test_limite_de_cota_nao_dispara_a_segunda_consulta(self):
-        """Insistir contra um teto dobra o gasto e nao tem chance de ir melhor.
+    def test_limite_de_cota_ainda_tenta_a_consulta_barata(self):
+        """A segunda consulta e a BARATA, e o limite do GraphQL e por pontos.
 
-        A segunda consulta existe para o caso de faltar PERMISSAO num campo.
-        Contra `RATE_LIMITED` ela e so mais uma ida a rede — a cada 20 minutos,
-        na conta cuja cota ja estourou uma vez.
+        Eu tinha escrito o contrario: desistia no `RATE_LIMITED` para "poupar
+        cota". Mas o custo e dominado pelo campo de alertas — 100 alertas em
+        cada um dos 17 apelidos —, e e exatamente esse campo que a segunda
+        consulta NAO pede. Desistir congelava CI, PR, issues, site e publicacao
+        dos 17 durante toda a janela do limite: a mesma classe de congelamento
+        que esta correcao veio consertar, entrando por outra porta.
         """
         idas = []
         self._coleta_com(None)
@@ -1461,10 +1468,10 @@ class TokenDoColetor(unittest.TestCase):
             return None, "a API do GitHub recusou a consulta (RATE_LIMITED)"
         coletar_github._gh_graphql = contando
         self.addCleanup(setattr, coletar_github, "_gh_graphql", original)
-        self.assertEqual(coletar_github.main(), 1)
-        self.assertEqual(len(idas), 1, "repetiu a consulta contra o teto de cota")
+        coletar_github.main()
+        self.assertEqual(len(idas), 2, "desistiu sem tentar a consulta barata")
 
-    def test_falta_de_permissao_ainda_dispara_a_segunda_consulta(self):
+    def test_falta_de_permissao_tambem_dispara_a_segunda_consulta(self):
         idas = []
         self._coleta_com(None)
         original = coletar_github._gh_graphql
@@ -1475,6 +1482,28 @@ class TokenDoColetor(unittest.TestCase):
         self.addCleanup(setattr, coletar_github, "_gh_graphql", original)
         coletar_github.main()
         self.assertEqual(len(idas), 2)
+
+    def test_erro_parcial_nao_passa_calado(self):
+        """Dado bom com erro do lado: fico com o dado, MAS digo o que faltou.
+
+        Este e o caso do token que perde a permissao de ler alertas. Aceitar em
+        silencio foi o defeito da correcao anterior: o painel republicava uma
+        medicao de seguranca velha como se fosse fresca, dizendo "ok" a cada 20
+        minutos, e o operador perdia o unico aviso que existia.
+        """
+        import io
+        import contextlib
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        self._sem_subprocess()
+        self._http_falso({"data": {"r0": {"nameWithOwner": "a/b"}},
+                          "errors": [{"type": "FORBIDDEN",
+                                      "path": ["r0", "vulnerabilityAlerts"]}]})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            dados, erro = coletar_github._gh_graphql("query { x }")
+        self.assertIsNone(erro)
+        self.assertTrue(dados)
+        self.assertIn("FORBIDDEN", err.getvalue())
 
     def test_o_motivo_da_falha_sai_pelo_cano_que_o_servidor_le(self):
         """`servir.py` guarda `r.stderr` e DESCARTA o `stdout`.

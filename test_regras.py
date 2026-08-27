@@ -92,6 +92,29 @@ class RegrasAltas(unittest.TestCase):
         self.assertEqual(item["gravidade"], "alta")
         self.assertIn("3", item["texto"])
 
+    def test_3_alerta_que_nao_deu_para_reler_se_anuncia_velho(self):
+        """O numero preservado tem de CHEGAR A TELA marcado.
+
+        Quando o token perde a permissao de ler alertas, o coletor mantem o
+        ultimo numero conhecido em vez de zerar — zerar apagaria um alerta
+        real. Mas manter sem dizer que e velho e pior: o painel republica uma
+        medicao de semanas atras como se fosse de agora, para sempre, enquanto
+        a permissao nao voltar. O `dias_sem_reler` e o carimbo.
+        """
+        p = projeto(github={"ci": {"conclusao": "success", "url": "u", "quando": ""},
+                            "prs": [],
+                            "vulns": {"total": 93, "url": "https://alerts",
+                                      "dias_sem_reler": 26}})
+        (item,) = so(regras.avaliar([p], quota=None), "vulnerabilidade")
+        self.assertIn("93", item["texto"])
+        self.assertIn("26", item["texto"])
+
+    def test_3_alerta_recem_medido_nao_ganha_ressalva(self):
+        p = projeto(github={"ci": {"conclusao": "success", "url": "u", "quando": ""},
+                            "prs": [], "vulns": {"total": 3, "url": "u"}})
+        (item,) = so(regras.avaliar([p], quota=None), "vulnerabilidade")
+        self.assertNotIn("velho", item["texto"].lower())
+
     def test_4_nao_commitado_ha_mais_de_um_dia(self):
         p = projeto(git=dict(projeto()["git"], sujos=4, sujos_dias=3))
         (item,) = so(regras.avaliar([p], quota=None), "nao_commitado")
