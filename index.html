@@ -262,45 +262,51 @@ tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
   opacity:0;pointer-events:none;transition:opacity .18s}
 #recado.ver{opacity:1}
 /* ---------------------------------------------------- formas de entrar --- */
-#portas-dlg{width:min(560px,92vw);max-height:min(84vh,720px);padding:0;border:none;
+.dlg-pd{width:min(560px,92vw);max-height:min(84vh,720px);padding:0;border:none;
   border-radius:14px;background:var(--painel);color:var(--texto);
   box-shadow:var(--sombra)}
-#portas-dlg::backdrop{background:rgba(0,0,0,.42)}
-#portas-dlg .pd-topo{display:flex;align-items:center;justify-content:space-between;
+.dlg-pd::backdrop{background:rgba(0,0,0,.42)}
+.dlg-pd .pd-topo{display:flex;align-items:center;justify-content:space-between;
   gap:12px;padding:14px 16px;border-bottom:1px solid var(--borda)}
-#portas-dlg h2{margin:0;font-size:15px}
-#portas-dlg .pd-corpo{padding:16px;overflow-y:auto}
-#portas-dlg .pd-titulo{margin:20px 0 6px;font-size:13px;letter-spacing:.02em}
-#portas-dlg .pd-titulo:first-of-type{margin-top:0}
-#portas-dlg .pd-nota{margin:0 0 10px;font-size:12.5px;line-height:1.55;
+.dlg-pd h2{margin:0;font-size:15px}
+.dlg-pd .pd-corpo{padding:16px;overflow-y:auto}
+.dlg-pd .pd-titulo{margin:20px 0 6px;font-size:13px;letter-spacing:.02em}
+.dlg-pd .pd-titulo:first-of-type{margin-top:0}
+.dlg-pd .pd-nota{margin:0 0 10px;font-size:12.5px;line-height:1.55;
   color:var(--fraco)}
-#portas-dlg .pd-cobra{margin:0 0 16px;padding:11px 13px;border-radius:9px;
+.dlg-pd .pd-cobra{margin:0 0 16px;padding:11px 13px;border-radius:9px;
   font-size:12.5px;line-height:1.55;
   background:color-mix(in srgb,var(--alerta) 12%,transparent);
   border:1px solid color-mix(in srgb,var(--alerta) 40%,transparent)}
-#portas-dlg .pd-lista{list-style:none;margin:0 0 14px;padding:0;
+.dlg-pd .pd-lista{list-style:none;margin:0 0 14px;padding:0;
   display:flex;flex-direction:column;gap:7px}
-#portas-dlg .pd-lista li{display:flex;align-items:center;gap:10px;
+.dlg-pd .pd-lista li{display:flex;align-items:center;gap:10px;
   padding:9px 11px;border:1px solid var(--borda);border-radius:9px}
-#portas-dlg .pd-nome{font-weight:600;font-size:13px}
-#portas-dlg .pd-quando{margin-left:auto;font-size:11.5px;color:var(--fraco)}
-#portas-dlg .pd-vazia{justify-content:center;color:var(--fraco);font-size:12.5px}
-#portas-dlg .pd-nova{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
-#portas-dlg .pd-rotulo{flex-basis:100%;font-size:11.5px;color:var(--fraco)}
-#portas-dlg input{flex:1 1 12rem;font:inherit;font-size:13px;padding:8px 10px;
+.dlg-pd .pd-nome{font-weight:600;font-size:13px}
+.dlg-pd .pd-quando{margin-left:auto;font-size:11.5px;color:var(--fraco)}
+.dlg-pd .pd-vazia{justify-content:center;color:var(--fraco);font-size:12.5px}
+.dlg-pd .pd-nova{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
+.dlg-pd .pd-rotulo{flex-basis:100%;font-size:11.5px;color:var(--fraco)}
+.dlg-pd input{flex:1 1 12rem;font:inherit;font-size:13px;padding:8px 10px;
   border:1px solid var(--borda);border-radius:8px;
   background:var(--bg);color:var(--texto)}
-#portas-dlg .pd-codigos{margin:12px 0 0;padding-left:26px;
+.dlg-pd .pd-codigos{margin:12px 0 0;padding-left:26px;
   font-family:ui-monospace,Consolas,monospace;font-size:13.5px;line-height:1.9;
   letter-spacing:.06em}
-#portas-dlg .pd-aviso:not(:empty){margin:16px 0 0;padding:9px 12px;
+.dlg-pd .pd-aviso:not(:empty){margin:16px 0 0;padding:9px 12px;
   border-radius:8px;font-size:12.5px;
   background:color-mix(in srgb,var(--texto) 7%,transparent)}
-#portas-dlg .pd-aviso.ruim{
+.dlg-pd .pd-aviso.ruim{
   background:color-mix(in srgb,var(--alerta) 14%,transparent)}
 @media (prefers-reduced-motion:no-preference){
-  #portas-dlg[open]{animation:sobe .13s ease-out}
+  .dlg-pd[open]{animation:sobe .13s ease-out}
 }
+#maq-dlg .maq-numero{margin:14px 0 10px;font-family:ui-monospace,Consolas,monospace;
+  font-size:30px;letter-spacing:.22em;text-align:center;font-weight:600}
+#maq-dlg .maq-linha{margin:0 0 10px;padding:10px 12px;border-radius:8px;
+  border:1px solid var(--borda);background:var(--bg);overflow-x:auto;
+  font-family:ui-monospace,Consolas,monospace;font-size:12.5px;
+  white-space:pre-wrap;word-break:break-all}
 @media (prefers-reduced-motion:reduce){#recado{transition:none}}
 </style>
 </head>
@@ -321,6 +327,7 @@ __FAIXA__
       </button>
       <button class="btn" id="btn-tema">Tema</button>
       <button class="btn" id="btn-portas">Formas de entrar</button>
+      <button class="btn" id="btn-maquinas">M&#225;quinas</button>
       <button class="btn" id="btn-sair">Sair</button>
     </div>
   </header>
@@ -380,7 +387,7 @@ __FAIXA__
 <!-- ------------------------------------------------- formas de entrar ----
      Mesmo desenho da paleta: <dialog> nativo com closedby="any", que ja da
      foco preso, Esc e clique fora sem uma linha de JS. -->
-<dialog id="portas-dlg" closedby="any" aria-labelledby="portas-titulo">
+<dialog id="portas-dlg" class="dlg-pd" closedby="any" aria-labelledby="portas-titulo">
   <div class="pd-topo">
     <h2 id="portas-titulo">Formas de entrar</h2>
     <button class="btn" id="pd-fechar" type="button">Fechar</button>
@@ -432,6 +439,56 @@ __FAIXA__
     </p>
 
     <p class="pd-aviso" id="pd-aviso" role="status" aria-live="polite"></p>
+  </div>
+</dialog>
+
+<!-- ----------------------------------------------------------- maquinas ----
+     As maquinas que reportam para este painel. O dono gera um numero de seis
+     digitos aqui e digita na outra maquina; a partir dai ela manda a medicao
+     sozinha.
+
+     O QUE ESTA TELA NAO FAZ: nao manda comando para maquina nenhuma. O sentido
+     e sempre da maquina para ca — ela reporta, este painel le. Foi isso que a
+     etapa 7 amputou, e nao volta por uma tela bonita. -->
+<dialog id="maq-dlg" class="dlg-pd" closedby="any" aria-labelledby="maq-titulo">
+  <div class="pd-topo">
+    <h2 id="maq-titulo">M&#225;quinas</h2>
+    <button class="btn" id="maq-fechar" type="button">Fechar</button>
+  </div>
+
+  <div class="pd-corpo">
+    <p class="pd-nota">
+      Cada computador que voc&#234; conecta aqui mede a si mesmo &#8212; git,
+      Docker, portas, chaves de <code>.env</code> &#8212; e manda o resultado
+      para este painel. O envio &#233; que conta como sinal de vida: se a
+      medi&#231;&#227;o parar, a m&#225;quina aparece parada, e n&#227;o
+      saud&#225;vel.
+    </p>
+    <ul class="pd-lista" id="maq-lista"></ul>
+
+    <h3 class="pd-titulo">Conectar uma m&#225;quina nova</h3>
+    <p class="pd-nota">
+      O n&#250;mero vale por <strong>dez minutos</strong> e serve
+      <strong>uma vez s&#243;</strong>.
+    </p>
+    <button class="btn primario" id="maq-gerar" type="button">
+      Gerar o n&#250;mero
+    </button>
+
+    <div id="maq-receita" hidden>
+      <p class="maq-numero" id="maq-numero"></p>
+      <p class="pd-nota">
+        Na outra m&#225;quina, dentro da pasta do DERVS, cole isto:
+      </p>
+      <pre class="maq-linha" id="maq-comando"></pre>
+      <p class="pd-nota">
+        Se der certo, ela imprime <strong>pareado com</strong> e, logo depois,
+        <strong>enviado: N projetos</strong>. Se disser que o n&#250;mero
+        n&#227;o serve, ele venceu &#8212; gere outro aqui.
+      </p>
+    </div>
+
+    <p class="pd-aviso" id="maq-aviso" role="status" aria-live="polite"></p>
   </div>
 </dialog>
 <script>
@@ -1354,6 +1411,99 @@ async function pdGerar() {
   pdDizer("anote agora — eles não aparecem de novo.");
   pdCarregar();
 }
+
+/* ------------------------------------------------------------- maquinas ---
+   Mesmo par de utilitarios do dialogo de portas: `pdEscrever` ja carrega o
+   token anti-CSRF da sessao, e reaproveita-lo evita uma segunda copia que
+   esqueceria o cabecalho no dia em que alguem mexesse so numa. */
+const maq = $("#maq-dlg");
+
+function maqDizer(texto, ruim) {
+  const p = $("#maq-aviso");
+  p.textContent = texto;
+  p.classList.toggle("ruim", !!ruim);
+}
+
+function maqQuando(iso) {
+  if (!iso) return "nunca reportou";
+  const d = new Date(iso);
+  if (isNaN(d)) return "—";
+  const min = Math.round((Date.now() - d.getTime()) / 60000);
+  if (min < 2) return "reportou agora";
+  if (min < 60) return "reportou há " + min + " min";
+  const h = Math.round(min / 60);
+  if (h < 48) return "reportou há " + h + " h";
+  return "reportou em " + d.toLocaleDateString("pt-BR");
+}
+
+async function maqCarregar() {
+  let d;
+  try { d = await (await fetch("/api/maquinas")).json(); }
+  catch { maqDizer("não deu para ler a lista.", true); return; }
+
+  const lista = $("#maq-lista");
+  lista.textContent = "";
+  if (!d.maquinas || !d.maquinas.length) {
+    const li = document.createElement("li");
+    li.className = "pd-vazia";
+    li.textContent = "Nenhuma máquina conectada. Os números da tela vêm da "
+                   + "coleta desta máquina.";
+    lista.append(li);
+    return;
+  }
+  for (const m of d.maquinas) {
+    const li = document.createElement("li");
+    const nome = document.createElement("span");
+    nome.className = "pd-nome";
+    // textContent, nunca innerHTML: o nome vem da OUTRA maquina, e e o campo
+    // mais facil de envenenar em todo este painel — quem pareia escolhe o
+    // texto. Com innerHTML, um nome com <script> viraria script aqui dentro.
+    nome.textContent = m.nome || "máquina sem nome";
+    const quando = document.createElement("span");
+    quando.className = "pd-quando";
+    quando.textContent = maqQuando(m.visto_em) + " · " + m.projetos
+                       + (m.projetos === 1 ? " projeto" : " projetos");
+    const tirar = document.createElement("button");
+    tirar.className = "btn";
+    tirar.type = "button";
+    tirar.textContent = "Remover";
+    tirar.addEventListener("click", () => maqRemover(m.id, m.nome));
+    li.append(nome, quando, tirar);
+    lista.append(li);
+  }
+}
+
+async function maqRemover(id, nome) {
+  if (!confirm("Remover “" + (nome || "esta máquina") + "”?\n"
+               + "Ela para de reportar na hora, e só volta com um número novo.")) return;
+  const r = await pdEscrever("/api/maquinas/remover", { id });
+  if (!r.ok) { maqDizer("não deu para remover.", true); return; }
+  maqDizer("removida. Ela não reporta mais.");
+  maqCarregar();
+}
+
+async function maqGerar() {
+  maqDizer("");
+  const r = await pdEscrever("/api/maquinas/parear");
+  if (!r.ok) { maqDizer("não deu para gerar o número.", true); return; }
+  const d = await r.json();
+  $("#maq-numero").textContent = d.codigo;
+  $("#maq-comando").textContent =
+    "python -m agente.enviar --alvo " + location.origin + " --codigo " + d.codigo;
+  $("#maq-receita").hidden = false;
+  maqDizer("vale por " + d.minutos + " minutos, e para uma máquina só.");
+}
+
+$("#btn-maquinas").addEventListener("click", () => {
+  maqDizer("");
+  // O numero some ao reabrir: numero antigo na tela e numero que o dono digita
+  // e nao funciona, sem entender por que.
+  $("#maq-receita").hidden = true;
+  maq.showModal();
+  maqCarregar();
+});
+$("#maq-fechar").addEventListener("click", () => maq.close());
+$("#maq-gerar").addEventListener("click", maqGerar);
 
 $("#btn-portas").addEventListener("click", () => {
   pdDizer("");

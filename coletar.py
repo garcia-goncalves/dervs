@@ -833,7 +833,23 @@ def porta_viva(porta: int) -> bool:
 
 
 # ------------------------------------------------------------------------- main
-def main():
+def medir() -> dict:
+    """MEDE A MAQUINA E DEVOLVE O RESULTADO. Nao escreve em lugar nenhum.
+
+    Esta funcao era o comeco do `main()`, e saiu de la na etapa 11 por um
+    motivo so: agora ha DOIS destinos para a mesma medicao — o `hub.db`
+    desta maquina (o `main()` daqui) e um DERVS remoto (`agente/enviar.py`).
+    Medir e gravar eram a mesma funcao, e o agente teria de copiar as ~600
+    linhas que medem projeto. Copia divide-se em duas versoes no dia em que
+    uma for corrigida, e a errada passa calada.
+
+    OS AVISOS VOLTAM NA ESTRUTURA, e nao em `print`. Quem chama por HTTP nao
+    tem stdout para ler: "a raiz nao existe" tem de chegar ao outro lado, ou
+    o painel remoto mostra "0 projetos pendentes" com cara de boa noticia.
+    Mesma familia de defeito de `7b4221c`/`3f5aa40`/`c50fe1d`: vazio e None
+    dizem coisas opostas, e aqui `docker_mudo` e `portas_mudas` guardam a
+    diferenca explicitamente.
+    """
     casos = json.loads(CASOS.read_text(encoding="utf-8")) if CASOS.exists() else {}
     containers = coleta_docker()
     docker_mudo = containers is None
@@ -884,32 +900,53 @@ def main():
                        for p in caso.get("portas", [])],
         })
 
-    # Uma linha por projeto, com carimbo proprio: quando a coleta de um repo
-    # falhar, os outros continuam com data honesta em vez de herdar a do lote.
-    con = banco.conectar()
-    try:
-        for p in projetos:
-            banco.gravar(p["nome"], "local", p, con)
-        banco.gravar(banco.INFRA, "local", {
+    avisos = []
+    if not RAIZ.is_dir():
+        avisos.append("a raiz %s nao existe nesta maquina; os projetos dela NAO foram medidos — isto nao e 'nenhum projeto pendente'." % RAIZ)
+    if portas is None:
+        avisos.append("nao consegui listar as portas em uso; o 'no ar' de cada projeto saiu so da conexao direta.")
+    if docker_mudo:
+        avisos.append("o docker nao respondeu; a lista de conteineres esta MUDA, e nao vazia.")
+    return {
+        "projetos": projetos,
+        "infra": {
             "containers": containers,
             "docker_mudo": docker_mudo,
             "quebrados": [c["nome"] for c in containers if c["reiniciando"]],
             "portas": portas,
-        }, con)
+        },
+        "portas_mudas": portas is None,
+        "avisos": avisos,
+    }
+
+
+def main():
+    """A coleta LOCAL: mede e grava no `hub.db` desta maquina."""
+    medicao = medir()
+    projetos, infra = medicao["projetos"], medicao["infra"]
+    docker_mudo, containers = infra["docker_mudo"], infra["containers"]
+
+    # Uma linha por projeto, com carimbo proprio: quando a coleta de um repo
+    # falhar, os outros continuam com data honesta em vez de herdar a do lote.
+    con = banco.conectar()
+    try:
+        for pr in projetos:
+            banco.gravar(pr["nome"], "local", pr, con)
+        banco.gravar(banco.INFRA, "local", infra, con)
     finally:
         con.close()
 
-    print(f"ok: {len(projetos)} projetos, {'DOCKER MUDO' if docker_mudo else str(len(containers)) + ' containers'} -> {banco.BANCO.name}")
+    print(f"ok: {len(projetos)} projetos, "
+          f"{'DOCKER MUDO' if docker_mudo else str(len(containers)) + ' containers'}"
+          f" -> {banco.BANCO.name}")
     # A raiz sumida nao levanta erro: iterdir() nao roda e a lista fica so com os
     # avulsos. Sem este aviso o coletor imprime "ok: 1 projetos" e parece que deu
     # certo — foi o que aconteceu ao rodar em Linux pela primeira vez, onde o
-    # caminho do Windows obviamente nao existe.
-    if not RAIZ.is_dir():
-        print(f"AVISO: a raiz {RAIZ} nao existe. Os projetos dela NAO foram medidos "
-              f"— isto nao e 'nenhum projeto pendente'.")
-    if portas is None:
-        print("AVISO: nao consegui listar as portas em uso. "
-              "O 'no ar' de cada projeto saiu so da conexao direta.")
+    # caminho do Windows obviamente nao existe. Os avisos vem de `medir()`: um
+    # so lugar decide o que e digno de aviso, e o agente carrega os MESMOS para
+    # o painel remoto.
+    for aviso in medicao["avisos"]:
+        print("AVISO: " + aviso)
     return 0
 
 

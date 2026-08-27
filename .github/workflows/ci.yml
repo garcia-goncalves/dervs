@@ -61,7 +61,7 @@ jobs:
           exit $erro
 
       - name: Compila
-        run: python -m py_compile banco.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py
+        run: python -m py_compile banco.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py agente/__init__.py agente/enviar.py
 
       # Os testes abaixo sao listados A MAO, um passo cada, porque cada nome na
       # tela do GitHub diz o que quebrou sem ninguem abrir o log. O preco disso
@@ -141,3 +141,11 @@ jobs:
 
       - name: Fila
         run: python test_fila.py
+
+      # O agente local e o pareamento por seis digitos. O que ele cobra de mais
+      # importante nao e "o codigo funciona": e que o teto de chute POR ORIGEM
+      # exista na rota (divida nomeada da etapa 8), que o token fique preso a
+      # uma maquina e uma conta, e que NAO exista rota de "estou vivo" separada
+      # — sinal proprio deixa a maquina parecer viva com a medicao parada.
+      - name: Agente e pareamento
+        run: python test_agente.py

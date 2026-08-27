@@ -781,6 +781,69 @@ O peso nunca atravessa gravidades: uma pendência média com risco alto continua
 atrás de qualquer alta. Regra que não mede risco fica em zero e ordena pelo nome,
 como sempre.
 
+## O painel deixa de ser de uma máquina só, de verdade (etapa 11 do DERVS)
+
+A etapa 8 abriu as tabelas para várias máquinas; a 11 é quem finalmente põe dado
+de outra máquina lá dentro. O pacote `agente/` mede um computador e **manda** o
+resultado para um DERVS remoto.
+
+Conectar é um número de seis dígitos, gerado no botão **Máquinas** do painel e
+digitado na outra máquina:
+
+```
+python -m agente.enviar --alvo https://SEU-DERVS --codigo 123456
+```
+
+O roteiro completo — o que aparece quando dá certo, o que fazer em cada erro, e
+como deixar reportando sozinho — está em
+[`docs/operacao/conectar-uma-maquina.md`](docs/operacao/conectar-uma-maquina.md).
+
+### Quatro decisões que valem ser ditas
+
+**O agente não escuta porta nenhuma.** Só sai conexão dele. Um agente que
+aceitasse conexão seria uma porta nova numa máquina de casa, atrás do roteador,
+sem ninguém olhando — e o que ele executaria do outro lado é justamente o que a
+etapa 7 amputou do servidor. `test_agente.py` cobra isso lendo os arquivos do
+pacote: `HTTPServer`, `bind(` e `listen(` reprovam a suíte.
+
+**O envio de dado é o sinal de vida.** Não há rota de "estou vivo", e a ausência
+dela é testada nominalmente. Com um sinal próprio, uma máquina com a coleta
+travada continuaria reportando saúde, e o painel ficaria verde exatamente quando
+parou de olhar — a pior mentira possível neste produto.
+
+**O que segura seis dígitos são três travas**, e a terceira era dívida nomeada da
+etapa 8: dez minutos de validade, uso único, e **cinco tentativas por origem**
+(vinte no ambiente local). Por origem, e não um contador global: global deixava
+um estranho trancar o pareamento de todo mundo com cinco chutes. Balcão próprio,
+também, para gastar o teto do pareamento não trancar a entrada do dono pela capa.
+
+**Nasceu a quarta classificação de acesso.** Além de `aberta`, `cortina` e
+`dado`, a tabela `ROTAS` passou a ter `maquina`: quem prova ser máquina, e não
+pessoa. Ela não exige cookie nem `Origin` — o agente não é navegador, e exigir
+isso seria uma defesa que só atrapalha quem tem o token. Em troca, `test_rotas.py`
+cobra que nenhuma rota de `/api/` aceite token de máquina: relatório roubado não
+pode virar acesso ao painel.
+
+### O que mede saiu de dentro do que grava
+
+`coletar.main()` media e gravava na mesma função. Agora `coletar.medir()` mede e
+devolve, e dois destinos consomem o mesmo resultado: o `hub.db` desta máquina e
+um DERVS remoto. Sem isso, o agente teria de copiar as ~600 linhas que medem
+projeto — e cópia vira duas versões no dia em que uma for corrigida, com a errada
+passando calada.
+
+Junto veio uma correção honesta: os avisos ("a raiz não existe nesta máquina",
+"o Docker está mudo") deixaram de ser `print` e passaram a voltar na estrutura.
+Quem recebe por HTTP não tem stdout para ler, e uma medição que não mediu nada
+chegaria do outro lado com a mesma cara de uma que não achou nada.
+
+### O que a etapa 11 **não** resolveu
+
+A tabela `medida` continua com chave `(projeto, camada)`, sem dono. Duas contas
+diferentes com um projeto de mesmo nome ainda escrevem uma por cima da outra —
+como já acontecia com a coleta local. Não é regressão desta etapa, é o
+multi-inquilino que falta; o `projeto_conectado`, esse sim, é por máquina.
+
 ## O que ainda não existe
 
 Fases 3 e 4 da especificação (a **fase 2 está entregue**, seção acima) (`~/.claude/docs/superpowers/plans/2026-08-24-hub-do-dev.md`):

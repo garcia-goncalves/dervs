@@ -338,7 +338,7 @@ class Pareamento(unittest.TestCase):
     def test_maquina_revogada_nao_abre_mais(self):
         token = banco.usar_pareamento(self.codigo, "n", agora_iso=iso(AGORA), con=self.con)
         m = banco.maquina_por_token(token, con=self.con)
-        banco.revogar_maquina(m["id"], con=self.con)
+        banco.revogar_maquina(m["id"], m["usuario_id"], con=self.con)
         self.assertIsNone(banco.maquina_por_token(token, con=self.con))
 
 
