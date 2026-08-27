@@ -43,6 +43,14 @@ import github_app
 # da MESMA chave. Os dois formatos existem porque o GitHub entrega o primeiro e
 # quem converte o arquivo por engano acaba com o segundo — e a mensagem "chave
 # nao serve" naquele dia custaria uma tarde.
+# NAO USE ESTE PADRAO PARA CHAVE DE VERDADE. Guardar o miolo sem armadura e
+# remonta-lo com `armar()` contorna, literalmente, o detector de segredo do
+# GitHub. Aqui e legitimo porque esta chave nunca foi registrada em lugar
+# nenhum: chave privada so vale se a publica correspondente for confiada em
+# algum lugar, e esta nao e — apagar este arquivo nao fecharia buraco nenhum,
+# so quebraria o unico teste que prova que a conta esta certa. O risco e o
+# PRECEDENTE: no dia em que alguem colar uma chave real com este mesmo molde, o
+# varredor nao pega, e a revisao ve um formato que ja foi aprovado antes.
 MIOLO_PKCS1 = "MIIEpAIBAAKCAQEAsFc/9hzFK9z1ZQRzg0ZOf8nVJo3fT2mGlg+H4ImP7Py9Tfvzw/WqTzM9VMhUeO6CG3nq29+SsA5yXYOGOjmc+DM85XJREhawjSNw7k68XOB0uVOsGXG4E/pcxjycBiq0Xd2enVbKORW+cfqpIY3HrbVnTZUuwui8m7oMvQ+tBzrEwMSvq2bh42XiBrrXg3UkKeUMVQ6OsB4BqyNghiwSgRlPxMolKCWJtqYfxee00Ilii0rgGWne8l32dJI6U7r83zqNQNYnr40mq35yjhhAzrkkDNSATz/4qsCELACGMoSY/rayWlRpQ7yDSq/LTXnHpRPIUS527KjFBh7qRok8TwIDAQABAoIBAEiMrPkBnzFLp/5WlXu16kfy7un8xpoybTfBzgJYNkmnNe8msIS3xsjs6Ne/z9ktL4REZZbuZbhfSTgmC4xa9bS7x9sSbD5H7X0zzpuM8zw28G7q+MxDGBvIDnFUsFBtM2XG7yIGeg6AXqkgGoN+hF94Wbb2oJV6EVb0dZc3ItXs7crNCNeNfxGKO9VsTmISXIJbiYAbyEfyk7oUcvmch82FUTsVqg4yWwIPyPZtjH+FhQFlbcqkM2U/LZus6akSmu+H8bthe6bl0NVAzw7xwb85jVWQX5o97LXi1neRLD66cdFkojD/zvwFxTqb0MWllH6DNYKwQ4a+JhZ4kwpFdTECgYEA3wqRk9EpU/VcluZTLY++JEhx3n8uF0bO8nBEipVKEgGiNVTArP2YzxLyFKml4h57DLpjE3vKUWu6x68tndh8502NnKYmxBfG8l0by7SDDUw83BIjTvvkg4FABVE/tBhwUgKGZxO4wHmhSc+NLhvmimVeLrntJ4dFv5zqCNTxN9kCgYEAymYMfRR8Zu0Vf/UK0a7Q1BquqdPQV1KSJCPdFpQxWlzgK/N/rKwM+o1r85S8xJYHMLs5tNwdtx329qaH7XXH2WkgLneesok0itkL3BGj2qkReOmr2u3sLsMi+K8Z18VhvNd/ZYgVAjNiM/YKfpHMaetpHLOFubSwGVpesIUjZGcCgYEAoZ5l6Me6e8Uix5G0miI7tMzt/j0IKAO+N70UXZtaJfwbDywPxgqpLPvcgQ6BTn2pyopQ+rBL5X37xXBxzJwvvefbgrR/CL72AW9okc6G3B7vRsS54yTx7Dy/KFs8nwLKeRKtU4nd6VL5haOo+M1s28IiYheF+ouyBevtRmMPO9kCgYBk/aiLnPY58WDB+UZNvDntK+ctTEhv2f6b091Uj9tUaHVe2OBDC5JqTrin0Paj7Oxnj3RK325gWa5KAmxeu19eB0uMhBmGolm6UnTNeWvWBnh2abpbwk4QQ0Qm7FArzwxmyuyBf/Zjo7oDjWhNIXjq/RD0xksaj6My81m+IKC5TwKBgQDIOKmuBOvdPVru/DzOuOzt6Gn3cBPM2r5DXdYYS77CRFSq6DxfoAM+w5QowrbGlYAfzrXHJ8uhvYl0Ii7qKP8cnle0pq+9CmdaDKiSs9o9Bo/f7T/Nac47i/KkJ+lAIV3lCNKia5wXrTfYF5rUJ1E2JI3VHEzQSE3a7Eb2et3j3g=="
 MIOLO_PKCS8 = "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCwVz/2HMUr3PVlBHODRk5/ydUmjd9PaYaWD4fgiY/s/L1N+/PD9apPMz1UyFR47oIbeerb35KwDnJdg4Y6OZz4MzzlclESFrCNI3DuTrxc4HS5U6wZcbgT+lzGPJwGKrRd3Z6dVso5Fb5x+qkhjcettWdNlS7C6Lybugy9D60HOsTAxK+rZuHjZeIGuteDdSQp5QxVDo6wHgGrI2CGLBKBGU/EyiUoJYm2ph/F57TQiWKLSuAZad7yXfZ0kjpTuvzfOo1A1ievjSarfnKOGEDOuSQM1IBPP/iqwIQsAIYyhJj+trJaVGlDvINKr8tNecelE8hRLnbsqMUGHupGiTxPAgMBAAECggEASIys+QGfMUun/laVe7XqR/Lu6fzGmjJtN8HOAlg2Sac17yawhLfGyOzo17/P2S0vhERllu5luF9JOCYLjFr1tLvH2xJsPkftfTPOm4zzPDbwbur4zEMYG8gOcVSwUG0zZcbvIgZ6DoBeqSAag36EX3hZtvaglXoRVvR1lzci1eztys0I141/EYo71WxOYhJcgluJgBvIR/KTuhRy+ZyHzYVROxWqDjJbAg/I9m2Mf4WFAWVtyqQzZT8tm6zpqRKa74fxu2F7puXQ1UDPDvHBvzmNVZBfmj3steLWd5EsPrpx0WSiMP/O/AXFOpvQxaWUfoM1grBDhr4mFniTCkV1MQKBgQDfCpGT0SlT9VyW5lMtj74kSHHefy4XRs7ycESKlUoSAaI1VMCs/ZjPEvIUqaXiHnsMumMTe8pRa7rHry2d2HznTY2cpibEF8byXRvLtIMNTDzcEiNO++SDgUAFUT+0GHBSAoZnE7jAeaFJz40uG+aKZV4uue0nh0W/nOoI1PE32QKBgQDKZgx9FHxm7RV/9QrRrtDUGq6p09BXUpIkI90WlDFaXOAr83+srAz6jWvzlLzElgcwuzm03B23Hfb2poftdcfZaSAud56yiTSK2QvcEaPaqRF46ava7ewuwyL4rxnXxWG8139liBUCM2Iz9gp+kcxp62kcs4W5tLAZWl6whSNkZwKBgQChnmXox7p7xSLHkbSaIju0zO3+PQgoA743vRRdm1ol/BsPLA/GCqks+9yBDoFOfanKilD6sEvlffvFcHHMnC+959uCtH8IvvYBb2iRzobcHu9GxLnjJPHsPL8oWzyfAsp5Eq1Tid3pUvmFo6j4zWzbwiJiF4X6i7IF6+1GYw872QKBgGT9qIuc9jnxYMH5Rk28Oe0r5y1MSG/Z/pvT3VSP21RodV7Y4EMLkmpOuKfQ9qPs7GePdErfbmBZrkoCbF67X14HS4yEGYaiWbpSdM15a9YGeHZpulvCThBDRCbsUCvPDGbK7IF/9mOjugONaE0heOr9EPTGSxqPozLzWb4goLlPAoGBAMg4qa4E6909Wu78PM647O3oafdwE8zavkNd1hhLvsJEVKroPF+gAz7DlCjCtsaVgB/Otccny6G9iXQiLuoo/xyeV7Smr70KZ1oMqJKz2j0Gj9/tP81pzjuL8qQn6UAhXeUI0qJrnBetN9gXmtQnUTYkjdUcTNBITdrsRvZ63ePe"
 
@@ -266,6 +274,72 @@ class LerAValidade(unittest.TestCase):
         """`None` aqui significaria 'nunca vence' numa comparacao ingenua."""
         self.assertIsNone(github_app.quando_vence("ontem"))
         self.assertIsNone(github_app.quando_vence(None))
+
+
+class OQueARevisaoDeSegurancaPediu(unittest.TestCase):
+    """Tres achados menores da revisao de 27/08/2026, cada um com o seu teste.
+
+    Nenhum era explouravel — a chave vem do ambiente, e quem escreve no ambiente
+    ja controla tudo. Entram assim mesmo porque os tres tem o mesmo formato: uma
+    tarde perdida no primeiro deploy, com falha calada e diagnostico errado.
+    """
+
+    def der(self, tag: int, corpo: bytes) -> bytes:
+        """DER minimo, so para MONTAR a chave torta que o teste precisa."""
+        if len(corpo) < 0x80:
+            return bytes([tag, len(corpo)]) + corpo
+        tamanho = len(corpo).to_bytes((len(corpo).bit_length() + 7) // 8, "big")
+        return bytes([tag, 0x80 | len(tamanho)]) + tamanho + corpo
+
+    def inteiro(self, n: int) -> bytes:
+        cru = n.to_bytes((n.bit_length() + 8) // 8, "big")
+        return self.der(0x02, cru)
+
+    def chave_com_d(self, d: int) -> str:
+        """Uma chave sintetica com o `d` que o teste quiser."""
+        real = github_app.chave_de_pem(PEM_PKCS1)
+        corpo = (self.inteiro(0) + self.inteiro(real.n) + self.inteiro(real.e)
+                 + self.inteiro(d) + self.inteiro(1) + self.inteiro(1))
+        return armar(base64.b64encode(self.der(0x30, corpo)).decode("ascii"),
+                     "RSA PRIVATE KEY")
+
+    def test_expoente_privado_gigante_e_recusado(self):
+        """Sem teto no `d`, um arquivo trocado por engano trava a assinatura.
+
+        Medido pela revisao: um `d` de 104 mil bits — que cabe folgado dentro de
+        `TETO_DO_ARQUIVO` — leva `assinar_rs256` a 10,5 s. Nao e ataque, e o
+        mesmo motivo do teto que ja existia no modulo: o operador erra de arquivo.
+        """
+        self.assertIsNotNone(github_app.chave_de_pem(self.chave_com_d(3)))
+        self.assertIsNone(github_app.chave_de_pem(self.chave_com_d(2 ** 20000)))
+
+    def test_le_a_chave_mesmo_indentada(self):
+        """Bloco de YAML e `systemd` indentam o arquivo, e isso e comum.
+
+        A linha de armadura indentada nao era reconhecida, entrava no miolo, o
+        base64 falhava e o coletor caia CALADO no `gh` — falha fechada, mas com
+        o diagnostico apontando para o lugar errado.
+        """
+        indentada = "\n".join("    " + l for l in PEM_PKCS1.splitlines())
+        self.assertEqual(github_app.chave_de_pem(indentada),
+                         github_app.chave_de_pem(PEM_PKCS1))
+
+    def test_validade_absurda_nao_vira_token_eterno(self):
+        """Defesa em profundidade: exige o GitHub mentir sob TLS conferido.
+
+        Um `expires_at` no ano 9999 congelaria o token pelo resto da vida do
+        processo. O teto de uma hora e o proprio prazo que o GitHub promete.
+        """
+        chamadas = []
+
+        def eterno(url, jwt, teto):
+            chamadas.append(url)
+            return {"token": "ghs-mentira", "expires_at": "9999-12-31T23:59:59Z"}
+
+        app = github_app.Coletor("4739197", "157015815", PEM_PKCS1, _pedir=eterno)
+        app.token(agora=1000000)
+        app.token(agora=1000000 + 3600)
+        self.assertEqual(len(chamadas), 2)
 
 
 if __name__ == "__main__":

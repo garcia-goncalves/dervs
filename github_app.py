@@ -65,7 +65,14 @@ SO_DIGITOS = re.compile(r"[0-9]{1,20}")
 
 
 class Chave(NamedTuple):
-    """Os tres numeros que a assinatura usa. `e` so serve para conferencia."""
+    """Os tres numeros lidos do arquivo. Assinar usa `n` e `d`; `e` nao.
+
+    `e` fica guardado porque e a unica coisa que permite conferir o par por um
+    caminho independente da assinatura — e e isso que os testes fazem. Em
+    producao ele nao e usado: uma conferencia antes de cada assinatura custaria
+    uma exponenciacao a mais para pegar so um arquivo corrompido, que o GitHub
+    ja pega com um 401.
+    """
     n: int
     e: int
     d: int
@@ -142,7 +149,13 @@ def _rsa_de_pkcs1(corpo: bytes):
         # uma, e adivinhar o formato de um arquivo que nao entendemos e pior
         # que recusar.
         return None
-    if not (MENOR_MODULO <= n.bit_length() <= MAIOR_MODULO) or e < 3 or d < 1:
+    # O teto do `d` importa tanto quanto o do `n`, e por um motivo que so
+    # aparece medindo: um `d` de 104 mil bits cabe folgado dentro de
+    # TETO_DO_ARQUIVO e leva `assinar_rs256` a 10,5 s. Nao e ataque — quem
+    # escreve a variavel de ambiente ja controla tudo — e o operador que trocou
+    # de arquivo, e a coleta travando por 10 s e pior que a coleta recusando.
+    if not (MENOR_MODULO <= n.bit_length() <= MAIOR_MODULO) or e < 3 or d < 1 \
+            or d.bit_length() > MAIOR_MODULO:
         return None
     return Chave(n, e, d)
 
@@ -157,8 +170,13 @@ def chave_de_pem(texto):
     """
     if not isinstance(texto, str) or len(texto) > TETO_DO_ARQUIVO:
         return None
+    # `l.strip().startswith`, e nao `l.startswith`: bloco de YAML do compose e
+    # unidade do systemd entregam o arquivo INDENTADO. Com a linha crua, a
+    # armadura indentada nao era reconhecida, entrava no miolo, o base64 falhava
+    # e o coletor caia calado no `gh` — falha fechada, mas com o diagnostico
+    # apontando para o lugar errado no primeiro deploy.
     miolo = "".join(l.strip() for l in texto.splitlines()
-                    if l.strip() and not l.startswith("-----"))
+                    if l.strip() and not l.strip().startswith("-----"))
     if not miolo:
         return None
     try:
@@ -339,7 +357,11 @@ class Coletor:
             return None
 
         vence = quando_vence(resposta.get("expires_at"))
-        # Sem data legivel, assume o pior prazo plausivel em vez de "eterno".
-        self._vence_em = vence if vence else agora + 600
+        # Sem data legivel, assume o pior prazo plausivel em vez de "eterno". E
+        # com data legivel, um teto de uma hora — que e o prazo que o GitHub
+        # promete: um `expires_at` no ano 9999 congelaria este token pelo resto
+        # da vida do processo. Exige o GitHub mentir sob TLS conferido, entao e
+        # defesa em profundidade, e custa uma linha.
+        self._vence_em = min(vence, agora + 3600) if vence else agora + 600
         self._token = novo
         return novo
