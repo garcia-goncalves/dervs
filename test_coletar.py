@@ -794,9 +794,6 @@ class NaoSaberNaoEDizerNao(unittest.TestCase):
         self.assertFalse(coletar.deve_testar(4777, set()))
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
 
 class NaoConsegueMedir(unittest.TestCase):
     """Falha de git ou de docker precisa aparecer como falha, nao como zero.
@@ -890,3 +887,6 @@ class NaoMedidoNaoViraNota(unittest.TestCase):
         g = coletar.coleta_git(aqui)
         pr = coletar.coleta_prontidao(aqui, g, coletar.coleta_arquivos(aqui), {})
         self.assertEqual(pr["nao_medido"], [])
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
