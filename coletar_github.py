@@ -15,8 +15,17 @@ alertas de vulnerabilidade dos 16 de uma vez, gastando pontos do orcamento de
 Roda em processo separado do coletar.py de proposito: aquele mede o disco a cada
 60 s e nao pode ficar esperando a rede.
 
-O TOKEN nunca aparece aqui: quem autentica e o `gh` que o dono ja logou. Este
-arquivo nao le, nao grava e nao imprime segredo nenhum.
+QUEM AUTENTICA
+
+Dois caminhos, nesta ordem. Com `DERVS_GITHUB_TOKEN` no ambiente, este arquivo
+fala com a API do GitHub direto — e o caminho do SERVIDOR, onde nao ha `gh`
+logado nem pode haver. Sem a variavel, cai no `gh` que o dono ja logou na
+maquina dele, e nada muda para ele.
+
+O token e LIDO do ambiente e vai para o cabecalho da requisicao. Nao e gravado,
+nao e impresso, e nao entra em mensagem de erro — todas as mensagens que saem
+daqui sao escritas por nos, nunca repassadas da excecao. Como o token nasce,
+onde ele mora e como se troca: `docs/operacao/token-do-coletor.md`.
 
     python coletar_github.py
 """
@@ -212,6 +221,10 @@ PEDACO = """
     pullRequests(states: OPEN, first: 5, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes { number title url updatedAt isDraft }
     }
+    issues(states: OPEN, first: 10, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      nodes { number title url updatedAt }
+    }
     %(vulns)s
   }
 """
@@ -241,7 +254,90 @@ def _consulta(slugs: dict, com_vulns: bool) -> str:
     return "query {\n" + "\n".join(partes) + "\n}"
 
 
+# ------------------------------------------------------- quem autentica aqui
+#
+# DOIS CAMINHOS, e a ordem importa.
+#
+# 1. TOKEN NO AMBIENTE (`DERVS_GITHUB_TOKEN`) — o caminho do SERVIDOR. La nao
+#    existe `gh` logado, nem pode existir: o `gh` e a ferramenta que o dono
+#    autenticou na maquina DELE, e amarrar a coleta a isso e amarrar o produto
+#    a uma pessoa estar sentada aqui. O token vem de um GitHub App instalado na
+#    organizacao (ver docs/operacao/token-do-coletor.md).
+# 2. O `gh` — o caminho da MAQUINA DO DONO, que continua funcionando sem
+#    configurar nada. Sem token no ambiente, nada muda para ele.
+#
+# O TOKEN NAO E LIDO, NAO E IMPRESSO E NAO E GUARDADO por este arquivo alem do
+# cabecalho da requisicao. Toda mensagem de erro que sai daqui e escrita por
+# nos, nunca repassada da excecao: `URLError` carrega a URL, e URL de API pode
+# carregar o que o chamador pos nela.
+VAR_TOKEN_NO_AMBIENTE = "DERVS_GITHUB_TOKEN"
+API = "https://api.github.com/"
+# So o que a API do GitHub usa em caminho de recurso. Barra inicial some antes
+# desta peneira; `//`, `..` e esquema completo caem aqui.
+CAMINHO_API = re.compile(r"[A-Za-z0-9._~/-]+(\?[A-Za-z0-9._~=&%-]*)?$")
+
+
+def _token() -> str:
+    return (os.environ.get(VAR_TOKEN_NO_AMBIENTE) or "").strip()
+
+
+def _url_da_api(caminho: str):
+    """`repos/a/b` -> URL da API do GitHub. `None` se o caminho nao serve.
+
+    A checagem existe porque o caminho e montado com `slug`, que vem do
+    `casos.json` e da propria API. Sem ela, um slug com `..` ou com `//host`
+    apontaria esta funcao para outro servidor levando o `Authorization` junto —
+    e entregar o token e pior que falhar a coleta.
+    """
+    # UMA barra inicial e conveniencia; duas sao `//host`, que e outro endereco.
+    # Comer as duas com `lstrip` transformava um caminho malformado em caminho
+    # bom calado — e calado e como um defeito destes chega em producao.
+    c = (caminho or "")[1:] if (caminho or "").startswith("/") else (caminho or "")
+    if not c or c.startswith("/") or not CAMINHO_API.fullmatch(c):
+        return None
+    # `..` como PEDACO do caminho e subir de pasta. `..` no meio de um pedaco
+    # nao e: `compare/abc123...main` — a comparacao que mede o drift inteiro —
+    # tem tres pontos, e recusar por texto deixava a regra 16 muda em silencio.
+    if ".." in c.split("?", 1)[0].split("/"):
+        return None
+    return API + c
+
+
+def _http_github(caminho: str, corpo=None, teto=90):
+    """GET (ou POST com `corpo`) na API do GitHub, com o token do ambiente.
+
+    Devolve o JSON decodificado. Levanta em qualquer falha — quem chama traduz.
+    """
+    url = _url_da_api(caminho)
+    if not url:
+        raise ValueError("caminho de API recusado")
+    dados = json.dumps(corpo).encode("utf-8") if corpo is not None else None
+    pedido = urllib.request.Request(
+        url, data=dados, method="POST" if dados else "GET",
+        headers={"Authorization": "Bearer " + _token(),
+                 "Accept": "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28",
+                 "User-Agent": AGENTE,
+                 **({"Content-Type": "application/json"} if dados else {})})
+    # Sem seguir desvio: um 302 levaria o cabecalho `Authorization` — o token —
+    # para o host que o outro lado escolher. E a mesma licao do agente.
+    abridor = urllib.request.build_opener(_SemRedirecionar)
+    with abridor.open(pedido, timeout=teto) as resp:
+        return json.loads(resp.read().decode("utf-8", "replace"))
+
+
 def _gh_graphql(consulta: str):
+    if _token():
+        try:
+            resposta = _http_github("graphql", {"query": consulta})
+        except Exception:            # noqa: BLE001 — rede, HTTP, TLS, JSON
+            # A excecao NAO entra na mensagem: ela carrega a URL, e a URL pode
+            # carregar o token de quem montou a requisicao errado um dia.
+            return None, "a API do GitHub nao respondeu"
+        if not isinstance(resposta, dict):
+            return None, "resposta da API do GitHub nao era JSON de objeto"
+        return resposta.get("data") or {}, None
+
     try:
         r = subprocess.run(["gh", "api", "graphql", "-f", "query=" + consulta],
                            capture_output=True, text=True, encoding="utf-8",
@@ -257,7 +353,13 @@ def _gh_graphql(consulta: str):
 
 
 def _gh_json(caminho: str, teto=30):
-    """GET na API REST do GitHub pelo `gh` ja autenticado. None quando falha."""
+    """GET na API REST do GitHub. None quando falha — ver `_gh_graphql`."""
+    if _token():
+        try:
+            return _http_github(caminho, teto=teto)
+        except Exception:            # noqa: BLE001 — 404 aqui e resposta valida
+            return None
+
     try:
         r = subprocess.run(["gh", "api", caminho], capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=teto,
@@ -401,6 +503,25 @@ def traduz(no: dict, com_vulns: bool) -> dict:
     alertas = (_resume_alertas(no.get("vulnerabilityAlerts") or {})
                if com_vulns else {})
 
+    # AS ISSUES ABERTAS — o "eu sei o que falta" do painel.
+    #
+    # Vem no MESMO campo da mesma consulta que ja ia buscar CI e PRs: nao ha
+    # uma ida a rede a mais por causa disto, e nao pode haver (a cota desta
+    # conta ja estourou uma vez).
+    #
+    # DUAS VERDADES DIFERENTES, e trocar uma pela outra e o painel mentindo:
+    #   `issues_total` diz QUANTAS ha — e a contagem completa, vinda do GitHub.
+    #   `issues` diz QUAIS sao, e traz no maximo 10. Contar esta lista para
+    #     dizer "faltam N" daria 10 num repositorio com 40 abertas.
+    # Sem o campo na resposta (permissao negada, consulta degradada), o total e
+    # None: NAO MEDI e uma coisa, "nao ha nenhuma" e outra.
+    bloco_issues = no.get("issues")
+    issues = []
+    for it in ((bloco_issues or {}).get("nodes") or []):
+        issues.append({"numero": it.get("number"), "titulo": it.get("title", "")[:120],
+                       "url": it.get("url", ""), "dias": _dias(it.get("updatedAt", ""))})
+    total_issues = (bloco_issues or {}).get("totalCount")
+
     return {
         "slug": no.get("nameWithOwner", ""),
         "url": url,
@@ -414,9 +535,32 @@ def traduz(no: dict, com_vulns: bool) -> dict:
                "url": url + "/actions",
                "quando": ""},
         "prs": prs,
+        "issues": issues,
+        "issues_total": total_issues if isinstance(total_issues, int) else None,
+        "issues_url": url + "/issues",
         "vulns": (dict(alertas, url=url + "/security/dependabot")
                   if alertas else {}),
     }
+
+
+def issues_abertas(slug: str):
+    """As issues abertas de UM repositorio. `None` quando nao deu para saber.
+
+    Ferramenta de conferencia, para a linha de comando — a coleta de verdade
+    passa por `main()`, que pega os 17 de uma vez. Reusa a mesma consulta e o
+    mesmo tradutor de proposito: se um dia o formato mudar, muda nos dois.
+
+    A distincao que importa: `[]` quer dizer "conferi, nao ha nada aberto", e
+    `None` quer dizer "nao consegui conferir". Devolver `[]` na falha faria a
+    tela comemorar um repositorio que ela nao conseguiu ler.
+    """
+    if not slug or "/" not in slug:
+        return None
+    dados, _erro = _gh_graphql(_consulta({"r0": slug}, com_vulns=False))
+    no = (dados or {}).get("r0")
+    if not no:
+        return None
+    return traduz(no, com_vulns=False)["issues"]
 
 
 def main():

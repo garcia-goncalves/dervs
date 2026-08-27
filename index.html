@@ -351,7 +351,7 @@ __FAIXA__
     <div class="rolagem">
       <table>
         <thead><tr>
-          <th>Projeto</th><th>Fase</th><th>Ramo</th><th>CI</th><th>Contêineres</th>
+          <th>Projeto</th><th>Fase</th><th>Ramo</th><th>CI</th><th>A fazer</th><th>Contêineres</th>
           <th>Sem commit</th><th>Sem enviar</th><th>Última atividade</th>
           <th>Prontidão</th><th>Grafo</th><th>Medido</th>
         </tr></thead>
@@ -839,7 +839,7 @@ function linhaDaConta(pr){
   const tr = document.createElement("tr");
   tr.className = "conta";
   const td = document.createElement("td");
-  td.colSpan = 11;
+  td.colSpan = 12;   // acompanha o <thead>: mudou coluna la, muda aqui
 
   const caixa = document.createElement("div");
   caixa.className = "pecas";
@@ -923,6 +923,35 @@ function desenhaTabela(projetos){
     else if (ciTexto(p) === "passou") ci.style.color = "var(--ok)";
     else ci.className = "tenue";
     tr.append(ci);
+
+    // A FAZER: issues abertas no GitHub. Fato do projeto, nao alarme — por
+    // isso mora aqui na tabela e NAO vira pendencia: todo repositorio vivo tem
+    // issue aberta o tempo todo, e uma caixa de entrada que repete isso em 17
+    // projetos ensina o dono a ignorar a caixa.
+    //
+    // Tres estados diferentes, e achatar os tres num "—" foi o defeito que este
+    // painel ja teve: sem camada do GitHub (nao coletei), total ausente (a
+    // consulta veio degradada), e zero de verdade (conferi, nao ha nada).
+    const gh = p.github || null;
+    const nIssues = gh ? gh.issues_total : undefined;
+    let tdIssues;
+    if (!gh){
+      tdIssues = celula("—", "num tenue");
+    } else if (nIssues == null){
+      tdIssues = celula("?", "num nao-medi");
+      tdIssues.title = "não consegui ler as issues deste repositório";
+    } else if (nIssues === 0){
+      tdIssues = celula("—", "num tenue");
+      tdIssues.title = "nenhuma issue aberta";
+    } else {
+      tdIssues = celula(String(nIssues), "num");
+      tdIssues.style.cursor = "pointer";
+      tdIssues.title = "abrir as issues no GitHub";
+      // A URL vem montada pelo coletor a partir do slug, nao de texto de
+      // terceiro — o titulo da issue nao entra em lugar nenhum desta linha.
+      if (gh.issues_url) tdIssues.onclick = () => window.open(gh.issues_url, "_blank", "noopener");
+    }
+    tr.append(tdIssues);
 
     // Quantos containers SAUDAVEIS o projeto tem agora. containers_esperados e
     // uma lista de nomes a casar, nao uma quantidade — mostrar "10/1" mentia.

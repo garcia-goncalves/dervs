@@ -13,6 +13,7 @@ import os
 import tempfile
 import time
 import unittest
+import urllib.error
 from pathlib import Path
 
 import coletar
@@ -887,6 +888,221 @@ class NaoMedidoNaoViraNota(unittest.TestCase):
         g = coletar.coleta_git(aqui)
         pr = coletar.coleta_prontidao(aqui, g, coletar.coleta_arquivos(aqui), {})
         self.assertEqual(pr["nao_medido"], [])
+
+class IssuesAbertas(unittest.TestCase):
+    """Etapa 12: o que falta fazer, na MESMA consulta que ja ia a rede.
+
+    A armadilha desta etapa esta escrita no plano: o `dervs` antigo fazia uma
+    consulta por repositorio e a cota da conta estourou. Estes testes existem
+    para que voltar a esse padrao quebre alguma coisa.
+    """
+
+    def test_a_consulta_pede_issues_abertas(self):
+        q = coletar_github._consulta({"r0": "dono/repo"}, com_vulns=False)
+        self.assertIn("issues(", q)
+        self.assertIn("states: OPEN", q)
+
+    def test_uma_consulta_so_para_todos_os_repositorios(self):
+        slugs = {"r%d" % i: "dono/repo%d" % i for i in range(16)}
+        q = coletar_github._consulta(slugs, com_vulns=True)
+        # 16 apelidos dentro de UM `query {`: nao 16 idas a rede.
+        self.assertEqual(q.count("repository("), 16)
+        self.assertEqual(q.count("query {"), 1)
+        self.assertEqual(q.count("issues("), 16)
+
+    def _no(self, issues, total=None):
+        return {"nameWithOwner": "dono/repo", "url": "https://github.com/dono/repo",
+                "defaultBranchRef": {"name": "main", "target": {}},
+                "pullRequests": {"nodes": []},
+                "issues": {"totalCount": len(issues) if total is None else total,
+                           "nodes": issues}}
+
+    def test_a_contagem_e_o_total_e_nao_o_tamanho_da_amostra(self):
+        """40 issues abertas com amostra de 10 tem de contar 40, nao 10.
+
+        A lista vem limitada de proposito (uma consulta so, para todos). Contar
+        o tamanho dela seria o painel dizendo "faltam 10" com 40 na fila — a
+        mentira com cara de certo que este projeto persegue.
+        """
+        no = self._no([{"number": i, "title": "t", "url": "u",
+                        "updatedAt": "2026-08-01T00:00:00Z"} for i in range(10)],
+                      total=40)
+        saida = coletar_github.traduz(no, com_vulns=False)
+        self.assertEqual(saida["issues_total"], 40)
+        self.assertEqual(len(saida["issues"]), 10)
+
+    def test_sem_contagem_o_total_fica_none_e_nao_zero(self):
+        """Nao ter medido nao e "nao ha nada" (invariante 2 do projeto)."""
+        no = self._no([])
+        no.pop("issues")
+        self.assertIsNone(coletar_github.traduz(no, com_vulns=False)["issues_total"])
+
+    def test_traduz_devolve_numero_titulo_e_idade(self):
+        no = self._no([{"number": 12, "title": "erro no login",
+                        "url": "https://github.com/dono/repo/issues/12",
+                        "updatedAt": "2026-08-01T00:00:00Z"}])
+        (issue,) = coletar_github.traduz(no, com_vulns=False)["issues"]
+        self.assertEqual(issue["numero"], 12)
+        self.assertEqual(issue["titulo"], "erro no login")
+        self.assertEqual(issue["url"], "https://github.com/dono/repo/issues/12")
+        self.assertGreater(issue["dias"], 0)
+
+    def test_repositorio_sem_issues_nao_quebra(self):
+        no = self._no([])
+        no.pop("issues")
+        self.assertEqual(coletar_github.traduz(no, com_vulns=False)["issues"], [])
+
+    def test_titulo_gigante_e_cortado(self):
+        no = self._no([{"number": 1, "title": "x" * 500, "url": "u",
+                        "updatedAt": "2026-08-01T00:00:00Z"}])
+        (issue,) = coletar_github.traduz(no, com_vulns=False)["issues"]
+        self.assertLessEqual(len(issue["titulo"]), 120)
+
+    # ------------------------------------------------- a consulta de uma so
+    def _com_gh_falso(self, resposta):
+        original = coletar_github._gh_graphql
+        coletar_github._gh_graphql = lambda consulta: resposta
+        self.addCleanup(setattr, coletar_github, "_gh_graphql", original)
+
+    def test_issues_abertas_devolve_lista(self):
+        self._com_gh_falso(({"r0": self._no(
+            [{"number": 3, "title": "t", "url": "u",
+              "updatedAt": "2026-08-01T00:00:00Z"}])}, None))
+        self.assertEqual(len(coletar_github.issues_abertas("dono/repo")), 1)
+
+    def test_repositorio_sem_nada_aberto_devolve_lista_vazia(self):
+        self._com_gh_falso(({"r0": self._no([])}, None))
+        self.assertEqual(coletar_github.issues_abertas("dono/repo"), [])
+
+    def test_falha_devolve_none_e_nunca_lista_vazia(self):
+        """`[]` significa "nao ha nada a fazer". Falha NAO pode dizer isso."""
+        self._com_gh_falso((None, "gh nao respondeu"))
+        self.assertIsNone(coletar_github.issues_abertas("dono/repo"))
+
+    def test_repositorio_que_nao_veio_na_resposta_devolve_none(self):
+        self._com_gh_falso(({}, None))
+        self.assertIsNone(coletar_github.issues_abertas("dono/repo"))
+
+    def test_slug_sem_barra_devolve_none_sem_ir_a_rede(self):
+        def explode(_):
+            raise AssertionError("foi a rede com slug invalido")
+        original = coletar_github._gh_graphql
+        coletar_github._gh_graphql = explode
+        self.addCleanup(setattr, coletar_github, "_gh_graphql", original)
+        self.assertIsNone(coletar_github.issues_abertas("repo-sem-dono"))
+
+
+class TokenDoColetor(unittest.TestCase):
+    """Etapa 12: no servidor nao existe `gh` logado, e nao pode existir.
+
+    O `gh` e a ferramenta de linha de comando que o DONO logou na maquina DELE.
+    Depender dela e depender de uma pessoa estar sentada aqui. Quando ha token
+    no ambiente, o coletor fala com o GitHub direto; sem token, ele continua
+    caindo no `gh`, que e o que faz a maquina do dono seguir funcionando.
+    """
+
+    def setUp(self):
+        self.antes = os.environ.get(coletar_github.VAR_TOKEN_NO_AMBIENTE)
+        os.environ.pop(coletar_github.VAR_TOKEN_NO_AMBIENTE, None)
+
+    def tearDown(self):
+        os.environ.pop(coletar_github.VAR_TOKEN_NO_AMBIENTE, None)
+        if self.antes is not None:
+            os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = self.antes
+
+    def test_sem_token_no_ambiente_nao_ha_token(self):
+        self.assertEqual(coletar_github._token(), "")
+
+    def test_espaco_em_branco_nao_e_token(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "   \n "
+        self.assertEqual(coletar_github._token(), "")
+
+    def _sem_subprocess(self):
+        """Qualquer chamada ao `gh` neste teste e o defeito que ele procura."""
+        original = coletar_github.subprocess.run
+        def explode(*a, **kw):
+            raise AssertionError("chamou o `gh` tendo token no ambiente")
+        coletar_github.subprocess.run = explode
+        self.addCleanup(setattr, coletar_github.subprocess, "run", original)
+
+    def _http_falso(self, resposta=None, erro=None):
+        chamadas = []
+        def falso(caminho, corpo=None, teto=90):
+            chamadas.append({"caminho": caminho, "corpo": corpo})
+            if erro:
+                raise erro
+            return resposta
+        original = coletar_github._http_github
+        coletar_github._http_github = falso
+        self.addCleanup(setattr, coletar_github, "_http_github", original)
+        return chamadas
+
+    def test_com_token_a_consulta_vai_por_http_e_nao_pelo_gh(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        self._sem_subprocess()
+        chamadas = self._http_falso({"data": {"r0": {"nameWithOwner": "a/b"}}})
+        dados, erro = coletar_github._gh_graphql("query { x }")
+        self.assertIsNone(erro)
+        self.assertEqual(dados, {"r0": {"nameWithOwner": "a/b"}})
+        self.assertEqual(chamadas[0]["caminho"], "graphql")
+
+    def test_com_token_a_rest_tambem_vai_por_http(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        self._sem_subprocess()
+        chamadas = self._http_falso({"workflows": []})
+        self.assertEqual(coletar_github._gh_json("repos/a/b/actions/workflows"),
+                         {"workflows": []})
+        self.assertEqual(chamadas[0]["caminho"], "repos/a/b/actions/workflows")
+
+    def test_falha_de_rede_com_token_devolve_none_e_nao_estoura(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        self._sem_subprocess()
+        self._http_falso(erro=urllib.error.URLError("sem rede"))
+        dados, erro = coletar_github._gh_graphql("query { x }")
+        self.assertIsNone(dados)
+        self.assertTrue(erro)
+
+    def test_a_mensagem_de_erro_nunca_carrega_o_token(self):
+        """Erro vai para a tela e para o log. Segredo nao pode ir junto."""
+        segredo = "valor-de-mentira-que-nao-pode-vazar"
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = segredo
+        self._sem_subprocess()
+        self._http_falso(erro=urllib.error.URLError("falhou com " + segredo))
+        _dados, erro = coletar_github._gh_graphql("query { x }")
+        self.assertNotIn(segredo, erro or "")
+
+    def test_erro_da_rest_com_token_devolve_none(self):
+        os.environ[coletar_github.VAR_TOKEN_NO_AMBIENTE] = "token-de-mentira-para-teste"
+        self._sem_subprocess()
+        self._http_falso(erro=urllib.error.HTTPError("u", 404, "nao existe", {}, None))
+        self.assertIsNone(coletar_github._gh_json("repos/a/b/actions/workflows"))
+
+    def test_o_endereco_e_sempre_o_da_api_do_github(self):
+        """O caminho vira URL. Caminho de fora nao pode virar outro servidor."""
+        self.assertTrue(coletar_github._url_da_api("graphql")
+                        .startswith("https://api.github.com/"))
+        self.assertTrue(coletar_github._url_da_api("/repos/a/b")
+                        .startswith("https://api.github.com/"))
+        for veneno in ("//evil.com/x", "https://evil.com/x", "..%2F..%2Fx"):
+            self.assertIsNone(coletar_github._url_da_api(veneno), veneno)
+
+    def test_subir_de_pasta_e_recusado(self):
+        for veneno in ("repos/a/../../x", "../x", "repos/a/..", "/../x"):
+            self.assertIsNone(coletar_github._url_da_api(veneno), veneno)
+
+    def test_a_comparacao_do_github_tem_tres_pontos_e_e_valida(self):
+        """`compare/sha...branch` e caminho legitimo da API — e o drift inteiro.
+
+        A primeira versao desta peneira recusava qualquer `..` como texto, e
+        `sha...branch` casa com isso. O efeito nao era erro: `mede_deploy`
+        devolvia {} e a regra 16 ficava CALADA. O painel simplesmente parava de
+        dizer "ha trabalho nao publicado", com toda a cara de estar certo.
+        """
+        url = coletar_github._url_da_api(
+            "repos/dono/repo/compare/abc1234...main")
+        self.assertEqual(
+            url, "https://api.github.com/repos/dono/repo/compare/abc1234...main")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
