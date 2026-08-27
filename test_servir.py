@@ -630,6 +630,21 @@ class ServidorDeVerdade(unittest.TestCase):
             vistos.add(json.loads(r.corpo)["desafio"])
         self.assertEqual(len(vistos), 5)
 
+    def test_pedir_desafio_nao_gasta_tentativa(self):
+        """Pedir desafio nao e chutar, e nao pode custar como chute.
+
+        Quem chuta e `/entrar/chave`, que tem o teto. Se a emissao do desafio
+        contasse, cinco cliques no botao — com a pessoa desistindo do PIN no
+        meio, que nem sequer chega ao servidor — trancariam a conta por 15
+        minutos. E exatamente a falha que prendeu o dono do lado de fora da
+        propria maquina em 26/08, por outro caminho.
+        """
+        cookies = self.abrir_cortina()
+        cortina.zerar_tentativas()
+        for _ in range(cortina.TETO * 3):
+            r = self.pedir("/entrar/chave/desafio", "POST", {}, cookies=cookies)
+            self.assertEqual(r.status, 200)
+
     def test_o_desafio_nao_aceita_pedido_de_outro_site(self):
         r = self.pedir("/entrar/chave/desafio", "POST", {},
                        cookies=self.abrir_cortina(), com_origem=False)

@@ -727,10 +727,14 @@ class Hub(SimpleHTTPRequestHandler):
     def _chave_desafio(self):
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
-        origem, agora_s = self._origem_do_pedido(), time.time()
-        if not cortina.registrar_tentativa(origem, agora_s, balcao="passkey"):
-            return self._json(429, self.RECUSA)
-        bilhete, desafio = DESAFIOS.abrir(agora_s)
+        # NAO conta como tentativa, e a diferenca importa. Pedir um desafio nao
+        # revela nada e nao chuta nada — quem chuta e `/entrar/chave`, que tem
+        # o teto. Se contasse aqui, cinco cliques no botao (com a pessoa
+        # desistindo do PIN no meio) trancariam a conta por 15 minutos, que e
+        # exatamente o que aconteceu com o dono em 26/08 por outro caminho.
+        # O crescimento de memoria ja e barrado pelo teto de `passkey.Desafios`,
+        # que descarta o mais velho em vez de recusar o mais novo.
+        bilhete, desafio = DESAFIOS.abrir(time.time())
         self._por_cookie("desafio", bilhete, passkey.PRAZO_DO_DESAFIO)
         return self._json(200, {"desafio": passkey.b64url(desafio),
                                 "rp_id": self._rp_id(),
@@ -805,6 +809,11 @@ class Hub(SimpleHTTPRequestHandler):
 
     def _chaves(self):
         sessao = self._sessao()
+        if sessao is None:
+            # A sessao pode vencer ENTRE o despacho e esta linha. Sem a guarda,
+            # indexar `None` levanta TypeError e devolve 500 onde o certo e 403.
+            # Mesmo achado que ja estava anotado em `_silenciar`.
+            return self._json(403, {"erro": "entre de novo"})
         uid = sessao["usuario_id"]
         con = banco.conectar()
         try:
@@ -822,6 +831,11 @@ class Hub(SimpleHTTPRequestHandler):
 
     def _chave_cadastro_desafio(self):
         sessao = self._sessao()
+        if sessao is None:
+            # A sessao pode vencer ENTRE o despacho e esta linha. Sem a guarda,
+            # indexar `None` levanta TypeError e devolve 500 onde o certo e 403.
+            # Mesmo achado que ja estava anotado em `_silenciar`.
+            return self._json(403, {"erro": "entre de novo"})
         if not self._csrf_ok(sessao):
             return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
         bilhete, desafio = DESAFIOS.abrir(time.time())
@@ -846,6 +860,11 @@ class Hub(SimpleHTTPRequestHandler):
 
     def _chave_cadastrar(self):
         sessao = self._sessao()
+        if sessao is None:
+            # A sessao pode vencer ENTRE o despacho e esta linha. Sem a guarda,
+            # indexar `None` levanta TypeError e devolve 500 onde o certo e 403.
+            # Mesmo achado que ja estava anotado em `_silenciar`.
+            return self._json(403, {"erro": "entre de novo"})
         if not self._csrf_ok(sessao):
             return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
         corpo = self._corpo_json(teto=passkey.TETO_DO_CORPO * 4)
@@ -875,6 +894,11 @@ class Hub(SimpleHTTPRequestHandler):
 
     def _chave_remover(self):
         sessao = self._sessao()
+        if sessao is None:
+            # A sessao pode vencer ENTRE o despacho e esta linha. Sem a guarda,
+            # indexar `None` levanta TypeError e devolve 500 onde o certo e 403.
+            # Mesmo achado que ja estava anotado em `_silenciar`.
+            return self._json(403, {"erro": "entre de novo"})
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
@@ -896,6 +920,11 @@ class Hub(SimpleHTTPRequestHandler):
 
     def _codigos_gerar(self):
         sessao = self._sessao()
+        if sessao is None:
+            # A sessao pode vencer ENTRE o despacho e esta linha. Sem a guarda,
+            # indexar `None` levanta TypeError e devolve 500 onde o certo e 403.
+            # Mesmo achado que ja estava anotado em `_silenciar`.
+            return self._json(403, {"erro": "entre de novo"})
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
