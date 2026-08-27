@@ -223,10 +223,17 @@ def _anotar_a_vida(camada: str) -> None:
             # local isto vira DONO_LOCAL e o laco nao ve nada: a memoria ainda
             # e de um inquilino so, e passar a ser de cada conta e trabalho da
             # etapa 16. DIVIDA NOMEADA, nao esquecimento.
-            e = banco.montar_estado(con, usuario_id=banco.conta_local(con))
+            # UM dono so nas tres pontas. A medicao passou a ser lida como
+            # `conta_local`, mas o silenciado e o arquivado continuavam no
+            # padrao `DONO_LOCAL`: o que o dono escondeu pelo painel nao contava
+            # como escondido aqui, e a pendencia entrava na memoria como aberta.
+            dono = banco.conta_local(con)
+            e = banco.montar_estado(con, usuario_id=dono)
             pend = regras.avaliar(e["projetos"], quota=e["quota"],
-                                  silenciadas=banco.silenciadas(con),
-                                  arquivadas=banco.arquivadas(con=con))
+                                  silenciadas=banco.silenciadas(con,
+                                                                usuario_id=dono),
+                                  arquivadas=banco.arquivadas(usuario_id=dono,
+                                                              con=con))
             # Coleta que terminou bem mas nao enxergou projeto nenhum NAO e "o
             # dono resolveu tudo": e a pasta de repositorios indisponivel por um
             # instante. Sem esta guarda, o painel fecharia as 27 pendencias de

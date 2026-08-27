@@ -573,6 +573,23 @@ class OServidorDeVerdade(unittest.TestCase):
         self.assertEqual(r.status, 500, "rota fora das 4 classes executou")
 
 
+    def test_projeto_gordo_demais_e_recusado(self):
+        """O teto de 4 MiB e do CORPO, e o de 60 envios e da FREQUENCIA.
+
+        Sem um teto por projeto, mil relatorios de um projeto de 4 MiB davam
+        ~4 GiB numa conta — e `montar_estado` faz `json.loads` de tudo aquilo,
+        num processo unico compartilhado por todos os inquilinos: o painel do
+        dono legitimo derrubava o servidor. Achado da revisao da correcao.
+        """
+        token = self.parear(self.uid)
+        gordo = {"nome": "gordo", "lixo": "x" * (banco.MAX_BYTES_POR_PROJETO + 1)}
+        r = self._relatar(token, [gordo, {"nome": "magro"}])
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertEqual((r.json["projetos"], r.json["invalidos"]), (1, 1),
+                         r.corpo)
+        self.assertNotIn("gordo", self._projetos_vistos(self.uid))
+
+
 class OEnderecoDoAlvo(unittest.TestCase):
     """`--alvo` sem https manda o token em claro no cabecalho."""
 
@@ -593,6 +610,29 @@ class OEnderecoDoAlvo(unittest.TestCase):
         for ruim in ("", "dervs.com.br", "ftp://dervs.com.br"):
             with self.assertRaises(enviar.ErroDoAlvo, msg=repr(ruim)):
                 enviar.conferir_alvo(ruim)
+
+
+    def test_endereco_com_query_ou_fragmento_e_recusado(self):
+        """`--alvo http://x#y` passava e depois engolia o caminho na
+        concatenacao, virando um 404 sem explicacao."""
+        for ruim in ("https://dervs.com.br#x", "https://dervs.com.br?a=1"):
+            with self.assertRaises(enviar.ErroDoAlvo, msg=ruim):
+                enviar.conferir_alvo(ruim)
+
+    def test_endereco_impossivel_vira_frase_e_nao_traceback(self):
+        """`urlsplit` levanta ValueError cru em alguns enderecos, e `main` so
+        captura `ErroDoAlvo`: o dono levava um traceback."""
+        with self.assertRaises(enviar.ErroDoAlvo):
+            enviar.conferir_alvo("http://[::1")
+
+    def test_nao_segue_desvio(self):
+        """O `urlopen` repassa o `Authorization` no redirecionamento, sem tirar
+        na troca de host: um 302 do alvo entregava o token da maquina em texto
+        para outro servidor. Quem controla o alvo hoje so tem o HASH dele."""
+        with self.assertRaises(enviar.ErroDoAlvo) as e:
+            enviar._SemRedirecionar().redirect_request(
+                None, None, 302, "Found", {}, "http://outro-host/x")
+        self.assertIn("outro-host", str(e.exception))
 
 
 class OArquivoDoToken(unittest.TestCase):

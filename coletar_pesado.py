@@ -128,10 +128,13 @@ def audita_npm(repo: Path):
 def main():
     con = banco.conectar()
     try:
+        # FORA DO LACO: dentro, era um SELECT por repositorio, e no primeiro
+        # giro de um banco novo o `criar_usuario` de dentro commitava a
+        # transacao do coletor pela metade.
+        dono = banco.conta_local(con)
         quota = coleta_quota()
         if quota:
-            banco.gravar(banco.QUOTA, "pesado", quota, con,
-                         usuario_id=banco.conta_local(con))
+            banco.gravar(banco.QUOTA, "pesado", quota, con, usuario_id=dono)
             banco.anotar_historico("actions_minutos", quota["minutos"], con)
             print("cota do Actions: %d%% (%d de %d min)"
                   % (quota["pct"], quota["minutos"], quota["cota"]))
@@ -152,7 +155,7 @@ def main():
             # invariante 2 do motor (ausencia nao e falha) continua de pe.
             banco.gravar(repo.name, "pesado",
                          {"deps_inseguras": deps, "auditoria_falhou": deps is None},
-                         con, usuario_id=banco.conta_local(con))
+                         con, usuario_id=dono)
             if deps is None:
                 cegos.append(repo.name)
             else:

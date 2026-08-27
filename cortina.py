@@ -179,7 +179,7 @@ def _assinar(ate: str, chave: bytes) -> str:
 # disco de outra pessoa.
 
 def registrar_tentativa(origem: str, agora_s: float,
-                        balcao: str = "cortina", teto: int = 0) -> bool:
+                        balcao: str = "cortina", teto: int = None) -> bool:
     """Anota a tentativa e diz se ela pode ser conferida. UMA funcao so.
 
     Antes eram duas — `pode_tentar` e `anotar_tentativa` —, cada uma pegando o
@@ -206,7 +206,9 @@ def registrar_tentativa(origem: str, agora_s: float,
     with _trava:
         _podar(agora_s)
         vistas = _tentativas.setdefault((balcao, origem), [])
-        if len(vistas) >= (teto or TETO):
+        # `None` e nao `0`: com o sentinela zero, alguem escreveria `teto=0`
+        # querendo "bloqueia tudo" e ganharia o padrao.
+        if len(vistas) >= (TETO if teto is None else teto):
             return False
         vistas.append(agora_s)
         return True

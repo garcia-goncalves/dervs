@@ -76,11 +76,16 @@ def guardar_token(alvo: str, token: str, maquina: str = "") -> Path:
     onde este agente tambem roda, o padrao do sistema deixaria o arquivo legivel
     por qualquer conta da maquina.
 
-    O ARQUIVO NASCE COM 600, em vez de nascer com o padrao do sistema e ser
-    fechado na linha seguinte. Entre um `write_text` e um `chmod` havia uma
-    janela — curta, mas real numa maquina de varias contas — em que o token
-    ficava legivel por qualquer um. E um token que nao vence. Achado da revisao
-    de Python da etapa 11.
+    ESCREVE NUM TEMPORARIO E TROCA POR CIMA. Duas razoes, as duas apontadas por
+    revisao:
+
+    1. O modo do `os.open` so vale para arquivo NOVO. Escrever direto no destino
+       que ja existe com permissao frouxa deixava o token exposto entre a
+       escrita e o `chmod` — e o `chmod` falha em silencio. Um temporario criado
+       com `O_EXCL` NUNCA existe antes, entao nasce sempre com 600.
+    2. `os.replace` e atomico. Escrever por cima com `O_TRUNC` significava que
+       uma queda no meio da escrita perdia TODOS os tokens desta maquina, e nao
+       so o que estava entrando.
     """
     destino = arquivo_do_token()
     destino.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -88,15 +93,15 @@ def guardar_token(alvo: str, token: str, maquina: str = "") -> Path:
     dados[_chave(alvo)] = {"token": token, "maquina": maquina,
                            "guardado_em": time.strftime("%Y-%m-%dT%H:%M:%S")}
     texto = json.dumps(dados, ensure_ascii=False, indent=2)
-    fd = os.open(destino, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as arq:
-        arq.write(texto)
+    passagem = destino.with_name(destino.name + ".novo")
     try:
-        # O `O_CREAT` so aplica o modo em arquivo NOVO: num arquivo que ja
-        # existia com permissao frouxa, e este chmod que corrige.
-        os.chmod(destino, 0o600)
+        passagem.unlink()             # sobra de uma queda anterior
     except OSError:
         pass
+    fd = os.open(passagem, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as arq:
+        arq.write(texto)
+    os.replace(passagem, destino)
     return destino
 
 
@@ -113,7 +118,7 @@ class ErroDoAlvo(Exception):
 
 
 # Onde `http://` continua valendo: a maquina do proprio dono, sem rede no meio.
-LOCAIS = ("localhost", "127.0.0.1", "[::1]", "::1")
+LOCAIS = ("localhost", "127.0.0.1", "::1")
 
 
 def conferir_alvo(alvo: str) -> str:
@@ -125,7 +130,16 @@ def conferir_alvo(alvo: str) -> str:
     alvo = (alvo or "").strip().rstrip("/")
     if not alvo:
         raise ErroDoAlvo("--alvo vazio. Exemplo: --alvo https://dervs.com.br")
-    partes = urllib.parse.urlsplit(alvo)
+    try:
+        partes = urllib.parse.urlsplit(alvo)
+    except ValueError as e:
+        # Sem isto o dono levava um traceback: `main` so captura `ErroDoAlvo`.
+        raise ErroDoAlvo("nao entendi o endereco %r (%s)" % (alvo, e)) from None
+    if partes.fragment or partes.query:
+        # `--alvo http://x#y` passava e depois engolia o caminho na
+        # concatenacao de `_falar`, virando um 404 sem explicacao.
+        raise ErroDoAlvo("o endereco do DERVS nao leva `?` nem `#`. Veio: %r"
+                         % alvo)
     if partes.scheme not in ("http", "https"):
         raise ErroDoAlvo("o endereco tem de comecar com https:// (ou http:// "
                          "para o DERVS da sua propria maquina). Veio: %r" % alvo)
@@ -136,6 +150,26 @@ def conferir_alvo(alvo: str) -> str:
     return alvo
 
 
+class _SemRedirecionar(urllib.request.HTTPRedirectHandler):
+    """O `urlopen` segue redirecionamento LEVANDO o `Authorization` junto.
+
+    O `HTTPRedirectHandler` do CPython repassa todos os cabecalhos menos
+    `content-length` e `content-type`, sem tirar o `Authorization` na troca de
+    host. Um 302 do alvo para `http://outro-host/` entregava o token da maquina
+    em texto — e quem controla o alvo hoje so tem o HASH dele. Achado da revisao
+    da correcao.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ErroDoAlvo(
+            "o alvo respondeu com um desvio (%s) para %s, e eu nao sigo desvio: "
+            "o cabecalho com o token da maquina iria junto. Confira o endereco."
+            % (code, newurl))
+
+
+_ABRIDOR = urllib.request.build_opener(_SemRedirecionar)
+
+
 def _falar(alvo: str, caminho: str, corpo: dict, token: str = "") -> dict:
     dados = json.dumps(corpo, ensure_ascii=False).encode("utf-8")
     pedido = urllib.request.Request(
@@ -144,7 +178,7 @@ def _falar(alvo: str, caminho: str, corpo: dict, token: str = "") -> dict:
     if token:
         pedido.add_header("Authorization", "Token " + token)
     try:
-        with urllib.request.urlopen(pedido, timeout=ESPERA) as r:
+        with _ABRIDOR.open(pedido, timeout=ESPERA) as r:
             return json.loads(r.read(TETO_DA_RESPOSTA) or b"{}")
     except urllib.error.HTTPError as e:
         raise ErroDoAlvo(_explicar(caminho, e.code)) from None

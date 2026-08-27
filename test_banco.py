@@ -1395,5 +1395,89 @@ class OsCodigosDeRecuperacao(unittest.TestCase):
         self.assertIsNone(banco.usar_codigo_de_recuperacao(c, con=self.con))
 
 
+class AMigracaoDaMedida(unittest.TestCase):
+    """A `medida` antiga nao tem dono: nao da para saber de quem e cada linha."""
+
+    def _banco_antigo(self, emails):
+        """Um hub.db no formato de antes, com as contas pedidas."""
+        pasta = tempfile.TemporaryDirectory()
+        self.addCleanup(pasta.cleanup)
+        caminho = Path(pasta.name) / "hub.db"
+        antes = banco.BANCO
+        banco.BANCO = caminho
+        self.addCleanup(setattr, banco, "BANCO", antes)
+        con = banco.conectar()                    # nasce ja no formato de hoje
+        for e in emails:
+            banco.criar_usuario(e, con=con)
+        con.commit()
+        # e AGORA volta a `medida` para a forma antiga, sem dono
+        con.execute("DROP TABLE medida")
+        con.execute("""CREATE TABLE medida (
+            projeto TEXT NOT NULL, camada TEXT NOT NULL,
+            medido_em TEXT NOT NULL, dados TEXT NOT NULL,
+            PRIMARY KEY (projeto, camada))""")
+        con.execute("INSERT INTO medida VALUES ('site','local','x','{}')")
+        con.commit()
+        con.close()
+        return caminho
+
+    def test_com_mais_de_uma_conta_nao_entrega_a_ninguem(self):
+        """Entregar a `CONTA_LOCAL` moveria o inventario alheio — nomes de
+        projeto, caminhos, contagem de alerta — para uma conta que
+        `/entrar/local` abre SEM SENHA, e o `DROP TABLE` apagaria o rastro.
+
+        Com mais de uma conta, `DONO_LOCAL`: ninguem le, e o coletor local repoe
+        a medicao em 60 s. Achado da revisao da correcao, com prova rodada.
+        """
+        self._banco_antigo([banco.CONTA_LOCAL, "outra@empresa.com"])
+        con = banco.conectar()
+        self.addCleanup(con.close)
+        donos = [l[0] for l in con.execute("SELECT usuario_id FROM medida")]
+        self.assertEqual(donos, [banco.DONO_LOCAL],
+                         "a migracao entregou dado sem dono a uma conta")
+
+    def test_com_uma_conta_so_entrega_a_ela(self):
+        """Maquina do dono: a medicao antiga E dele, e jogar no zero deixaria o
+        painel vazio ate a proxima coleta."""
+        self._banco_antigo([banco.CONTA_LOCAL])
+        con = banco.conectar()
+        self.addCleanup(con.close)
+        uid = con.execute("SELECT id FROM usuario WHERE email = ?",
+                          (banco.CONTA_LOCAL,)).fetchone()["id"]
+        donos = [l[0] for l in con.execute("SELECT usuario_id FROM medida")]
+        self.assertEqual(donos, [uid])
+
+    def test_rodar_de_novo_nao_muda_nada(self):
+        """`migrar()` roda em TODA conexao."""
+        self._banco_antigo([banco.CONTA_LOCAL])
+        for _ in range(3):
+            banco.conectar().close()
+        con = banco.conectar()
+        self.addCleanup(con.close)
+        self.assertEqual(len(list(con.execute("SELECT * FROM medida"))), 1)
+
+
+class AContaLocalDesativada(unittest.TestCase):
+    def test_nao_estoura_no_unique_do_email(self):
+        """O SELECT filtrava `desativado_em IS NULL`, nao achava, e o
+        `criar_usuario` seguinte estourava no UNIQUE — derrubando o servidor e a
+        coleta. Achado da revisao da correcao."""
+        pasta = tempfile.TemporaryDirectory()
+        self.addCleanup(pasta.cleanup)
+        antes_b, antes_a = banco.BANCO, os.environ.get("DERVS_AMBIENTE")
+        banco.BANCO = Path(pasta.name) / "hub.db"
+        os.environ["DERVS_AMBIENTE"] = "local"
+        self.addCleanup(setattr, banco, "BANCO", antes_b)
+        self.addCleanup(os.environ.__setitem__, "DERVS_AMBIENTE", antes_a or "")
+        con = banco.conectar()
+        self.addCleanup(con.close)
+        uid = banco.criar_usuario(banco.CONTA_LOCAL, con=con)
+        self.assertEqual(banco.conta_local(con), uid)
+        con.execute("UPDATE usuario SET desativado_em = ? WHERE id = ?",
+                    (banco.agora(), uid))
+        con.commit()
+        self.assertEqual(banco.conta_local(con), banco.DONO_LOCAL)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

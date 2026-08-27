@@ -61,6 +61,11 @@ RESERVADOS = (INFRA, QUOTA)
 # relatorio nao segura disco: 300 nomes NOVOS por envio, mil envios, e o volume
 # do servidor acaba. Ver `receber_relatorio`.
 MAX_PROJETOS_POR_CONTA = 1000
+# E o teto de CADA projeto. Sem ele, o teto de 4 MiB do corpo e o de 60 envios
+# por 15 min ainda somavam ~4 GiB numa conta — e `montar_estado` faz `json.loads`
+# de tudo aquilo, num processo unico compartilhado por todos os inquilinos: o
+# painel do dono legitimo derrubava o servidor. Achado da revisao da correcao.
+MAX_BYTES_POR_PROJETO = 64 * 1024
 
 ESQUEMA = """
 -- `usuario_id` NA CHAVE. Sem ele a medicao era um balcao unico: duas contas
@@ -504,12 +509,24 @@ def _migrar_pendencia_estado(con: sqlite3.Connection) -> None:
 
 
 def _dono_da_medida_antiga(con: sqlite3.Connection) -> int:
-    """A conta local, se ela ja existir neste banco; senao, `DONO_LOCAL`.
+    """A conta local — mas SO se ela for a unica conta deste banco.
+
+    A `medida` antiga nao tem dono: nao da para saber de quem e cada linha. Num
+    banco com mais de uma conta, entregar tudo a conta local seria mover o
+    inventario alheio — nomes de projeto, caminhos, contagem de alerta — para
+    uma conta que `/entrar/local` abre SEM SENHA, apagando o rastro no
+    `DROP TABLE`. Foi o que aconteceu, e o revisor da correcao rodou a prova.
+
+    Com mais de uma conta, `DONO_LOCAL`: ninguem le, e o coletor local repoe a
+    medicao em 60 s. Fechar por padrao custa um minuto de tela vazia.
 
     Le direto em vez de chamar `conta_local()`: aqui NAO se cria conta nenhuma —
     a migracao roda em toda conexao, inclusive no servidor.
     """
     try:
+        contas = con.execute("SELECT COUNT(*) FROM usuario").fetchone()[0]
+        if contas != 1:
+            return DONO_LOCAL
         l = con.execute("SELECT id FROM usuario WHERE email = ?"
                         " AND desativado_em IS NULL", (CONTA_LOCAL,)).fetchone()
     except sqlite3.Error:
@@ -546,7 +563,8 @@ def _migrar_medida(con: sqlite3.Connection) -> None:
         # painel e a conta `CONTA_LOCAL`; entregar a ela e o unico jeito de a
         # medicao antiga continuar aparecendo. No servidor essa conta nao
         # existe, e ai o destino e o zero mesmo.
-        destino = "0" if tinha_dono else str(_dono_da_medida_antiga(con))
+        destino = ("usuario_id" if tinha_dono
+                   else str(_dono_da_medida_antiga(con)))
         con.execute("DROP TABLE IF EXISTS medida_nova")
         con.execute("""CREATE TABLE medida_nova (
                 usuario_id INTEGER NOT NULL DEFAULT 0,
@@ -558,7 +576,7 @@ def _migrar_medida(con: sqlite3.Connection) -> None:
         con.execute("INSERT INTO medida_nova"
                     " (usuario_id, projeto, camada, medido_em, dados)"
                     " SELECT %s, projeto, camada, medido_em, dados FROM medida"
-                    % ("usuario_id" if tinha_dono else destino))
+                    % destino)
         con.execute("DROP TABLE medida")
         con.execute("ALTER TABLE medida_nova RENAME TO medida")
         con.commit()
@@ -1162,10 +1180,15 @@ def conta_local(con=None) -> int:
     fechar = con is None
     con = con or conectar()
     try:
-        l = con.execute("SELECT id FROM usuario WHERE email = ?"
-                        " AND desativado_em IS NULL", (CONTA_LOCAL,)).fetchone()
+        # PROCURA-SE A LINHA, NAO A CONTA ATIVA. Filtrar `desativado_em IS NULL`
+        # aqui devolvia nada para uma conta local desativada, e o `criar_usuario`
+        # abaixo estourava no UNIQUE do e-mail — derrubando `servir.main()` e a
+        # coleta. `_entrar_local` ja trata esse caso; esta funcao esqueceu.
+        l = con.execute("SELECT id, desativado_em FROM usuario WHERE email = ?",
+                        (CONTA_LOCAL,)).fetchone()
         if l is not None:
-            return l["id"]
+            # Desativada de proposito: nao se reativa por aqui, e nao ha dono.
+            return DONO_LOCAL if l["desativado_em"] else l["id"]
         uid = criar_usuario(CONTA_LOCAL, nome="Dono (ambiente local)", con=con)
         if fechar:
             con.commit()
@@ -1590,6 +1613,10 @@ def receber_relatorio(maquina_id: int, projetos: list, infra=None,
             if len(vistos) >= MAX_PROJETOS_POR_RELATORIO and nome not in vistos:
                 cortados += 1
                 continue
+            if len(json.dumps(p, ensure_ascii=False).encode("utf-8")) > \
+                    MAX_BYTES_POR_PROJETO:
+                invalidos += 1
+                continue
             if nome not in ja_tem and len(ja_tem) >= MAX_PROJETOS_POR_CONTA:
                 cortados += 1
                 continue
@@ -1609,7 +1636,8 @@ def receber_relatorio(maquina_id: int, projetos: list, infra=None,
                     arquivar_projeto(maquina_id, antigo["projeto"], con=con)
         con.execute("UPDATE maquina SET visto_em = ? WHERE id = ?",
                     (agora(), maquina_id))
-        con.commit()
+        if propria:                   # so encerra a transacao quem a abriu
+            con.commit()
         # `cortados` e `invalidos` VOLTAM na resposta em vez de sumir. Truncagem
         # silenciosa e a mesma mentira por omissao de tudo mais neste projeto: o
         # agente imprimiria "enviado: 300 projetos" achando que mandou os 340.
@@ -1619,7 +1647,10 @@ def receber_relatorio(maquina_id: int, projetos: list, infra=None,
         return {"projetos": len(vistos), "infra": isinstance(infra, dict),
                 "cortados": cortados, "invalidos": invalidos}
     except Exception:
-        con.rollback()
+        # `propria` pode nem existir se o estouro veio antes dela: um erro na
+        # busca do dono nao desfaz a transacao de quem chamou.
+        if locals().get("propria"):
+            con.rollback()
         raise
     finally:
         if fechar:
