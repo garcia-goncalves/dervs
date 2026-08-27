@@ -20,6 +20,8 @@ nao roda comando — e por isso da para testar as 18 regras em um segundo.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 # Os quatro tipos de acao que a tela sabe executar.
 #   abrir_url — o navegador abre o link (CI, PR, alerta de seguranca)
 #   vscode    — abre o VS Code na pasta ou no arquivo
@@ -399,7 +401,8 @@ def detalhe_alerta(v: dict) -> str:
     return " · ".join(partes)
 
 
-def avaliar(projetos, quota=None, silenciadas=None) -> list:
+def avaliar(projetos, quota=None, silenciadas=None,
+            arquivadas=None) -> list:
     """Retrato dos projetos -> lista de pendencias, mais grave primeiro."""
     itens = []
     for p in projetos:
@@ -415,10 +418,117 @@ def avaliar(projetos, quota=None, silenciadas=None) -> list:
             {"tipo": "abrir_url", "rotulo": "Ver o consumo",
              "url": quota.get("url", "https://github.com/settings/billing")}))
 
+    # Duas maneiras de sumir, e a diferenca entre elas e o prazo. `silenciadas`
+    # esconde por 24 h e volta sozinha. `arquivadas` e o dono dizendo "isto esta
+    # certo assim" — e nao tem volta automatica, por isso nao ha data aqui. O
+    # defeito que isto corrige: projeto arquivado de proposito voltava a cutucar
+    # todo dia, para sempre, e caixa que repete alarme resolvido ensina o dono a
+    # ignorar a caixa inteira.
     calados = silenciadas or {}
-    itens = [i for i in itens if i["id"] not in calados]
+    guardadas = arquivadas or set()
+    itens = [i for i in itens
+             if i["id"] not in calados and i["id"] not in guardadas]
     itens.sort(key=lambda i: (ORDEM[i["gravidade"]], i["projeto"], i["regra"]))
     return itens
+
+
+# --------------------------------------------------------------------- o selo
+#
+# Validade de cada camada, em segundos. Nao e "quando o numero apodrece": e a
+# partir de quando ele deixa de servir para AFIRMAR alguma coisa. A cadencia de
+# coleta e local 60 s, github 20 min, pesado 24 h; cada validade aqui e algumas
+# cadencias, para que uma coleta que falhou uma vez nao apague o selo inteiro.
+VALIDADE = {"local": 10 * 60, "github": 2 * 3600, "pesado": 48 * 3600}
+
+# De qual camada cada regra depende. Regra que nao esta neste mapa NAO pinta o
+# selo, e isso e decisao, nao esquecimento: `abandonado` e `caso_vazio` sao
+# constatacao (nao ha o que fazer hoje), `grafo_velho` volta a cada 7 dias para
+# sempre, e `memoria_crlf` e convencao interna do Claude Code — nenhuma das
+# quatro quer dizer que o projeto esta doente. Elas continuam na lista de
+# pendencias; so nao mandam na cor.
+CAMADA_DA_REGRA = {
+    "container_caido": "local",
+    "nao_commitado": "local",
+    "nao_enviado": "local",
+    "env_drift": "local",
+    "sem_remoto": "local",
+    "git_nao_medido": "local",
+    "ci_vermelha": "github",
+    "vulnerabilidade": "github",
+    "pr_parado": "github",
+    "site_fora": "github",
+    "nao_publicado": "github",
+    "dependencia_insegura": "pesado",
+    "auditoria_nao_rodou": "pesado",
+}
+
+
+def _idade(iso, agora):
+    """Segundos desde o carimbo. `None` quando nao ha carimbo legivel.
+
+    `None` e o valor que sobrevive ate a tela. Devolver 0 aqui — "acabou de ser
+    medido" — para um carimbo ausente e exatamente o defeito que esta etapa
+    existe para matar: seria indistinguivel de uma medida real.
+    """
+    try:
+        t = datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (agora - t).total_seconds()
+
+
+def camadas_do_selo(p: dict, agora=None) -> dict:
+    """{camada: True se a medida dela ainda vale}. A prova por tras do selo."""
+    agora = agora or datetime.now(timezone.utc)
+    carimbos = p.get("medido_em") or {}
+    vale = {}
+    for camada, limite in VALIDADE.items():
+        idade = _idade(carimbos.get(camada), agora)
+        vale[camada] = idade is not None and idade <= limite
+    return vale
+
+
+def selo_do_projeto(p: dict, pendencias=None, agora=None) -> str:
+    """Um de "saudavel", "atencao", "quebrado", "sem_dados".
+
+    O QUARTO ESTADO E O MOTIVO DESTA FUNCAO EXISTIR. A conta ingenua — "nao ha
+    pendencia aberta, logo verde" — pinta de verde justamente o projeto que
+    ninguem mediu, porque ausencia de medida tambem produz ausencia de
+    pendencia. Verde por cegueira e indistinguivel de verde por saude, e e a
+    pior mentira que um painel conta.
+
+    Entao: sem NENHUMA camada dentro da validade, o selo e `sem_dados` — nao e
+    bom nem ruim, e ausencia. E cada pendencia so pinta o selo se a camada que a
+    produziu ainda vale: numero de 20 minutos atras, numa camada que mede a cada
+    60 s, nao afirma nada sobre agora.
+
+    `pendencias` opcional: passe a lista JA filtrada (silenciada, arquivada)
+    quando quiser que o que o dono arquivou — "isto esta certo assim" — pare de
+    pintar o selo. Sem ela, a funcao calcula do zero a partir do retrato.
+    """
+    validas = camadas_do_selo(p, agora)
+    if not any(validas.values()):
+        return "sem_dados"
+
+    nome = p.get("nome")
+    if pendencias is None:
+        pendencias = _do_projeto(p)
+
+    pior = None
+    for i in pendencias:
+        if i.get("projeto") != nome:
+            continue
+        camada = CAMADA_DA_REGRA.get(i.get("regra"))
+        if camada is None or not validas.get(camada):
+            continue
+        o = ORDEM.get(i.get("gravidade"), 9)
+        pior = o if pior is None else min(pior, o)
+
+    if pior is None:
+        return "saudavel"
+    return "quebrado" if pior == ORDEM["alta"] else "atencao"
 
 
 # ----------------------------------------------------------------- agrupar

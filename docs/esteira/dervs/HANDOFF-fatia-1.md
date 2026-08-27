@@ -294,11 +294,56 @@ desenhado (botão que leva a erro é pior que botão que não existe).
 - **Chave de acesso (passkey)** — Fatia 2, como o plano já previa. A tabela
   `credencial` é o encaixe pronto.
 
-## A RETOMAR — ETAPA 10
+## ETAPA 10 — CONCLUÍDA (26/08/2026, branch `etapa-10-selo`)
 
-Plano: `docs/superpowers/plans/dervs-fatia-1.md`, seção "## 10" — o motor do
-selo: quatro estados, e o que acontece quando o agente cala. Depois:
-11 · 12 · 13→14→15 (as telas) · 16 (publicação) · 17.
+**O quarto estado do selo existe, e a conta dele mora em `regras.py`.**
+`selo_do_projeto(p, pendencias=None, agora=None)` devolve uma string:
+`saudavel`, `atencao`, `quebrado` ou `sem_dados`. Ainda **não há tela** — quem
+desenha os quatro selos é a etapa 14.
+
+### A regra, em uma frase
+
+Sem **nenhuma** camada dentro da validade, o selo é `sem_dados`. Com pelo menos
+uma, cada pendência só pinta o selo se a camada que a produziu ainda vale: alta
+→ `quebrado`, média ou baixa → `atencao`, nenhuma → `saudavel`.
+
+### As duas tabelas novas em `regras.py`
+
+- **`VALIDADE`** — `local` 10 min, `github` 2 h, `pesado` 48 h. São algumas
+  cadências de coleta cada uma, para que **uma** coleta falha não apague o selo.
+  Número de 20 minutos atrás numa camada que mede a cada 60 s não afirma nada
+  sobre agora, e `camadas_do_selo()` é o que diz isso à tela.
+- **`CAMADA_DA_REGRA`** — de qual camada cada regra depende. Regra fora do mapa
+  não pinta o selo. Ficaram fora **de propósito**: `abandonado`, `caso_vazio`,
+  `grafo_velho` e `memoria_crlf`. Continuam na lista de pendências; só não
+  mandam na cor.
+
+### Arquivamento permanente ficou de pé
+
+`avaliar()` ganhou o parâmetro `arquivadas` (conjunto de ids). Diferente de
+`silenciadas`, que expira em 24 h, arquivar não tem volta automática — é o dono
+dizendo "isto está certo assim". `servir.py` já passa `banco.arquivadas()` nos
+dois pontos que montam o estado, com o `usuario_id` da sessão.
+
+**O que ainda NÃO existe:** rota para arquivar. `banco.arquivar_pendencia()` e
+`banco.desarquivar_pendencia()` estão prontos desde a etapa 8, sem ninguém os
+chamando por HTTP. O botão é da etapa 14.
+
+### Defeito achado e corrigido no caminho
+
+`test_regras.py` tinha o `if __name__ == "__main__": unittest.main()` **no meio
+do arquivo**. As quatro funções da classe `GitQueNaoRespondeu`, definidas depois
+dele, nunca rodavam por `python test_regras.py` — só pelo `discover`. Por isso a
+contagem batia 627 pelo discover e menos pelo comando documentado. O bloco foi
+para o fim do arquivo.
+
+**Suíte:** 659 testes (era 644 medido pelo discover nesta sessão).
+
+## A RETOMAR — ETAPA 11
+
+Plano: `docs/superpowers/plans/dervs-fatia-1.md`, seção "## 11" — o agente local
+`dervs-agent` e o pareamento por código de seis dígitos. Depois:
+12 · 13→14→15 (as telas) · 16 (publicação) · 17.
 
 ## PARA A ETAPA 16 — o que a revisão de segurança deixou anotado
 
@@ -357,8 +402,9 @@ Nada disso é defeito do que já foi feito; é o roteiro de expor o painel.
 
 ## NÚMEROS REAIS (os documentos da esteira erravam)
 
-- **519** funções de teste em 10 arquivos `test_*.py` **na raiz** (não em `tests/`),
-  medidas em 26/08 depois da etapa 8. Eram 500 em 8 arquivos antes dela.
+- **659** funções de teste em `test_*.py` **na raiz** (não em `tests/`), medidas
+  em 26/08 depois da etapa 10 por `python -m unittest discover`. Eram 519 depois
+  da etapa 8 e 644 depois da etapa 9.
   A CI reporta 483 pelo runner do unittest. Não são "452".
 - **18** rótulos em `regras.ROTULO_REGRA`. Não são "16".
 - `projects.json` não existe. `casos.json` existe.

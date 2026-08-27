@@ -24,9 +24,33 @@ import threading
 
 import banco
 
-TETO = 5              # tentativas por origem dentro da janela
-JANELA = 900          # segundos (15 minutos)
-MINUTOS_DO_SELO = 10
+JANELA = 900          # segundos (15 minutos), nos dois ambientes
+
+
+def _e_local() -> bool:
+    return (os.environ.get("DERVS_AMBIENTE") or "").strip().lower() == "local"
+
+
+def limites(local: bool) -> tuple:
+    """(tentativas por origem na janela, minutos que o selo da cortina dura).
+
+    Local e servidor nao merecem a mesma regra, e escrever isso numa funcao —
+    em vez de dois numeros soltos — e o que impede afrouxar o local e afrouxar
+    o servidor junto sem perceber.
+
+    NO SERVIDOR: 5 tentativas por 15 min, selo de 10 min. A cortina la e o que
+    faz um robo de varredura ir embora achando que nao ha nada.
+
+    NO LOCAL: 20 tentativas, selo de 12 horas. Ali o dado e de mentira, a
+    combinacao esta escrita na documentacao e o servidor so escuta em
+    127.0.0.1 — apertar nao protege ninguem, e afasta quem trabalha. Em
+    26/08/2026 o dono ficou travado do lado de fora da propria maquina com a
+    chave certa na mao, e teve de esperar 15 minutos.
+    """
+    return (20, 12 * 60) if local else (5, 10)
+
+
+TETO, MINUTOS_DO_SELO = limites(_e_local())
 
 # Local e de mentira: dado de teste nao e segredo, e esta escrito no README para
 # o dono nao ter de decorar nada na propria maquina. No servidor a combinacao e
@@ -39,10 +63,6 @@ _tentativas: dict = {}
 # ThreadingHTTPServer atende cada pedido numa linha de execucao propria: duas
 # tentativas simultaneas mexeriam neste dicionario ao mesmo tempo.
 _trava = threading.Lock()
-
-
-def _e_local() -> bool:
-    return (os.environ.get("DERVS_AMBIENTE") or "").strip().lower() == "local"
 
 
 # ------------------------------------------------------------- a combinacao

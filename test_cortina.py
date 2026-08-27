@@ -205,5 +205,28 @@ class Teto(unittest.TestCase):
             self.assertFalse(cortina.conferir(ruim, con), ruim[:10])
 
 
+
+class LimitesPorAmbiente(unittest.TestCase):
+    """Local e servidor nao merecem a mesma regra, e a diferenca e testavel.
+
+    O que motivou: em 26/08 o dono foi barrado na propria maquina pelo teto de
+    5 tentativas, com a chave certa na mao, e o selo de 10 minutos o mandava
+    digitar de novo a cada intervalo. Local e dado de mentira atras de
+    127.0.0.1 — apertar ali nao protege ninguem e afasta quem trabalha.
+    """
+
+    def test_no_servidor_a_regra_e_apertada(self):
+        self.assertEqual(cortina.limites(False), (5, 10))
+
+    def test_no_local_a_regra_afrouxa(self):
+        teto, minutos = cortina.limites(True)
+        self.assertGreater(teto, 5)
+        self.assertGreaterEqual(minutos, 12 * 60)
+
+    def test_o_modulo_usa_a_funcao_e_nao_um_numero_solto(self):
+        """Sem isto, alguem afrouxa o local e afrouxa o servidor junto."""
+        self.assertIn((cortina.TETO, cortina.MINUTOS_DO_SELO),
+                      (cortina.limites(True), cortina.limites(False)))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
