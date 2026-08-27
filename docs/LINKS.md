@@ -27,16 +27,12 @@ etapa 7. Ele continua existindo como ferramenta do Claude Code, à parte.
 
 - **Não tem `/api/health`.** O painel é uma página só; a prova de que subiu é a
   raiz responder HTTP 200.
-- **Não tem tela de login** — ainda. O servidor escuta apenas em `127.0.0.1`,
-  ou seja, só o seu próprio computador alcança. A única rota que escreve
-  (`/api/silenciar`, o "x" que esconde um alerta) exige um **token sorteado a
-  cada vez que o painel sobe**, injetado só na página que o servidor entrega.
-
-  **Atenção para a etapa 16:** o `/api/dados` não tem autenticação nenhuma e
-  devolve o caminho absoluto das suas pastas. Quem segura isso hoje é escutar só
-  em `127.0.0.1`. Trocar esse endereço para aceitar a internet **antes** de as
-  etapas 8 e 9 (banco multiusuário e login) estarem prontas publicaria o painel
-  inteiro para leitura anônima.
+- **Não tem cadastro aberto.** Conta só nasce por convite, rodado por quem tem
+  acesso à máquina (`python autenticacao.py convidar …`). Não existe rota de
+  registro, e um teste reprova a suíte se alguma aparecer.
+- **Não tem recuperação por e-mail.** É decisão, não falta: quem perde todas as
+  formas de entrar não abre a conta. Por isso o painel cobra a segunda forma —
+  ver `docs/operacao/formas-de-entrar.md`.
 - **Não tem Postgres nem Docker próprio.** O painel guarda tudo num arquivo
   SQLite (`hub.db`). Ele *observa* os containers dos outros projetos, mas não
   sobe nenhum.
@@ -71,8 +67,8 @@ Get-NetTCPConnection -LocalPort 4777 -State Listen | Select-Object OwningProcess
 
 ## Mudou um arquivo `.py`? Reinicie o servidor
 
-O `servir.py` importa `regras.py`, `banco.py` e `coletar.py` **uma vez, quando
-sobe**. Editar esses arquivos não muda nada na tela enquanto o processo não
+O `servir.py` importa `regras.py`, `banco.py`, `coletar.py`, `cortina.py` e
+`passkey.py` **uma vez, quando sobe**. Editar esses arquivos não muda nada na tela enquanto o processo não
 reiniciar — a página continua servindo a versão que estava em memória.
 
 Isso engana de um jeito caro: você conserta um defeito, confere na tela, o
@@ -99,11 +95,48 @@ O sintoma é o painel não subir e o log acusar endereço em uso. Duas saídas:
 
 ## Depois de reiniciar o painel, recarregue a aba
 
-O token é sorteado a cada inicialização. Uma aba aberta desde antes do reinício
-fica com o token antigo e o "x" de esconder alerta para de funcionar. **Aperte
-F5 na página** e volta ao normal.
+O token anti-falsificação é derivado da **sua sessão**, e vai dentro da página
+que o servidor entrega. Uma aba aberta desde antes do reinício pode ficar com um
+token que não vale mais, e aí os botões que escrevem param de funcionar.
+**Aperte F5** e volta ao normal.
+
+## Entrar
+
+Desde a etapa 9 e o desenho das portas de entrada (26/08/2026), o painel tem
+cortina e login.
+
+1. **A capa** pede uma combinação de seis dígitos. No seu computador ela é
+   `000000`, escrita aqui de propósito: aqui o dado é de mentira, e combinação
+   que você tem de decorar na própria máquina só atrapalha. **No servidor ela é
+   sorteada e mostrada uma vez só.**
+2. **Depois da capa**, três portas: chave de acesso (o PIN do Windows ou a
+   digital do celular), GitHub, e código do papel. No ambiente local há uma
+   quarta, **Entrar · ambiente local**, que **não existe** no servidor — nem
+   como caminho reconhecido.
+
+Detalhes e a razão de cada escolha: `docs/operacao/formas-de-entrar.md`.
+
+## Conectar outra máquina (etapa 11)
+
+O painel recebe medição de outros computadores. No painel, botão **Máquinas** →
+**Gerar o número**; na outra máquina, dentro da pasta do DERVS:
+
+```
+python -m agente.enviar --alvo http://localhost:4777 --codigo 123456
+```
+
+Se der certo, ela imprime `pareado com …` e, logo depois,
+`enviado: N projetos`. Para deixar reportando sozinho, acrescente
+`--intervalo 600`. O roteiro completo, com os erros comuns:
+`docs/operacao/conectar-uma-maquina.md`.
+
+O token daquela máquina fica em `~/.dervs/agente.json`, **fora do repositório**.
 
 ## Credenciais
 
-Não há nenhuma. Este painel não tem usuário nem senha — ver "Não tem tela de
-login" acima. Nada aqui deve ser exposto à internet.
+**Deste computador, e não são segredo:** a combinação da capa é `000000` e a
+porta "ambiente local" entra sem senha. Dado de teste não é segredo — é dado de
+teste.
+
+**Do servidor:** a combinação é sorteada lá dentro e mostrada uma vez; a chave
+do cofre (`DERVS_COFRE`) nasce lá e nunca passa por chat, repositório ou commit.
