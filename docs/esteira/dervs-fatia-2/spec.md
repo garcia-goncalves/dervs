@@ -173,16 +173,27 @@ O freio precisa de três números, e o dono decide o perfil:
 3. **A janela de silêncio** — as horas em que o painel não encosta na cota, porque são as
    horas em que eles trabalham.
 
-- **Recomendação: 6 sessões/dia, 15 rodadas por sessão, e trabalhar só das 22h às 7h.**
-  Motivo: fora do horário de trabalho a cota se recompõe sozinha, então o painel usa o que
-  sobraria; e 15 rodadas resolvem uma verificação vermelha simples com folga — o número
-  existe para o laço errado morrer cedo, não para a tarefa caber.
-- Alternativa: sem janela de silêncio, com reserva de cota (o painel para de disparar
-  quando detecta que a janela de 5 horas está acabando). **Mais correto e mais caro:** a
-  CLI não expõe o consumo da janela de forma confiável, então "detectar" seria estimativa —
-  e estimativa disfarçada de medição é exatamente o que a segunda lei do repositório proíbe.
-- Alternativa: liberar sem freio e observar por uma semana. Barato de construir, e o
-  primeiro dia ruim custa o dia de trabalho de duas pessoas.
+**RESPONDIDA pelo dono em 28/08/2026: sem freio de horário. Observar por uma semana.**
 
-**Independente da escolha:** o teto em reais fica no código como rede de segurança para o
-dia em que uma chave de API entrar, e o botão "Parar" continua sendo a única garantia dura.
+A recomendação do Sintetizador era outra (janela de silêncio das 22h às 7h, 6 sessões por
+noite, 15 rodadas). O dono ouviu o alerta — *o painel disputa cota com o trabalho dele, e o
+dia ruim custa horas de duas pessoas* — e decidiu observar antes de limitar. **Decisão
+tomada, não se relitiga.** O alerta não se repete a cada sessão.
+
+**O que essa escolha obriga a construir, e não é escopo extra — é o que a torna executável:**
+
+1. **O contador de consumo.** Cada sessão registra início, fim, duração, rodadas gastas,
+   resultado e projeto. Sem isso, "observar" é uma intenção. A tabela `fila` já guarda
+   parte (`iniciado_em`, `terminado_em`, `custo_usd`); faltam rodadas e um lugar de leitura.
+2. **A tela que responde "quanto o painel consumiu esta semana"** — por dia, por projeto e
+   por regra, para a semana de observação virar decisão em vez de impressão.
+3. **O botão Parar em toda tela onde há sessão viva**, não só na tela da tarefa. Ele é a
+   única garantia dura que existe (`parar()` → `_matar_arvore`, `execucao.py:933,1145`), e
+   com o freio de horário fora ele deixa de ser conveniência e vira o freio principal.
+4. **Revisão marcada.** Ao fim de sete dias de uso real, o número volta ao dono com os
+   dados na mão. Fica escrito aqui para não depender de alguém lembrar.
+
+**Continua valendo:** `MAX_TURNOS = 40` como está, o teto em reais no código como rede para
+o dia em que uma chave de API entrar, e uma sessão por vez por máquina (`decidir_pedido`,
+`execucao.py:409`) — que, sem janela de silêncio, passa a ser a trava que mais segura o
+consumo.
