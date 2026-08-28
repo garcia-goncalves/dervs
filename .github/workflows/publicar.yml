@@ -343,6 +343,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
+          # A etiqueta e ANOTADA (`-a`), e etiqueta anotada guarda autor e data
+          # — e por isso que ela serve de registro do que foi ao ar. O runner
+          # do GitHub nasce sem identidade de git nenhuma, entao o comando
+          # morre com `empty ident name` e a publicacao termina vermelha
+          # DEPOIS de ter dado certo: o pior tipo de falha, porque diz que
+          # nao publicou quando publicou. Duas linhas resolvem.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           etiqueta="publicado-$(date -u +%Y%m%d-%H%M%S)"
           git tag -a "$etiqueta" -m "Publicado por ${{ github.actor }} de ${{ github.sha }}"
           git push origin "$etiqueta"
