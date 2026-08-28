@@ -45,10 +45,13 @@ configuração do nginx — quem faz isso é você, uma vez, olhando.
 `!` na frente.
 
 ```
-ssh root@SEU-SERVIDOR
+ssh -p 3119 tiba@57.129.81.137
 ```
 
-Troque `SEU-SERVIDOR` pelo endereço da VPS da OVH.
+Os valores estão aí porque foram medidos, não supostos: a VPS é
+`57.129.81.137`, o SSH atende na porta **3119** (a 22 está fechada) e o usuário
+de publicação é `tiba`. O usuário `andre`, que aparece nos documentos do Ajudei,
+é outro acesso da mesma máquina.
 
 **Se der certo:** o texto muda e passa a começar com algo como
 `root@vps-alguma-coisa:~#`. Daí em diante, tudo o que você digitar acontece **no
@@ -177,6 +180,15 @@ ls /etc/letsencrypt/live/dervs.com.br/fullchain.pem
   e responda o que ele perguntar (e-mail e aceite dos termos). Isso só funciona
   se o domínio já apontar para esta VPS — e ele já aponta.
 
+> **Atenção, e isto vai acontecer com você:** já existe um bloco respondendo
+> por `dervs.com.br` — o arquivo `/etc/nginx/sites-available/dervs` (sem
+> `.conf`), que serve a página provisória de `/var/www/dervs`. Conferido em
+> 28/08/2026: `https://dervs.com.br` responde 200 com certificado válido. Esse
+> bloco antigo **tem de sair do ar antes** do novo entrar, senão o nginx recusa
+> os dois com `conflicting server name`. Desligar é apagar o link, não o
+> arquivo:
+> `sudo rm -f /etc/nginx/sites-enabled/dervs`
+
 Agora o arquivo do site. O conteúdo dele está no repositório, em
 `infra/nginx-dervs.conf`. Traga-o e ligue:
 
@@ -231,20 +243,35 @@ guardados **no GitHub**, cifrados, e nem eu nem você os lemos de volta depois.
 
 Clique em **New repository secret**, uma vez para cada linha da tabela:
 
-| Nome (copie exatamente) | O que colar no valor |
-|---|---|
-| `VPS_HOST` | o endereço da VPS (o mesmo que você usou no `ssh` do passo 1) |
-| `VPS_USUARIO` | `root` (ou o usuário que você usa no `ssh`) |
-| `VPS_CHAVE_SSH` | a **chave privada** que abre o servidor — o arquivo inteiro, do `-----BEGIN` ao `-----END` |
-| `VPS_IMPRESSAO_DIGITAL` | a linha que o passo 6.1 abaixo gera |
+São **cinco**, não quatro. O `VPS_PORTA_SSH` faltava neste roteiro e é
+obrigatório: sem ele o workflow tenta a porta 22, que naquela máquina está
+fechada, e a publicação morre em `Connection refused`.
+
+| Nome (copie exatamente) | O que colar no valor | Situação em 28/08/2026 |
+|---|---|---|
+| `VPS_HOST` | `57.129.81.137` | **já gravado** |
+| `VPS_USUARIO` | `tiba` | **já gravado** |
+| `VPS_PORTA_SSH` | `3119` | **já gravado** |
+| `VPS_IMPRESSAO_DIGITAL` | a linha que o passo 6.1 abaixo gera | **já gravado** |
+| `VPS_CHAVE_SSH` | a **chave privada** que abre o servidor — o arquivo inteiro, do `-----BEGIN` ao `-----END` | **falta, e só a sua mão faz** |
+
+Os quatro primeiros não são segredo de verdade: endereço, nome de usuário,
+número de porta e uma chave *pública*. O quinto é o único que abre a porta, e
+por isso ele nunca passa por mim, por commit, por log nem por esta conversa —
+você o cola direto do arquivo para o campo do GitHub.
 
 **6.1 — a impressão digital do servidor.** Ela é o que impede o deploy de ser
 entregue a uma máquina que só *finge* ser a sua VPS. **Onde:** no seu
 computador (não dentro do servidor):
 
 ```
-ssh-keyscan -t ed25519 SEU-SERVIDOR
+ssh-keyscan -t ed25519 -p 3119 57.129.81.137
 ```
+
+**O `-p 3119` não é opcional.** Sem ele o comando bate na porta 22, não recebe
+nada, e devolve vazio — sem erro, sem aviso. Um `VPS_IMPRESSAO_DIGITAL` vazio
+faz a publicação falhar lá na frente, com uma mensagem que não fala de porta
+nenhuma.
 
 **Se der certo:** sai uma linha longa começando com o endereço e
 `ssh-ed25519 AAAA...`. É essa linha inteira que vai no valor de
