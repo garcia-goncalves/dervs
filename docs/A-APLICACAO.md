@@ -266,7 +266,12 @@ liga e desliga ferramenta do agente é uma superfície de ataque de primeira ord
 
 ## 11. O caminho — o que está pronto, o que falta
 
-**Entregue (etapas 1 a 16 de 17, 1060 testes passando):** a fusão dos dois repositórios com
+> **Estado em 28/08/2026, fim do dia: a Fatia 1 está FECHADA e NO AR.** As 17 etapas
+> entregues, 1095 testes em 19 arquivos, e `https://dervs.com.br` publicado e conferido
+> (etiqueta `publicado-20260828-203019`). O que segue abaixo descreve como se chegou até
+> aqui; o que **falta** começa em "Depois disso, Fatia 2".
+
+**Entregue (as 17 etapas, 1095 testes passando):** a fusão dos dois repositórios com
 as duas autorias preservadas · a verificação automática escalonada · a amputação de toda
 rota que executava comando · o banco de vários usuários · o login com cortina e entrada
 pelo GitHub · o motor do selo de quatro estados · o agente do computador e o pareamento
@@ -275,13 +280,18 @@ token do aplicativo do GitHub, conferida byte a byte contra o OpenSSL · a palet
 tipografia em tokens, servidas do próprio domínio · **e as telas, em português, com o
 selo de quatro estados ligado ao motor e "isto está certo assim" gravando no banco.**
 
-**A etapa 16 fechou o caminho até o ar, mas não passou por ele ainda.** Existem a imagem
-de produção, o arquivo que descreve o container no servidor, a configuração do nginx e o
-workflow de publicação — que só dispara por botão, com a palavra `PUBLICAR` digitada, e
-que sobe a imagem e bate na porta dela antes de trocar o que está no ar. O que falta é a
-mão do dono, em dois pontos que ninguém pode fazer por ele: gravar os segredos (a chave do
-servidor, no GitHub; a chave do cofre, gerada dentro da VPS) e dizer "pode subir". O
-roteiro completo está em `docs/operacao/publicar-no-servidor.md`.
+**A etapa 16 fechou o caminho até o ar, e em 28/08/2026 ele foi percorrido.** Existem a
+imagem de produção, o arquivo que descreve o container no servidor, a configuração do
+nginx e o workflow de publicação — que só dispara por botão, com a palavra `PUBLICAR`
+digitada, e que sobe a imagem e bate na porta dela antes de trocar o que está no ar. Os
+segredos foram gravados, o dono deu o sinal, e o site está publicado com duas contas e uma
+máquina reportando. O roteiro está em `docs/operacao/publicar-no-servidor.md`.
+
+**A primeira subida ensinou cinco coisas que só existem fora do localhost**, e elas estão
+em `docs/esteira/dervs/verificacao.md`. A pior: `test_design.py` reprovava e devolvia
+código de saída zero, e uma publicação inteira foi ao ar com quatro falhas dentro, com o
+passo marcado como sucesso. **A verificação automática decide pelo código de saída — teste
+que não o repassa não é teste, é decoração.**
 
 **O que a etapa 16 achou, e vale registrar porque é o tipo de erro que volta:** o
 `Dockerfile` não era aberto desde a etapa 7. Entre uma coisa e outra nasceram sete
@@ -316,12 +326,13 @@ trocam um clique economizado na rolagem por dez cliques gastos na investigação
 primeiras linhas visíveis mostram *selo, nome, motivo e carimbo* juntos, e o selo é
 legível a um braço de distância. A contagem deixa de ser critério.
 
-**Falta, nesta ordem:**
-
-| # | O quê | Por que agora |
-|---|---|---|
-| 16 | Publicar em `dervs.com.br` | O domínio já aponta para a VPS e já serve HTTPS |
-| 17 | Conferência final da fundação | |
+**As etapas 16 e 17 foram entregues em 28/08/2026.** A conferência final está colada em
+`docs/esteira/dervs/verificacao.md`, com a saída dos oito comandos, com o que eles **não**
+provam (conferido clicando), e com as pendências nomeadas. Duas delas foram fechadas no
+mesmo dia — o `painel.js` que saía sem sessão, e a conta criada errada que não dava para
+apagar. **Duas continuam abertas e as duas dependem só da mão do dono:** cadastrar uma
+chave de acesso e gerar os códigos de papel (hoje o GitHub é a única porta da conta), e o
+MX nulo do domínio, que só importa no dia em que o DERVS precisar enviar e-mail.
 
 **A etapa 15 entregou o teste que reprova design errado**, e vale saber o que ele *não*
 faz: seis dos oito itens da lista do desenho são verificados contra os arquivos de
@@ -333,6 +344,30 @@ pior que a lacuna.
 **Depois disso, Fatia 2:** descoberta automática de pasta, conectar servidor e conta pela
 tela, e o botão consertar. **Fatia 3:** terminais e lousa de agentes. **Fatia 4:** o painel
 do ferramental do Claude, e o Telegram.
+
+### O pedido do dono em 28/08/2026, à noite — o que abre a Fatia 2
+
+Palavras dele, transcritas para não virarem lembrança minha:
+
+> "Quero a fusão das aplicações conforme combinado (dervs-hub + painel-projetos) e muito
+> mais. Quero tudo que um DEV precisa."
+
+**Cuidado com a palavra "fusão" aqui, porque ela já foi usada para outra coisa.** A fusão
+dos **repositórios** está entregue desde a etapa 1: o `dervs-hub` do André vive em
+`vivo/`, como subárvore, com os 13 commits dele preservados. O que ele está pedindo agora
+é a fusão das **capacidades** — trazer para o DERVS o que aquele código faz (terminais,
+lousa, os agentes) **reescrito em Python sob as regras deste repositório**, que é
+exatamente o que a linha travada do §12 manda: *"a camada de execução do `dervs` antigo é
+reescrita, não endurecida"*.
+
+**Nada de `vivo/` vai para o ar como está.** Aquele código abre um terminal de verdade sem
+pedir autenticação — no `127.0.0.1` é ferramenta, publicado é execução remota aberta. Duas
+barreiras independentes impedem, e `vivo/LEIA-ANTES.md` explica as duas.
+
+**"Tudo que um DEV precisa" ainda não é escopo — é intenção.** Traduzir isso em contrato é
+trabalho da esteira, começando pelo briefing. Não comece a construir antes disso: o
+próprio dono disse em 27/08 que estava confuso com o tamanho que a coisa tomou, e a
+esteira existe para essa conversa.
 
 ## 12. O que não se relitiga
 
@@ -354,7 +389,17 @@ Decisões travadas. Mudar qualquer uma exige um motivo novo, escrito.
 
 - **Pendência #10** — peneirar o nome do repositório na entrada, e não na hora de montar a
   consulta. Defeito que já existia.
-- **Quando o servidor existir** — levar as duas identificações públicas do aplicativo do
-  GitHub e os dois segredos para lá, e convidar cada pessoa.
-- **A troca de chave por token nunca rodou contra o GitHub de verdade.** Está certa contra
-  o OpenSSL e contra o formato documentado, e mais nada. Falta o servidor existir.
+- ~~**Quando o servidor existir** — levar as identificações e os segredos para lá, e
+  convidar cada pessoa.~~ **Pago em 28/08/2026:** as credenciais do OAuth chegam ao
+  `/opt/dervs/.env` pelo workflow (`f2adc52`), e o workflow convida os donos a partir de
+  `vars.DERVS_DONOS`, uma linha por pessoa, idempotente **por pessoa** e não por contagem
+  — o DERVS tem dois donos (`feed0e0`).
+- **A troca de chave por token continua sem ter rodado contra o GitHub de verdade.** Está
+  certa contra o OpenSSL e contra o formato documentado, e mais nada. O servidor agora
+  existe, então a dívida deixou de estar bloqueada — falta exercitá-la.
+- **Só uma forma de entrar.** As rotas de chave de acesso e de código de papel existem e
+  são testadas desde a etapa 12; ninguém cadastrou nem gerou nada em produção. Perder a
+  conta do GitHub hoje é perder o DERVS. Exige a mão do dono: o Windows só abre a janela
+  do PIN para uma pessoa.
+- **`dervs.com.br` publica um MX nulo** — o domínio declara que não recebe e-mail. Os
+  endereços das contas são identificadores, não caixas.
