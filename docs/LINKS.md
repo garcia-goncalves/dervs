@@ -1,14 +1,14 @@
 # Links e comandos deste projeto
 
-O HUB do dev é um painel local: uma página só, servida pelo seu próprio
-computador, que mostra o estado dos seus projetos (git, Docker, CI, alertas de
-segurança, gasto do Claude).
+O DERVS é um painel: uma página só, que mostra o estado dos seus projetos
+(git, contêineres, verificação automática, alertas de segurança, publicação).
 
-**Desde a etapa 7 do DERVS (26/08/2026), ele só mostra — não age.** As rotas
-que rodavam `git push`, `docker compose up`, abriam o VS Code e disparavam uma
-sessão do Claude foram removidas, porque este painel vai passar a rodar num
-servidor exposto à internet. O que sobrou de botão: esconder um alerta por 24 h
-e trocar o tema.
+**Desde a etapa 7 (26/08/2026), ele só mostra — não age.** As rotas que rodavam
+`git push`, `docker compose up`, abriam o VS Code e disparavam uma sessão do
+Claude foram removidas, porque este painel vai passar a rodar num servidor
+exposto à internet. O que sobrou de botão escreve no banco e não roda programa
+nenhum: adiar um alerta por 24 h, dizer "isto está certo assim", desarquivar,
+parear um computador e trocar o tema.
 
 ## Links
 
@@ -18,6 +18,33 @@ DESTE PROJETO
   Banco de dados ... hub.db (arquivo SQLite na raiz do projeto)
 
 ```
+
+## As telas (etapa 14, 27/08/2026)
+
+O painel é uma página só, e cada tela tem um endereço com `#`. Dá para colar o
+endereço na barra do navegador e cair direto nela.
+
+| Tela | Endereço | O que responde |
+|---|---|---|
+| Painel | `#/painel` | a frase de resumo, a ação recomendada, e um selo por projeto |
+| Projeto | `#/projeto/<nome>` | a prova do selo, nas três colunas, mais os arquivados |
+| Alerta | `#/alerta/<id>` | o que houve, e as ações: adiar 24 h ou "isto está certo assim" |
+| Conectar projeto | `#/conectar` | por que os projetos chegam sozinhos, e o que falta |
+| Computadores | `#/computadores` | quem reporta, e o número de pareamento |
+| Formas de entrar | `#/entrada` | chaves de acesso e códigos do papel |
+
+A tela **Entrar** é outra página (`index-cortina.html` + `portas.html`): ela é
+servida antes de existir sessão, e por isso não mora aqui dentro.
+
+**A pasta `assets/` é servida a partir da etapa 14** — folha de estilo, marca,
+glifos dos selos e as duas famílias tipográficas, do próprio domínio. A lista de
+arquivos permitidos é montada na subida, por caminho exato e com a extensão
+filtrada: o `CREDITOS.md` da pasta **não** é servido, e não existe permissão por
+prefixo.
+
+**`/robots.txt` também é servido**, bloqueando `/painel`, `/projeto`,
+`/maquinas`, `/api`, `/entrar`, `/entrada` e `/agente`. Toda tela autenticada
+manda junto o cabeçalho `X-Robots-Tag: noindex, nofollow`.
 
 O grafo de código (`codebase-memory-mcp`, porta 9749) **não é mais dependência
 deste projeto**. O painel embutia a tela dele por procuração; esse proxy saiu na
@@ -80,6 +107,21 @@ Derrube (receita acima) e suba de novo. Depois recarregue a página.
 Mudança só no `index.html` **não** precisa disso: o arquivo é lido a cada
 pedido — basta recarregar a página.
 
+**Mas cuidado com dois detalhes que já custaram meia hora em 27/08/2026:**
+
+1. **Mudar só o `#` do endereço NÃO recarrega a página.** Ir de `#/painel` para
+   `#/projeto/x` troca a tela sem buscar o arquivo de novo. Para ver uma edição
+   no `index.html`, aperte F5 ou mude a parte antes do `#`.
+2. **Confira que só existe UM servidor de pé.** Se o antigo não morrer, o novo
+   sobe do lado e o navegador continua falando com o velho — a tela fica
+   idêntica e as rotas novas respondem 404. Para ver todos:
+
+```
+Get-CimInstance Win32_Process -Filter "Name='python.exe' or Name='pythonw.exe'" |
+  Where-Object { $_.CommandLine -like '*servir.py*' } |
+  Select-Object ProcessId, CommandLine
+```
+
 E `python coletar.py` também não basta sozinho: ele grava no `hub.db`, mas quem
 calcula as pendências é o processo do servidor.
 
@@ -116,10 +158,16 @@ cortina e login.
 
 Detalhes e a razão de cada escolha: `docs/operacao/formas-de-entrar.md`.
 
-## Conectar outra máquina (etapa 11)
+## Conectar outro computador (etapa 11)
 
-O painel recebe medição de outros computadores. No painel, botão **Máquinas** →
-**Gerar o número**; na outra máquina, dentro da pasta do DERVS:
+*A palavra mudou na etapa 14: era "máquina", virou "computador" na tela inteira
+— decisão de 27/08/2026 registrada em `docs/A-APLICACAO.md`. Os endereços por
+dentro (`/api/maquinas`) continuam como estavam; trocar identificador de código
+por causa de texto de tela é risco sem ganho.*
+
+O painel recebe medição de outros computadores. No painel, tela
+**Computadores** → **Gerar o número**; no outro computador, dentro da pasta do
+DERVS:
 
 ```
 python -m agente.enviar --alvo http://localhost:4777 --codigo 123456

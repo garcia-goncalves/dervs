@@ -873,6 +873,160 @@ class ServidorDeVerdade(unittest.TestCase):
                        cookies=self.com_sessao())
         self.assertEqual(r.status, 403)
 
+    # ------------------------------------------------- o selo chega na tela
+    def test_api_dados_traz_o_selo_de_cada_projeto(self):
+        """O motor do selo existe desde a etapa 10 e nunca era chamado.
+
+        Sem esta linha a tela teria de recalcular os quatro estados em
+        JavaScript — uma segunda copia da regra mais importante do produto,
+        e a copia que diverge e sempre a que ninguem le. A etapa 14 fecha o
+        cano: quem decide a cor e `regras.selo_do_projeto`, no servidor.
+        """
+        # O projeto e semeado AQUI de proposito. Sem ele o laco abaixo giraria
+        # sobre uma lista vazia e o teste passaria por engano — a armadilha que
+        # o plano da etapa 15 nomeia e que este projeto ja pegou uma vez.
+        banco.gravar("projeto-do-selo", "local",
+                     {"nome": "projeto-do-selo", "git": {"versionado": True}},
+                     usuario_id=self.uid)
+        r = self.pedir("/api/dados", cookies=self.com_sessao())
+        self.assertEqual(r.status, 200)
+        d = json.loads(r.corpo)
+        self.assertTrue(d["projetos"], "nenhum projeto para examinar")
+        for p in d["projetos"]:
+            self.assertIn(p.get("selo"),
+                          ("saudavel", "atencao", "quebrado", "sem_dados"),
+                          "projeto %r sem selo valido" % p.get("nome"))
+            # A prova por tras do selo viaja junto: sem ela a tela nao consegue
+            # dizer QUAL camada esta velha, e "sem dados" vira um veredito sem
+            # explicacao — que e a mesma mentira, so que educada.
+            self.assertIsInstance(p.get("camadas"), dict)
+
+    def test_projeto_sem_medicao_nenhuma_nao_vem_verde(self):
+        """A mentira por omissao, conferida na fronteira HTTP.
+
+        `test_regras.py` ja prova isso na funcao. Aqui prova-se que a rota nao
+        desfaz o cuidado no caminho ate o navegador.
+        """
+        cru = {"nome": "sem-medida", "medido_em": {}}
+        self.assertEqual(servir.regras.selo_do_projeto(cru), "sem_dados")
+
+    # ------------------------------------ "isto esta certo assim" (etapa 14)
+    def test_arquivar_sem_motivo_e_recusado_e_nao_grava(self):
+        """Sumico permanente sem motivo registrado nao tem volta explicavel.
+
+        O banco ja levantava ValueError; sem esta guarda a rota devolveria 500
+        e a tela mostraria "nao conseguimos arquivar" para um erro que e de
+        preenchimento, nao de servidor.
+        """
+        cookies, token = self.sessao_e_token()
+        r = self.pedir("/api/arquivar", "POST", {"id": "ci_vermelha:x"},
+                       cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertEqual(r.status, 400, r.corpo)
+        con = banco.conectar()
+        try:
+            self.assertNotIn("ci_vermelha:x",
+                             banco.arquivadas(usuario_id=self.uid, con=con))
+        finally:
+            con.close()
+
+    def test_arquivar_com_motivo_some_da_lista_e_deixa_rastro(self):
+        cookies, token = self.sessao_e_token()
+        pid = "nao_publicado:projeto-de-teste"
+        r = self.pedir("/api/arquivar", "POST",
+                       {"id": pid, "motivo": "este projeto nao publica de proposito"},
+                       cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertEqual(r.status, 200, r.corpo)
+
+        d = json.loads(self.pedir("/api/dados", cookies=cookies).corpo)
+        self.assertNotIn(pid, [i["id"] for i in d["pendencias"]])
+        # O rastro tem de chegar a TELA, e nao so ao banco: a secao
+        # "Arquivados" mostra o motivo e a data, e o botao de desarquivar.
+        guardadas = {a["id"]: a for a in d["arquivadas"]}
+        self.assertIn(pid, guardadas)
+        self.assertEqual(guardadas[pid]["motivo"],
+                         "este projeto nao publica de proposito")
+        self.assertTrue(guardadas[pid]["arquivado_em"])
+
+    def test_desarquivar_devolve_a_pendencia_para_a_lista(self):
+        cookies, token = self.sessao_e_token()
+        pid = "pr_parado:projeto-de-teste"
+        self.pedir("/api/arquivar", "POST", {"id": pid, "motivo": "engano meu"},
+                   cookies=cookies, cabecalhos={"X-Token": token})
+        r = self.pedir("/api/desarquivar", "POST", {"id": pid},
+                       cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertEqual(r.status, 200, r.corpo)
+        d = json.loads(self.pedir("/api/dados", cookies=cookies).corpo)
+        self.assertNotIn(pid, [a["id"] for a in d["arquivadas"]])
+
+    def test_arquivar_de_um_usuario_nao_esconde_o_alerta_do_outro(self):
+        """O mesmo IDOR que a etapa 11 consertou no silenciar.
+
+        Arquivar e mais grave que silenciar: silenciar vence em 24 h, arquivar
+        e para sempre. Um vazamento aqui apagaria o alerta de seguranca de
+        outra conta sem prazo para se desfazer sozinho.
+        """
+        meus, meu_token = self.sessao_e_token()
+        pid = "vulnerabilidade:projeto-de-teste"
+        self.pedir("/api/arquivar", "POST", {"id": pid, "motivo": "so meu"},
+                   cookies=meus, cabecalhos={"X-Token": meu_token})
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("outro-arquivar@teste.local", con=con)
+            self.assertIn(pid, banco.arquivadas(usuario_id=self.uid, con=con))
+            self.assertNotIn(pid, banco.arquivadas(usuario_id=outro, con=con))
+            self.assertNotIn(pid, banco.arquivadas(usuario_id=banco.DONO_LOCAL,
+                                                   con=con))
+        finally:
+            con.close()
+
+    def test_arquivar_e_desarquivar_exigem_o_anti_csrf(self):
+        cookies = self.com_sessao()
+        for rota in ("/api/arquivar", "/api/desarquivar"):
+            with self.subTest(rota=rota):
+                r = self.pedir(rota, "POST", {"id": "x:y", "motivo": "m"},
+                               cookies=cookies)
+                self.assertEqual(r.status, 403)
+
+    def test_arquivar_sem_sessao_e_401(self):
+        for rota in ("/api/arquivar", "/api/desarquivar"):
+            with self.subTest(rota=rota):
+                self.assertEqual(
+                    self.pedir(rota, "POST", {"id": "x:y", "motivo": "m"}).status,
+                    401)
+
+    # --------------------------------------------- os estaticos da etapa 13
+    def test_a_folha_de_estilo_e_as_fontes_sao_servidas(self):
+        """A etapa 13 criou assets/ e ninguem podia baixar nada de la.
+
+        Sem isto a tela nova nasceria sem tipografia e sem token: o navegador
+        pediria /assets/dervs.css, levaria 404, e a pagina apareceria com a
+        fonte do sistema e as cores do navegador — parecendo quebrada sem
+        nenhum erro visivel no servidor.
+        """
+        r = self.pedir("/assets/dervs.css", cookies=self.com_sessao())
+        self.assertEqual(r.status, 200)
+        self.assertIn("--estado-sem-dados", r.corpo)
+
+    def test_a_lista_de_estaticos_continua_sendo_de_caminho_exato(self):
+        """Permissao por PASTA seria travessia de diretorio esperando acontecer.
+
+        A lista nasce de uma leitura da pasta na subida, com extensao filtrada.
+        Estes tres pedidos provam que ela nao virou um prefixo permissivo.
+        """
+        for caminho in ("/assets/CREDITOS.md",
+                        "/assets/../banco.py",
+                        "/assets/nao-existe.css"):
+            with self.subTest(caminho=caminho):
+                r = self.pedir(caminho, cookies=self.com_sessao())
+                self.assertNotEqual(r.status, 200, caminho)
+
+    def test_robots_bloqueia_as_telas_autenticadas(self):
+        r = self.pedir("/robots.txt")
+        self.assertEqual(r.status, 200)
+        for area in ("/painel", "/projeto", "/maquinas", "/api"):
+            self.assertIn("Disallow: " + area, r.corpo)
+
+
 class _Resposta:
     def __init__(self, status, corpo, cabecalhos, postos):
         self.status = status

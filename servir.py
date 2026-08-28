@@ -116,7 +116,22 @@ GITHUB_SECRET = (os.environ.get("DERVS_GITHUB_SECRET") or "").strip()
 # Os UNICOS arquivos servidos alem da pagina. Delegar ao handler estatico
 # publicava a pasta toda — inclusive o hub.db e o .git/config.
 ESTATICOS_OK = {"/painel-projetos.svg", "/painel-projetos.png",
-                "/painel-projetos.ico", "/favicon.ico"}
+                "/painel-projetos.ico", "/favicon.ico", "/robots.txt"}
+
+# A pasta `assets/` da etapa 13 — folha de estilo, marca, glifos dos selos e as
+# duas famílias tipográficas servidas do próprio domínio.
+#
+# A lista nasce de UMA LEITURA DA PASTA na subida, e continua sendo permissão
+# por caminho exato: cada arquivo vira uma entrada propria em `ROTAS`, entao
+# nao ha prefixo permissivo e nao ha travessia de diretorio a defender —
+# `/assets/../banco.py` simplesmente nao esta na tabela.
+#
+# A extensao e filtrada de proposito. Sem o filtro, o `CREDITOS.md` seria
+# servido, e um `.py` que caisse ali por engano viraria codigo-fonte publico.
+ESTATICOS_OK |= {"/" + arquivo.relative_to(AQUI).as_posix()
+                 for arquivo in (AQUI / "assets").rglob("*")
+                 if arquivo.is_file()
+                 and arquivo.suffix in (".css", ".svg", ".png", ".woff2")}
 
 COLETORES = {
     "local": (AQUI / "coletar.py", None),          # intervalo vem da linha de comando
@@ -468,11 +483,30 @@ class Hub(SimpleHTTPRequestHandler):
             pend = memoria.decorar(pend, memoria.vidas(con), agora_iso,
                                    desde=memoria.desde(con))
             tend = memoria.tendencia(con, agora_iso)
+            guardadas = banco.arquivadas_detalhe(usuario_id=usuario_id, con=con)
         finally:
             con.close()
+        # O SELO E CALCULADO AQUI, e nao no navegador.
+        #
+        # `regras.selo_do_projeto` existe desde a etapa 10 e ate esta linha
+        # nunca era chamado por ninguem: a tela antiga pintava a cor por conta
+        # propria. Deixar a tela nova recalcular os quatro estados em
+        # JavaScript criaria uma segunda copia da regra mais importante do
+        # produto — e, como este repositorio ja aprendeu, a copia que diverge e
+        # sempre a que ninguem le.
+        #
+        # `camadas` viaja junto porque "sem dados" sem dizer QUAL camada
+        # envelheceu e um veredito sem explicacao: a mesma mentira, so que
+        # educada.
+        for p in e["projetos"]:
+            p["selo"] = regras.selo_do_projeto(p, pend)
+            p["camadas"] = regras.camadas_do_selo(p)
         return {
             "agora": agora_iso,
             "pendencias": pend,
+            # O que o dono mandou sumir para sempre, com motivo e data. Some da
+            # lista de pendencias e reaparece aqui — nunca sem deixar rastro.
+            "arquivadas": guardadas,
             # A lista achatada acima continua sendo o contrato (o "x" acha a
             # pendencia pelo id). `grupos` e so o desenho da tela.
             "grupos": regras.agrupar(pend),
@@ -1147,43 +1181,74 @@ class Hub(SimpleHTTPRequestHandler):
         self._apagar_cookie("cortina")
         return self._json(200, {"ok": True})
 
-    def _silenciar(self):
-        """Esconde uma pendencia por N horas. SO escreve no banco.
+    # ------------------------------------------- a guarda comum das escritas
+    #
+    # Tres rotas escrevem no banco (silenciar, arquivar, desarquivar) e as tres
+    # precisam exatamente da mesma guarda. Ate a etapa 14 ela existia UMA vez,
+    # escrita a mao dentro de `_silenciar`. Copiar essas vinte linhas mais duas
+    # vezes seria pedir para a terceira copia esquecer uma delas — e guarda de
+    # seguranca esquecida nao aparece na tela, aparece no incidente.
+    def _guarda_de_escrita(self):
+        """(corpo, sessao) — ou (None, None) com a recusa JA respondida.
 
-        E a unica rota de escrita que sobrou depois da amputacao da etapa 7.
-        Nao roda programa nenhum: o pior que um pedido forjado consegue aqui e
-        esconder um alerta da tela do dono por ate 30 dias, e isso se desfaz
-        sozinho. Mesmo assim o par Origin + token continua exigido, porque o
-        alerta escondido pode ser um alerta de seguranca.
+        Falha FECHADA: todo caminho que nao chega a ultima linha devolve o par
+        vazio, e quem chama sai na hora sem tocar no banco.
         """
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
-            return self._json(403, {"erro": "origem nao permitida"})
-        # A rota e de `acesso="dado"`, entao o despacho ja garantiu que ha
+            self._json(403, {"erro": "origem nao permitida"})
+            return None, None
+        # As rotas sao de `acesso="dado"`, entao o despacho ja garantiu que ha
         # sessao completa. Aqui so falta o anti-CSRF DAQUELA sessao.
         sessao = self._sessao()
         if sessao is None:
             # A sessao pode ter vencido entre o despacho e esta linha. Sem esta
             # guarda, `_csrf_da_sessao(None)` levantaria TypeError e devolveria
             # 500 onde o certo e 403.
-            return self._json(403, {"erro": "entre de novo"})
+            self._json(403, {"erro": "entre de novo"})
+            return None, None
         if not secrets.compare_digest(self.headers.get("X-Token") or "",
                                       self._csrf_da_sessao(sessao)):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return None, None
         try:
             n = int(self.headers.get("Content-Length") or 0)
             corpo = json.loads(self.rfile.read(min(n, 16_384)) or b"{}")
         except (ValueError, OSError):
-            return self._json(400, {"erro": "pedido invalido"})
+            self._json(400, {"erro": "pedido invalido"})
+            return None, None
         if not isinstance(corpo, dict):
-            return self._json(400, {"erro": "pedido invalido"})
+            self._json(400, {"erro": "pedido invalido"})
+            return None, None
+        return corpo, sessao
+
+    def _id_de_pendencia(self, corpo):
+        """O id validado, ou `None` com a recusa ja respondida."""
         pid = corpo.get("id")
         if not pid or not isinstance(pid, str):
-            return self._json(400, {"erro": "faltou o id da pendencia"})
+            self._json(400, {"erro": "faltou o id da pendencia"})
+            return None
         # O id e sempre `regra:projeto` — dezenas de caracteres. Sem teto, quem
         # tem o token grava ids de 16 KiB, um por pedido, e cada um vira linha
         # que nenhuma coleta jamais colhe. Nao vaza nada; incha o banco.
         if len(pid) > 200:
-            return self._json(400, {"erro": "id longo demais"})
+            self._json(400, {"erro": "id longo demais"})
+            return None
+        return pid
+
+    def _silenciar(self):
+        """Esconde uma pendencia por N horas. SO escreve no banco.
+
+        Nao roda programa nenhum: o pior que um pedido forjado consegue aqui e
+        esconder um alerta da tela do dono por ate 30 dias, e isso se desfaz
+        sozinho. Mesmo assim o par Origin + token continua exigido, porque o
+        alerta escondido pode ser um alerta de seguranca.
+        """
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        pid = self._id_de_pendencia(corpo)
+        if pid is None:
+            return
         try:
             horas = max(1, min(24 * 30, int(corpo.get("horas") or 24)))
         except (TypeError, ValueError):
@@ -1193,6 +1258,48 @@ class Hub(SimpleHTTPRequestHandler):
         banco.silenciar(pid, ate, usuario_id=sessao["usuario_id"])
         return self._json(200, {"ok": True,
                                 "saida": "silenciada por %d h." % horas})
+
+    # O limite do motivo. Ele e escrito a mao, numa linha, para o proprio dono
+    # se lembrar daqui a tres meses — nao e campo de texto livre para prosa.
+    MOTIVO_MAX = 300
+
+    def _arquivar(self):
+        """"Isto esta certo assim" — o sumico PERMANENTE, e por isso com motivo.
+
+        A correcao veio da fase 2 do desenho: ate aqui a unica saida era adiar
+        24 horas, sempre. Consequencia — projeto que o dono arquivou de
+        proposito voltava a cutucar todo dia, para sempre, e isso treina a
+        pessoa a ignorar a lista inteira. Uma lista que se aprende a ignorar
+        nao protege ninguem.
+
+        O motivo e EXIGIDO na rota, e nao so no banco. `banco.arquivar`
+        levanta ValueError sem ele; sem esta guarda o dono veria "nao
+        conseguimos arquivar" — mensagem de falha de servidor — para o que e
+        so um campo em branco.
+        """
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        pid = self._id_de_pendencia(corpo)
+        if pid is None:
+            return
+        motivo = corpo.get("motivo")
+        if not isinstance(motivo, str) or not motivo.strip():
+            return self._json(400, {"erro": "escreva por que isto esta certo assim"})
+        banco.arquivar(pid, usuario_id=sessao["usuario_id"],
+                       motivo=motivo.strip()[:self.MOTIVO_MAX])
+        return self._json(200, {"ok": True, "saida": "arquivada."})
+
+    def _desarquivar(self):
+        """A volta. Carimba em vez de apagar: o rastro vale tambem para o desfazer."""
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        pid = self._id_de_pendencia(corpo)
+        if pid is None:
+            return
+        banco.desarquivar(pid, usuario_id=sessao["usuario_id"])
+        return self._json(200, {"ok": True, "saida": "de volta a lista."})
 
     def do_HEAD(self):
         """Recusado.
@@ -1260,6 +1367,10 @@ ROTAS = {
     "/sair":                    Rota("POST", Hub._sair,           "aberta"),
     "/api/dados":               Rota("GET",  Hub._dados,          "dado"),
     "/api/silenciar":           Rota("POST", Hub._silenciar,      "dado"),
+    # "Isto esta certo assim" e o desfazer dele. Escrevem uma linha no banco e
+    # nao rodam programa nenhum, como o silenciar.
+    "/api/arquivar":            Rota("POST", Hub._arquivar,       "dado"),
+    "/api/desarquivar":         Rota("POST", Hub._desarquivar,    "dado"),
 
     # As portas de entrada. As tres primeiras sao "cortina" — quem chega ainda
     # nao tem sessao, e e para isso que elas existem. As quatro de baixo sao

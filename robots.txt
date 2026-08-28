@@ -1,0 +1,22 @@
+# DERVS — o que pode ser visitado por buscador, e o que nao pode.
+#
+# A pagina publica de dervs.com.br e a unica coisa aqui que existe para ser
+# achada. Todo o resto fica atras de login e nao tem nada a ganhar aparecendo
+# no Google.
+#
+# CINTO E SUSPENSORIO, de proposito: este arquivo impede a VISITA, e as telas
+# autenticadas mandam junto o cabecalho `X-Robots-Tag: noindex, nofollow`, que
+# impede a INDEXACAO de um endereco que tenha vazado por outro caminho. Um
+# `Disallow` sozinho nunca impediu um endereco descoberto por link de aparecer
+# na busca.
+
+User-agent: *
+Disallow: /painel
+Disallow: /projeto
+Disallow: /maquinas
+Disallow: /api
+Disallow: /entrar
+Disallow: /entrada
+Disallow: /agente
+
+Sitemap: https://dervs.com.br/sitemap.xml
