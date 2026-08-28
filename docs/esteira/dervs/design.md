@@ -213,7 +213,16 @@ de venda. Tamanho grande aqui custa projetos visíveis por rolagem.
   troca de `--fundo` para `--fundo-elevado`. Sombra sugere luz e profundidade física, que é
   linguagem calorosa; e no tema escuro ela simplesmente não se enxerga.
 - **Densidade alta:** linha de lista com `--e3` de respiro vertical e `--e4` horizontal.
-  Meta verificável: **10 projetos visíveis sem rolagem em uma tela de 360×640**.
+  Meta verificável: **em 360×640, a linha de projeto mostra selo, nome, motivo e carimbo
+  juntos** — o que houve se lê sem abrir nada. Na prática isso dá 5 a 7 projetos por tela.
+
+  > **Correção de 28/08/2026, decidida pelo dono.** Até aqui a meta era "10 projetos
+  > visíveis sem rolagem em 360×640", e a etapa 14 provou por medição que ela não cabe
+  > junto com o motivo na linha (90 a 113 px por linha, mais ~350 px de frase de resumo,
+  > régua e ação recomendada). O número foi trocado, não a densidade: dez nomes com um
+  > selo ao lado obrigam a abrir cada projeto para descobrir o que aconteceu — trocam um
+  > clique economizado na rolagem por dez gastos na investigação. Rolar não é defeito;
+  > abrir dez telas é. A contagem deixou de ser critério.
 - **Foco de teclado:** anel de 2px em `--acao` com `--e1` de afastamento, sempre visível,
   nunca removido. É a única "sombra" do sistema, e ela é funcional.
 - **Movimento:** só transição de cor e de opacidade, no máximo 150ms. Nenhuma entrada
@@ -301,7 +310,8 @@ A tela das cinco da manhã. É esta que decide se o produto vale.
   esvaziar a tela por causa de uma falha de rede — tela vazia é indistinguível de "você não
   tem projetos".
 - **360px:** o motivo quebra em até duas linhas e corta com reticências na terceira; o
-  carimbo desce para a linha de baixo do selo. A meta de 10 projetos por tela vale aqui.
+  carimbo desce para a linha de baixo do selo. **O motivo fica** — é ele que responde "o
+  que houve" sem um clique. Ver a correção de 28/08/2026 na seção de densidade.
 - **Verificável:** o `ajudei-saude` aparece vermelho no quesito de publicação, com os 10
   commits não publicados desde 11/08/2026.
 
@@ -663,7 +673,8 @@ Os itens abaixo são verificáveis e viram teste ou olhada na tela na fase 6:
 3. Todo par de contraste da tabela é recalculado no teste e reprova abaixo de 4,5:1
    (texto) ou 3:1 (contorno com significado).
 4. Nenhuma cor tem definição única dentro de um bloco de tema.
-5. Em 360×640, o painel mostra 10 projetos sem rolagem, e a página não rola na horizontal.
+5. Em 360×640, a linha de projeto mostra selo, nome, motivo e carimbo juntos, e a página
+   não rola na horizontal. (Corrigido em 28/08/2026; era "10 projetos sem rolagem".)
 6. Nenhuma palavra em inglês na interface — busca contra a lista do vocabulário fixo.
 7. Todo estado de selo tem, no HTML, cor + forma + glifo + rótulo textual.
 8. Nenhum número aparece em tela sem o carimbo da medição que o produziu.

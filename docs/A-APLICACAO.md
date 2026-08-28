@@ -275,14 +275,20 @@ token do aplicativo do GitHub, conferida byte a byte contra o OpenSSL · a palet
 tipografia em tokens, servidas do próprio domínio · **e as telas, em português, com o
 selo de quatro estados ligado ao motor e "isto está certo assim" gravando no banco.**
 
-**Uma contradição achada na etapa 14, que só a mão do dono resolve.** O desenho pede duas
-coisas que não cabem juntas: "10 projetos visíveis sem rolagem em 360×640" e uma linha de
-projeto com *selo · nome · o motivo em uma frase · o carimbo*. Medido no navegador, a
-linha com esse conteúdo ocupa cerca de 90 a 113 px — sete linhas enchem os 640 px, e isso
-sem contar a frase de resumo, a régua de quatro contadores e a ação recomendada, que
-somam mais 350 px. **Chegar a 10 exige tirar o motivo da linha.** A tela foi entregue com
-o motivo, porque é ele que responde "o que houve" sem um clique; a meta de 10 fica
-registrada como não cumprida em vez de silenciosamente abandonada.
+**Uma contradição achada na etapa 14, decidida pelo dono em 28/08/2026.** O desenho pedia
+duas coisas que não cabem juntas: "10 projetos visíveis sem rolagem em 360×640" e uma
+linha de projeto com *selo · nome · o motivo em uma frase · o carimbo*. Medido no
+navegador, a linha com esse conteúdo ocupa cerca de 90 a 113 px — sete linhas enchem os
+640 px, e isso sem contar a frase de resumo, a régua de quatro contadores e a ação
+recomendada, que somam mais 350 px. Chegar a 10 exigiria tirar o motivo da linha.
+
+**A meta mudou: são 5 a 7 projetos por tela, com o motivo visível.** O número 10 estava
+medindo a coisa errada. A promessa do DERVS é "eu sei o que houve sem clicar" — dez nomes
+com um selo colorido ao lado obrigam a abrir cada um para descobrir o que aconteceu, e
+trocam um clique economizado na rolagem por dez cliques gastos na investigação. Rolar não
+é um defeito; abrir dez telas é. **A meta verificável passa a ser:** em 360×640, as
+primeiras linhas visíveis mostram *selo, nome, motivo e carimbo* juntos, e o selo é
+legível a um braço de distância. A contagem deixa de ser critério.
 
 **Falta, nesta ordem:**
 
