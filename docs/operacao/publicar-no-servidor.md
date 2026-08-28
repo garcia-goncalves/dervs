@@ -329,6 +329,45 @@ A próxima publicação aplica. O número viaja por STDIN até dentro do contain
 não aparece em log nenhum. Enquanto o segredo existir, toda publicação reafirma
 o mesmo número — trocar é gravar outro e publicar.
 
+**6.2c — a sua conta. Sem ela, a porta aberta não leva a lugar nenhum.**
+
+Passar a cortina e autorizar no GitHub ainda não é entrar. `convidar()` é a
+**única** forma de criar conta no DERVS, e ela não passa pela web de propósito:
+criar conta custa acesso à máquina, e é isso que mantém o cadastro fechado sem
+precisar de lista de convidados em lugar nenhum.
+
+Em 28/08/2026 nada rodava esse comando no servidor. O efeito na tela é cruel de
+diagnosticar: você digita a combinação, clica em *Entrar com GitHub*, autoriza —
+e volta para a mesma capa, **sem uma palavra de explicação**. É por desenho: o
+retorno responde igual no sucesso e no fracasso, para não dizer a um estranho
+qual metade ele acertou.
+
+O DERVS tem mais de um dono, então a variável é uma **lista**: uma linha por
+pessoa, `<login-do-github> <e-mail>`. Não são segredos.
+
+```
+gh variable set DERVS_DONOS --repo garcia-goncalves/dervs --body "thi-garcia tibamooca@gmail.com
+outro-login outro@exemplo.com"
+```
+
+A publicação decide **pessoa a pessoa**: quem já tem conta (pelo e-mail, que é
+UNIQUE) é pulado com uma frase; quem não tem é convidado. Contar credenciais no
+total não serviria — na segunda publicação daria "já há 1 conta" e o segundo
+dono nunca entraria.
+
+Não há `|| true` escondendo erro: uma falha de rede ou da API do GitHub deixa a
+publicação vermelha, como deve.
+
+**Sobre o e-mail:** `dervs.com.br` publica um MX nulo — o domínio declara que
+não recebe e-mail. Um endereço `@dervs.com.br` nunca será entregável sem
+contratar correio. Como a aplicação não envia e-mail nenhum hoje, o campo é só
+identificador; ainda assim, prefira um endereço real, para o dia em que alguma
+funcionalidade tentar escrever para ele.
+
+**Escolha o e-mail com cuidado.** Ele é único no banco e **não existe comando
+para apagar uma conta criada errada**. Errar aqui custa mexer no banco do
+servidor à mão.
+
 **6.3 — uma trava a mais, se você quiser (opcional).** O ambiente `producao` já
 existe no repositório. Em
 <https://github.com/garcia-goncalves/dervs/settings/environments> você pode

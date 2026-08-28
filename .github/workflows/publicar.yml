@@ -208,6 +208,7 @@ jobs:
           OAUTH_ID: ${{ vars.DERVS_GITHUB_ID }}
           OAUTH_SECRET: ${{ secrets.DERVS_GITHUB_SECRET }}
           CORTINA: ${{ secrets.DERVS_CORTINA }}
+          DONOS: ${{ vars.DERVS_DONOS }}
         run: |
           # NADA DE SEGREDO NA LINHA DE COMANDO DO `ssh`.
           #
@@ -298,6 +299,38 @@ jobs:
             printf '%s' "$CORTINA" | docker exec -i dervs python -c 'import sys, banco, cortina; con = banco.conectar(); cortina.trocar(sys.stdin.read().strip(), con); con.close(); print("combinacao da cortina trocada")'
           fi
 
+          # A CONTA DO DONO. A terceira peca da primeira subida, e a ultima.
+          #
+          # `autenticacao.convidar()` e a UNICA porta para criar conta, e ela
+          # nao passa pela web de proposito: criar conta custa acesso a maquina,
+          # e e isso que mantem o cadastro fechado sem lista de convidados. Mas
+          # nada rodava esse comando no servidor. Resultado, em 28/08/2026: a
+          # cortina abria, o botao do GitHub autorizava, e a volta caia na capa
+          # sem uma palavra -- porque o retorno responde igual no sucesso e no
+          # fracasso, para nao dizer a um estranho qual metade ele acertou.
+          #
+          # Idempotente PESSOA A PESSOA, e isso importa: o DERVS tem dois
+          # donos. Contar credenciais no total responderia "ja ha 1 conta" na
+          # segunda publicacao, e o segundo dono nunca seria convidado. A
+          # pergunta certa e "esta pessoa ja tem conta?", e ela e feita pelo
+          # e-mail, que e UNIQUE na tabela `usuario`.
+          #
+          # Sem `|| true` em lugar nenhum: engolir o erro esconderia uma falha
+          # de rede ou da API do GitHub atras da mesma linha verde. Quem ja tem
+          # conta e pulado com uma frase; quem falha de verdade derruba a
+          # publicacao.
+          #
+          # Login e e-mail vao por STDIN, nao por argv. `convidar` tem CLI que
+          # os recebe como argumentos, e ai eles apareceriam em /proc para
+          # qualquer conta local desta VPS. Nao sao segredo, mas tambem nao
+          # precisam ficar legiveis para os outros oito sistemas da maquina.
+          # A lista inteira vai de uma vez, por STDIN, e o python de dentro
+          # do container decide pessoa a pessoa. Uma linha por dono:
+          # `<login-do-github> <email>`.
+          if [ -n "${DONOS:-}" ]; then
+            printf '%s\n' "$DONOS" | docker exec -i dervs python -c 'import sys, banco, autenticacao; con = banco.conectar(); ns = [l.split() for l in sys.stdin.read().splitlines() if l.split()]; [print(("ja existe: %s" % e) if con.execute("SELECT 1 FROM usuario WHERE email = ?", (e.strip().lower(),)).fetchone() else ("conta criada: %s (id %d)" % (e, autenticacao.convidar(g, e, con=con)))) for g, e in ns]; con.close()'
+          fi
+
           # Bater na porta de dentro do servidor, com o Host de verdade. Sem
           # isto, "publicado" seria só "o comando não deu erro".
           #
@@ -359,6 +392,7 @@ jobs:
             printf 'OAUTH_ID=%q\n'         "${OAUTH_ID:-}"
             printf 'OAUTH_SECRET=%q\n'     "${OAUTH_SECRET:-}"
             printf 'CORTINA=%q\n'          "${CORTINA:-}"
+            printf 'DONOS=%q\n'            "${DONOS:-}"
             cat roteiro.sh
           } | ssh -i ~/.ssh/id_deploy -p "$PORTA_SSH" "$ALVO" 'bash -s'
 

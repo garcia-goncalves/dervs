@@ -133,6 +133,53 @@ class ACortinaTemVolta(unittest.TestCase):
             cortina.trocar("12345", None)   # cinco digitos param antes do banco
 
 
+class ExisteUmaConta(unittest.TestCase):
+    """A terceira peca da primeira subida.
+
+    Cortina aberta e botao do GitHub ligado nao bastam: `convidar()` e a unica
+    porta para criar conta, e nada a chamava no servidor. O sintoma nao ajuda
+    ninguem — o retorno do GitHub responde igual no sucesso e no fracasso, de
+    proposito, entao autorizar caia na capa sem uma palavra.
+    """
+
+    def setUp(self):
+        self.passo = passo_do_servidor()
+
+    def test_o_workflow_convida_o_dono(self):
+        self.assertIn(
+            "autenticacao.convidar(", self.passo,
+            "nada no workflow cria a conta do dono. O site sobe com a porta "
+            "aberta e nenhuma conta atras dela.")
+
+    def test_o_convite_nao_se_repete(self):
+        """`convidar` estoura na segunda vez, e nao ha comando para apagar
+        conta criada errada: repetir cegamente quebraria toda publicacao
+        seguinte."""
+        self.assertIn("SELECT 1 FROM usuario WHERE email = ?", self.passo,
+                      "o convite nao consulta se a PESSOA ja tem conta. Contar"
+                      " credenciais no total pularia o segundo dono para"
+                      " sempre: o DERVS tem mais de um.")
+        self.assertNotIn("convidar(login, email) || true", self.passo)
+
+    def test_o_erro_de_verdade_nao_e_engolido(self):
+        """Idempotencia pela contagem, nunca por `|| true`: um `|| true` faria
+        falha de rede e conta-ja-existe darem a mesma linha verde."""
+        for engolidor in ("|| true", "|| echo", "2>/dev/null"):
+            self.assertNotIn(
+                "convidar" + engolidor, self.passo.replace(" ", ""))
+
+    def test_login_e_email_nao_vao_pelo_argv(self):
+        self.assertNotRegex(
+            self.passo, r"autenticacao\.py convidar",
+            "o CLI recebe login e e-mail como argumentos, e argv e legivel em "
+            "/proc por qualquer conta local da VPS. Use STDIN.")
+        self.assertIn("printf 'DONOS=%q", self.passo)
+
+    def test_convidar_existe_com_essa_assinatura(self):
+        import autenticacao
+        self.assertTrue(callable(autenticacao.convidar))
+
+
 class PublicarContinuaSendoDecisaoDeGente(unittest.TestCase):
     """O que foi acrescentado nao pode ter afrouxado a trava principal."""
 
