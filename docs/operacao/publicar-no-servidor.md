@@ -133,6 +133,27 @@ número que você anotou.
 > banco do painel. Se ela mudar depois, o que já foi guardado não abre mais.
 > Por isso ela é gerada uma vez e fica quieta.
 
+> **Uma sexta variável que você não precisa escrever.** O
+> `DERVS_PROXIES_CONFIAVEIS` já vem com o valor certo no `docker-compose.yml`.
+> Ela diz ao painel que o pedido veio do nginx e que o endereço de quem chegou
+> está no cabeçalho, não na conexão. Sem ela, todo visitante do mundo dividiria
+> **o mesmo** teto de cinco tentativas — e cinco chamadas de um estranho
+> trancariam você para fora do próprio painel.
+
+---
+
+## Passo 4.5 — Um teste que vale a pena antes de continuar
+
+Ainda dentro do servidor, confira que o Docker e o compose respondem:
+
+```
+docker compose version && docker ps --format '{{.Names}}' | wc -l
+```
+
+**Se der certo:** sai a versão do compose e o número de containers rodando na
+máquina — deve ser algo perto de 26. Se sair `0`, algo está errado com o Docker
+daquela VPS e **pare aqui**, porque publicar por cima disso vai dar confusão.
+
 **As duas linhas vazias (`DERVS_GITHUB_ID` e `DERVS_GITHUB_SECRET`)** são a
 entrada por GitHub. Enquanto estiverem vazias, aquele botão simplesmente não
 existe no site — e o painel funciona pelas outras portas de entrada. O passo 6

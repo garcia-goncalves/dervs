@@ -155,6 +155,13 @@ jobs:
     needs: imagem
     runs-on: ubuntu-latest
     environment: producao
+    # `packages: read` no JOB, e não no topo do arquivo. O pacote no GHCR nasce
+    # privado (herda a visibilidade do repositório), e sem esta linha o
+    # `docker compose pull` do servidor bate em `denied` — a primeira
+    # publicação falharia por permissão, não por defeito.
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -177,12 +184,31 @@ jobs:
       - name: Trocar o container e esperar ele responder
         env:
           REFERENCIA: ${{ needs.imagem.outputs.referencia }}
+          REGISTRO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRO_USUARIO: ${{ github.actor }}
+          ALVO: ${{ secrets.VPS_USUARIO }}@${{ secrets.VPS_HOST }}
+          PORTA_SSH: ${{ secrets.VPS_PORTA_SSH || 22 }}
         run: |
-          # O token do registro viaja pela sessão e morre com ela: o servidor
-          # não guarda credencial de registro nenhuma.
-          ssh -i ~/.ssh/id_deploy -p "${{ secrets.VPS_PORTA_SSH || 22 }}" \
-            "${{ secrets.VPS_USUARIO }}@${{ secrets.VPS_HOST }}" \
-            "REFERENCIA='$REFERENCIA' REGISTRO_TOKEN='${{ secrets.GITHUB_TOKEN }}' REGISTRO_USUARIO='${{ github.actor }}' bash -s" <<'REMOTO'
+          # NADA DE SEGREDO NA LINHA DE COMANDO DO `ssh`.
+          #
+          # A versão anterior passava o token como prefixo de ambiente do
+          # comando remoto. O sshd executa esse comando como `shell -c '<a
+          # string inteira>'`, e essa string é o `argv` do processo — legível em
+          # `/proc/<pid>/cmdline` por QUALQUER usuário local do servidor. Numa
+          # VPS que serve outros 8 sistemas, uma conta de serviço qualquer
+          # colheria o token durante a janela da publicação. Achado da revisão
+          # de segurança da etapa 16.
+          #
+          # A correção: tudo viaja pelo STDIN do ssh, que nenhum `ps` mostra. As
+          # três primeiras linhas do que chega são as atribuições; o resto é o
+          # roteiro, escrito num heredoc protegido para que nada expanda aqui.
+          cat > roteiro.sh <<'REMOTO'
+          # A primeira coisa, antes de qualquer arquivo ser tocado: arquivo
+          # novo nasce só para o dono. Sem isto o `.env` reescrito lá embaixo
+          # nasceria 0644 — legível por todo o sistema — e só depois receberia
+          # o `chmod`. A janela é de milissegundos, mas repete a cada
+          # publicação, e vira permanente se o passo morrer no meio.
+          umask 077
           set -euo pipefail
           cd /opt/dervs
 
@@ -197,10 +223,16 @@ jobs:
           mv .env.novo .env
           chmod 600 .env
 
+          # O `trap` vem ANTES do login, e é o que torna verdadeira a frase "o
+          # servidor não guarda credencial de registro nenhuma". Sem ele, com
+          # `set -e`, uma falha no `pull` ou no `up` abortaria antes do
+          # `logout` — e a credencial ficaria gravada em `~/.docker/config.json`
+          # justamente no caminho em que ninguém volta para conferir. Prometer
+          # defesa que não existe é pior que não ter a defesa.
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
           echo "$REGISTRO_TOKEN" | docker login ghcr.io -u "$REGISTRO_USUARIO" --password-stdin
           docker compose pull
           docker compose up -d --wait
-          docker logout ghcr.io
 
           # Bater na porta de dentro do servidor, com o Host de verdade. Sem
           # isto, "publicado" seria só "o comando não deu erro".
@@ -223,6 +255,20 @@ jobs:
           # sistemas. Só as sem uso, e só as deste projeto.
           docker image prune -f --filter "label=org.opencontainers.image.source=https://github.com/garcia-goncalves/dervs" || true
           REMOTO
+
+          # Aqui os valores entram — por stdin, nunca por argv. `%q` cita cada
+          # um de forma que o shell remoto leia exatamente o que foi mandado,
+          # mesmo com caractere esquisito no meio.
+          {
+            printf 'REFERENCIA=%q\n'        "$REFERENCIA"
+            printf 'REGISTRO_USUARIO=%q\n'  "$REGISTRO_USUARIO"
+            printf 'REGISTRO_TOKEN=%q\n'    "$REGISTRO_TOKEN"
+            cat roteiro.sh
+          } | ssh -i ~/.ssh/id_deploy -p "$PORTA_SSH" "$ALVO" 'bash -s'
+
+          # O arquivo com o roteiro fica no runner, que é descartado — mas o
+          # token nunca chegou a entrar nele, e é isso que importa.
+          rm -f roteiro.sh
 
       - name: O site responde pelo domínio de verdade
         run: |

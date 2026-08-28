@@ -1134,6 +1134,73 @@ class DentroDoContainer(unittest.TestCase):
         self.assertTrue(servir._mede_esta_maquina())
 
 
+class QuemPodeDizerDeOndeVeioOPedido(unittest.TestCase):
+    """A lista de proxies confiaveis, que ate a etapa 16 nao tinha teste nenhum.
+
+    O PROBLEMA QUE ELA RESOLVE. Atras do nginx, o endereco de quem chega e
+    sempre o mesmo: o gateway do Docker. Se o servidor acreditar nisso, o teto
+    de cinco tentativas por quinze minutos vira UM BALDE UNICO para a internet
+    inteira — e `/entrada` e `/agente/parear` sao rotas abertas. Cinco chamadas
+    de um estranho, repetidas de tres em tres minutos, e o dono nunca mais entra
+    no proprio painel nem pareia computador nenhum. A resposta e 204 por
+    desenho, entao a tela nem tem como dizer por que parou.
+
+    O PROBLEMA QUE ELA CRIA SE FOR LARGA DEMAIS. Se qualquer um pudesse mandar
+    `X-Forwarded-For`, bastaria variar o cabecalho a cada chute e o teto sumiria
+    do outro lado.
+
+    POR QUE FAIXA E NAO ENDERECO EXATO. O gateway do Docker nao e previsivel: a
+    rede que o compose cria ganha a sub-rede que estiver livre na maquina —
+    medido em 28/08/2026, `172.17.0.1` na rede padrao, e outra a cada rede nova.
+    Fixar a sub-rede no compose foi tentado e colide com quem ja esta la (a VPS
+    tem 26 containers). Uma faixa privada resolve sem adivinhacao, e nao alarga
+    de verdade: a porta do container so aceita conexao de 127.0.0.1 do host.
+    """
+
+    def test_vazio_nao_confia_em_ninguem(self):
+        """O padrao desta maquina. Sem proxy na frente, ninguem pode reescrever
+        de onde veio o pedido — e e assim que tem de continuar."""
+        self.assertEqual(servir._redes_confiaveis(""), ())
+        self.assertEqual(servir._redes_confiaveis(None), ())
+
+    def test_endereco_solto_continua_valendo(self):
+        redes = servir._redes_confiaveis("172.17.0.1")
+        self.assertTrue(servir._vem_de_proxy("172.17.0.1", redes))
+        self.assertFalse(servir._vem_de_proxy("172.17.0.2", redes))
+
+    def test_faixa_inteira(self):
+        redes = servir._redes_confiaveis("172.16.0.0/12")
+        for dentro in ("172.16.0.1", "172.17.0.1", "172.18.0.1", "172.31.255.254"):
+            self.assertTrue(servir._vem_de_proxy(dentro, redes), dentro)
+        for fora in ("172.15.0.1", "172.32.0.1", "8.8.8.8", "192.168.1.1"):
+            self.assertFalse(servir._vem_de_proxy(fora, redes), fora)
+
+    def test_varias_entradas_separadas_por_virgula(self):
+        redes = servir._redes_confiaveis(" 127.0.0.1 , 172.16.0.0/12 ")
+        self.assertTrue(servir._vem_de_proxy("127.0.0.1", redes))
+        self.assertTrue(servir._vem_de_proxy("172.20.5.9", redes))
+        self.assertFalse(servir._vem_de_proxy("10.0.0.1", redes))
+
+    def test_entrada_mal_escrita_nao_vira_permissao(self):
+        """Falha FECHADA. Um erro de digitacao no `.env` do servidor nao pode
+        virar "confia em todo mundo" — tem de virar "nao confia nisso"."""
+        redes = servir._redes_confiaveis("nao-e-ip, 999.1.1.1, /24, 172.17.0.1")
+        self.assertEqual(len(redes), 1)
+        self.assertTrue(servir._vem_de_proxy("172.17.0.1", redes))
+
+    def test_endereco_de_cliente_ilegivel_nao_e_confiavel(self):
+        """`client_address` pode ser "?" quando a conexao ja morreu. Nesse caso
+        a resposta e nao, nunca sim."""
+        redes = servir._redes_confiaveis("172.16.0.0/12")
+        for esquisito in ("?", "", "nao-e-ip", "172.17.0.1:4777"):
+            self.assertFalse(servir._vem_de_proxy(esquisito, redes), esquisito)
+
+    def test_ipv6_tambem(self):
+        redes = servir._redes_confiaveis("fd00::/8")
+        self.assertTrue(servir._vem_de_proxy("fd00::1", redes))
+        self.assertFalse(servir._vem_de_proxy("2001:db8::1", redes))
+
+
 class ODominioDeFora(unittest.TestCase):
     """`dervs.com.br` precisa entrar em `HOSTS_OK`, e so por variavel.
 
@@ -1196,6 +1263,19 @@ class ODominioDeFora(unittest.TestCase):
         _, origens = servir._enderecos_permitidos(4777, "dervs.com.br")
         self.assertIn("https://dervs.com.br", origens)
         self.assertNotIn("http://dervs.com.br", origens)
+
+    def test_com_dominio_o_loopback_sai_das_ORIGENS(self):
+        """A assimetria de proposito: o loopback fica nos HOSTS (o healthcheck
+        bate ali de dentro) e sai das ORIGENS.
+
+        `Origin` so aparece em pedido que escreve, e no servidor nao ha pedido
+        legitimo vindo de `http://localhost:4777` — mas ha uma pagina assim: o
+        proprio DERVS rodando no computador do dono, mesma porta, mesmo
+        navegador. Hoje ela nao consegue nada (SameSite=Lax segura o cookie),
+        e depender de uma defesa so e o que a revisao apontou."""
+        hosts, origens = servir._enderecos_permitidos(4777, "dervs.com.br")
+        self.assertEqual(origens, {"https://dervs.com.br"})
+        self.assertIn("127.0.0.1:4777", hosts)
 
 
 if __name__ == "__main__":

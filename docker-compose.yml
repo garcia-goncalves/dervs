@@ -51,6 +51,22 @@ services:
       # deploy, em silêncio.
       DERVS_BANCO: /dados/hub.db
 
+      # QUEM PODE DIZER DE ONDE VEIO O PEDIDO. Sem esta variável, o teto de
+      # cinco tentativas por quinze minutos vira UM BALDE ÚNICO para a internet
+      # inteira: atrás do nginx todo pedido chega ao container com o mesmo
+      # endereço, o do gateway do Docker. Como `/entrada` e `/agente/parear` são
+      # rotas abertas, cinco chamadas de um estranho — repetidas de três em três
+      # minutos, ao custo de nada — trancariam o dono para fora do próprio
+      # painel, e a tela não teria como dizer por quê (a resposta é 204 por
+      # desenho). O código previa isso desde a etapa 11; faltava ligar.
+      #
+      # A faixa, e não um endereço: o gateway do Docker não é previsível — cada
+      # rede que o compose cria pega a sub-rede que estiver livre. Fixar a
+      # sub-rede aqui foi tentado e colide com quem já mora na VPS. E a faixa
+      # não alarga a confiança de verdade: a porta acima só aceita conexão de
+      # 127.0.0.1 do host, que é o nginx.
+      DERVS_PROXIES_CONFIAVEIS: ${DERVS_PROXIES_CONFIAVEIS:-172.16.0.0/12}
+
       # O servidor não mede a máquina onde roda. Lá não há pasta de projeto: a
       # varredura voltaria com zero e gravaria esse zero por cima do que o
       # agente pareado mandou. Quem mede a máquina do dono é o agente.
@@ -87,6 +103,19 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+
+    # `no-new-privileges` impede GANHAR privilégio; não impede começar com as
+    # 14 capacidades que todo container recebe de graça. Um servidor HTTP em
+    # Python que roda como usuário comum não precisa de nenhuma delas.
+    cap_drop:
+      - ALL
+
+    # Os tetos existem por causa dos VIZINHOS. Naquela máquina rodam outros 8
+    # sistemas: um laço infinito ou um vazamento de memória aqui derrubaria o
+    # Ajudei antes de derrubar o DERVS. Com os tetos, quem morre é este
+    # container — e o `restart: unless-stopped` o levanta de volta.
+    pids_limit: 256
+    mem_limit: 512m
 
     logging:
       driver: json-file

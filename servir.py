@@ -56,6 +56,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import http.cookies
+import ipaddress
 import json
 import os
 import secrets
@@ -194,6 +195,51 @@ def porta_de(args, padrao=4777):
 PORTA = porta_de(sys.argv)
 INTERVALO = _numero_de(sys.argv, 2, 60, 1, 86400)
 
+def _redes_confiaveis(cru):
+    """Quem pode dizer "o cliente de verdade e outro". Vazio = ninguem.
+
+    Le `DERVS_PROXIES_CONFIAVEIS`: uma lista separada por virgula, onde cada
+    item e um endereco (`172.17.0.1`) ou uma faixa (`172.16.0.0/12`).
+
+    POR QUE FAIXA. Atras do nginx, todo pedido chega ao container com o endereco
+    do gateway do Docker — e esse endereco nao e previsivel: cada rede que o
+    compose cria recebe a sub-rede que estiver livre na maquina. Fixar a
+    sub-rede no compose foi tentado na etapa 16 e esbarrou em colisao com quem
+    ja mora na VPS (26 containers). A faixa privada resolve sem adivinhacao, e
+    nao alarga a confianca de verdade: a porta do container so aceita conexao
+    vinda de `127.0.0.1` do host, que e o nginx.
+
+    FALHA FECHADA. Item que nao e endereco nem faixa e DESCARTADO, nao vira
+    permissao ampla. Um erro de digitacao no `.env` do servidor tem de virar
+    "nao confio nisso", nunca "confio em todo mundo".
+    """
+    redes = []
+    for pedaco in (cru or "").split(","):
+        pedaco = pedaco.strip()
+        if not pedaco:
+            continue
+        try:
+            redes.append(ipaddress.ip_network(pedaco, strict=False))
+        except ValueError:
+            continue
+    return tuple(redes)
+
+
+def _vem_de_proxy(endereco: str, redes) -> bool:
+    """Se `endereco` esta em alguma das redes confiaveis.
+
+    Endereco ilegivel devolve False. `client_address` pode ser "?" quando a
+    conexao ja morreu, e nesse caso a resposta e nao — nunca sim.
+    """
+    if not redes or not endereco:
+        return False
+    try:
+        ip = ipaddress.ip_address(endereco)
+    except ValueError:
+        return False
+    return any(ip in rede for rede in redes)
+
+
 def _dominio_publico() -> str:
     """O dominio pelo qual o DERVS e acessado de fora. Vazio nesta maquina.
 
@@ -210,20 +256,29 @@ def _dominio_publico() -> str:
 def _enderecos_permitidos(porta: int, dominio: str):
     """Os conjuntos fechados de `Host` e de `Origin` aceitos. (hosts, origens)
 
-    O loopback NAO sai quando ha dominio: e por ele que o healthcheck do
-    container bate na porta, de dentro. Tira-lo daqui deixaria o container
+    O loopback NAO sai dos HOSTS quando ha dominio: e por ele que o healthcheck
+    do container bate na porta, de dentro. Tira-lo daqui deixaria o container
     eternamente `unhealthy` e a publicacao nunca concluiria.
+
+    Das ORIGENS ele sai, e essa assimetria e de proposito. `Origin` so aparece
+    em pedido que escreve, e no servidor nao existe pedido legitimo que se
+    apresente como vindo de `http://localhost:4777` — mas existe uma pagina
+    assim: o proprio DERVS rodando no computador do dono, na mesma porta e no
+    mesmo navegador. Ela nao consegue nada hoje (o cookie de sessao e
+    `SameSite=Lax` e nao viaja num POST entre sites, entao o pedido chega sem
+    sessao e morre no 401), e continuar aceitando a origem seria confiar numa
+    unica defesa. Apontado pela revisao de seguranca da etapa 16.
 
     A origem do dominio e `https://` e so. O nginx manda a porta 80 para a 443,
     entao um pedido que se apresente como `http://dervs.com.br` ou viajou em
     claro ou foi forjado — nos dois casos nao entra.
     """
     hosts = {"localhost:%d" % porta, "127.0.0.1:%d" % porta}
-    origens = {"http://localhost:%d" % porta, "http://127.0.0.1:%d" % porta}
-    if dominio:
-        hosts.add(dominio)
-        origens.add("https://" + dominio)
-    return hosts, origens
+    if not dominio:
+        return hosts, {"http://localhost:%d" % porta,
+                       "http://127.0.0.1:%d" % porta}
+    hosts.add(dominio)
+    return hosts, {"https://" + dominio}
 
 
 # Vazio nesta maquina, `dervs.com.br` no servidor. Tres comentarios deste
@@ -441,13 +496,15 @@ class Hub(SimpleHTTPRequestHandler):
     # balde unico de cinco tentativas por 15 min: um estranho gastaria o teto de
     # graca e o dono nunca mais parearia maquina nenhuma. Achado da revisao de
     # seguranca da etapa 11.
-    PROXIES_CONFIAVEIS = frozenset(
-        p.strip() for p in (os.environ.get("DERVS_PROXIES_CONFIAVEIS") or "").split(",")
-        if p.strip())
+    # Aceita endereco solto (`172.17.0.1`) e faixa (`172.16.0.0/12`), porque o
+    # gateway do Docker nao e previsivel: cada rede que o compose cria pega a
+    # sub-rede que estiver livre. Fixar a sub-rede foi tentado na etapa 16 e
+    # colide com quem ja mora na VPS. Ver `_redes_confiaveis`.
+    PROXIES_CONFIAVEIS = None      # preenchido logo abaixo da classe
 
     def _origem_do_pedido(self) -> str:
         de = self.client_address[0] if self.client_address else "?"
-        if de not in self.PROXIES_CONFIAVEIS:
+        if not _vem_de_proxy(de, self.PROXIES_CONFIAVEIS):
             return de
         # O ULTIMO salto e o unico confiavel: o comeco da lista e escrito pelo
         # cliente e pode ser inventado inteiro.
@@ -1477,6 +1534,13 @@ ROTAS = {
 }
 ROTAS.update({caminho: Rota("GET", Hub._estatico, "aberta")
               for caminho in ESTATICOS_OK})
+
+# Fica FORA da classe porque `_redes_confiaveis` precisa existir antes, e uma
+# funcao do modulo nao pode ser chamada de dentro do corpo da classe que ela
+# vem depois. O valor e o mesmo de sempre: vazio nesta maquina, a faixa privada
+# do Docker no servidor.
+Hub.PROXIES_CONFIAVEIS = _redes_confiaveis(
+    os.environ.get("DERVS_PROXIES_CONFIAVEIS"))
 
 # A porta do ambiente local NAO EXISTE no servidor — nem como 403, nem como
 # caminho reconhecido. Nao ha `if` dentro da rota que segure tanto quanto a rota

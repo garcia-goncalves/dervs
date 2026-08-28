@@ -204,6 +204,7 @@ código. São seis variáveis, e cada uma existe por um motivo concreto:
 | `DERVS_ESCUTA` | vazia (`127.0.0.1`) | `0.0.0.0` | o nginx dá 502 e o log do painel não acusa nada |
 | `DERVS_BANCO` | vazia (ao lado do código) | `/dados/hub.db` | toda conta e todo pareamento somem a cada publicação |
 | `DERVS_COLETA_LOCAL` | vazia (liga) | `0` | o painel grava "zero projetos" por cima do que o agente mandou |
+| `DERVS_PROXIES_CONFIAVEIS` | vazia | `172.16.0.0/12` | um estranho tranca você para fora com 5 chamadas |
 | `DERVS_COFRE` | arquivo `cofre.chave` | gerada lá dentro | o painel não sobe (falha fechada, de propósito) |
 | `DERVS_AMBIENTE` | `local` | **não definida** | com `local`, o servidor aceitaria conta de teste e a porta sem senha |
 
