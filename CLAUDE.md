@@ -74,8 +74,10 @@ criptografia sem testemunha externa não entra.
   tokens, as seis telas e o vocabulário. **Aprovado, não refazer.**
 - `docs/esteira/dervs/briefing.md` e `spec.md` — o contrato do produto, fase 1
   e 2, aprovados. **Não refazer.**
-- `docs/superpowers/plans/dervs-fatia-1.md` — as 17 etapas. Etapas 1 a 16
-  entregues; falta a 17 (a verificacao final), e ela depende do site estar no ar.
+- `docs/superpowers/plans/dervs-fatia-1.md` — as 17 etapas, **todas entregues**
+  em 28/08/2026. A saida dos oito comandos da etapa 17 esta colada em
+  `docs/esteira/dervs/verificacao.md`, junto com o que eles NAO provam e foi
+  conferido clicando, e com quatro pendencias nomeadas que nao bloqueiam nada.
 - `docs/operacao/` — os roteiros que exigem a mão do dono (GitHub App, entrar,
   conectar computador, **publicar no servidor**).
 
