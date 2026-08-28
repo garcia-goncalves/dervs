@@ -629,6 +629,21 @@ const ORDEM = ["quebrado", "atencao", "sem_dados", "saudavel"];
 /* ------------------------------------------------------------------- tempo */
 /* Tempo relativo até 24 horas; data absoluta depois disso. Número sempre com
    unidade — "há 41 segundos", nunca "41". */
+/* Só `http:` e `https:` viram href. O endereço de um alerta vem do banco, e o
+   banco é alimentado pela coleta — hoje as duas fontes são seguras (a API do
+   GitHub, e `coletar_github.url_segura`, que já exige http/https). Mas isto é
+   uma trava de uma linha contra uma classe inteira: um `javascript:` gravado
+   ali um dia executaria na origem do painel, com o TOKEN anti-falsificação ao
+   alcance. Confia-se na fonte E se confere no destino. */
+function enderecoSeguro(url) {
+  try {
+    const e = new URL(url, location.origin).protocol;
+    return e === "http:" || e === "https:";
+  } catch (_) {
+    return false;
+  }
+}
+
 function haQuanto(iso) {
   if (!iso) return "sem carimbo";
   const t = Date.parse(iso);
@@ -1199,7 +1214,7 @@ function pintarAlerta(id) {
      botão nenhum. O que aparece aqui é o que o NAVEGADOR sabe fazer sozinho, e
      ele diz exatamente o que vai acontecer. */
   const a = p.acao || {};
-  if (a.tipo === "abrir_url" && a.url) {
+  if (a.tipo === "abrir_url" && a.url && enderecoSeguro(a.url)) {
     const b = document.createElement("a");
     b.className = "botao";
     b.href = a.url;
@@ -1265,7 +1280,18 @@ async function arquivar() {
   if (!motivo) { recado("escreva por que isto está certo assim.", true); return; }
   const r = await escrever("/api/arquivar", { id: ALVO_ARQUIVO.id, motivo });
   $("#dlg-arquivar").close();
-  if (!r.ok) { recado("não conseguimos arquivar. Tente de novo.", true); return; }
+  if (!r.ok) {
+    /* "Tente de novo" é conselho errado quando o problema é o texto: tentar de
+       novo dá o mesmo erro. Só o 400 fala pela boca do servidor — é o único
+       que descreve algo que o dono pode corrigir (motivo em branco, motivo
+       longo demais). 401, 403 e 500 continuam na frase genérica: o texto
+       interno deles ("host nao permitido") não ajudaria ninguém. */
+    const dele = r.status === 400
+      ? await r.json().then(j => j && j.erro).catch(() => null)
+      : null;
+    recado(dele || "não conseguimos arquivar. Tente de novo.", true);
+    return;
+  }
   recado("arquivado. Ele fica em “Arquivados”, com o motivo e a data.");
   await carregar();
   irPara("#/projeto/" + encodeURIComponent(ALVO_ARQUIVO.projeto));

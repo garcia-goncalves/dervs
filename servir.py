@@ -1285,9 +1285,21 @@ class Hub(SimpleHTTPRequestHandler):
             return
         motivo = corpo.get("motivo")
         if not isinstance(motivo, str) or not motivo.strip():
-            return self._json(400, {"erro": "escreva por que isto esta certo assim"})
-        banco.arquivar(pid, usuario_id=sessao["usuario_id"],
-                       motivo=motivo.strip()[:self.MOTIVO_MAX])
+            return self._json(400, {"erro": "escreva por que isto está certo assim"})
+        motivo = motivo.strip()
+        # RECUSAR, nao cortar. Ate a revisao de 28/08/2026 esta linha era
+        # `motivo[:self.MOTIVO_MAX]`: o dono escrevia a justificativa inteira, a
+        # rota respondia "arquivada." e metade do texto sumia sem aviso. O
+        # rastro que o arquivar existe para preservar chegava cortado, e a
+        # resposta afirmava sucesso total onde houve perda de dado -- a mentira
+        # do painel em miniatura. A recusa carrega o numero: recusa sem limite
+        # explicito manda o dono adivinhar onde cortar.
+        if len(motivo) > self.MOTIVO_MAX:
+            return self._json(400, {
+                "erro": "o motivo passou de %d caracteres (você escreveu %d). "
+                        "Resuma — isto é um bilhete para você mesmo daqui a "
+                        "três meses." % (self.MOTIVO_MAX, len(motivo))})
+        banco.arquivar(pid, usuario_id=sessao["usuario_id"], motivo=motivo)
         return self._json(200, {"ok": True, "saida": "arquivada."})
 
     def _desarquivar(self):

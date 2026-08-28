@@ -929,6 +929,42 @@ class ServidorDeVerdade(unittest.TestCase):
         finally:
             con.close()
 
+    def test_arquivar_com_motivo_longo_demais_e_recusado_sem_cortar(self):
+        """Cortar em silencio e a mentira do painel em miniatura.
+
+        Ate aqui a rota respondia 200 "arquivada." depois de guardar so os 300
+        primeiros caracteres: o dono escrevia a justificativa inteira, a tela
+        dizia que salvou, e o resto sumia sem aviso. O rastro que o arquivar
+        existe para preservar chegava cortado. Recusar e dizer o limite e a
+        unica resposta honesta.
+        """
+        cookies, token = self.sessao_e_token()
+        pid = "nao_publicado:projeto-de-teste"
+        longo = "x" * (servir.Hub.MOTIVO_MAX + 1)
+        r = self.pedir("/api/arquivar", "POST", {"id": pid, "motivo": longo},
+                       cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertEqual(r.status, 400, r.corpo)
+        # O limite aparece na mensagem: recusa sem numero manda adivinhar.
+        self.assertIn(str(servir.Hub.MOTIVO_MAX), r.corpo)
+        # E nada meio-gravado ficou para tras.
+        con = banco.conectar()
+        try:
+            self.assertNotIn(pid, banco.arquivadas(usuario_id=self.uid, con=con))
+        finally:
+            con.close()
+
+    def test_arquivar_no_limite_exato_do_motivo_e_aceito_inteiro(self):
+        """A fronteira do lado de dentro — e o texto chega ao banco sem perda."""
+        cookies, token = self.sessao_e_token()
+        pid = "nao_publicado:projeto-de-teste"
+        no_limite = "y" * servir.Hub.MOTIVO_MAX
+        r = self.pedir("/api/arquivar", "POST", {"id": pid, "motivo": no_limite},
+                       cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertEqual(r.status, 200, r.corpo)
+        d = json.loads(self.pedir("/api/dados", cookies=cookies).corpo)
+        guardadas = {a["id"]: a for a in d["arquivadas"]}
+        self.assertEqual(guardadas[pid]["motivo"], no_limite)
+
     def test_arquivar_com_motivo_some_da_lista_e_deixa_rastro(self):
         cookies, token = self.sessao_e_token()
         pid = "nao_publicado:projeto-de-teste"
