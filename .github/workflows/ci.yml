@@ -76,6 +76,13 @@ jobs:
           if [ "$faltou" = "0" ]; then echo "Todos os test_*.py estao na CI."; fi
           exit $faltou
 
+      # O fluxo ao vivo: o servidor de verdade empurrando, com PRAZO em toda
+      # leitura (teste de fluxo sem prazo nao falha, PENDURA), mais o bloco do
+      # nginx conferido como texto — inclusive que ele NAO tem `add_header`,
+      # que anularia os seis cabecalhos de seguranca do `server`.
+      - name: O ao vivo
+        run: python test_sse.py
+
       # O semaforo, num lugar so. Cobra as tres coisas que a Fatia 2 nao pode
       # perder: vermelha sem aprovacao nao roda, `publicar` nunca fica verde, e
       # importar `tarefas` NAO arrasta `execucao` nem `fila` (se arrastasse, o

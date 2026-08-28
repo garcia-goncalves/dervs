@@ -98,6 +98,10 @@ class ATelaSoChamaRotaQueExiste(unittest.TestCase):
         # Pega o primeiro argumento de fetch(), que e sempre um literal aqui.
         # Query e concatenacao ficam de fora: a tabela casa so o caminho.
         cruas = re.findall(r'fetch\(\s*"(/[^"?]*)', html)
+        # O FLUXO AO VIVO NAO E UM `fetch`. Sem esta linha, `/api/eventos`
+        # seria a unica rota da tela que ninguem cobra existir — e um erro de
+        # digitacao ali deixaria a tela muda sem nenhum teste vermelho.
+        cruas += re.findall(r'new\s+EventSource\(\s*"(/[^"?]*)', html)
         return {c for c in cruas}
 
     def test_todo_fetch_da_tela_tem_rota_no_servidor(self):
@@ -560,6 +564,14 @@ class ServidorDeVerdade(BaseServidorDeVerdade):
 
     # -------------------------------------------------------------- segredo
     def test_nenhuma_resposta_traz_a_combinacao(self):
+        # `/api/eventos` fica aberto por cinco minutos de proposito, e uma
+        # varredura ingenua penduraria a suite inteira nele. A saida NAO e
+        # pular a rota — ela responde com sessao e precisa ser conferida como
+        # as outras: e encurtar a vida do fluxo para zero, para ele mandar o
+        # aviso de fim e fechar na hora. Assim a varredura continua completa.
+        vida = servir.Hub.SEGUNDOS_DE_VIDA
+        servir.Hub.SEGUNDOS_DE_VIDA = 0
+        self.addCleanup(setattr, servir.Hub, "SEGUNDOS_DE_VIDA", vida)
         for caminho, rota in servir.ROTAS.items():
             if rota.metodo != "GET":
                 continue

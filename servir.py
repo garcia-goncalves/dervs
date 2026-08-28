@@ -1485,6 +1485,160 @@ class Hub(SimpleHTTPRequestHandler):
             "nunca_verde": sorted(tarefas.NUNCA_VERDE),
             "medido_em": banco.agora()})
 
+    # ------------------------------------------------------ o fluxo ao vivo
+    #
+    # O `setInterval(..., 60000)` da tela nao sustenta "o dono ve o trabalho
+    # acontecendo": um minuto de silencio numa sessao de dez minutos e uma tela
+    # que parece travada. Isto e um `text/event-stream` — a primeira resposta
+    # deste servidor que nao e uma string inteira.
+    #
+    # Quatro numeros, e nenhum deles e arbitrario:
+    SEGUNDOS_ENTRE_LEITURAS = 1.0   # de quanto em quanto o banco e relido
+    SEGUNDOS_ENTRE_PINGS = 20       # o proxy_read_timeout do nginx e 60 s;
+                                    # silencio de um minuto derruba a conexao
+    SEGUNDOS_DE_VIDA = 300          # o EventSource reconecta sozinho, e conexao
+                                    # eterna em ThreadingHTTPServer e thread
+                                    # eterna
+    FLUXOS_POR_SESSAO = 4           # dez abas abertas seriam dez threads
+    FLUXOS_NO_TOTAL = 16            # paradas, e o publico deste servidor sao
+                                    # duas pessoas
+
+    # Contador de conexoes vivas. Mora no modulo, e nao na instancia: cada
+    # pedido cria um `Hub` novo.
+    _fluxos = {}
+    _tranca_dos_fluxos = threading.Lock()
+
+    @classmethod
+    def _entrar_no_fluxo(cls, chave) -> bool:
+        with cls._tranca_dos_fluxos:
+            if sum(cls._fluxos.values()) >= cls.FLUXOS_NO_TOTAL:
+                return False
+            if cls._fluxos.get(chave, 0) >= cls.FLUXOS_POR_SESSAO:
+                return False
+            cls._fluxos[chave] = cls._fluxos.get(chave, 0) + 1
+            return True
+
+    @classmethod
+    def _sair_do_fluxo(cls, chave) -> None:
+        with cls._tranca_dos_fluxos:
+            restam = cls._fluxos.get(chave, 1) - 1
+            if restam > 0:
+                cls._fluxos[chave] = restam
+            else:
+                cls._fluxos.pop(chave, None)
+
+    def _eventos(self):
+        """O que esta acontecendo agora, empurrado enquanto acontece.
+
+        `BrokenPipeError` e `ConnectionAbortedError` sao tratados AQUI DENTRO.
+        Sem isso, cada aba fechada cai no `except Exception` de `_despachar` e
+        cospe um traceback no log — e log cheio de traceback normal e log que
+        ninguem le no dia do traceback anormal.
+        """
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        consulta = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        alvo = (consulta.get("id") or [""])[0][:200]
+        try:
+            desde = int((consulta.get("desde") or ["0"])[0])
+        except (TypeError, ValueError):
+            desde = 0
+
+        chave = sessao["usuario_id"]
+        if not self._entrar_no_fluxo(chave):
+            return self._json(503, {"erro": "janelas demais abertas ao vivo"})
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            # SEM ESTA LINHA O FLUXO NAO PASSA PELO NGINX. O bloco de
+            # `location` tambem desliga o buffer, mas as duas defesas nao se
+            # dispensam: a de la vale para este nginx, esta vale para qualquer
+            # proxy no caminho.
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Connection", "close")
+            # Nenhum Content-Length: o tamanho nao existe ainda.
+            self.end_headers()
+            self._empurrar(alvo, desde)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError,
+                OSError):
+            pass                        # a aba fechou. Nao e erro.
+        finally:
+            self._sair_do_fluxo(chave)
+
+    def _empurrar(self, alvo: str, desde: int) -> None:
+        """O laco. Le o banco, manda o que ha de novo, respira."""
+        fim = time.time() + self.SEGUNDOS_DE_VIDA
+        ultimo_ping = time.time()
+        # `object()` e nao `None`: `None` e um estado POSSIVEL (tarefa que nao
+        # existe), e comecar igual a ele faria o primeiro evento nunca sair.
+        # Quem abrisse a tela numa tarefa apagada ficaria sem saber se estava
+        # carregando ou se nao havia nada — e "nao sei" e "vazio" sao estados
+        # diferentes.
+        ultimo_estado = object()
+        while time.time() < fim:
+            if alvo:
+                for linha in banco.linhas_da_tarefa(alvo, desde):
+                    desde = max(desde, int(linha["n"]))
+                    self._evento("linha", {"n": linha["n"],
+                                           "texto": linha["texto"],
+                                           "quando": linha["quando"]},
+                                 ident=linha["n"])
+                    ultimo_ping = time.time()
+                atual = banco.tarefa(alvo)
+                marca = None if atual is None else (
+                    atual["estado"], atual["frase"], atual["rodadas"])
+                if marca != ultimo_estado:
+                    ultimo_estado = marca
+                    self._evento("estado", {
+                        "id": alvo,
+                        "estado": None if atual is None else atual["estado"],
+                        "frase": None if atual is None else atual["frase"],
+                        "rodadas": None if atual is None else atual["rodadas"],
+                        "parada_pedida": bool(
+                            atual and atual["parada_pedida_em"])})
+                    ultimo_ping = time.time()
+            if time.time() - ultimo_ping >= self.SEGUNDOS_ENTRE_PINGS:
+                # Comentario de SSE: nao vira evento na tela, so mantem a
+                # conexao viva. O cliente ignora sozinho.
+                self.wfile.write(b": ping\n\n")
+                self.wfile.flush()
+                ultimo_ping = time.time()
+            else:
+                # A SONDA, e ela nao e enfeite: e o que faz o servidor PERCEBER
+                # que a aba fechou. Sem ela, a unica escrita do laco era o ping
+                # de 20 em 20 s, e ate la a vaga do dono continuava ocupada por
+                # ninguem — com quatro vagas por sessao, quatro recargas de
+                # pagina trancavam o dono fora do proprio painel por cinco
+                # minutos. Custa tres bytes por segundo, e o publico deste
+                # servidor sao duas pessoas.
+                self.wfile.write(b":\n\n")
+                self.wfile.flush()
+            time.sleep(self.SEGUNDOS_ENTRE_LEITURAS)
+        # Fim de vida anunciado. O EventSource reconecta sozinho; o aviso
+        # existe para a tela nao pintar isso como queda.
+        self._evento("fim", {"motivo": "a conexao renova sozinha a cada %s"
+                                       % self._quanto_tempo(
+                                           self.SEGUNDOS_DE_VIDA)})
+
+    @staticmethod
+    def _quanto_tempo(segundos: int) -> str:
+        """300 -> "5 minutos"; 3 -> "3 segundos". Nunca "0 minutos"."""
+        if segundos < 60:
+            return "%d segundo%s" % (segundos, "" if segundos == 1 else "s")
+        minutos = segundos // 60
+        return "%d minuto%s" % (minutos, "" if minutos == 1 else "s")
+
+    def _evento(self, nome: str, dados: dict, ident=None) -> None:
+        pedaco = ""
+        if ident is not None:
+            pedaco += "id: %s\n" % ident
+        pedaco += "event: %s\n" % nome
+        pedaco += "data: %s\n\n" % json.dumps(dados, ensure_ascii=False)
+        self.wfile.write(pedaco.encode("utf-8"))
+        self.wfile.flush()
+
     def _tarefa_aprovar(self):
         """O clique do dono numa tarefa vermelha."""
         corpo, sessao = self._guarda_de_escrita()
@@ -1808,6 +1962,7 @@ ROTAS = {
     # roda SO os coletores da tabela `COLETORES` — nenhum argv vem de pedido.
     "/agente/resultado":        Rota("POST", Hub._resultado,       "maquina"),
     "/api/tarefas":             Rota("GET",  Hub._tarefas,         "dado"),
+    "/api/eventos":             Rota("GET",  Hub._eventos,         "dado"),
     "/api/tarefas/aprovar":     Rota("POST", Hub._tarefa_aprovar,  "dado"),
     "/api/tarefas/parar":       Rota("POST", Hub._tarefa_parar,    "dado"),
     "/api/tarefas/cor":         Rota("POST", Hub._tarefa_cor,      "dado"),
