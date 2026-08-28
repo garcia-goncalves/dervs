@@ -125,6 +125,16 @@ Acrescentado nesta fase, com motivo:
 2. **"Claude Code rodando 100% nele" × zero dependências.** Venceu `subprocess` sobre o
    binário `claude`, que é o que `execucao.py:163` já faz. O SDK oficial em Python traz 5
    dependências para embrulhar o mesmo subprocesso — e deixaria a CI vermelha de propósito.
+
+2b. **"A assinatura não serve, precisa de chave de API" (a pesquisa) × a medição local e a
+   decisão do dono.** *Contradição levantada e resolvida no mesmo dia — o Sintetizador
+   errou primeiro.* A pesquisa achou a regra da Anthropic que proíbe token de assinatura
+   **com o Agent SDK**, e eu a generalizei para o binário. Errado: o DERVS não usa o SDK, e
+   `execucao.py:20` registra que o executor **já roda com login por assinatura (OAuth)**
+   desde 24/08. O dono decidiu em 28/08 usar a Max 20x que as duas pessoas já pagam, e
+   recusou a chave de API por custo. Venceu a assinatura, com duas consequências escritas:
+   `--bare` continua fora (só aceita chave de API), e **o recurso escasso passa a ser cota,
+   não dinheiro**. Ver `contradicoes` do freio, abaixo.
 3. **O teto como cerca × a medição de campo.** `--max-budget-usd` **não** é cerca: medido
    estourando 4,5× (teto US$ 0,10, gasto US$ 0,4455 — `execucao.py:63-66`). A garantia real
    é matar o processo (`parar()` → `_matar_arvore`, `:933`). Pior: **só o evento `result`
@@ -145,17 +155,34 @@ Acrescentado nesta fase, com motivo:
 
 ## duvidas_para_o_dono
 
-Uma só, e é de dinheiro — por isso não decido sozinho.
+**A dúvida do teto em reais foi respondida em 28/08 e virou outra dúvida.** O dono decidiu
+usar a assinatura Max 20x — ver contradição 2b. Com isso o freio muda de natureza, e a
+pergunta que sobra é esta:
 
-**O teto de gasto diário continua em R$ 50?** Ele foi escolhido quando toda tarefa exigia
-um clique. Com o semáforo, o verde anda sozinho, e o teto deixa de ser um limite teórico
-para virar **o valor que pode ser gasto sem ninguém olhar**. R$ 50/dia é até R$ 1.500/mês.
+**Quanta cota o painel pode consumir sem pedir licença?** O Max 20x limita por janela de 5
+horas e por semana; as duas pessoas usam a mesma conta o dia inteiro, em muitos projetos.
+O modo de falhar deixou de ser financeiro e virou operacional: **o painel esgota a janela e
+o Claude para para os dois no meio do expediente.** Um teto em reais não protege disso —
+ele conta a moeda errada.
 
-- **Recomendação: baixar para R$ 15/dia enquanto tudo é vermelho, e subir depois.** Motivo:
-  nas primeiras semanas quase nada estará pintado de verde, então um teto alto não compra
-  velocidade nenhuma — só aumenta o estrago de um laço recursivo. Subir é uma linha de
-  configuração; recuperar dinheiro queimado não é.
-- Alternativa: manter R$ 50/dia — cabe se ele quiser pintar muita coisa de verde já na
-  primeira semana.
-- Alternativa: dois tetos, um para verde (baixo, automático) e um para vermelho (alto, ele
-  aprovou na hora). Mais correto conceitualmente, uma coluna a mais, e adiável.
+O freio precisa de três números, e o dono decide o perfil:
+
+1. **Sessões automáticas por dia** (só o verde; o vermelho ele aprovou olhando).
+2. **Rodadas por sessão** — hoje `MAX_TURNOS = 40` (`execucao.py`), dimensionado para "o
+   laço que der errado não rodar a noite inteira". Para trabalho desassistido é folgado.
+3. **A janela de silêncio** — as horas em que o painel não encosta na cota, porque são as
+   horas em que eles trabalham.
+
+- **Recomendação: 6 sessões/dia, 15 rodadas por sessão, e trabalhar só das 22h às 7h.**
+  Motivo: fora do horário de trabalho a cota se recompõe sozinha, então o painel usa o que
+  sobraria; e 15 rodadas resolvem uma verificação vermelha simples com folga — o número
+  existe para o laço errado morrer cedo, não para a tarefa caber.
+- Alternativa: sem janela de silêncio, com reserva de cota (o painel para de disparar
+  quando detecta que a janela de 5 horas está acabando). **Mais correto e mais caro:** a
+  CLI não expõe o consumo da janela de forma confiável, então "detectar" seria estimativa —
+  e estimativa disfarçada de medição é exatamente o que a segunda lei do repositório proíbe.
+- Alternativa: liberar sem freio e observar por uma semana. Barato de construir, e o
+  primeiro dia ruim custa o dia de trabalho de duas pessoas.
+
+**Independente da escolha:** o teto em reais fica no código como rede de segurança para o
+dia em que uma chave de API entrar, e o botão "Parar" continua sendo a única garantia dura.

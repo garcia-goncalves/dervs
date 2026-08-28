@@ -451,17 +451,24 @@ Decisões travadas. Mudar qualquer uma exige um motivo novo, escrito.
   do PIN para uma pessoa.
 - **`dervs.com.br` publica um MX nulo** — o domínio declara que não recebe e-mail. Os
   endereços das contas são identificadores, não caixas.
-- **A Fatia 2 precisa de uma chave de API que ainda não existe.** A assinatura Max do dono
-  **não pode** ser usada para uso programático — é regra escrita da Anthropic, e houve uma
-  mudança de cobrança anunciada e pausada em 15/06/2026, então planejar em cima da
-  assinatura é planejar em cima de um preço que não é nosso. O painel precisa de chave de
-  API do console, e a conta passa a ser por token. Preços em 28/08/2026, por milhão
-  (entrada/saída): **Opus 5 US$ 5 / 25 · Sonnet 5 US$ 2 / 10 · Haiku 4.5 US$ 1 / 5**;
-  acerto em cache custa 10% da entrada e lote corta 50%, e os dois se somam. Pegadinha
-  oficial: o tokenizador do Claude 4.7+ gera ~30% mais tokens no mesmo texto — preço por
-  token igual, conta 30% maior. **Exige a mão do dono** (criar a chave no console) e um
-  segredo novo no `/opt/dervs/.env`, pelo caminho que já leva as credenciais do OAuth.
-- **O alerta de gasto do fornecedor atrasa cerca de um dia.** Por isso o teto do DERVS conta
-  **antes** de disparar, nunca depois. Casos públicos de 2026 que definem o tamanho do
-  perigo: US$ 1,3 milhão em 30 dias com ~100 agentes soltos, e US$ 437 numa única noite num
-  laço recursivo.
+- **A energia do painel é a assinatura Max 20x, não chave de API.** *Decisão do dono,
+  28/08/2026: "usamos o Claude Code Max 20x pela conta do André e usamos muito. Quero usar
+  o Max 20x que já pagamos. Não vamos usar API da Anthropic (isso seria um absurdo de
+  caro)."* Isso já é o que acontece: `execucao.py:20` registra a medição de 24/08 — *"o
+  login é por assinatura (OAuth)"*. **A regra da Anthropic que proíbe assinatura em uso
+  programático vale para o Agent SDK**, e o DERVS não usa o SDK (ele traria 5 dependências
+  e deixaria a CI vermelha) — ele chama o binário `claude`, o mesmo programa que o dono usa.
+  Consequência de desenho: `--bare` continua indisponível (só aceita chave de API), e o
+  isolamento segue por `--setting-sources ""` + `--strict-mcp-config`.
+- **Com assinatura, o recurso escasso deixa de ser dinheiro e passa a ser COTA.** O Max 20x
+  limita por janela de 5 horas e por semana, e as duas pessoas usam a mesma conta o dia
+  inteiro. O jeito de falhar não é fatura alta: é **o painel comer a cota e o Claude parar
+  para os dois no meio de uma terça-feira.** Por isso o freio da Fatia 2 conta **sessões e
+  rodadas**, não reais, e reserva cota para o trabalho humano. O teto em reais continua no
+  código como rede de segurança para o dia em que uma chave de API entrar — não como o
+  limite que manda.
+- **O teto do fornecedor não é cerca, e isso está medido aqui.** `--max-budget-usd` com teto
+  US$ 0,10 terminou em US$ 0,4455 — estouro de 4,5× (`execucao.py:22`). E só o evento final
+  traz custo, então durante a sessão o gasto é desconhecido. A única garantia real é matar o
+  processo. Casos públicos de 2026 que definem o tamanho do perigo em quem usa API: US$ 1,3
+  milhão em 30 dias com ~100 agentes soltos, e US$ 437 numa única noite num laço recursivo.
