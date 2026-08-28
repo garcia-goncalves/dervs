@@ -56,7 +56,9 @@ etapa 7. Ele continua existindo como ferramenta do Claude Code, à parte.
   raiz responder HTTP 200.
 - **Não tem cadastro aberto.** Conta só nasce por convite, rodado por quem tem
   acesso à máquina (`python autenticacao.py convidar …`). Não existe rota de
-  registro, e um teste reprova a suíte se alguma aparecer.
+  registro, e um teste reprova a suíte se alguma aparecer. O desfazer é
+  `python autenticacao.py remover <email> APAGAR` — a palavra `APAGAR` é
+  obrigatória, e a última conta que ainda entra não pode ser apagada.
 - **Não tem recuperação por e-mail.** É decisão, não falta: quem perde todas as
   formas de entrar não abre a conta. Por isso o painel cobra a segunda forma —
   ver `docs/operacao/formas-de-entrar.md`.
