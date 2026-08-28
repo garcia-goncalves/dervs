@@ -178,6 +178,16 @@ jobs:
       - name: A imagem leva tudo o que precisa, e nada alem
         run: python test_imagem.py
 
+      # ETAPA 17 — o workflow de publicacao leva ao servidor o que abre
+      # a porta. Em 28/08/2026 o site subiu verde, respondendo e bonito,
+      # e sem entrada nenhuma: em producao /entrar/github e a UNICA
+      # rota de login, e ela responde 404 sem as credenciais do OAuth
+      # App, que o workflow nunca levava para o /opt/dervs/.env. Cobre
+      # tambem a volta da cortina: cortina.trocar() existia desde a
+      # etapa 9 e nada no produto o chamava.
+      - name: A publicacao leva o que abre a porta
+        run: python test_publicar.py
+
       # ETAPA 13 — a paleta. O script LE assets/dervs.css, nao uma copia dos
       # valores: ate 27/08/2026 ele tinha a paleta digitada dentro dele, e
       # bastava mudar uma cor no CSS para a verificacao continuar aprovando a

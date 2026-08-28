@@ -205,6 +205,9 @@ jobs:
           REGISTRO_USUARIO: ${{ github.actor }}
           ALVO: ${{ secrets.VPS_USUARIO }}@${{ secrets.VPS_HOST }}
           PORTA_SSH: ${{ secrets.VPS_PORTA_SSH || 22 }}
+          OAUTH_ID: ${{ vars.DERVS_GITHUB_ID }}
+          OAUTH_SECRET: ${{ secrets.DERVS_GITHUB_SECRET }}
+          CORTINA: ${{ secrets.DERVS_CORTINA }}
         run: |
           # NADA DE SEGREDO NA LINHA DE COMANDO DO `ssh`.
           #
@@ -240,6 +243,30 @@ jobs:
           mv .env.novo .env
           chmod 600 .env
 
+          # AS CREDENCIAIS DO OAuth App, quando o repositorio as tem.
+          #
+          # Em producao `/entrar/github` e a UNICA porta: `/entrar/local` so
+          # entra na tabela de rotas quando `E_LOCAL` e verdadeiro. Sem estas
+          # duas linhas o botao responde 404 e o site sobe sem entrada nenhuma
+          # -- foi literalmente o estado de dervs.com.br em 28/08/2026, com a
+          # CI verde e o dominio respondendo 200.
+          #
+          # Os valores nunca aparecem em log nem em `ps`: chegam por STDIN, como
+          # o token do registro, e sao escritos direto no arquivo.
+          if [ -n "${OAUTH_ID:-}" ] && [ -n "${OAUTH_SECRET:-}" ]; then
+            grep -v -e '^DERVS_GITHUB_ID=' -e '^DERVS_GITHUB_SECRET=' .env \
+              > .env.novo || true
+            echo "DERVS_GITHUB_ID=$OAUTH_ID"         >> .env.novo
+            echo "DERVS_GITHUB_SECRET=$OAUTH_SECRET" >> .env.novo
+            mv .env.novo .env
+            chmod 600 .env
+            echo "credenciais do OAuth App gravadas no .env"
+          else
+            echo "AVISO: sem DERVS_GITHUB_ID/DERVS_GITHUB_SECRET no"
+            echo "repositorio, a entrada por GitHub responde 404 -- e em"
+            echo "producao nao ha outra porta. Ver docs/operacao/registrar-app-github.md."
+          fi
+
           # O `trap` vem ANTES do login, e é o que torna verdadeira a frase "o
           # servidor não guarda credencial de registro nenhuma". Sem ele, com
           # `set -e`, uma falha no `pull` ou no `up` abortaria antes do
@@ -250,6 +277,26 @@ jobs:
           echo "$REGISTRO_TOKEN" | docker login ghcr.io -u "$REGISTRO_USUARIO" --password-stdin
           docker compose pull
           docker compose up -d --wait
+
+          # A COMBINACAO DA CORTINA, quando o repositorio manda uma.
+          #
+          # Ela nasce sorteada na primeira subida e e impressa UMA vez, no log
+          # daquele container. Cada publicacao recria o container e o log vai
+          # junto: em 28/08/2026 o numero ja nao existia em lugar nenhum, e
+          # `cortina.trocar()` -- escrito na etapa 9 -- nao era chamado por
+          # nada no produto. Perder o numero era ficar trancado para fora do
+          # proprio site, para sempre. Esta e a recuperacao, e ela e a unica.
+          #
+          # O numero viaja por STDIN ate o python de dentro do container. NAO
+          # use `docker exec -e`: o valor entraria no argv do processo docker,
+          # legivel em /proc por qualquer conta local desta VPS de 26
+          # containers -- o mesmo achado que tirou o token da linha de comando.
+          if [ -n "${CORTINA:-}" ]; then
+            # Uma linha so, e de proposito: bloco literal de YAML exige
+            # que toda linha respeite a indentacao do bloco, e Python
+            # recusa linha indentada em `-c`. `;` satisfaz os dois.
+            printf '%s' "$CORTINA" | docker exec -i dervs python -c 'import sys, banco, cortina; con = banco.conectar(); cortina.trocar(sys.stdin.read().strip(), con); con.close(); print("combinacao da cortina trocada")'
+          fi
 
           # Bater na porta de dentro do servidor, com o Host de verdade. Sem
           # isto, "publicado" seria só "o comando não deu erro".
@@ -309,6 +356,9 @@ jobs:
             printf 'REFERENCIA=%q\n'        "$REFERENCIA"
             printf 'REGISTRO_USUARIO=%q\n'  "$REGISTRO_USUARIO"
             printf 'REGISTRO_TOKEN=%q\n'    "$REGISTRO_TOKEN"
+            printf 'OAUTH_ID=%q\n'         "${OAUTH_ID:-}"
+            printf 'OAUTH_SECRET=%q\n'     "${OAUTH_SECRET:-}"
+            printf 'CORTINA=%q\n'          "${CORTINA:-}"
             cat roteiro.sh
           } | ssh -i ~/.ssh/id_deploy -p "$PORTA_SSH" "$ALVO" 'bash -s'
 

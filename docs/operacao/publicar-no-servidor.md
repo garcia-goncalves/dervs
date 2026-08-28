@@ -277,21 +277,57 @@ nenhuma.
 `ssh-ed25519 AAAA...`. É essa linha inteira que vai no valor de
 `VPS_IMPRESSAO_DIGITAL` (ignore as linhas que começam com `#`).
 
-**6.2 — a entrada por GitHub (opcional, dá para deixar para depois).** O OAuth
-App já existe (veja `docs/operacao/registrar-app-github.md`). Falta dizer a ele o
-endereço novo:
+**6.2 — a entrada por GitHub. NÃO é opcional.**
 
-1. Vá em <https://github.com/settings/developers> → o App do DERVS.
-2. Em **Authorization callback URL**, coloque:
+Este passo já foi chamado de opcional aqui, com a frase *"o site sobe igual, só
+sem o botão"*. Era falso, e custou caro: em 28/08/2026 o dervs.com.br subiu com
+a CI verde, o domínio respondendo e **ninguém capaz de entrar**. A porta
+`/entrar/local` só entra na tabela de rotas quando o ambiente é local; em
+produção `/entrar/github` é a **única** porta que existe. Sem estas credenciais
+ela responde 404, e o site é uma vitrine trancada.
+
+O que **você** faz, uma vez, no navegador:
+
+1. Vá em <https://github.com/settings/developers> → o App **DERVS**.
+2. Em **Authorization callback URL**, deixe exatamente:
    `https://dervs.com.br/entrar/github/retorno`
-3. Copie o **Client ID**, e gere um **Client Secret** novo.
-4. De volta ao servidor, preencha as duas linhas vazias do passo 4:
-   ```
-   sed -i "s|^DERVS_GITHUB_ID=.*|DERVS_GITHUB_ID=COLE-O-CLIENT-ID|" /opt/dervs/.env
-   ```
-   e para o secret, o mesmo com `DERVS_GITHUB_SECRET`.
+   Se estiver apontando para `localhost`, a entrada falha depois do login com
+   *"redirect_uri is not associated with this application"*.
+3. Confira o **Client ID** e, se não tiver o secret guardado, gere um novo.
 
-**Se você pular o 6.2:** o site sobe igual, só sem o botão "entrar com GitHub".
+O que **a publicação** faz sozinha, desde 28/08/2026: lê
+`vars.DERVS_GITHUB_ID` e `secrets.DERVS_GITHUB_SECRET` do repositório e grava
+as duas no `/opt/dervs/.env`, por STDIN, sem passar por log nem por `ps`. Não
+há mais `sed` à mão dentro do servidor. Para trocar o valor:
+
+```
+gh variable set DERVS_GITHUB_ID --repo garcia-goncalves/dervs --body "Ov23..."
+gh secret   set DERVS_GITHUB_SECRET --repo garcia-goncalves/dervs
+```
+
+**Se as duas faltarem:** a publicação não falha — ela imprime um aviso em
+maiúsculas e segue. O site sobe sem entrada nenhuma. O aviso está lá para que
+isso seja uma escolha, e não uma surpresa.
+
+**6.2b — a combinação da cortina (seis dígitos).**
+
+A cortina é a tela de teclado que aparece antes de qualquer coisa. Ela **não é
+a fechadura** — serve para que robô que varre a internet atrás de tela de login
+não encontre tela nenhuma. O número nasce sorteado na primeira subida e é
+impresso **uma vez só**, no registro daquele container. Cada publicação recria o
+container, e o registro vai junto com ele.
+
+Foi o que aconteceu: o número da primeira subida deixou de existir na segunda
+publicação, e não havia como trocá-lo. Agora há. Escolha seis dígitos, guarde-os
+onde você guarda senha, e grave:
+
+```
+gh secret set DERVS_CORTINA --repo garcia-goncalves/dervs --body "123456"
+```
+
+A próxima publicação aplica. O número viaja por STDIN até dentro do container e
+não aparece em log nenhum. Enquanto o segredo existir, toda publicação reafirma
+o mesmo número — trocar é gravar outro e publicar.
 
 **6.3 — uma trava a mais, se você quiser (opcional).** O ambiente `producao` já
 existe no repositório. Em
