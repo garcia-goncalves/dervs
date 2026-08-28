@@ -61,7 +61,7 @@ jobs:
           exit $erro
 
       - name: Compila
-        run: python -m py_compile banco.py github_app.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py agente/__init__.py agente/enviar.py
+        run: python -m py_compile banco.py github_app.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py tarefas.py agente/__init__.py agente/enviar.py
 
       # Os testes abaixo sao listados A MAO, um passo cada, porque cada nome na
       # tela do GitHub diz o que quebrou sem ninguem abrir o log. O preco disso
@@ -75,6 +75,13 @@ jobs:
           done
           if [ "$faltou" = "0" ]; then echo "Todos os test_*.py estao na CI."; fi
           exit $faltou
+
+      # O semaforo, num lugar so. Cobra as tres coisas que a Fatia 2 nao pode
+      # perder: vermelha sem aprovacao nao roda, `publicar` nunca fica verde, e
+      # importar `tarefas` NAO arrasta `execucao` nem `fila` (se arrastasse, o
+      # servidor nao poderia importa-lo e a imagem nao fecharia).
+      - name: O semáforo
+        run: python test_tarefas.py
 
       # As seis tabelas da etapa 8, mais o cofre. O que ele cobra alem de "a
       # tabela existe": nenhum segredo em claro, arquivar sem motivo recusado, e

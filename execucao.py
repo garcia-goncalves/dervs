@@ -65,20 +65,19 @@ from pathlib import Path
 # `banco` so para anotar o gasto no teto do dia. Nao ha ciclo: banco nao importa
 # ninguem daqui.
 import banco
+import tarefas
 
-# Teto por execucao, em dolar. US$ 1 nao daria: medido em 24/08/2026, so LIGAR a
-# sessao custa US$ 0,2256 num turno trivial sem MCP, e US$ 0,4455 herdando os
-# MCPs da maquina. Nao e limite duro (ver medicao 2 no topo) — a tela precisa
-# dizer que o teto e aproximado.
-TETO_USD = 3.0
-
-# Cotacao fixa no codigo, num lugar so (decisao do dono, 24/08/2026). Valor do
-# fechamento de 21/08/2026: R$ 5,1417. Envelhece — atualize quando incomodar.
-USD_BRL = 5.14
-
-# Limite de turnos da sessao filha. Uma CI vermelha simples se resolve em muito
-# menos; o numero existe para o laco que der errado nao rodar a noite inteira.
-MAX_TURNOS = 40
+# MUDARAM DE CASA (Fatia 2, etapa 2): TETO_USD, USD_BRL, MAX_TURNOS e
+# `em_reais` agora moram em `tarefas.py`, que e o unico arquivo que o SERVIDOR
+# tambem pode importar. Os nomes continuam aqui de proposito — sao os MESMOS
+# objetos, nao copias. Uma copia divergiria, e a que diverge e sempre a que
+# ninguem le (licao do `contraste.py`, 27/08/2026).
+#
+# Nao e limite duro (ver medicao 2 no topo) — a tela precisa dizer que o teto
+# e aproximado.
+TETO_USD = tarefas.TETO_USD
+USD_BRL = tarefas.USD_BRL
+MAX_TURNOS = tarefas.MAX_TURNOS
 
 # Lista branca: o que a sessao filha pode fazer sozinha, sem perguntar.
 #
@@ -397,13 +396,9 @@ def custo_do_evento(evento: dict, acumulado: float) -> float:
     return acumulado
 
 
-def em_reais(usd: float) -> str:
-    """0.2256 -> "R$ 1,16". Virgula decimal, duas casas, sempre."""
-    try:
-        valor = float(usd) * USD_BRL
-    except (TypeError, ValueError):
-        valor = 0.0
-    return "R$ " + ("%.2f" % valor).replace(".", ",")
+# Mesma funcao de `tarefas.em_reais`, e nao uma copia dela: o nome daqui
+# aponta para o objeto de la.
+em_reais = tarefas.em_reais
 
 
 def decidir_pedido(execucao_atual, projeto_pedido: str) -> str:
