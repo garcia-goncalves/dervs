@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute" aria-hidden="true">
+  <title>Formas dos quatro estados do selo</title>
+  <!-- ==========================================================================
+       As QUATRO formas do selo, como sprite. Cada uma e um sinal INDEPENDENTE da
+       cor: a tela continua legivel impressa em preto e branco, e para quem nao
+       distingue verde de vermelho.
+
+       Use assim, dentro do .selo:
+           <svg class="selo__forma" width="12" height="12" aria-hidden="true">
+             <use href="assets/selos.svg#forma-saudavel"></use>
+           </svg>
+
+       As formas herdam currentColor, entao a cor vem do proprio .selo -- ou seja,
+       de --estado-*. Nenhuma cor esta escrita aqui dentro, de proposito: cor
+       literal fora do bloco de tokens e o defeito n. 1 da lista de verificacao
+       do design.
+
+       O CSS ja desenha as mesmas quatro formas com borda pura (.selo__forma em
+       dervs.css), e isso basta para a tela. Este arquivo existe para onde a
+       forma precisa ser um desenho de verdade: dentro de um botao com mascara,
+       num e-mail, ou impressa.
+       ========================================================================== -->
+
+  <!-- Saudavel: circulo CHEIO. Tudo o que dava para medir foi medido e passou. -->
+  <symbol id="forma-saudavel" viewBox="0 0 12 12">
+    <circle cx="6" cy="6" r="5" fill="currentColor" />
+  </symbol>
+
+  <!-- Atencao: triangulo CHEIO. Mede, passa, mas alguma coisa vai piorar. -->
+  <symbol id="forma-atencao" viewBox="0 0 12 12">
+    <path d="M6 1l5 9.5H1L6 1z" fill="currentColor" />
+  </symbol>
+
+  <!-- Quebrado: quadrado CHEIO. Mede e reprova. -->
+  <symbol id="forma-quebrado" viewBox="0 0 12 12">
+    <rect x="1" y="1" width="10" height="10" fill="currentColor" />
+  </symbol>
+
+  <!-- Sem dados: losango VAZADO e TRACEJADO. Nao e bom nem ruim: e ausencia.
+       E o unico vazado, e isso e o produto inteiro numa forma -- ele PARECE
+       vazio de informacao, que e exatamente a verdade que precisa comunicar.
+       Sem este estado, um projeto que ninguem conseguiu medir apareceria verde:
+       verde por ausencia de pendencia, nao por saude. -->
+  <symbol id="forma-sem-dados" viewBox="0 0 12 12">
+    <rect x="2.4" y="2.4" width="7.2" height="7.2" transform="rotate(45 6 6)"
+          fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 2" />
+  </symbol>
+</svg>

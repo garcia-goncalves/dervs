@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="DERVS">
+  <title>DERVS</title>
+  <!-- A marca sao as TRES CAMADAS de um projeto, empilhadas na ordem em que o
+       codigo anda: no seu computador, no GitHub, no ar. A do meio esta fora de
+       alinhamento -- e o drift, a diferenca entre as tres, que e o diferencial
+       confirmado do produto: nenhuma ferramenta pronta mede isso.
+
+       Antes disto tentei desenhar uma torre de controle. Nao se le em 16px:
+       vira abajur ou taca. Uma marca abstrata que carrega o significado certo
+       vence um desenho literal que ninguem reconhece.
+
+       Aqui a cor NAO e currentColor: a aba do navegador nao tem o nosso tema.
+       Fundo --acao do tema claro, barras --acao-texto: contraste 18,68:1 em
+       qualquer aba. Verde nao entra -- verde e estado saudavel, nunca marca. -->
+  <rect width="32" height="32" rx="3" fill="#111310" />
+  <g fill="#ffffff">
+    <rect x="6" y="7" width="20" height="4" rx="1" />
+    <rect x="11" y="14" width="15" height="4" rx="1" />
+    <rect x="6" y="21" width="20" height="4" rx="1" />
+  </g>
+</svg>
