@@ -407,8 +407,9 @@ vira exatamente o que ela existe para não ser.
   `grep -c 'noindex' index.html` ≥ 1 ·
   `python -c "import re;h=open('index.html',encoding='utf-8').read();print(len(re.findall(r'data-selo=\"(saudavel|atencao|quebrado|sem_dados)\"',h)))"`
   ≥ 4 · e a prova visual, que é o item 5 do design: com o servidor de pé,
-  `python -m agente.enviar --demonstracao` e a tela em 360×640 mostrando 10 projetos sem
-  rolagem — conferida **clicando no selo**, não olhando a faixa: `Ver o que gerou este
+  `python -m agente.enviar --demonstracao` e a tela em 360×640 mostrando a linha de projeto com selo,
+  nome, motivo e carimbo juntos (5 a 7 projetos; a meta de 10 foi aposentada em
+  28/08/2026, porque não cabe junto com o motivo) — conferida **clicando no selo**, não olhando a faixa: `Ver o que gerou este
   selo` tem de abrir a prova.
 - **armadilha** — dar a tela por pronta porque ela **aparece** certa. Já aconteceu nesta
   casa: a faixa da fila apareceu e o botão nunca disparava. Cada botão do design

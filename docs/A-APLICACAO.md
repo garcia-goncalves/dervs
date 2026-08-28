@@ -10,7 +10,7 @@ A confusão era real e não era culpa dele: as decisões estavam espalhadas por 
 briefing, uma especificação, um documento de design, um plano de 17 etapas e mais de
 trinta anotações de memória. Nenhum deles respondia, sozinho, *o que esta aplicação é*.
 
-Última revisão: 27/08/2026.
+Última revisão: 28/08/2026.
 
 ---
 
@@ -266,7 +266,7 @@ liga e desliga ferramenta do agente é uma superfície de ataque de primeira ord
 
 ## 11. O caminho — o que está pronto, o que falta
 
-**Entregue (etapas 1 a 14 de 17, 998 testes passando):** a fusão dos dois repositórios com
+**Entregue (etapas 1 a 15 de 17, 1022 testes passando):** a fusão dos dois repositórios com
 as duas autorias preservadas · a verificação automática escalonada · a amputação de toda
 rota que executava comando · o banco de vários usuários · o login com cortina e entrada
 pelo GitHub · o motor do selo de quatro estados · o agente do computador e o pareamento
@@ -275,24 +275,42 @@ token do aplicativo do GitHub, conferida byte a byte contra o OpenSSL · a palet
 tipografia em tokens, servidas do próprio domínio · **e as telas, em português, com o
 selo de quatro estados ligado ao motor e "isto está certo assim" gravando no banco.**
 
-**Uma contradição achada na etapa 14, que só a mão do dono resolve.** O desenho pede duas
-coisas que não cabem juntas: "10 projetos visíveis sem rolagem em 360×640" e uma linha de
-projeto com *selo · nome · o motivo em uma frase · o carimbo*. Medido no navegador, a
-linha com esse conteúdo ocupa cerca de 90 a 113 px — sete linhas enchem os 640 px, e isso
-sem contar a frase de resumo, a régua de quatro contadores e a ação recomendada, que
-somam mais 350 px. **Chegar a 10 exige tirar o motivo da linha.** A tela foi entregue com
-o motivo, porque é ele que responde "o que houve" sem um clique; a meta de 10 fica
-registrada como não cumprida em vez de silenciosamente abandonada.
+**Uma contradição achada na etapa 14, decidida pelo dono em 28/08/2026.** O desenho pedia
+duas coisas que não cabem juntas: "10 projetos visíveis sem rolagem em 360×640" e uma
+linha de projeto com *selo · nome · o motivo em uma frase · o carimbo*. Medido no
+navegador, a linha com esse conteúdo ocupa cerca de 90 a 113 px — sete linhas enchem os
+640 px, e isso sem contar a frase de resumo, a régua de quatro contadores e a ação
+recomendada, que somam mais 350 px.
+
+**O que a medição prova, dito com precisão:** não cabe *com o motivo em duas linhas e com o
+topo atual*. Cortar o motivo para uma linha só abaixo de 400 px encolheria a linha em uns
+20 a 25 px e levaria de 5-7 para 8-9; enxugar a régua de contadores ou a ação recomendada
+ganharia mais. Nenhum dos dois chega a 10 — dez linhas em 640 px pediriam 64 px por linha
+*com zero de topo*. Registrado porque a frase fácil ("chegar a 10 exige tirar o motivo") é
+mais categórica do que a régua permite, e uma frase categórica errada num documento
+aprovado encerra uma discussão que ainda podia render.
+
+**A meta mudou: são 5 a 7 projetos por tela, com o motivo visível.** O número 10 estava
+medindo a coisa errada. A promessa do DERVS é "eu sei o que houve sem clicar" — dez nomes
+com um selo colorido ao lado obrigam a abrir cada um para descobrir o que aconteceu, e
+trocam um clique economizado na rolagem por dez cliques gastos na investigação. Rolar não
+é um defeito; abrir dez telas é. **A meta verificável passa a ser:** em 360×640, as
+primeiras linhas visíveis mostram *selo, nome, motivo e carimbo* juntos, e o selo é
+legível a um braço de distância. A contagem deixa de ser critério.
 
 **Falta, nesta ordem:**
 
 | # | O quê | Por que agora |
 |---|---|---|
-| 13 | Paleta, tipografia e símbolos como código | É a resposta a "está tudo feio" |
-| 14 | As seis telas reescritas, em 360px e nos dois temas | idem |
-| 15 | O teste que reprova design errado na verificação automática | Impede a feiura de voltar |
 | 16 | Publicar em `dervs.com.br` | O domínio já aponta para a VPS e já serve HTTPS |
 | 17 | Conferência final da fundação | |
+
+**A etapa 15 entregou o teste que reprova design errado**, e vale saber o que ele *não*
+faz: seis dos oito itens da lista do desenho são verificados contra os arquivos de
+verdade; **dois exigem olho humano** — a linha de projeto em 360×640, e cada botão fazer o
+que promete. O teste imprime esses dois na própria saída, em vez de se calar. Uma lista de
+oito com seis verificados e dois calados se lê como oito verificados, e essa impressão é
+pior que a lacuna.
 
 **Depois disso, Fatia 2:** descoberta automática de pasta, conectar servidor e conta pela
 tela, e o botão consertar. **Fatia 3:** terminais e lousa de agentes. **Fatia 4:** o painel

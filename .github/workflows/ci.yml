@@ -159,6 +159,16 @@ jobs:
       - name: Agente e pareamento
         run: python test_agente.py
 
+      # ETAPA 15 — os oito itens verificaveis do design.md viram verificacao.
+      # Cor literal solta num componente, token de estado pintando um botao,
+      # "loading" numa tela: nada disso quebra nada, nada disso aparece numa
+      # revisao apressada, e e assim que a feiura volta. Dois dos oito itens
+      # exigem olho humano, e o teste diz isso na propria saida em vez de se
+      # calar — lista de oito com seis verificados e dois calados se le como
+      # oito verificados.
+      - name: Os oito itens do design
+        run: python test_design.py
+
       # ETAPA 13 — a paleta. O script LE assets/dervs.css, nao uma copia dos
       # valores: ate 27/08/2026 ele tinha a paleta digitada dentro dele, e
       # bastava mudar uma cor no CSS para a verificacao continuar aprovando a

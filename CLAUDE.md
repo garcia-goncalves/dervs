@@ -74,7 +74,7 @@ criptografia sem testemunha externa não entra.
   tokens, as seis telas e o vocabulário. **Aprovado, não refazer.**
 - `docs/esteira/dervs/briefing.md` e `spec.md` — o contrato do produto, fase 1
   e 2, aprovados. **Não refazer.**
-- `docs/superpowers/plans/dervs-fatia-1.md` — as 17 etapas. Etapas 1 a 14
+- `docs/superpowers/plans/dervs-fatia-1.md` — as 17 etapas. Etapas 1 a 15
   entregues.
 - `docs/operacao/` — os roteiros que exigem a mão do dono (GitHub App, entrar,
   conectar computador).
