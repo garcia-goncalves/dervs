@@ -322,6 +322,11 @@ class Remocao(unittest.TestCase):
                                   con=self.con, abrir=self.rede)
         return a, b
 
+    def _desativar(self, uid):
+        self.con.execute("UPDATE usuario SET desativado_em = ? WHERE id = ?",
+                         (banco.agora(), uid))
+        self.con.commit()
+
     def test_apaga_a_conta_e_libera_o_email(self):
         """O ponto todo: o endereco tem de voltar a ser usavel."""
         errada, _ = self._duas_contas()
@@ -393,6 +398,27 @@ class Remocao(unittest.TestCase):
             autenticacao.remover("unica@teste.local", con=self.con)
         self.assertIsNotNone(banco.usuario_por_email("unica@teste.local",
                                                      con=self.con))
+
+    def test_conta_desativada_nao_conta_como_saida(self):
+        """A guarda de cima contava LINHAS na tabela `usuario`. Conta
+        desativada nao entra — `entrar_por_github` a recusa — entao deixar so
+        ela de pe tranca o sistema do mesmo jeito, com a diferenca de que o
+        comando teria dito que estava tudo bem."""
+        viva, desativada = self._duas_contas()
+        self._desativar(desativada)
+        # Apagar a VIVA deixaria de pe so uma conta que nao entra.
+        with self.assertRaises(ValueError):
+            autenticacao.remover("errado@teste.local", con=self.con)
+        self.assertIsNotNone(banco.usuario_por_email("errado@teste.local",
+                                                     con=self.con))
+
+    def test_a_conta_desativada_pode_ser_apagada(self):
+        """O outro lado da mesma moeda: a guarda nao pode impedir a faxina.
+        Apagar a desativada deixa a viva de pe, e isso e legitimo."""
+        _, desativada = self._duas_contas()
+        self._desativar(desativada)
+        self.assertEqual(autenticacao.remover("andre@teste.local",
+                                              con=self.con), desativada)
 
     def test_a_linha_de_comando_exige_a_palavra_apagar(self):
         """Comando destrutivo nao pode ser um errinho de digitacao."""
