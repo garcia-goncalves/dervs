@@ -27,6 +27,7 @@ import re
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -124,8 +125,13 @@ class ATelaSoChamaRotaQueExiste(unittest.TestCase):
                 self.assertNotIn('src = "%s"' % morta, html)
 
 
-class ServidorDeVerdade(unittest.TestCase):
-    """Sobe o servidor de verdade numa porta livre e CONVERSA com ele.
+class BaseServidorDeVerdade(unittest.TestCase):
+    """O ANDAIME: sobe o servidor de verdade numa porta livre.
+
+    Nao tem teste nenhum, de proposito. Quem tem os testes e
+    `ServidorDeVerdade`, logo abaixo, e as classes que precisarem do mesmo
+    servidor herdam DAQUI — herdar daquela faria os cem testes dela rodarem
+    de novo, contra um segundo servidor, a cada classe nova.
 
     Os outros testes deste arquivo leem estrutura em memoria, e isso e bom para
     o que eles cobram. Mas "a tela abriu" nao e prova de que o botao dispara --
@@ -234,6 +240,26 @@ class ServidorDeVerdade(unittest.TestCase):
         finally:
             con.close()
         return {"sessao": final}
+
+    def sessao_e_token(self):
+        """A sessao E o anti-CSRF dela. Toda rota de escrita precisa dos dois."""
+        cookies = self.com_sessao()
+        con = banco.conectar()
+        try:
+            s = banco.sessao_valida(cookies["sessao"], con=con)
+        finally:
+            con.close()
+        return cookies, servir.Hub._csrf_da_sessao(s)
+
+
+class ServidorDeVerdade(BaseServidorDeVerdade):
+    """Os testes que CONVERSAM com o servidor de verdade.
+
+    Os outros testes deste arquivo leem estrutura em memoria, e isso e bom para
+    o que eles cobram. Mas "a tela abriu" nao e prova de que o botao dispara --
+    ja afirmei isso uma vez tendo visto so a faixa aparecer. Aqui o pedido sai
+    pelo soquete e a resposta vem pelo soquete.
+    """
 
     # ------------------------------------------------------------ estaticos
     #
@@ -823,15 +849,6 @@ class ServidorDeVerdade(unittest.TestCase):
     # ================================================ a gestao, ja la dentro
     # As rotas de DENTRO do painel: listar, cadastrar, remover, gerar codigos.
 
-    def sessao_e_token(self):
-        cookies = self.com_sessao()
-        con = banco.conectar()
-        try:
-            s = banco.sessao_valida(cookies["sessao"], con=con)
-        finally:
-            con.close()
-        return cookies, servir.Hub._csrf_da_sessao(s)
-
     def test_a_lista_exige_sessao(self):
         self.assertEqual(self.pedir("/api/chaves").status, 401)
 
@@ -1331,6 +1348,283 @@ class ODominioDeFora(unittest.TestCase):
         hosts, origens = servir._enderecos_permitidos(4777, "dervs.com.br")
         self.assertEqual(origens, {"https://dervs.com.br"})
         self.assertIn("127.0.0.1:4777", hosts)
+
+
+class AsTarefasNoServidorDeVerdade(BaseServidorDeVerdade):
+    """O fio de volta, pelo soquete.
+
+    Ler a tabela de rotas nao basta: a classificacao de acesso e um rotulo, e
+    ja divergiu do que o despacho faz de verdade neste repositorio. Aqui o
+    pedido sai pela rede e a resposta volta pela rede.
+    """
+
+    def maquina_com_token(self, nome="laptop", autorizada=True):
+        """Uma maquina pareada de verdade, e o token dela."""
+        codigo = banco.novo_codigo(6)
+        con = banco.conectar()
+        try:
+            banco.abrir_pareamento(self.uid, codigo, banco.prazo(600), con=con)
+            token = banco.usar_pareamento(codigo, nome, con=con)
+            m = banco.maquina_por_token(token, con=con)
+            if autorizada:
+                banco.ligar_execucao(m["id"], self.uid, True, con=con)
+        finally:
+            con.close()
+        return token, m["id"]
+
+    def enfileirar_tarefa(self, id_="d:1", regra="env_drift", verde=True):
+        con = banco.conectar()
+        try:
+            con.execute(
+                "INSERT OR REPLACE INTO fila"
+                " (id, projeto, regra, trilho, criado_em, estado)"
+                " VALUES (?, 'dervs', ?, 'claude', ?, 'esperando')",
+                (id_, regra, banco.agora()))
+            con.commit()
+            if verde:
+                banco.repintar_regra(regra, "verde", self.uid, con=con)
+        finally:
+            con.close()
+
+    def limpar_fila(self):
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM fila")
+            con.execute("DELETE FROM tarefa_linha")
+            con.execute("DELETE FROM cor_da_regra")
+            con.commit()
+        finally:
+            con.close()
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.limpar_fila)
+
+    def como_agente(self, token, caminho, corpo):
+        return self.pedir(caminho, "POST", corpo, com_origem=False,
+                          cabecalhos={"Authorization": "Token " + token})
+
+    # ------------------------------------------------------ o fio descendo
+
+    def test_relatorio_de_maquina_nao_autorizada_volta_sem_tarefa(self):
+        """A lei 3: `maquina.executa` nasce 0, e o padrao manda. Parear um
+        computador nunca deu a ele o direito de rodar codigo."""
+        token, _ = self.maquina_com_token(autorizada=False)
+        self.enfileirar_tarefa()
+        r = self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        self.assertEqual(r.status, 200)
+        self.assertIsNone(json.loads(r.corpo)["tarefa"])
+
+    def test_relatorio_de_maquina_autorizada_traz_a_tarefa_verde(self):
+        token, _ = self.maquina_com_token()
+        self.enfileirar_tarefa()
+        r = self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        tarefa = json.loads(r.corpo)["tarefa"]
+        self.assertIsNotNone(tarefa)
+        self.assertEqual(tarefa["id"], "d:1")
+        self.assertEqual(tarefa["projeto"], "dervs")
+        self.assertGreater(tarefa["teto_usd"], 0)
+
+    def test_tarefa_vermelha_nao_desce_sem_o_clique_do_dono(self):
+        token, _ = self.maquina_com_token()
+        self.enfileirar_tarefa(verde=False)
+        r = self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        self.assertIsNone(json.loads(r.corpo)["tarefa"])
+
+    def test_a_mesma_tarefa_nao_desce_duas_vezes(self):
+        """Uma sessao por vez. O segundo pedido nao pode levar a mesma."""
+        token, _ = self.maquina_com_token()
+        self.enfileirar_tarefa()
+        primeira = self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        segunda = self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        self.assertIsNotNone(json.loads(primeira.corpo)["tarefa"])
+        self.assertIsNone(json.loads(segunda.corpo)["tarefa"])
+
+    # ------------------------------------------------------- o fio subindo
+
+    def test_resultado_sem_token_e_401(self):
+        self.assertEqual(self.pedir("/agente/resultado", "POST",
+                                    {"id": "d:1"}).status, 401)
+
+    def test_resultado_com_token_de_outra_maquina_nao_alcanca_a_tarefa(self):
+        """O token da vizinha nao empurra linha na sessao desta."""
+        meu, _ = self.maquina_com_token("laptop")
+        outro, _ = self.maquina_com_token("vps")
+        self.enfileirar_tarefa()
+        self.como_agente(meu, "/agente/relatorio", {"projetos": []})
+        r = self.como_agente(outro, "/agente/resultado",
+                             {"tipo": "progresso", "id": "d:1",
+                              "linhas": [[1, "invasao"]]})
+        self.assertEqual(r.status, 200)
+        con = banco.conectar()
+        try:
+            self.assertEqual(banco.linhas_da_tarefa("d:1", con=con), [])
+        finally:
+            con.close()
+
+    def test_o_progresso_grava_e_a_resposta_diz_se_e_para_parar(self):
+        token, _ = self.maquina_com_token()
+        self.enfileirar_tarefa()
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        r = self.como_agente(token, "/agente/resultado",
+                             {"tipo": "progresso", "id": "d:1",
+                              "frase": "rodando os testes",
+                              "linhas": [[1, "abrindo a copia"]]})
+        self.assertEqual(r.status, 200)
+        self.assertFalse(json.loads(r.corpo)["pare"])
+        con = banco.conectar()
+        try:
+            self.assertEqual(len(banco.linhas_da_tarefa("d:1", con=con)), 1)
+        finally:
+            con.close()
+
+    def test_o_pedido_de_parada_desce_na_resposta_do_progresso(self):
+        """O botao Parar viaja no proximo alo do agente. Nao ha conexao nova,
+        e a latencia disso e o que a tela precisa dizer."""
+        cookies, csrf = self.sessao_e_token()
+        token, _ = self.maquina_com_token()
+        self.enfileirar_tarefa()
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        parar = self.pedir("/api/tarefas/parar", "POST", {"id": "d:1"},
+                           cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertEqual(parar.status, 200)
+        r = self.como_agente(token, "/agente/resultado",
+                             {"tipo": "progresso", "id": "d:1"})
+        self.assertTrue(json.loads(r.corpo)["pare"])
+
+    def test_o_desfecho_fecha_a_tarefa(self):
+        token, _ = self.maquina_com_token()
+        self.enfileirar_tarefa()
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        r = self.como_agente(token, "/agente/resultado",
+                             {"tipo": "desfecho", "id": "d:1", "estado": "ok",
+                              "ramo": "hub/env-drift-1", "resumo": "pronto",
+                              "diff": "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n",
+                              "rodadas": 3, "custo_usd": 0.5})
+        self.assertEqual(r.status, 200)
+        con = banco.conectar()
+        try:
+            t = banco.tarefa("d:1", con=con)
+        finally:
+            con.close()
+        self.assertEqual(t["estado"], "ok")
+        self.assertEqual(t["ramo"], "hub/env-drift-1")
+
+    def test_tipo_desconhecido_e_recusado(self):
+        token, _ = self.maquina_com_token()
+        self.enfileirar_tarefa()
+        r = self.como_agente(token, "/agente/resultado",
+                             {"tipo": "qualquer", "id": "d:1"})
+        self.assertEqual(r.status, 400)
+
+    # ------------------------------------------------------ as rotas do dono
+
+    def test_as_quatro_rotas_de_tarefa_exigem_sessao(self):
+        self.assertEqual(self.pedir("/api/tarefas").status, 401)
+        for caminho in ("/api/tarefas/aprovar", "/api/tarefas/parar",
+                        "/api/tarefas/cor"):
+            with self.subTest(caminho=caminho):
+                self.assertEqual(self.pedir(caminho, "POST", {}).status, 401)
+
+    def test_aprovar_com_sessao_e_sem_anti_csrf_e_403(self):
+        self.enfileirar_tarefa(verde=False)
+        r = self.pedir("/api/tarefas/aprovar", "POST", {"id": "d:1"},
+                       cookies=self.com_sessao(),
+                       cabecalhos={"X-Token": "a" * 64})
+        self.assertEqual(r.status, 403)
+
+    def test_aprovar_deixa_a_tarefa_vermelha_descer(self):
+        cookies, csrf = self.sessao_e_token()
+        token, _ = self.maquina_com_token()
+        self.enfileirar_tarefa(verde=False)
+        antes = self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        self.assertIsNone(json.loads(antes.corpo)["tarefa"])
+        r = self.pedir("/api/tarefas/aprovar", "POST", {"id": "d:1"},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertEqual(r.status, 200)
+        depois = self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        self.assertIsNotNone(json.loads(depois.corpo)["tarefa"])
+
+    def test_repintar_publicar_de_verde_e_recusado_com_frase_em_portugues(self):
+        cookies, csrf = self.sessao_e_token()
+        r = self.pedir("/api/tarefas/cor", "POST",
+                       {"regra": "publicar", "cor": "verde"},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertEqual(r.status, 409)
+        self.assertIn("nunca anda sozinha", json.loads(r.corpo)["erro"])
+
+    def test_repintar_uma_regra_comum_funciona_nos_dois_sentidos(self):
+        cookies, csrf = self.sessao_e_token()
+        for cor in ("verde", "vermelho"):
+            r = self.pedir("/api/tarefas/cor", "POST",
+                           {"regra": "env_drift", "cor": cor},
+                           cookies=cookies, cabecalhos={"X-Token": csrf})
+            self.assertEqual(r.status, 200, cor)
+
+    def test_a_lista_de_tarefas_diz_quando_foi_medida(self):
+        """"Nao sei" e "zero" sao estados diferentes, e o carimbo e o que
+        permite a tela distinguir os dois."""
+        self.enfileirar_tarefa()
+        corpo = json.loads(self.pedir("/api/tarefas",
+                                      cookies=self.com_sessao()).corpo)
+        self.assertIn("medido_em", corpo)
+        self.assertIn("publicar", corpo["nunca_verde"])
+        self.assertEqual([t["id"] for t in corpo["tarefas"]], ["d:1"])
+
+    def test_a_lista_nao_carrega_o_diff_e_a_tarefa_carrega(self):
+        token, _ = self.maquina_com_token()
+        self.enfileirar_tarefa()
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        self.como_agente(token, "/agente/resultado",
+                         {"tipo": "desfecho", "id": "d:1", "estado": "ok",
+                          "diff": "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"})
+        cookies = self.com_sessao()
+        lista = json.loads(self.pedir("/api/tarefas", cookies=cookies).corpo)
+        self.assertNotIn("diff", lista["tarefas"][0])
+        uma = json.loads(self.pedir("/api/tarefas?id=d:1",
+                                    cookies=cookies).corpo)["tarefa"]
+        self.assertIn("diff", uma)
+        self.assertTrue(uma["frases_do_diff"])
+
+    def test_autorizar_maquina_de_outra_conta_e_recusado(self):
+        cookies, csrf = self.sessao_e_token()
+        _token, mid = self.maquina_com_token(autorizada=False)
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("outro@teste.local", con=con)
+            con.execute("UPDATE maquina SET usuario_id = ? WHERE id = ?",
+                        (outro, mid))
+            con.commit()
+        finally:
+            con.close()
+        r = self.pedir("/api/maquinas/autorizar", "POST",
+                       {"id": mid, "ligado": True},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertEqual(r.status, 404)
+
+    def test_tarefa_muda_ha_muito_tempo_vira_falha_e_nao_fica_rodando(self):
+        """Agente que morreu no meio nao pode deixar a tela dizendo
+        "trabalhando" para sempre. Painel que mente e pior que painel vazio."""
+        token, mid = self.maquina_com_token()
+        self.enfileirar_tarefa()
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        con = banco.conectar()
+        try:
+            velho = (datetime.now(timezone.utc)
+                     - timedelta(minutes=60)).isoformat(timespec="seconds")
+            con.execute("UPDATE fila SET visto_em = ?, iniciado_em = ?"
+                        " WHERE id = 'd:1'", (velho, velho))
+            con.commit()
+        finally:
+            con.close()
+        self.pedir("/api/tarefas", cookies=self.com_sessao())
+        con = banco.conectar()
+        try:
+            t = banco.tarefa("d:1", con=con)
+        finally:
+            con.close()
+        self.assertEqual(t["estado"], "falha")
+        self.assertIn("noticia", t["erro"])
 
 
 if __name__ == "__main__":

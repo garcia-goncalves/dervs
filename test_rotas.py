@@ -337,5 +337,74 @@ class TodaRotaDeclaraAcesso(unittest.TestCase):
         self.assertFalse(hasattr(servir, "TOKEN"))
 
 
+class AsRotasDaFatia2(unittest.TestCase):
+    """As seis rotas novas, uma a uma, com a classe de acesso NOMEADA.
+
+    Escrito a mao de proposito. Um teste que so contasse rotas passaria com a
+    classe de acesso errada, e classe de acesso errada e a diferenca entre
+    "so o dono aprova" e "qualquer visitante aprova".
+    """
+
+    def acesso(self, caminho):
+        self.assertIn(caminho, servir.ROTAS, "a rota %s sumiu" % caminho)
+        return servir.ROTAS[caminho].acesso
+
+    def test_o_agente_manda_resultado_com_token_de_maquina(self):
+        self.assertEqual(self.acesso("/agente/resultado"), "maquina")
+        self.assertEqual(servir.ROTAS["/agente/resultado"].metodo, "POST")
+
+    def test_as_quatro_rotas_de_tarefa_sao_do_dono(self):
+        for caminho in ("/api/tarefas", "/api/tarefas/aprovar",
+                        "/api/tarefas/parar", "/api/tarefas/cor"):
+            with self.subTest(caminho=caminho):
+                self.assertEqual(self.acesso(caminho), "dado")
+
+    def test_autorizar_maquina_e_do_dono(self):
+        self.assertEqual(self.acesso("/api/maquinas/autorizar"), "dado")
+
+    def test_a_lista_de_tarefas_e_leitura_e_as_outras_sao_escrita(self):
+        self.assertEqual(servir.ROTAS["/api/tarefas"].metodo, "GET")
+        for caminho in ("/api/tarefas/aprovar", "/api/tarefas/parar",
+                        "/api/tarefas/cor", "/api/maquinas/autorizar"):
+            self.assertEqual(servir.ROTAS[caminho].metodo, "POST", caminho)
+
+    def test_nenhuma_rota_nova_afrouxou_a_lista_de_bloqueio(self):
+        """A lista de bloqueio nao foi tocada para acomodar nome nenhum.
+
+        Se uma etapa parecer exigir tirar uma palavra daqui, ela saiu do
+        trilho. `_tarefa_aprovar` passa; `_executar_tarefa` nao.
+        """
+        for palavra in ("acao", "execucao", "exec", "terminal", "pty",
+                        "shell", "comando", "grafo"):
+            self.assertIsNotNone(PROIBIDO.search(palavra), palavra)
+
+    def test_o_servidor_continua_sem_execucao_e_sem_fila(self):
+        """O achado que a Fatia 2 nao pode desfazer: quem executa e o agente."""
+        self.assertFalse(hasattr(servir, "execucao"))
+        self.assertFalse(hasattr(servir, "fila"))
+
+    def test_o_subprocess_do_servidor_so_roda_os_proprios_coletores(self):
+        """O servidor USA `subprocess` — e sempre usou, para rodar os coletores.
+
+        A trava nao e "nao importar subprocess": e que o argv nunca venha de um
+        pedido. Ha um unico `subprocess.run` no arquivo, e o argv dele e
+        `[sys.executable, script]` com o script vindo de `COLETORES`, que e uma
+        tabela fixa no codigo. Este teste cobra as duas coisas.
+        """
+        import inspect
+        fonte = inspect.getsource(servir)
+        self.assertEqual(fonte.count("subprocess.run("), 1,
+                         "apareceu um segundo lugar que dispara processo")
+        self.assertIn("subprocess.run([sys.executable, str(script)]", fonte)
+        # E `script` sai da tabela fixa, nao do pedido.
+        self.assertIn("script = COLETORES[camada][0]", fonte)
+
+    def test_o_semaforo_e_o_arquivo_que_a_gente_escreveu(self):
+        """`tarefas.py` entrou entre o servidor e a decisao. Ele foi escrito
+        para nao arrastar `execucao` nem `fila` — conferido em test_tarefas."""
+        import sys as _sys
+        self.assertTrue(_sys.modules["tarefas"].__file__.endswith("tarefas.py"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)

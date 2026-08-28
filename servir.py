@@ -75,6 +75,7 @@ from pathlib import Path
 import autenticacao
 import banco
 import cortina
+import tarefas
 import memoria
 import passkey
 import regras
@@ -1317,7 +1318,240 @@ class Hub(SimpleHTTPRequestHandler):
             avisos if isinstance(avisos, list) else None)
         resposta = {"ok": True}
         resposta.update(contas)
+        # O FIO DE VOLTA. Nenhuma conexao nova, nenhuma porta aberta, nenhuma
+        # inversao de sentido: o agente continua sendo quem pergunta, e a
+        # resposta que ele ja recebia passa a carregar a tarefa pendente.
+        resposta["tarefa"] = self._tarefa_pendente(maquina)
         return self._json(200, resposta)
+
+    # ------------------------------------------------- a tarefa e o desfecho
+
+    def _varrer_mudas(self):
+        """Tarefa `rodando` que parou de dar noticia vira `falha`.
+
+        Nao e enfeite. Sem isto, um agente que morreu no meio deixa a tarefa
+        `rodando` para sempre, e a tela mostra "trabalhando" para uma sessao
+        que nao existe mais. Painel que mente e pior que painel vazio — e a
+        lei 2 deste repositorio.
+        """
+        agora_iso = banco.agora()
+        for muda in banco.tarefas_sem_noticia(tarefas.MINUTOS_SEM_NOTICIA,
+                                              agora_iso):
+            banco.marcar_fila(muda["id"], estado="falha",
+                              terminado_em=agora_iso,
+                              erro="o computador parou de dar noticia")
+
+    def _tarefa_pendente(self, maquina):
+        """O que ESTA maquina deve fazer agora, ou `None`.
+
+        Tres recusas em serie, e a ordem importa: sem maquina autorizada nao ha
+        candidata; sem candidata nao ha o que avaliar; e so entao `pode_rodar`
+        decide. Qualquer uma delas devolvendo vazio significa `None` — nunca
+        uma tarefa "quase" entregue.
+        """
+        self._varrer_mudas()
+        candidata = banco.tarefa_para_maquina(maquina["id"])
+        if not candidata:
+            return None
+        janela = tarefas.janela_local_em_utc(tarefas.hoje_local())
+        pode, _motivo = tarefas.pode_rodar(
+            candidata, banco.gasto_entre(*janela), banco.agora(),
+            banco.cores_das_regras(), maquina)
+        if not pode:
+            return None
+        if not banco.entregar_tarefa(candidata["id"], maquina["id"]):
+            # Outra maquina levou entre a leitura e a reserva. Nao e erro: e a
+            # resposta certa para "uma sessao por vez".
+            return None
+        return {
+            "id": candidata["id"],
+            "projeto": candidata.get("projeto") or "",
+            "regra": candidata.get("regra") or "",
+            "trilho": candidata.get("trilho") or "",
+            "executor": candidata.get("executor") or "claude",
+            "detalhe": candidata.get("erro") or "",
+            "cor": candidata.get("cor") or tarefas.VERMELHO,
+            "teto_usd": tarefas.teto_da_sessao(banco.gasto_entre(*janela)),
+            "rodadas": int(candidata.get("rodadas") or 0),
+        }
+
+    # O progresso chega a cada 5 s (`tarefas.SEGUNDOS_ENTRE_PROGRESSOS`), e o
+    # balcao de `relatorio` tem teto de 60 por 15 min — um a cada 15 s. Misturar
+    # os dois trancaria a maquina legitima com 429 e a tela do dono congelaria
+    # sem explicacao. Balcao proprio, teto proprio: 240 por 15 min = um a cada
+    # 3,75 s, com folga de quase o dobro sobre o intervalo de 5 s.
+    TETO_DE_RESULTADOS = 240
+    # O diff cabe aqui dentro. Um diff de uma sessao de 40 rodadas passa
+    # folgado de 256 KiB; 2 MiB e o teto que impede o balde sem fundo.
+    TETO_DO_RESULTADO = 2 * 1024 * 1024
+
+    @staticmethod
+    def _recorte(valor, teto: int) -> str:
+        """Texto cortado no teto, com um aviso VISIVEL de que foi cortado.
+
+        `_texto_do_corpo` devolve "" quando o campo passa do teto, e para o
+        diff isso seria mentira por omissao: a tela mostraria "nada mudou" para
+        uma sessao que mudou 3 MiB. Cortar e dizer que cortou e a resposta
+        honesta.
+        """
+        if not isinstance(valor, str):
+            return ""
+        if len(valor) <= teto:
+            return valor
+        return valor[:teto] + (
+            "\n[... o restante foi cortado: passou de %d KiB]"
+            % (teto // 1024))
+
+    def _resultado(self):
+        """O agente conta o que esta acontecendo, ou como terminou.
+
+        A RESPOSTA carrega `{"pare": ...}`. E assim, e so assim, que o botao
+        Parar chega ao agente: sem conexao nova, sem porta aberta, e com a
+        latencia declarada de ate ~10 s.
+        """
+        maquina = getattr(self, "_maquina", None)
+        if maquina is None:            # cinto, alem do guarda do despacho
+            return self._json(401, {"erro": "token de maquina invalido"})
+        if not cortina.registrar_tentativa(
+                "maquina:%d" % maquina["id"], time.time(),
+                balcao="resultado", teto=self.TETO_DE_RESULTADOS):
+            return self._json(429, {"erro": "noticias demais"})
+        corpo = self._corpo_json(teto=self.TETO_DO_RESULTADO)
+        if not isinstance(corpo, dict):
+            return self._json(400, {"erro": "corpo invalido"})
+        tarefa_id = self._texto_do_corpo(corpo, "id", teto=200)
+        if not tarefa_id:
+            return self._json(400, {"erro": "faltou o id da tarefa"})
+        tipo = self._texto_do_corpo(corpo, "tipo", teto=20)
+
+        if tipo == "desfecho":
+            estado = self._texto_do_corpo(corpo, "estado", teto=20)
+            ok = banco.registrar_desfecho(
+                tarefa_id, maquina["id"], estado,
+                ramo=self._texto_do_corpo(corpo, "ramo", teto=200),
+                resumo=self._texto_do_corpo(corpo, "resumo", teto=4000),
+                diff=self._recorte(corpo.get("diff"), 1024 * 1024),
+                pr_url=self._texto_do_corpo(corpo, "pr_url", teto=500),
+                rodadas=corpo.get("rodadas"),
+                custo_usd=corpo.get("custo_usd"),
+                erro=self._texto_do_corpo(corpo, "erro", teto=2000))
+            if not ok:
+                # A tarefa nao e desta maquina, ou o estado nao existe. A mesma
+                # resposta para os dois: distinguir diria a quem tem um token
+                # quais ids existem na conta do vizinho.
+                return self._json(404, {"erro": "nao existe"})
+            return self._json(200, {"ok": True, "pare": False})
+
+        if tipo != "progresso":
+            return self._json(400, {"erro": "tipo desconhecido"})
+
+        linhas = []
+        cru = corpo.get("linhas")
+        if isinstance(cru, list):
+            # Teto de 200 linhas por pedido. O agente fala a cada 5 s; uma
+            # sessao que cospe mais que isso em cinco segundos esta em laco, e
+            # o teto e o que impede o laco de virar disco cheio.
+            for par in cru[:200]:
+                if isinstance(par, (list, tuple)) and len(par) == 2:
+                    linhas.append((par[0], str(par[1])[:2000]))
+        pare = banco.registrar_progresso(
+            tarefa_id, maquina["id"],
+            frase=self._texto_do_corpo(corpo, "frase", teto=500),
+            linhas=linhas, rodadas=corpo.get("rodadas"),
+            custo_usd=corpo.get("custo_usd"))
+        return self._json(200, {"ok": True, "pare": bool(pare)})
+
+    # ------------------------------------------------- as quatro rotas do dono
+
+    def _tarefas(self):
+        """A lista que a tela desenha. Sem o diff cru: ele e pedido a parte."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        self._varrer_mudas()
+        consulta = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(self.path).query)
+        pedido = (consulta.get("id") or [""])[0][:200]
+        if pedido:
+            uma = banco.tarefa(pedido)
+            if uma is None:
+                return self._json(404, {"erro": "nao existe"})
+            uma["frases_do_diff"] = tarefas.frases_do_diff(uma.get("diff") or "")
+            return self._json(200, {"tarefa": uma,
+                                    "medido_em": banco.agora()})
+        return self._json(200, {
+            "tarefas": banco.tarefas_do_painel(),
+            "cores": banco.cores_das_regras(),
+            "nunca_verde": sorted(tarefas.NUNCA_VERDE),
+            "medido_em": banco.agora()})
+
+    def _tarefa_aprovar(self):
+        """O clique do dono numa tarefa vermelha."""
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        alvo = self._texto_do_corpo(corpo, "id", teto=200)
+        if not alvo:
+            return self._json(400, {"erro": "faltou o id da tarefa"})
+        if not banco.aprovar_tarefa(alvo, sessao["usuario_id"]):
+            return self._json(409, {"erro": "essa tarefa nao espera aprovacao"})
+        return self._json(200, {"ok": True})
+
+    def _tarefa_parar(self):
+        """O freio. Escreve o pedido; quem para e o agente, no proximo alo.
+
+        A resposta diz `pedido`, e nao `parado`. Afirmar que parou antes de o
+        agente confirmar seria exatamente o numero errado com cara de certo que
+        a lei 2 proibe — `parar()` devolve False quando nao confirmou a morte.
+        """
+        corpo, _sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        alvo = self._texto_do_corpo(corpo, "id", teto=200)
+        if not alvo:
+            return self._json(400, {"erro": "faltou o id da tarefa"})
+        if not banco.pedir_parada(alvo):
+            return self._json(409, {"erro": "essa tarefa ja nao esta rodando"})
+        return self._json(200, {"ok": True, "pedido": True,
+                                "segundos": tarefas.SEGUNDOS_ENTRE_PROGRESSOS})
+
+    def _tarefa_cor(self):
+        """O dono repinta uma regra. `publicar` e recusada, e a tela mostra."""
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        regra = self._texto_do_corpo(corpo, "regra", teto=100)
+        cor = self._texto_do_corpo(corpo, "cor", teto=20)
+        if not regra:
+            return self._json(400, {"erro": "faltou a regra"})
+        if not banco.repintar_regra(regra, cor, sessao["usuario_id"]):
+            if regra in tarefas.NUNCA_VERDE:
+                return self._json(409, {
+                    "erro": "a regra \"%s\" nunca anda sozinha, e isso nao se "
+                            "repinta" % regra})
+            return self._json(400, {"erro": "cor invalida"})
+        return self._json(200, {"ok": True, "cor": cor})
+
+    def _maquina_autorizar(self):
+        """Liga ou desliga o direito desta maquina de trabalhar sozinha.
+
+        Nao se chama "executar" de proposito: `test_rotas.PROIBIDO` casa `exec`
+        contra o nome da funcao E o caminho da rota. O nome ruim doeria aqui
+        antes de chegar ao servidor, que e para isso que aquela lista existe.
+        """
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        try:
+            id_ = int(corpo.get("id"))
+        except (TypeError, ValueError):
+            return self._json(400, {"erro": "id invalido"})
+        ligado = bool(corpo.get("ligado"))
+        # `usuario_id` vai para dentro do UPDATE: o id vem do navegador, e um
+        # numero vizinho nao pode ligar a execucao na maquina do outro.
+        if not banco.ligar_execucao(id_, sessao["usuario_id"], ligado):
+            return self._json(404, {"erro": "nao existe"})
+        return self._json(200, {"ok": True, "ligado": ligado})
 
     def _sair(self):
         # `SameSite=Lax` ja impede o cookie de acompanhar um POST de outro site,
@@ -1559,6 +1793,24 @@ ROTAS = {
     "/api/maquinas/remover":    Rota("POST", Hub._maquina_remover, "dado"),
     "/agente/parear":           Rota("POST", Hub._parear,          "aberta"),
     "/agente/relatorio":        Rota("POST", Hub._relatorio,       "maquina"),
+    "/api/maquinas/autorizar":  Rota("POST", Hub._maquina_autorizar, "dado"),
+
+    # As tarefas (Fatia 2). `/agente/resultado` e a UNICA de acesso `maquina`
+    # aqui: e por ela que o agente conta o que esta acontecendo, e e na
+    # RESPOSTA dela que o pedido de parada desce. As quatro `/api/tarefas*` sao
+    # do dono, acesso `dado`, com a guarda comum das escritas.
+    #
+    # Os nomes foram escolhidos contra `test_rotas.PROIBIDO`, que casa
+    # `acao|execucao|exec|terminal|pty|shell|comando|grafo` contra o CAMINHO e
+    # contra o NOME DA FUNCAO: `_tarefa_aprovar` passa, `_executar_tarefa` nao.
+    # E o servidor continua sem importar `execucao`: quem executa a sessao e o
+    # agente, na maquina dele. O `subprocess` que existe aqui e o de sempre, e
+    # roda SO os coletores da tabela `COLETORES` — nenhum argv vem de pedido.
+    "/agente/resultado":        Rota("POST", Hub._resultado,       "maquina"),
+    "/api/tarefas":             Rota("GET",  Hub._tarefas,         "dado"),
+    "/api/tarefas/aprovar":     Rota("POST", Hub._tarefa_aprovar,  "dado"),
+    "/api/tarefas/parar":       Rota("POST", Hub._tarefa_parar,    "dado"),
+    "/api/tarefas/cor":         Rota("POST", Hub._tarefa_cor,      "dado"),
 }
 # A capa e servida a qualquer visitante, entao a folha de estilo e o teclado da
 # cortina precisam ser abertos. Estes dois nao: quem os carrega e o
