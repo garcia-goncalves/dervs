@@ -235,6 +235,31 @@ class ServidorDeVerdade(unittest.TestCase):
             con.close()
         return {"sessao": final}
 
+    # ------------------------------------------------------------ estaticos
+    #
+    # A tabela de rotas ja e cobrada em `test_rotas.py`. Aqui a pergunta e
+    # outra e so o servidor de verdade responde: o despacho REALMENTE barra o
+    # arquivo, ou a classificacao e um rotulo que ninguem le no caminho do
+    # `_estatico`? As duas ja divergiram neste repositorio.
+
+    def test_o_script_do_painel_nao_sai_sem_sessao(self):
+        for caminho in ("/assets/painel.js", "/assets/painel.css"):
+            with self.subTest(arquivo=caminho):
+                r = self.pedir(caminho)
+                self.assertEqual(r.status, 401, caminho)
+                self.assertNotIn("fetch(", r.corpo)
+
+    def test_o_script_do_painel_sai_para_quem_entrou(self):
+        """A outra metade: trava que tranca todo mundo quebra a tela."""
+        r = self.pedir("/assets/painel.js", cookies=self.com_sessao())
+        self.assertEqual(r.status, 200)
+        self.assertIn("fetch(", r.corpo)
+
+    def test_a_folha_da_cortina_continua_saindo_sem_nada(self):
+        r = self.pedir("/assets/cortina.css")
+        self.assertEqual(r.status, 200)
+        self.assertTrue(r.corpo.strip())
+
     # ---------------------------------------------------------------- a capa
     def test_a_capa_nao_entrega_o_formulario_de_login(self):
         corpo = self.pedir("/").corpo.lower()

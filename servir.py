@@ -1560,7 +1560,19 @@ ROTAS = {
     "/agente/parear":           Rota("POST", Hub._parear,          "aberta"),
     "/agente/relatorio":        Rota("POST", Hub._relatorio,       "maquina"),
 }
-ROTAS.update({caminho: Rota("GET", Hub._estatico, "aberta")
+# A capa e servida a qualquer visitante, entao a folha de estilo e o teclado da
+# cortina precisam ser abertos. Estes dois nao: quem os carrega e o
+# `index.html`, que `_pagina` so devolve com sessao. Servi-los abertos entregava
+# a tela inteira do painel — o desenho, os nomes dos campos e a lista das rotas
+# de API que ela chama — a quem tivesse so a combinacao da cortina.
+#
+# A protecao casa por CAMINHO EXATO, entao renomear o arquivo a desliga sem
+# aviso. `test_rotas.py` cobra que os dois nomes daqui existam em `ROTAS`.
+ESTATICOS_COM_SESSAO = {"/assets/painel.js", "/assets/painel.css"}
+
+ROTAS.update({caminho: Rota("GET", Hub._estatico,
+                            "dado" if caminho in ESTATICOS_COM_SESSAO
+                            else "aberta")
               for caminho in ESTATICOS_OK})
 
 # Fica FORA da classe porque `_redes_confiaveis` precisa existir antes, e uma
