@@ -1,0 +1,295 @@
+/* Só layout. A cor, a tipografia, o selo, o botão, o campo, a lista, a faixa e
+   o estado vazio vêm todos de `assets/dervs.css`. */
+
+.pular {
+  position: absolute;
+  left: -9999px;
+  top: var(--e2);
+  padding: var(--e2) var(--e4);
+  background: var(--fundo-elevado);
+  color: var(--acao);
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+}
+.pular:focus {
+  left: var(--e4);
+  z-index: 9;
+}
+
+/* A faixa de ambiente, injetada pelo servidor. Quem vê esta tela entrou por
+   uma porta que não pede senha e precisa saber disso. Ela NÃO usa `--estado-*`:
+   não é o selo de um projeto, é um aviso sobre a própria leitura. */
+.faixa-local {
+  padding: var(--e2) var(--e4);
+  border-bottom: var(--traco) solid var(--borda-forte);
+  background: var(--fundo-elevado);
+  color: var(--texto-suave);
+  text-align: center;
+  font-size: var(--fs-etiqueta);
+  font-weight: var(--peso-forte);
+  letter-spacing: var(--rastreio-etiqueta);
+  text-transform: uppercase;
+}
+
+/* Largura máxima de leitura em 1100px. Nada de painel lateral fixo: em 360px
+   ele viraria gaveta, e gaveta escondida é onde informação vai morrer. */
+.limite {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 var(--e4);
+}
+
+header.topo {
+  border-bottom: var(--traco) solid var(--borda);
+  margin-bottom: var(--e6);
+}
+.topo .linha {
+  display: flex;
+  align-items: center;
+  gap: var(--e4);
+  flex-wrap: wrap;
+  padding: var(--e3) var(--e4);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.marca {
+  display: flex;
+  align-items: center;
+  gap: var(--e2);
+  font-weight: var(--peso-forte);
+  letter-spacing: var(--rastreio-etiqueta);
+  color: var(--texto);
+  text-decoration: none;
+}
+.marca svg { display: block; flex: none; }
+
+nav.mapa {
+  display: flex;
+  gap: var(--e1);
+  flex-wrap: wrap;
+  flex: 1;
+}
+nav.mapa a {
+  padding: var(--e2) var(--e3);
+  border: var(--traco) solid transparent;
+  border-radius: var(--raio);
+  color: var(--texto-suave);
+  text-decoration: none;
+  font-size: var(--fs-metadado);
+  font-weight: var(--peso-medio);
+  /* alvo de toque de 44px: --e2 em cima e embaixo + a altura da linha */
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+nav.mapa a:hover { background: var(--fundo-elevado); }
+/* O item ativo é `--acao`, nunca verde. Verde é estado saudável. */
+nav.mapa a[aria-current="page"] {
+  color: var(--acao);
+  border-color: var(--borda-forte);
+  background: var(--fundo-elevado);
+}
+.topo .canto { display: flex; gap: var(--e2); flex-shrink: 0; }
+
+/* Em 360px o cabeçalho inteiro quebrava em quatro linhas e comia 217px — um
+   terço da tela, antes de o primeiro projeto aparecer. Agora a marca e os dois
+   botões ficam na primeira linha, e a navegação vira uma faixa que rola DENTRO
+   de si mesma. A página continua sem rolar de lado. */
+@media (max-width: 720px) {
+  .topo .linha { padding: var(--e2) var(--e3); gap: var(--e2); }
+  .marca { order: 1; }
+  .topo .canto { order: 2; margin-left: auto; }
+  nav.mapa {
+    order: 3;
+    flex-basis: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  nav.mapa a { min-height: 36px; white-space: nowrap; }
+  .topo .canto .botao { padding: var(--e1) var(--e2); font-size: var(--fs-metadado); }
+}
+
+/* --- painel ------------------------------------------------------------- */
+
+/* A frase. Responde a pergunta das cinco da manhã antes de qualquer número. */
+.resumo { margin: 0 0 var(--e4); }
+
+/* A régua de contagem: quatro contadores, e cada um é um filtro. */
+.regua {
+  display: flex;
+  gap: var(--e2);
+  flex-wrap: wrap;
+  margin-bottom: var(--e4);
+}
+.regua .selo { min-height: 44px; }
+.regua .selo[aria-pressed="true"] { outline: var(--foco-largura) solid var(--acao); }
+
+/* Lista de linha cheia, de borda a borda, com zero vão entre as linhas e um
+   traço de 1px separando. O espaço generoso vive DENTRO de cada linha, nunca
+   entre elas: o olho varre como sumário de jornal. */
+.projetos { border-top: var(--traco) solid var(--borda); }
+.projetos > li { flex-wrap: wrap; align-items: flex-start; }
+.projetos .dizeres { flex: 1; min-width: min(100%, 220px); }
+.projetos .nome {
+  font-size: var(--fs-destaque);
+  font-weight: var(--peso-medio);
+  line-height: var(--lh-apertada);
+}
+.projetos .motivo {
+  color: var(--texto-suave);
+  font-size: var(--fs-metadado);
+  /* Em 360px o motivo quebra em até duas linhas e corta na terceira. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.projetos .abrir { flex: none; }
+
+/* Em 360px a linha tem de encolher, e o que sai é o botão de texto — não a
+   informação. O selo JÁ é o botão que abre a prova, e ele continua ali: manter
+   os dois empilhados custava 100px por linha e não cabia projeto nenhum na
+   tela. O carimbo sobe para a mesma linha do motivo pelo mesmo motivo. */
+@media (max-width: 720px) {
+  .projetos > li { gap: var(--e2); padding: var(--e2) var(--e3); }
+  .projetos .abrir { display: none; }
+  .projetos .motivo { -webkit-line-clamp: 2; }
+  .projetos .dizeres { min-width: 0; }
+  .projetos .nome { font-size: var(--fs-corpo); }
+}
+
+/* O esqueleto tem a altura exata das linhas, para a tela não saltar quando o
+   dado chegar. Nunca uma roda girando no meio da tela. */
+.esqueleto > li { display: block; }
+.esqueleto .barra {
+  height: 1em;
+  background: var(--fundo-elevado);
+  border-radius: var(--raio);
+}
+.esqueleto .barra + .barra { margin-top: var(--e2); width: 60%; }
+
+/* --- projeto ------------------------------------------------------------ */
+
+.cabeca {
+  display: flex;
+  align-items: center;
+  gap: var(--e3);
+  flex-wrap: wrap;
+  margin-bottom: var(--e2);
+}
+.colunas {
+  display: grid;
+  gap: var(--e6);
+  grid-template-columns: 1fr;
+  margin-top: var(--e6);
+}
+/* Uma coluna só até 720px; duas acima disso, nunca três. */
+@media (min-width: 721px) {
+  .colunas { grid-template-columns: 1fr 1fr; }
+}
+.coluna > h2 {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--fundo);
+  padding: var(--e2) 0;
+  border-bottom: var(--traco) solid var(--borda-forte);
+  margin-bottom: var(--e2);
+}
+.criterio { border-bottom: var(--traco) solid var(--borda); padding: var(--e3) 0; }
+.criterio > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--e3);
+  flex-wrap: wrap;
+  cursor: pointer;
+  list-style: none;
+  min-height: 44px;
+}
+.criterio > summary::-webkit-details-marker { display: none; }
+.criterio .rotulo { flex: 1; min-width: min(100%, 140px); }
+.criterio .prova {
+  margin-top: var(--e2);
+  padding: var(--e3);
+  background: var(--fundo-elevado);
+  border: var(--traco) solid var(--borda);
+  border-radius: var(--raio);
+  font-family: var(--fonte-mono);
+  font-size: var(--fs-metadado);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- computadores, conectar, entrada ------------------------------------ */
+
+.numerao {
+  font-family: var(--fonte-mono);
+  font-size: var(--fs-pagina);
+  font-weight: var(--peso-forte);
+  letter-spacing: 0.12em;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+.numerao.vencido { text-decoration: line-through; }
+
+/* O comando rola na horizontal DENTRO da própria caixa. A página nunca rola
+   de lado — comportamento transversal C do design. */
+.receita {
+  margin: var(--e2) 0;
+  padding: var(--e3);
+  background: var(--fundo-elevado);
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+  font-family: var(--fonte-mono);
+  font-size: var(--fs-metadado);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.pilha { display: flex; flex-direction: column; gap: var(--e4); }
+.acoes { display: flex; gap: var(--e2); flex-wrap: wrap; margin-top: var(--e3); }
+.acoes .botao { min-height: 44px; }
+.mole { color: var(--texto-suave); }
+
+/* A ação recomendada aperta em 360px, mas não some: ela é o motivo de a tela
+   existir às cinco da manhã. O que encolhe é o respiro, não a informação. */
+@media (max-width: 720px) {
+  #recomendada { padding: var(--e3); }
+  #recomendada p { margin-bottom: var(--e1); }
+  #recomendada .acoes { margin-top: var(--e2); }
+  #resumo { font-size: var(--fs-titulo); }
+}
+
+/* --- o recado ------------------------------------------------------------ */
+
+#recado {
+  position: fixed;
+  left: 50%;
+  bottom: var(--e4);
+  transform: translateX(-50%);
+  max-width: min(560px, 92vw);
+  padding: var(--e2) var(--e4);
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+  background: var(--fundo-elevado);
+  color: var(--texto);
+  font-size: var(--fs-metadado);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transicao);
+}
+#recado.ver { opacity: 1; }
+
+dialog {
+  width: min(520px, 92vw);
+  padding: var(--e6);
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+  background: var(--fundo-elevado);
+  color: var(--texto);
+}
+dialog::backdrop { background: var(--texto); opacity: 0.4; }
+dialog .acoes { margin-top: var(--e4); }
+
+main { padding-bottom: var(--e12); }

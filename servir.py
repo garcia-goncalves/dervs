@@ -132,7 +132,8 @@ ESTATICOS_OK = {"/painel-projetos.svg", "/painel-projetos.png",
 ESTATICOS_OK |= {"/" + arquivo.relative_to(AQUI).as_posix()
                  for arquivo in (AQUI / "assets").rglob("*")
                  if arquivo.is_file()
-                 and arquivo.suffix in (".css", ".svg", ".png", ".woff2")}
+                 and arquivo.suffix in (".css", ".js", ".svg", ".png",
+                                       ".woff2")}
 
 COLETORES = {
     "local": (AQUI / "coletar.py", None),          # intervalo vem da linha de comando

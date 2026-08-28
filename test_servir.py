@@ -80,7 +80,16 @@ class ATelaSoChamaRotaQueExiste(unittest.TestCase):
     # `portas.html` entra na mesma conta: ele e injetado dentro da capa e busca
     # tres rotas proprias. Um erro de digitacao ali falha calado na cara do dono
     # — o botao roda, o servidor responde 404, e a tela nao mostra nada.
-    TELAS = ("index.html", "portas.html")
+    #
+    # OS `.js` DE `assets/` ESTAO AQUI PORQUE E LA QUE OS `fetch()` MORAM AGORA.
+    # Ate 28/08/2026 o script vivia dentro do proprio HTML; a CSP que o nginx
+    # manda em producao (`default-src 'self'`, sem `script-src`) descarta script
+    # embutido, e por isso ele foi para arquivo. Quando isso aconteceu este
+    # vigia passou a achar zero `fetch()` — e ficou vermelho sozinho, pelo
+    # teste-companheiro logo abaixo. Era para ser assim: um vigia que passa
+    # vazio nao vigia nada.
+    TELAS = ("index.html", "portas.html",
+             "assets/painel.js", "assets/portas.js", "assets/cortina.js")
 
     def _rotas_do_html(self):
         html = "\n".join((Path(__file__).parent / t).read_text(encoding="utf-8")
@@ -102,7 +111,11 @@ class ATelaSoChamaRotaQueExiste(unittest.TestCase):
         self.assertIn("/api/dados", achadas)
 
     def test_a_tela_nao_chama_mais_as_rotas_amputadas(self):
-        html = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
+        # O mesmo motivo da lista acima: o que a tela "chama" hoje esta no
+        # painel.js, nao no index.html. Ler so o HTML faria este teste passar
+        # por ausencia — a rota amputada podia voltar no .js sem ninguem ver.
+        html = "\n".join((Path(__file__).parent / t).read_text(encoding="utf-8")
+                         for t in ("index.html", "assets/painel.js"))
         # `fetch(` e `src=` sao os dois jeitos pelos quais a tela alcancava o
         # que foi removido — o segundo era o quadro do grafo.
         for morta in ("/api/acao", "/api/execucao", "/api/grafo", "/grafo/"):
