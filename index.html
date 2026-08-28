@@ -607,6 +607,10 @@ const $ = s => document.querySelector(s);
 let ESTADO = null;        // o último /api/dados que chegou inteiro
 let FILTRO = null;        // null = todos; senão um dos quatro estados
 let COMPUTADORES = null;  // último /api/maquinas
+/* Quando essa lista chegou. Guardado de propósito em vez de carimbar com a
+   hora do desenho: a tela "Conectar" mostra a contagem sem ter buscado nada,
+   e "agora" ali seria uma data inventada para um dado antigo. */
+let COMPUTADORES_LIDO_EM = null;
 
 /* --------------------------------------------------------------- vocabulário
    Os quatro estados, escritos. Quatro sinais independentes: cor, forma, glifo
@@ -1328,7 +1332,14 @@ function pintarConectar() {
     b.type = "button";
     b.textContent = "Ver o painel";
     b.addEventListener("click", () => irPara("#/painel"));
-    cartao.append(h, passo, b);
+    /* A contagem é um número, e número nesta tela leva carimbo como qualquer
+       outro. Achado do teste do item 8: a frase dizia "você já tem 2" sem
+       nunca dizer de quando era esse 2 — e ele vem da última visita à tela de
+       computadores, que pode ter sido ontem. */
+    const c = document.createElement("p");
+    c.className = "carimbo";
+    c.textContent = "lido " + haQuanto(COMPUTADORES_LIDO_EM);
+    cartao.append(h, passo, c, b);
   } else {
     h.textContent = "Falta conectar um computador";
     passo.textContent =
@@ -1362,10 +1373,11 @@ async function carregarComputadores() {
   try { d = await (await fetch("/api/maquinas")).json(); }
   catch { recado("não conseguimos ler a lista de computadores.", true); return; }
   COMPUTADORES = d.maquinas || [];
+  COMPUTADORES_LIDO_EM = new Date().toISOString();
 
   const lista = $("#lista-computadores");
   lista.textContent = "";
-  $("#computadores-carimbo").textContent = "lido " + haQuanto(new Date().toISOString());
+  $("#computadores-carimbo").textContent = "lido " + haQuanto(COMPUTADORES_LIDO_EM);
 
   if (!COMPUTADORES.length) {
     lista.append(vazio(
