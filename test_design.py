@@ -29,12 +29,20 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import sys
 import unittest
 from pathlib import Path
 
 AQUI = Path(__file__).parent
 CSS = AQUI / "assets" / "dervs.css"
 HTML = AQUI / "index.html"
+# O layout e o script da tela viviam DENTRO do index.html ate 28/08/2026.
+# A CSP de producao descarta estilo e script embutidos (commit 496f710), e
+# eles sairam para arquivo proprio. O teste segue os arquivos: apontar para
+# o index.html vazio faria toda busca achar zero e passar vazia -- foi
+# exatamente o que as guardas 1c e 8a pegaram.
+PAINEL_CSS = AQUI / "assets" / "painel.css"
+PAINEL_JS = AQUI / "assets" / "painel.js"
 
 # O verificador de contraste da etapa 13 e importado, nao reescrito. Ele ja le
 # o CSS de verdade (a licao de 27/08/2026: ate aquele dia ele guardava uma
@@ -88,12 +96,13 @@ def blocos_de_token(texto: str) -> list[tuple[int, int]]:
     return faixas
 
 
-def estilo_do_html(texto: str) -> str:
-    """O `<style>` do index.html. Ele existe e e legitimo -- guarda o layout,
-    que e desta tela e de mais nenhuma. Cor, nao: cor mora no CSS."""
-    m = re.search(r"<style>(.*?)</style>", texto, re.S)
-    assert m, "o index.html nao tem mais bloco <style> — confira o teste"
-    return re.sub(r"/\*.*?\*/", " ", m.group(1), flags=re.S)
+def estilo_da_tela() -> str:
+    """O layout do painel -- `assets/painel.css`. Ele e legitimo e guarda o
+    layout, que e desta tela e de mais nenhuma. Cor, nao: cor mora nos tokens
+    de `dervs.css`. Era o bloco `<style>` do index.html antes da CSP."""
+    texto = PAINEL_CSS.read_text(encoding="utf-8")
+    assert texto.strip(), "assets/painel.css esta vazio \u2014 confira o teste"
+    return re.sub(r"/\*.*?\*/", " ", texto, flags=re.S)
 
 
 CORES = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\(|\bcolor-mix\(")
@@ -137,9 +146,9 @@ class ACorMoraNumLugarSo(unittest.TestCase):
 
     def test_1c_o_style_do_html_nao_guarda_cor(self):
         """O `<style>` do index.html e a segunda porta por onde a cor volta."""
-        achadas = [m.group() for m in CORES.finditer(estilo_do_html(html()))]
+        achadas = [m.group() for m in CORES.finditer(estilo_da_tela())]
         self.assertEqual(achadas, [],
-                         "cor literal no <style> do index.html: %s. Layout "
+                         "cor literal em assets/painel.css: %s. Layout "
                          "fica ali; cor vem de var(--...)." % achadas)
 
     def test_2_estado_nao_pinta_botao_link_navegacao_nem_cabecalho(self):
@@ -466,7 +475,8 @@ class NenhumNumeroSemCarimbo(unittest.TestCase):
     TEXTO_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"' + r"|'(?:[^'\\]|\\.)*'")
 
     def script(self):
-        return "\n".join(re.findall(r"<script>(.*?)</script>", html(), re.S))
+        """O script da tela -- `assets/painel.js`, desde a correcao da CSP."""
+        return PAINEL_JS.read_text(encoding="utf-8")
 
     def sem_literais(self, corpo):
         """Tira comentario e cadeia de texto. Um numero DENTRO de aspas e
@@ -500,7 +510,7 @@ class NenhumNumeroSemCarimbo(unittest.TestCase):
         fs = self.funcoes()
         self.assertGreaterEqual(
             len(fs), 30,
-            "so %d funcoes lidas do index.html; a tela tem mais de 40. O "
+            "so %d funcoes lidas de assets/painel.js; a tela tem mais de 40. O "
             "leitor quebrou e os casos seguintes passariam vazios." % len(fs))
         escritas = len(re.findall(r"\.textContent\s*=", self.script()))
         self.assertGreaterEqual(
@@ -624,5 +634,9 @@ def resumo_do_que_falta():
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=0, exit=False)
+    # `exit=False` sozinho devolvia 0 mesmo com caso reprovado: em 28/08/2026
+    # este arquivo imprimiu FAILED (failures=4) e a CI seguiu verde. O codigo
+    # de saida tem de contar a verdade, senao o passo da CI nao verifica nada.
+    _res = unittest.main(verbosity=0, exit=False).result
     resumo_do_que_falta()
+    sys.exit(0 if _res.wasSuccessful() else 1)
