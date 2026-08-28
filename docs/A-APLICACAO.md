@@ -10,7 +10,7 @@ A confusão era real e não era culpa dele: as decisões estavam espalhadas por 
 briefing, uma especificação, um documento de design, um plano de 17 etapas e mais de
 trinta anotações de memória. Nenhum deles respondia, sozinho, *o que esta aplicação é*.
 
-Última revisão: 27/08/2026.
+Última revisão: 28/08/2026.
 
 ---
 
@@ -266,7 +266,7 @@ liga e desliga ferramenta do agente é uma superfície de ataque de primeira ord
 
 ## 11. O caminho — o que está pronto, o que falta
 
-**Entregue (etapas 1 a 14 de 17, 998 testes passando):** a fusão dos dois repositórios com
+**Entregue (etapas 1 a 15 de 17, 1022 testes passando):** a fusão dos dois repositórios com
 as duas autorias preservadas · a verificação automática escalonada · a amputação de toda
 rota que executava comando · o banco de vários usuários · o login com cortina e entrada
 pelo GitHub · o motor do selo de quatro estados · o agente do computador e o pareamento
@@ -294,11 +294,15 @@ legível a um braço de distância. A contagem deixa de ser critério.
 
 | # | O quê | Por que agora |
 |---|---|---|
-| 13 | Paleta, tipografia e símbolos como código | É a resposta a "está tudo feio" |
-| 14 | As seis telas reescritas, em 360px e nos dois temas | idem |
-| 15 | O teste que reprova design errado na verificação automática | Impede a feiura de voltar |
 | 16 | Publicar em `dervs.com.br` | O domínio já aponta para a VPS e já serve HTTPS |
 | 17 | Conferência final da fundação | |
+
+**A etapa 15 entregou o teste que reprova design errado**, e vale saber o que ele *não*
+faz: seis dos oito itens da lista do desenho são verificados contra os arquivos de
+verdade; **dois exigem olho humano** — a linha de projeto em 360×640, e cada botão fazer o
+que promete. O teste imprime esses dois na própria saída, em vez de se calar. Uma lista de
+oito com seis verificados e dois calados se lê como oito verificados, e essa impressão é
+pior que a lacuna.
 
 **Depois disso, Fatia 2:** descoberta automática de pasta, conectar servidor e conta pela
 tela, e o botão consertar. **Fatia 3:** terminais e lousa de agentes. **Fatia 4:** o painel
