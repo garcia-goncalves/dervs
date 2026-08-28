@@ -67,6 +67,11 @@ criptografia sem testemunha externa não entra.
 
 ## Onde estão as decisões já tomadas
 
+- **`docs/A-APLICACAO.md` — a fonte única. Leia este primeiro; em conflito com
+  qualquer outro documento, ele vence.** Responde numa leitura só o que o DERVS
+  é, para quem, o que mostra, o que faz e o que nunca vai fazer.
+- `docs/esteira/dervs/design.md` — a direção visual (Torre de Controle), os
+  tokens, as seis telas e o vocabulário. **Aprovado, não refazer.**
 - `docs/esteira/dervs/briefing.md` e `spec.md` — o contrato do produto, fase 1
   e 2, aprovados. **Não refazer.**
 - `docs/superpowers/plans/dervs-fatia-1.md` — as 17 etapas. Etapas 1 a 12

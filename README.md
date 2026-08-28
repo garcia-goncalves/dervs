@@ -1,10 +1,15 @@
-# HUB do dev
+# DERVS
 
-Uma pergunta só: **"o que precisa de mim agora?"** — respondida em menos de um
-segundo, sem clicar em nada, com um botão para agir em cada item.
+O posto de comando de quem programa. Uma pergunta só: **"posso confiar no que
+está no ar?"** — respondida em menos de um segundo, sem clicar em nada, com um
+botão para agir em cada item.
 
 Não é um painel de "como estão meus projetos". Essa pergunta produz uma tela
 bonita que se olha uma vez por semana. Esta produz uma tela que se abre todo dia.
+
+> **Novo por aqui? Leia [`docs/A-APLICACAO.md`](docs/A-APLICACAO.md).** É a fonte
+> única: o que o DERVS é, para quem, o que mostra, o que faz e o que nunca vai
+> fazer. Todo o resto deste repositório aponta para ele.
 
 ## Rodar
 
