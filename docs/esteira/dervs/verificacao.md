@@ -204,10 +204,33 @@ Nada disto bloqueia a fatia, e nada disto está resolvido:
 
 1. **Uma forma de entrar só.** Nenhuma chave de acesso cadastrada e nenhum
    código de papel gerado. Quem perder o GitHub não abre a conta — o próprio
-   painel cobra isso em vermelho.
-2. **`/assets/painel.js` é legível sem sessão.** Custo aceito no commit
-   `496f710`.
-3. **Não existe comando para apagar conta criada errada.** O e-mail é UNIQUE em
-   `usuario`; errar custa mexer no banco do servidor à mão.
-4. **`dervs.com.br` publica um MX nulo** — o domínio declara que não recebe
-   e-mail. Os e-mails das contas são identificadores, não caixas.
+   painel cobra isso em vermelho. **Não é falta de código:** as rotas
+   `/entrar/chave`, `/entrar/codigo`, `/api/chaves/cadastrar` e
+   `/api/codigos/gerar` existem e são testadas desde a etapa 12. O que falta é
+   a mão do dono no navegador, e o roteiro está em
+   `docs/operacao/formas-de-entrar.md`.
+2. **`dervs.com.br` publica um MX nulo** — o domínio declara que não recebe
+   e-mail. Os e-mails das contas são identificadores, não caixas. Nada a fazer
+   enquanto o DERVS não precisar enviar mensagem; quando precisar, é registro de
+   DNS, não código.
+
+## Fechadas em 28/08/2026, depois desta verificação
+
+3. ~~**`/assets/painel.js` é legível sem sessão.**~~ Fechado. Os dois arquivos
+   da tela (`painel.js` e `painel.css`) passaram para a classe de acesso
+   `dado` — `index.html`, que é quem os carrega, já exigia sessão. A prova não é
+   a tabela de rotas: `test_servir.py` sobe o servidor de verdade e confere
+   `401` sem sessão e `200` com ela, e a trava foi desligada uma vez para
+   confirmar que o teste fica vermelho sem ela.
+4. ~~**Não existe comando para apagar conta criada errada.**~~ Fechado.
+   `python autenticacao.py remover <email> APAGAR` apaga a conta e tudo que
+   pende dela. Duas guardas: a palavra `APAGAR` é obrigatória, e a **última**
+   conta do sistema não pode ser apagada — não há cadastro pela web, então
+   apagá-la trancaria o DERVS para sempre. As tabelas de decisão
+   (`pendencia_estado`, `pendencia_arquivada`, `medida`) não têm chave
+   estrangeira e são limpas nominalmente; o resto some por `ON DELETE CASCADE`.
+   O comando **não é alcançável pela web**, e `test_rotas.py` cobra isso.
+
+Também nesta rodada: a tela diz **Computadores** e três documentos mandavam
+clicar em **Máquinas**. Corrigido, com um vigia em `test_design.py` que lê os
+quatro nomes do menu do próprio HTML.

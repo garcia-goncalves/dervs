@@ -633,6 +633,50 @@ def resumo_do_que_falta():
           "verdade.\n")
 
 
+class ORoteiroChamaAsTelasPeloNomeDelas(unittest.TestCase):
+    """A verificacao de 28/08/2026 achou isto olhando, nao testando: a tela diz
+    **Computadores** e `docs/operacao/conectar-uma-maquina.md` mandava clicar em
+    **Maquinas**. O dono nao acha o botao, e conclui que o software esta
+    quebrado.
+
+    O vigia e estreito de proposito. Um teste que tentasse adivinhar quais
+    palavras em negrito de um roteiro sao rotulo de tela reprovaria em cima de
+    enfase comum, e teste ruidoso e teste que a gente aprende a ignorar. Este
+    aqui pergunta uma coisa so: os quatro nomes do menu, como estao no HTML,
+    sao os nomes que a documentacao usa?
+    """
+
+    DOCS = [AQUI / "README.md"] + sorted((AQUI / "docs" / "operacao").glob("*.md"))
+
+    def menu(self):
+        """Os rotulos do menu, lidos do HTML — nao uma copia escrita aqui."""
+        bloco = re.search(r"<nav.*?</nav>", html(), re.S)
+        self.assertIsNotNone(bloco, "o menu sumiu do index.html")
+        nomes = re.findall(r'data-tela="[^"]+"\s*>([^<]+)<', bloco.group(0))
+        self.assertEqual(len(nomes), 4, nomes)
+        return nomes
+
+    def test_o_menu_tem_os_quatro_nomes_esperados(self):
+        """Se o menu mudar de forma, o teste abaixo passa vazio e nao vigia."""
+        self.assertEqual(self.menu(),
+                         ["Painel", "Conectar projeto", "Computadores",
+                          "Formas de entrar"])
+
+    def test_nenhum_roteiro_manda_clicar_num_botao_que_nao_existe(self):
+        # O par: o nome errado que ja custou uma verificacao, e o certo.
+        # Acrescentar uma linha aqui e o jeito de registrar a proxima deriva.
+        trocas = {"Máquinas": "Computadores"}
+        for doc in self.DOCS:
+            texto = doc.read_text(encoding="utf-8")
+            for errado, certo in trocas.items():
+                self.assertIn(certo, self.menu(), certo)
+                with self.subTest(doc=doc.name, palavra=errado):
+                    self.assertNotIn(
+                        "**%s**" % errado, texto,
+                        "%s manda clicar em **%s**; a tela diz **%s**"
+                        % (doc.name, errado, certo))
+
+
 if __name__ == "__main__":
     # `exit=False` sozinho devolvia 0 mesmo com caso reprovado: em 28/08/2026
     # este arquivo imprimiu FAILED (failures=4) e a CI seguiu verde. O codigo

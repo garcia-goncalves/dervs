@@ -47,7 +47,9 @@ digitar.
 
 ### Cadastrar o primeiro aparelho
 
-1. Entre no painel (hoje, pela porta do ambiente local).
+1. Entre no painel. Em `https://dervs.com.br` é a combinação de seis dígitos e
+   depois **Entrar com GitHub**; no seu computador é a porta **Entrar ·
+   ambiente local**, que não existe no servidor.
 2. Botão **Formas de entrar**, no alto à direita.
 3. Escreva um apelido — "PC da sala", "celular" — e clique
    **Cadastrar este aparelho**.
@@ -177,7 +179,20 @@ voltar atrás.
 
 ## O que ainda depende da sua mão
 
-Registrar o OAuth App em github.com, cinco minutos, roteiro em
-[`registrar-app-github.md`](registrar-app-github.md). Sem isso o botão
-**Entrar com GitHub** não aparece — de propósito: botão que leva a erro é pior
-que botão que não existe.
+**O OAuth App já está registrado** e as credenciais chegam ao servidor pelo
+workflow de publicação desde 28/08/2026 (`f2adc52`). O botão **Entrar com
+GitHub** foi clicado em produção e leva ao painel. O roteiro continua em
+[`registrar-app-github.md`](registrar-app-github.md), para o dia em que as
+credenciais precisarem ser trocadas.
+
+O que resta é isto, e só a sua mão resolve — o Windows só abre a janelinha do
+PIN para uma pessoa de verdade:
+
+1. Entre em `https://dervs.com.br` (combinação de seis dígitos, depois **Entrar
+   com GitHub**).
+2. **Formas de entrar** → cadastre este computador com um apelido.
+3. Na mesma tela, **Gerar dez códigos novos**, e guarde os dez no papel.
+
+Enquanto os dois não forem feitos, **o GitHub é a única porta da conta**: perder
+o acesso à conta do GitHub é perder o DERVS, e o conserto seria mexer no banco
+do servidor à mão. O painel cobra isso em vermelho de propósito.
