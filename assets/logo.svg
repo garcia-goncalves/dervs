@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="DERVS">
+  <title>DERVS</title>
+  <!-- A marca sao as TRES CAMADAS de um projeto, na ordem em que o codigo anda:
+       no seu computador, no GitHub, no ar. A do meio esta fora de alinhamento --
+       e o drift, a diferenca entre as tres. E o diferencial confirmado do
+       produto: nenhuma ferramenta pronta mede isso.
+
+       MONOCROMATICA: currentColor herda --acao, quase-preto no tema claro e
+       quase-branco no escuro. Verde NUNCA entra aqui -- verde e estado
+       saudavel, nunca cor de marca.
+
+       O nome "DERVS" nao esta neste arquivo: e texto de verdade, em IBM Plex
+       Mono, ao lado do simbolo. Letra desenhada como caminho sai torta e nao
+       acompanha o peso da fonte. -->
+  <g fill="currentColor">
+    <rect x="2" y="4" width="17" height="3.5" rx="1" />
+    <rect x="6" y="10.25" width="13" height="3.5" rx="1" />
+    <rect x="2" y="16.5" width="17" height="3.5" rx="1" />
+  </g>
+</svg>

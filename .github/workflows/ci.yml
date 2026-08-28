@@ -158,3 +158,12 @@ jobs:
       # — sinal proprio deixa a maquina parecer viva com a medicao parada.
       - name: Agente e pareamento
         run: python test_agente.py
+
+      # ETAPA 13 — a paleta. O script LE assets/dervs.css, nao uma copia dos
+      # valores: ate 27/08/2026 ele tinha a paleta digitada dentro dele, e
+      # bastava mudar uma cor no CSS para a verificacao continuar aprovando a
+      # cor velha. Ele sai com codigo 1 se qualquer par ficar abaixo de 4,5:1
+      # (texto) ou 3:1 (contorno com significado), e tambem se o escuro do
+      # sistema divergir do escuro do botao de tema.
+      - name: Contraste da paleta
+        run: python docs/esteira/dervs/contraste.py
