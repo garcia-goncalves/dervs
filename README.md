@@ -82,7 +82,13 @@ Conta nova só por comando, nunca pela web:
 
 ```
 python autenticacao.py convidar <login-do-github> <email>
+python autenticacao.py remover <email> APAGAR
 ```
+
+O `remover` é o desfazer do convite: `email` é UNIQUE na tabela `usuario`, então
+sem ele um endereço digitado errado ficava queimado para sempre. A palavra
+`APAGAR` é obrigatória, e a última conta do sistema não pode ser apagada — não
+há cadastro pela web, e apagá-la trancaria o DERVS.
 `python servir.py 4780 30` troca a porta e o intervalo da camada local.
 
 Só escuta em `127.0.0.1`: o HUB lê git, Docker e o GitHub autenticado, então
@@ -842,7 +848,7 @@ A etapa 8 abriu as tabelas para várias máquinas; a 11 é quem finalmente põe 
 de outra máquina lá dentro. O pacote `agente/` mede um computador e **manda** o
 resultado para um DERVS remoto.
 
-Conectar é um número de seis dígitos, gerado no botão **Máquinas** do painel e
+Conectar é um número de seis dígitos, gerado no botão **Computadores** do painel e
 digitado na outra máquina:
 
 ```

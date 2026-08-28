@@ -295,5 +295,116 @@ class Convite(unittest.TestCase):
             self.assertNotIn(proibido, publicas)
 
 
+class Remocao(unittest.TestCase):
+    """O irmao que faltava do convite.
+
+    Ate 28/08/2026 errar o e-mail num convite era permanente: `email` e UNIQUE
+    em `usuario`, entao o endereco ficava queimado e a unica saida era abrir o
+    banco do servidor a mao. O proprio comentario de `convidar` nomeia isto —
+    "nenhum comando para apaga-la".
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.con = banco.conectar(str(Path(self.dir.name) / "hub.db"))
+        self.addCleanup(self.con.close)
+        self.rede = duble({
+            "api.github.com/users/thiago": {"id": 4242, "login": "thiago",
+                                            "name": "Thiago"},
+            "api.github.com/users/andre": {"id": 7, "login": "andre",
+                                           "name": "Andre"}})
+
+    def _duas_contas(self):
+        a = autenticacao.convidar("thiago", "errado@teste.local",
+                                  con=self.con, abrir=self.rede)
+        b = autenticacao.convidar("andre", "andre@teste.local",
+                                  con=self.con, abrir=self.rede)
+        return a, b
+
+    def test_apaga_a_conta_e_libera_o_email(self):
+        """O ponto todo: o endereco tem de voltar a ser usavel."""
+        errada, _ = self._duas_contas()
+        self.assertEqual(autenticacao.remover("errado@teste.local",
+                                              con=self.con), errada)
+        self.assertIsNone(banco.usuario_por_email("errado@teste.local",
+                                                  con=self.con))
+        de_novo = autenticacao.convidar("thiago", "certo@teste.local",
+                                        con=self.con, abrir=self.rede)
+        self.assertNotEqual(de_novo, errada)
+
+    def test_nao_sobra_credencial_nem_sessao_da_conta_apagada(self):
+        """Apagar a linha e deixar a sessao viva noutra tabela e pior que nao
+        apagar: some do cadastro e continua entrando."""
+        errada, _ = self._duas_contas()
+        banco.abrir_sessao(errada, "cookie-de-teste", banco.prazo(3600),
+                           con=self.con)
+        autenticacao.remover("errado@teste.local", con=self.con)
+        for tabela in ("credencial", "sessao", "maquina", "pareamento",
+                       "chave_de_acesso", "codigo_recuperacao"):
+            with self.subTest(tabela=tabela):
+                sobrou = self.con.execute(
+                    "SELECT COUNT(*) FROM %s WHERE usuario_id = ?" % tabela,
+                    (errada,)).fetchone()[0]
+                self.assertEqual(sobrou, 0, tabela)
+
+    def test_nao_leva_junto_a_conta_do_vizinho(self):
+        errada, vizinho = self._duas_contas()
+        banco.abrir_sessao(vizinho, "cookie-do-vizinho", banco.prazo(3600),
+                           con=self.con)
+        autenticacao.remover("errado@teste.local", con=self.con)
+        self.assertIsNotNone(banco.usuario_por_email("andre@teste.local",
+                                                     con=self.con))
+        self.assertIsNotNone(banco.sessao_valida("cookie-do-vizinho",
+                                                 con=self.con))
+
+    def test_as_decisoes_da_conta_apagada_nao_ficam_orfas(self):
+        """`pendencia_estado` e `pendencia_arquivada` nao tem chave
+        estrangeira — o CASCADE do banco nao alcanca as duas."""
+        errada, vizinho = self._duas_contas()
+        banco.silenciar("p1", banco.prazo(3600), con=self.con,
+                        usuario_id=errada)
+        banco.arquivar("p2", usuario_id=errada, motivo="engano", con=self.con)
+        banco.silenciar("p3", banco.prazo(3600), con=self.con,
+                        usuario_id=vizinho)
+        autenticacao.remover("errado@teste.local", con=self.con)
+        for tabela in ("pendencia_estado", "pendencia_arquivada"):
+            with self.subTest(tabela=tabela):
+                sobrou = self.con.execute(
+                    "SELECT COUNT(*) FROM %s WHERE usuario_id = ?" % tabela,
+                    (errada,)).fetchone()[0]
+                self.assertEqual(sobrou, 0, tabela)
+        self.assertEqual(banco.silenciadas(con=self.con,
+                                           usuario_id=vizinho).keys(), {"p3"})
+
+    def test_email_que_nao_existe_estoura_em_vez_de_mentir(self):
+        """Devolver 0 calado faria o dono achar que apagou alguma coisa."""
+        self._duas_contas()
+        with self.assertRaises(ValueError):
+            autenticacao.remover("ninguem@teste.local", con=self.con)
+
+    def test_a_ultima_conta_nao_pode_ser_apagada(self):
+        """Nao ha cadastro pela web. Apagar a ultima conta tranca o sistema
+        para sempre, e o unico conserto seria mexer no banco do servidor — o
+        mesmo buraco que este comando existe para fechar."""
+        autenticacao.convidar("thiago", "unica@teste.local",
+                              con=self.con, abrir=self.rede)
+        with self.assertRaises(ValueError):
+            autenticacao.remover("unica@teste.local", con=self.con)
+        self.assertIsNotNone(banco.usuario_por_email("unica@teste.local",
+                                                     con=self.con))
+
+    def test_a_linha_de_comando_exige_a_palavra_apagar(self):
+        """Comando destrutivo nao pode ser um errinho de digitacao."""
+        self.assertEqual(autenticacao.main(
+            ["autenticacao.py", "remover", "errado@teste.local"]), 2)
+        self.assertEqual(autenticacao.main(
+            ["autenticacao.py", "remover", "errado@teste.local", "sim"]), 2)
+
+    def test_o_uso_ensina_o_comando_novo(self):
+        self.assertIn("remover", autenticacao.USO)
+        self.assertIn("APAGAR", autenticacao.USO)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
