@@ -157,6 +157,22 @@ class NenhumaRotaAlcancaExecucao(unittest.TestCase):
                                  "a rota %s alcanca %s" % (caminho,
                                                            sorted(achados)))
 
+    def test_o_servidor_nao_cita_o_comando_que_apaga_conta(self):
+        """`autenticacao.remover` nasceu em 28/08/2026 como comando de quem tem
+        acesso a maquina, igual ao convite. Uma rota que o alcancasse daria a
+        qualquer sessao o poder de apagar a conta do outro dono.
+
+        O andarilho de cima nao serve aqui: `servir` ja importa `autenticacao`
+        para a volta do GitHub, entao o nome do modulo e alcancavel de forma
+        legitima. O que nao pode existir e a CHAMADA, e ela e um texto exato.
+        """
+        import inspect
+        fonte = inspect.getsource(servir)
+        self.assertNotIn("autenticacao.remover", fonte)
+        self.assertIn("autenticacao.", fonte,
+                      "se o modulo deixar de ser usado aqui, o teste acima "
+                      "passa por ausencia e para de vigiar")
+
     def test_o_andarilho_realmente_enxerga_o_corpo(self):
         """Se `_alcancaveis` parasse de andar, o teste acima passaria vazio.
 
@@ -241,6 +257,34 @@ class TodaRotaDeclaraAcesso(unittest.TestCase):
         """Se a capa exigisse sessao, ninguem conseguiria nem tentar entrar."""
         for caminho in ("/", "/entrada"):
             self.assertEqual(servir.ROTAS[caminho].acesso, "aberta", caminho)
+
+    # ---------------------------------------------------------- os estaticos
+    #
+    # `index.html` NAO e servido sem sessao — `_pagina` devolve a capa nesses
+    # casos. Mas os dois arquivos que ele carrega eram servidos a qualquer um,
+    # e juntos eles sao a tela inteira: o desenho, os nomes dos campos e a
+    # lista de rotas da API que o painel chama. Custo aceito em 496f710 e
+    # fechado aqui.
+
+    SO_COM_SESSAO = ("/assets/painel.js", "/assets/painel.css")
+
+    def test_os_arquivos_do_painel_exigem_sessao(self):
+        for caminho in self.SO_COM_SESSAO:
+            with self.subTest(arquivo=caminho):
+                self.assertIn(caminho, servir.ROTAS,
+                              "arquivo renomeado? a protecao casa por caminho "
+                              "exato, entao um rename reabre o arquivo em "
+                              "silencio: %s" % caminho)
+                self.assertEqual(servir.ROTAS[caminho].acesso, "dado", caminho)
+
+    def test_o_que_a_capa_carrega_continua_aberto(self):
+        """A trava acima nao pode subir alto demais. Quem ainda nao digitou a
+        combinacao precisa da folha de estilo e do teclado da cortina — sem
+        eles a capa chega sem desenho e sem botao."""
+        for caminho in ("/assets/cortina.css", "/assets/cortina.js"):
+            with self.subTest(arquivo=caminho):
+                self.assertEqual(servir.ROTAS[caminho].acesso, "aberta",
+                                 caminho)
 
     def test_entrar_exige_a_cortina(self):
         for caminho in servir.ROTAS:
