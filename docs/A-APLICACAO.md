@@ -20,6 +20,15 @@ trinta anotações de memória. Nenhum deles respondia, sozinho, *o que esta apl
 bate o olho e sabe, de cada projeto seu, se dá para confiar no que está no ar, o que
 falta fazer, e o que quebrou — e aperta um botão para o Claude consertar.**
 
+**A partir da Fatia 2, aberta em 28/08/2026, ele também tem braços.** Pedido do dono, com
+as palavras dele: *"quero sim que o DERVS seja independente — analisa, executa, programa,
+desenvolve, monitora, resolve problemas, tudo"*. O que executa é o **agente**, o programa
+instalado no computador dele e na VPS, dirigindo o Claude Code. O painel manda, o agente
+faz, e o semáforo do §7 decide o que anda sozinho e o que espera um clique.
+
+A ordem importa e não se inverte: **ele mede primeiro e age depois.** Um braço que conserta
+em cima de uma leitura errada estraga mais rápido do que uma pessoa distraída.
+
 A pergunta que ele responde, todo dia de manhã, em cinco minutos:
 
 > **Posso confiar no que está no ar?**
@@ -196,11 +205,28 @@ nem para conferir: mostra "configurado em 27/08" e um botão "substituir".
 
 Isto é tão parte do produto quanto o que ele faz.
 
-- **Nunca agir sozinho.** Toda ação passa por um clique seu.
+- **Nunca agir sozinho no que é vermelho.** *Reescrito em 28/08/2026, por decisão do dono
+  ao abrir a Fatia 2.* A regra antiga dizia "toda ação passa por um clique seu", e ela
+  impedia o que ele pediu com todas as letras: *"que o Claude Code cuide de TUDO, resolva
+  qualquer problema, sem eu precisar colocar a mão"*. A regra nova é um **semáforo**: cada
+  tipo de tarefa nasce verde ou vermelha, a cor é visível na tela, e o dono repinta quando
+  quiser. **Verde** roda sozinho e avisa depois — formatação, dependência, link quebrado,
+  teste que faltava. **Vermelho** para e espera o clique — login, pagamento, banco de
+  dados, exclusão, e **publicar, que é vermelho para sempre e não pode ser repintado**.
+  Todo verde é reversível por construção: vira commit num branch, nunca vai direto ao ar.
+  O que **não** mudou: nada acontece sem ficar registrado, e o dono vê o diff em português.
 - **Nunca mostrar número sem dizer quando foi medido.**
 - **Nunca inventar estado.** Não mediu, diz "sem dados".
-- **Nunca abrir um terminal na internet aberta.** Na Fatia 1 não existe nenhuma rota que
-  execute comando — e há um teste que varre as rotas e falha se alguém criar uma.
+- **Nunca pôr um modelo de linguagem no caminho da medição.** Medir é código comum e
+  determinístico: lê o commit que está no ar, lê o commit do GitHub, compara. Um LLM que
+  "acha" que está tudo bem é exatamente o número errado com cara de certo que a segunda lei
+  deste repositório proíbe. A IA entra depois de medir — para explicar, decidir e consertar,
+  nunca para apurar.
+- **Nunca abrir um terminal na internet aberta.** Continua valendo na Fatia 2, e é por isso
+  que o trabalho executa no **agente** — o programa instalado no computador e na VPS, que
+  não escuta porta nenhuma e só pergunta ao painel se há tarefa. Nenhuma rota do servidor
+  executa comando, e o teste que varre as rotas continua de pé. O terminal interativo no
+  navegador está adiado para a Fatia 3, e não entra sem uma decisão nova e escrita.
 - **Nunca guardar chave SSH do seu servidor.**
 - **Nunca mostrar texto em inglês na interface.**
 - **Nunca ter cadastro público** enquanto for de vocês dois. A estrutura de vários
@@ -364,10 +390,30 @@ reescrita, não endurecida"*.
 pedir autenticação — no `127.0.0.1` é ferramenta, publicado é execução remota aberta. Duas
 barreiras independentes impedem, e `vivo/LEIA-ANTES.md` explica as duas.
 
-**"Tudo que um DEV precisa" ainda não é escopo — é intenção.** Traduzir isso em contrato é
-trabalho da esteira, começando pelo briefing. Não comece a construir antes disso: o
-próprio dono disse em 27/08 que estava confuso com o tamanho que a coisa tomou, e a
-esteira existe para essa conversa.
+**"Tudo que um DEV precisa" deixou de ser intenção e virou escopo em 28/08/2026.** A
+esteira rodou na mesma noite: três pesquisas externas em paralelo com a entrevista, duas
+decisões de produto tomadas pelo dono, e **o briefing aprovado por ele no portão 1**.
+
+> **O contrato da Fatia 2 mora em `docs/esteira/dervs-fatia-2/briefing.md`.** Ele é quem
+> diz o que entra, o que fica de fora com destino nomeado, e como cada coisa se prova.
+
+O recorte, em uma linha: **a Fatia 2 constrói o trabalhador** — o agente ganha a capacidade
+de disparar o binário `claude` sobre um repositório e devolver o resultado; o mesmo agente
+instalado na VPS vira o segundo braço. Junto vêm o semáforo, a caixa efêmera, o freio de
+gasto que trava antes de disparar, e a tela onde o dono acompanha e aprova.
+
+**Adiado com destino escrito, não descartado:** terminal no navegador, a lousa, o canivete
+de 15 ferramentas avulsas e o **Codex** vão para a Fatia 3; editor de código e o
+ferramental do Claude (§10) para a Fatia 4. O Codex sai desta fatia com a tomada pronta —
+a interface do executor nasce com duas implementações previstas, e ligá-lo depois é
+acrescentar uma, não refazer nada.
+
+**Por que o Codex não entra agora, com o número:** só compensa orquestrar dois fornecedores
+quando há 3 ou mais tarefas independentes de 15+ minutos cada; a fila do DERVS é de
+correções de 2 minutos. O que a medição sustenta é **roteamento por tipo de tarefa** —
+Claude escreve melhor código que atravessa vários arquivos (87,6% × 85,0% no SWE-bench
+Verified), Codex opera melhor terminal e infraestrutura (81,8% no Terminal-Bench 2.0). Isso
+é uma coluna a mais na tabela `fila`, não uma arquitetura a mais.
 
 ## 12. O que não se relitiga
 
@@ -379,8 +425,10 @@ Decisões travadas. Mudar qualquer uma exige um motivo novo, escrito.
 - Mesclagem automática é privilégio do robô de dependências.
 - Teto de R$ 50 por dia na fila.
 - Só pendência mecânica, com gabarito.
-- A fila roda só quando o dono manda, e mora dentro do painel — **nada no GitHub Actions**
-  (a cota já estourou uma vez).
+- A fila mora dentro do painel — **nada no GitHub Actions** (a cota já estourou uma vez).
+  *A parte "só quando o dono manda" foi substituída em 28/08/2026 pelo semáforo do §7:
+  vermelho espera o clique, verde anda sozinho dentro do teto de gasto. O motivo novo e
+  escrito é o pedido do dono ao abrir a Fatia 2. Publicar continua exigindo a mão dele.*
 - O selo tem **quatro** estados.
 - Arquivamento é permanente, não 24 horas.
 - Publicação nunca é automática: só por botão, depois do sinal do dono.
@@ -403,3 +451,17 @@ Decisões travadas. Mudar qualquer uma exige um motivo novo, escrito.
   do PIN para uma pessoa.
 - **`dervs.com.br` publica um MX nulo** — o domínio declara que não recebe e-mail. Os
   endereços das contas são identificadores, não caixas.
+- **A Fatia 2 precisa de uma chave de API que ainda não existe.** A assinatura Max do dono
+  **não pode** ser usada para uso programático — é regra escrita da Anthropic, e houve uma
+  mudança de cobrança anunciada e pausada em 15/06/2026, então planejar em cima da
+  assinatura é planejar em cima de um preço que não é nosso. O painel precisa de chave de
+  API do console, e a conta passa a ser por token. Preços em 28/08/2026, por milhão
+  (entrada/saída): **Opus 5 US$ 5 / 25 · Sonnet 5 US$ 2 / 10 · Haiku 4.5 US$ 1 / 5**;
+  acerto em cache custa 10% da entrada e lote corta 50%, e os dois se somam. Pegadinha
+  oficial: o tokenizador do Claude 4.7+ gera ~30% mais tokens no mesmo texto — preço por
+  token igual, conta 30% maior. **Exige a mão do dono** (criar a chave no console) e um
+  segredo novo no `/opt/dervs/.env`, pelo caminho que já leva as credenciais do OAuth.
+- **O alerta de gasto do fornecedor atrasa cerca de um dia.** Por isso o teto do DERVS conta
+  **antes** de disparar, nunca depois. Casos públicos de 2026 que definem o tamanho do
+  perigo: US$ 1,3 milhão em 30 dias com ~100 agentes soltos, e US$ 437 numa única noite num
+  laço recursivo.
