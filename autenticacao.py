@@ -183,9 +183,62 @@ def convidar(login: str, email: str, con=None, abrir=None) -> int:
             con.close()
 
 
-USO = """uso: python autenticacao.py convidar <login-do-github> <email>
+# ------------------------------------------------------------- o desconvite
+#
+# O irmao que faltava. Errar o e-mail num convite era permanente: `email` e
+# UNIQUE em `usuario`, entao o endereco ficava queimado e o unico conserto era
+# abrir o banco do servidor a mao.
+#
+# As tabelas de credencial, sessao, maquina, pareamento, chave e codigo estao
+# amarradas por `ON DELETE CASCADE` e somem sozinhas — `banco.conectar` liga o
+# `PRAGMA foreign_keys`. As tabelas de DECISAO (`pendencia_estado`,
+# `pendencia_arquivada`, `medida`) nao tem chave estrangeira de proposito: o
+# DONO_LOCAL = 0 nao e um usuario de verdade. Por isso elas sao apagadas aqui,
+# nominalmente.
+#
+# Nada disto corre risco de vazar para uma conta futura: `usuario.id` e
+# AUTOINCREMENT, e o SQLite nunca reaproveita um numero. A limpeza e higiene,
+# nao contencao de vazamento.
+_TABELAS_SEM_CASCATA = ("pendencia_estado", "pendencia_arquivada", "medida")
 
-Cria a conta e a amarra ao id numerico do GitHub. Nao ha caminho pela web.
+
+def remover(email: str, con=None) -> int:
+    """Apaga a conta daquele e-mail e tudo que pende dela. Devolve o id."""
+    fechar = con is None
+    con = con or banco.conectar()
+    try:
+        u = banco.usuario_por_email(email, con=con)
+        if u is None:
+            raise ValueError("nao ha conta com este e-mail: %s" % email)
+        # Nao ha cadastro pela web. Apagar a ultima conta trancaria o sistema
+        # para sempre, e o conserto seria exatamente o que este comando existe
+        # para nao exigir: mexer no banco do servidor a mao.
+        quantas = con.execute("SELECT COUNT(*) FROM usuario").fetchone()[0]
+        if quantas <= 1:
+            raise ValueError(
+                "esta e a unica conta do sistema; apaga-la trancaria o DERVS "
+                "para sempre. Convide a conta nova ANTES de apagar esta.")
+        uid = u["id"]
+        for tabela in _TABELAS_SEM_CASCATA:
+            con.execute("DELETE FROM %s WHERE usuario_id = ?" % tabela, (uid,))
+        con.execute("DELETE FROM usuario WHERE id = ?", (uid,))
+        con.commit()
+        return uid
+    finally:
+        if fechar:
+            con.close()
+
+
+USO = """uso: python autenticacao.py convidar <login-do-github> <email>
+     python autenticacao.py remover <email> APAGAR
+
+convidar  cria a conta e a amarra ao id numerico do GitHub.
+remover   apaga a conta daquele e-mail, com tudo que pende dela, e libera o
+          endereco para um convite novo. A palavra APAGAR e obrigatoria: e o
+          que separa o comando de um errinho de digitacao. A ultima conta do
+          sistema nao pode ser apagada.
+
+Nao ha caminho pela web para nenhum dos dois.
 """
 
 
@@ -193,6 +246,14 @@ def main(argv) -> int:
     if len(argv) == 4 and argv[1] == "convidar":
         uid = convidar(argv[2], argv[3])
         print("conta criada: %s (id %d)" % (argv[3], uid))
+        return 0
+    if len(argv) == 4 and argv[1] == "remover" and argv[3] == "APAGAR":
+        try:
+            uid = remover(argv[2])
+        except ValueError as e:
+            sys.stderr.write("%s\n" % e)
+            return 1
+        print("conta apagada: %s (id %d)" % (argv[2], uid))
         return 0
     sys.stderr.write(USO)
     return 2

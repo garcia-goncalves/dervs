@@ -123,6 +123,21 @@ pegasse o nome abandonado.
 Não existe caminho pela web para criar conta. `POST /api/registro` não existe, e
 há teste cobrando que ele continue não existindo.
 
+### Errou o e-mail?
+
+O endereço é UNIQUE na tabela `usuario`: repetir o convite com o e-mail certo
+funciona, mas o errado fica ocupado. Para liberá-lo, **dentro do servidor**:
+
+```
+python autenticacao.py remover <email-errado> APAGAR
+```
+
+A palavra `APAGAR` é obrigatória — é o que separa o comando de um erro de
+digitação. Ele leva junto tudo que pendia daquela conta: credenciais, sessões
+abertas, computadores pareados, chaves de acesso, códigos de recuperação e as
+decisões de silenciar e arquivar. A **última** conta do sistema não pode ser
+apagada; convide a nova antes.
+
 ---
 
 ## Como saber que deu certo
