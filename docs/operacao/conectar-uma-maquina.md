@@ -22,7 +22,7 @@ variável em `.env`), monta um relatório e **manda** para o endereço do DERVS.
 
 ## Conectar, passo a passo
 
-1. No painel, clique em **Máquinas** e depois em **Gerar o número**.
+1. No painel, clique em **Computadores** e depois em **Gerar o número**.
    Aparece um número de seis dígitos e a linha pronta para copiar.
 2. Na outra máquina, abra o terminal na pasta do DERVS e cole a linha:
 
@@ -100,7 +100,7 @@ Para apontar o arquivo para outro lugar: `DERVS_AGENTE_ARQUIVO=/caminho/x.json`.
 
 ## Desconectar uma máquina
 
-No painel, **Máquinas → Remover**. O token daquela máquina deixa de valer no
+No painel, **Computadores → Remover**. O token daquela máquina deixa de valer no
 mesmo instante, e ela só volta com um número novo. Os projetos que ela reportava
 continuam no painel com o último dado medido — some a fonte, não o histórico.
 
