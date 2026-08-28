@@ -1338,8 +1338,19 @@ function pintarConectar() {
        computadores, que pode ter sido ontem. */
     const c = document.createElement("p");
     c.className = "carimbo";
-    c.textContent = "lido " + haQuanto(COMPUTADORES_LIDO_EM);
-    cartao.append(h, passo, c, b);
+    /* "contagem lida", e não só "lido": aqui o carimbo flutua num cartão cujo
+       número está no meio de um parágrafo, e "lido" sozinho se lê como
+       "quando esta tela foi lida". */
+    c.textContent = "contagem lida " + haQuanto(COMPUTADORES_LIDO_EM);
+    /* O botão vai dentro de `.acoes` — é lá que mora o `min-height: 44px`.
+       Solto no cartão ele fica com ~36px de altura, abaixo do alvo de toque
+       que este projeto adotou. De quebra o `.acoes` separa o carimbo do
+       botão, que sem isso ficava equidistante entre o texto e a ação, sem
+       dizer a que grupo pertence. */
+    const acoes = document.createElement("div");
+    acoes.className = "acoes";
+    acoes.append(b);
+    cartao.append(h, passo, c, acoes);
   } else {
     h.textContent = "Falta conectar um computador";
     passo.textContent =

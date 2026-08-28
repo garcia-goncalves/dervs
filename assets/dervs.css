@@ -491,7 +491,11 @@ th,
 }
 
 /* Densidade alta: --e3 de respiro vertical, --e4 horizontal.
-   Meta verificavel: 10 projetos visiveis sem rolagem em 360x640. */
+   Meta verificavel: em 360x640 a linha mostra selo, nome, motivo e
+   carimbo JUNTOS -- o que houve se le sem abrir nada. Na pratica dao 5 a
+   7 projetos por tela. A meta era "10 projetos sem rolagem" ate 28/08/2026;
+   a etapa 14 mediu que ela nao cabe junto com o motivo, e o dono trocou a
+   contagem pelo contexto. O porque esta em docs/esteira/dervs/design.md. */
 .lista {
   list-style: none;
   margin: 0;

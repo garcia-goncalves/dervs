@@ -76,7 +76,7 @@ O juiz não escolheu um pacote fechado. Três peças das perdedoras entram na ve
 
 | Enxerto | De onde veio | Por que entra |
 |---|---|---|
-| **Lista de linha cheia, de borda a borda, com zero vão entre linhas e um traço de 1px separando** — em vez de cartões flutuando com espaço entre eles | Alvorada | Resolve o conflito entre respiro e velocidade de leitura: o espaço generoso vive *dentro* de cada linha, nunca *entre* elas. O olho varre como sumário de jornal. Cabem 10 projetos em 360px sem rolagem |
+| **Lista de linha cheia, de borda a borda, com zero vão entre linhas e um traço de 1px separando** — em vez de cartões flutuando com espaço entre eles | Alvorada | Resolve o conflito entre respiro e velocidade de leitura: o espaço generoso vive *dentro* de cada linha, nunca *entre* elas. O olho varre como sumário de jornal. Em 360px cabem 5 a 7 projetos com o motivo visível — ver a correção de 28/08/2026 na seção de densidade |
 | **Uma frase de resumo no topo, em linguagem humana** — "8 de 10 projetos estão bem" | Alvorada | Responde a pergunta das cinco da manhã antes de a pessoa ler qualquer número. É a promessa nº 1 do briefing ("eu confio no que está no ar") virando uma linha de texto |
 | **O glifo textual dentro do selo** — `[OK]`, `[!]`, `[X]`, `[···]` | READOUT | Sobrevive a impressão em preto e branco, a captura de tela sem cor e a daltonismo total. Cor + forma + glifo + rótulo: quatro sinais, nenhum indispensável sozinho |
 

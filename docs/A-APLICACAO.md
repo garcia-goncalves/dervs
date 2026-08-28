@@ -280,7 +280,15 @@ duas coisas que não cabem juntas: "10 projetos visíveis sem rolagem em 360×64
 linha de projeto com *selo · nome · o motivo em uma frase · o carimbo*. Medido no
 navegador, a linha com esse conteúdo ocupa cerca de 90 a 113 px — sete linhas enchem os
 640 px, e isso sem contar a frase de resumo, a régua de quatro contadores e a ação
-recomendada, que somam mais 350 px. Chegar a 10 exigiria tirar o motivo da linha.
+recomendada, que somam mais 350 px.
+
+**O que a medição prova, dito com precisão:** não cabe *com o motivo em duas linhas e com o
+topo atual*. Cortar o motivo para uma linha só abaixo de 400 px encolheria a linha em uns
+20 a 25 px e levaria de 5-7 para 8-9; enxugar a régua de contadores ou a ação recomendada
+ganharia mais. Nenhum dos dois chega a 10 — dez linhas em 640 px pediriam 64 px por linha
+*com zero de topo*. Registrado porque a frase fácil ("chegar a 10 exige tirar o motivo") é
+mais categórica do que a régua permite, e uma frase categórica errada num documento
+aprovado encerra uma discussão que ainda podia render.
 
 **A meta mudou: são 5 a 7 projetos por tela, com o motivo visível.** O número 10 estava
 medindo a coisa errada. A promessa do DERVS é "eu sei o que houve sem clicar" — dez nomes
