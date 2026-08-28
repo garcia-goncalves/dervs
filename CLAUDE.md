@@ -74,7 +74,22 @@ criptografia sem testemunha externa não entra.
   tokens, as seis telas e o vocabulário. **Aprovado, não refazer.**
 - `docs/esteira/dervs/briefing.md` e `spec.md` — o contrato do produto, fase 1
   e 2, aprovados. **Não refazer.**
-- `docs/superpowers/plans/dervs-fatia-1.md` — as 17 etapas. Etapas 1 a 15
-  entregues.
+- `docs/superpowers/plans/dervs-fatia-1.md` — as 17 etapas. Etapas 1 a 16
+  entregues; falta a 17 (a verificacao final), e ela depende do site estar no ar.
 - `docs/operacao/` — os roteiros que exigem a mão do dono (GitHub App, entrar,
-  conectar computador).
+  conectar computador, **publicar no servidor**).
+
+## Publicação
+
+- **O deploy roda no GitHub, nunca daqui.** Nada de `ssh`, `scp`, `rsync` ou
+  `docker compose` apontados para o servidor saindo desta máquina.
+- `.github/workflows/publicar.yml` dispara **só** por `workflow_dispatch`, com a
+  palavra `PUBLICAR` digitada. Um passo dele falha se alguém acrescentar gatilho
+  automático — a trava é o próprio arquivo se conferindo.
+- **A VPS não é terreno limpo:** 26 containers, 8 sistemas. Porta alta nova,
+  conferida antes; arquivo de nginx novo; nenhum script escreve em
+  `/etc/nginx/sites-enabled/`.
+- **A imagem é conferida subindo, não lendo.** `test_imagem.py` cobra a lista de
+  cópia do `Dockerfile` contra o que `servir.py` importa de verdade; o workflow
+  sobe o container e bate na porta. A CI sozinha não pega isso: ela roda os
+  testes, não a imagem.

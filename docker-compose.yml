@@ -1,0 +1,128 @@
+# DERVS — como o container roda NO SERVIDOR.
+#
+# Este arquivo não sobe nada nesta máquina. Aqui o painel roda direto,
+# `python servir.py`, e o `docs/LINKS.md` explica. O compose existe para o
+# servidor, e é copiado para lá pelo workflow de publicação.
+#
+# TRÊS COISAS QUE ESTE ARQUIVO NÃO FAZ, DE PROPÓSITO:
+#
+#   1. Não constrói imagem. A imagem é construída no GitHub e baixada pronta.
+#      Construir no servidor faria a máquina que serve 8 sistemas parar para
+#      compilar, e faria o que está no ar depender do que estava no disco dela.
+#   2. Não abre porta na internet. A porta fica presa em `127.0.0.1`; quem fala
+#      com o mundo é o nginx do host, com o certificado.
+#   3. Não tem serviço `dervs-live`. O código antigo do dervs (`vivo/`) abre um
+#      terminal sem autenticação nenhuma. Ele não roda em lugar nenhum.
+
+services:
+  dervs:
+    image: ${DERVS_IMAGEM:?defina DERVS_IMAGEM no .env do servidor}
+    container_name: dervs
+    restart: unless-stopped
+
+    # 127.0.0.1 é o ponto inteiro: sem isso o Docker abre a porta na internet
+    # POR CIMA do firewall do sistema, e o painel ficaria acessível por IP e
+    # porta, sem certificado e sem passar pelo nginx.
+    #
+    # A porta do host é variável porque esta VPS NÃO é terreno limpo: são 26
+    # containers servindo 8 sistemas, e publicar numa porta já ocupada derruba
+    # um deles. Conferir antes de escolher — o roteiro está em
+    # docs/operacao/publicar-no-servidor.md.
+    ports:
+      - "127.0.0.1:${DERVS_PORTA:-4877}:4777"
+
+    environment:
+      # O domínio pelo qual o painel é acessado. Sem ele o servidor responde
+      # 403 a tudo, porque o `Host` que o nginx repassa não estaria na lista.
+      DERVS_DOMINIO: ${DERVS_DOMINIO:?defina DERVS_DOMINIO no .env do servidor}
+
+      # A chave que cifra o cofre do banco. >= 32 caracteres, gerada DENTRO do
+      # servidor, nunca em chat, commit, log ou documentação. Se ela mudar, o
+      # que já está cifrado no hub.db não abre mais.
+      DERVS_COFRE: ${DERVS_COFRE:?defina DERVS_COFRE no .env do servidor}
+
+      # A entrada por GitHub. Sem os dois, a rota responde 404 — falha fechada,
+      # e o painel continua de pé pelas outras portas de entrada.
+      DERVS_GITHUB_ID: ${DERVS_GITHUB_ID:-}
+      DERVS_GITHUB_SECRET: ${DERVS_GITHUB_SECRET:-}
+
+      # O banco fora da imagem. A imagem é jogada fora a cada publicação; o
+      # volume não. Sem isto, toda conta e todo pareamento sumiriam a cada
+      # deploy, em silêncio.
+      DERVS_BANCO: /dados/hub.db
+
+      # QUEM PODE DIZER DE ONDE VEIO O PEDIDO. Sem esta variável, o teto de
+      # cinco tentativas por quinze minutos vira UM BALDE ÚNICO para a internet
+      # inteira: atrás do nginx todo pedido chega ao container com o mesmo
+      # endereço, o do gateway do Docker. Como `/entrada` e `/agente/parear` são
+      # rotas abertas, cinco chamadas de um estranho — repetidas de três em três
+      # minutos, ao custo de nada — trancariam o dono para fora do próprio
+      # painel, e a tela não teria como dizer por quê (a resposta é 204 por
+      # desenho). O código previa isso desde a etapa 11; faltava ligar.
+      #
+      # A faixa, e não um endereço: o gateway do Docker não é previsível — cada
+      # rede que o compose cria pega a sub-rede que estiver livre. Fixar a
+      # sub-rede aqui foi tentado e colide com quem já mora na VPS. E a faixa
+      # não alarga a confiança de verdade: a porta acima só aceita conexão de
+      # 127.0.0.1 do host, que é o nginx.
+      DERVS_PROXIES_CONFIAVEIS: ${DERVS_PROXIES_CONFIAVEIS:-172.16.0.0/12}
+
+      # O servidor não mede a máquina onde roda. Lá não há pasta de projeto: a
+      # varredura voltaria com zero e gravaria esse zero por cima do que o
+      # agente pareado mandou. Quem mede a máquina do dono é o agente.
+      DERVS_COLETA_LOCAL: "0"
+
+      # Dentro do container, 127.0.0.1 é o loopback DO CONTAINER — ninguém de
+      # fora alcança. Quem prende a porta ao loopback do host é a linha de
+      # `ports` acima, não esta.
+      DERVS_ESCUTA: "0.0.0.0"
+
+      # DERVS_AMBIENTE NÃO É DEFINIDO AQUI, e essa ausência é uma decisão.
+      # Com `local` o servidor aceitaria conta de teste, semente de dado falso
+      # e a porta `/entrar/local` sem senha nenhuma.
+
+    volumes:
+      - dervs-dados:/dados
+
+    # O healthcheck já vem na imagem. Repetido aqui só o suficiente para que o
+    # `docker compose up --wait` da publicação espere de verdade: sem isto ele
+    # devolve sucesso assim que o processo nasce, e a publicação diria "no ar"
+    # com o servidor ainda subindo.
+    healthcheck:
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+    # O painel roda como usuário sem privilégio dentro da imagem. Estas duas
+    # linhas fecham o resto: nada de ganhar privilégio novo, e o sistema de
+    # arquivos da imagem é só leitura. O que ele precisa escrever é o banco, e
+    # o banco está no volume.
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    # `no-new-privileges` impede GANHAR privilégio; não impede começar com as
+    # 14 capacidades que todo container recebe de graça. Um servidor HTTP em
+    # Python que roda como usuário comum não precisa de nenhuma delas.
+    cap_drop:
+      - ALL
+
+    # Os tetos existem por causa dos VIZINHOS. Naquela máquina rodam outros 8
+    # sistemas: um laço infinito ou um vazamento de memória aqui derrubaria o
+    # Ajudei antes de derrubar o DERVS. Com os tetos, quem morre é este
+    # container — e o `restart: unless-stopped` o levanta de volta.
+    pids_limit: 256
+    mem_limit: 512m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  dervs-dados:
+    name: dervs-dados

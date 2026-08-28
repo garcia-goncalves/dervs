@@ -84,7 +84,7 @@ poucos botões e ver o Claude resolver.
 Fatia 1 — a fundação. Cada item é verificável por comando, teste ou olhada na tela.
 
 **Segurança (a fatia não entrega sem estes cinco):**
-- `curl -si https://dervs.com.br/api/projetos` sem sessão devolve 401 ou 302, nunca dado.
+- `curl -si https://dervs.com.br/api/dados` sem sessão devolve 401 ou 302, nunca dado.
 - Conta sem segundo fator configurado não alcança nenhuma rota de dados: teste automatizado
   prova o 403.
 - O cadastro público está desligado: `POST /api/registro` devolve 403 e existe teste que

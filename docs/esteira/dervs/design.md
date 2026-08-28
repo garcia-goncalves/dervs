@@ -279,7 +279,7 @@ A porta. Login com segundo fator obrigatório, cadastro público desligado.
   cai inteira e volta ao primeiro passo.
 - **360px:** campos de largura total, `--e6` de respiro lateral. Os seis campos do código
   têm 40px cada, com `--e2` entre eles — cabem em 328px com folga.
-- **Verificável:** `curl -si https://dervs.com.br/api/projetos` sem sessão devolve 401 ou
+- **Verificável:** `curl -si https://dervs.com.br/api/dados` sem sessão devolve 401 ou
   302, nunca dado.
 
 ### 2. Painel

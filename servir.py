@@ -56,6 +56,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import http.cookies
+import ipaddress
 import json
 import os
 import secrets
@@ -139,6 +140,38 @@ COLETORES = {
     "pesado": (AQUI / "coletar_pesado.py", 24 * 60 * 60),
 }
 
+# As camadas que medem A MAQUINA ONDE ESTE PROCESSO RODA: `local` varre as
+# pastas de projeto, `pesado` abre o historico de cada uma. A camada `github`
+# nao esta aqui porque ela mede a API do GitHub, que responde igual de qualquer
+# lugar — e no servidor ela e justamente o que continua fazendo sentido.
+CAMADAS_DESTA_MAQUINA = ("local", "pesado")
+
+
+def _endereco_de_escuta() -> str:
+    """Em que endereco o servidor abre a porta. Padrao: so o loopback.
+
+    O padrao e o certo nesta maquina — a porta 4777 nao deve estar visivel na
+    rede de casa. Dentro de um container ele e o errado, e o erro e mudo:
+    `127.0.0.1` la dentro e o loopback DO CONTAINER, entao o nginx do host bate
+    na porta publicada, o Docker encaminha para o IP do container, e ninguem
+    esta escutando ali. O site responde 502 para sempre e o log do servidor nao
+    tem uma linha de erro, porque ele subiu — so nao no endereco certo.
+    """
+    return (os.environ.get("DERVS_ESCUTA") or "").strip() or "127.0.0.1"
+
+
+def _mede_esta_maquina() -> bool:
+    """Se as camadas `local` e `pesado` devem rodar. `DERVS_COLETA_LOCAL=0` nao.
+
+    No servidor a pasta de projetos nao existe, entao a varredura local volta
+    com zero projetos. Gravar esse zero por cima do que o agente pareado mandou
+    e a lei 2 deste repositorio sendo violada da pior forma: nao e o painel
+    dizendo "nao sei", e o painel dizendo "nenhum" com a mesma cara de quem
+    sabe. La o dado chega pelo agente, e quem mede a maquina e o agente.
+    """
+    valor = (os.environ.get("DERVS_COLETA_LOCAL") or "1").strip().lower()
+    return valor not in ("0", "nao", "não", "false")
+
 def _numero_de(args, i, padrao, minimo, maximo):
     """Le um numero da linha de comando SEM derrubar o import.
 
@@ -162,8 +195,125 @@ def porta_de(args, padrao=4777):
 PORTA = porta_de(sys.argv)
 INTERVALO = _numero_de(sys.argv, 2, 60, 1, 86400)
 
-ORIGENS_OK = {"http://localhost:%d" % PORTA, "http://127.0.0.1:%d" % PORTA}
-HOSTS_OK = {"localhost:%d" % PORTA, "127.0.0.1:%d" % PORTA}
+def _redes_confiaveis(cru):
+    """Quem pode dizer "o cliente de verdade e outro". Vazio = ninguem.
+
+    Le `DERVS_PROXIES_CONFIAVEIS`: uma lista separada por virgula, onde cada
+    item e um endereco (`172.17.0.1`) ou uma faixa (`172.16.0.0/12`).
+
+    POR QUE FAIXA. Atras do nginx, todo pedido chega ao container com o endereco
+    do gateway do Docker — e esse endereco nao e previsivel: cada rede que o
+    compose cria recebe a sub-rede que estiver livre na maquina. Fixar a
+    sub-rede no compose foi tentado na etapa 16 e esbarrou em colisao com quem
+    ja mora na VPS (26 containers). A faixa privada resolve sem adivinhacao, e
+    nao alarga a confianca de verdade: a porta do container so aceita conexao
+    vinda de `127.0.0.1` do host, que e o nginx.
+
+    FALHA FECHADA. Item que nao e endereco nem faixa e DESCARTADO, nao vira
+    permissao ampla. Um erro de digitacao no `.env` do servidor tem de virar
+    "nao confio nisso", nunca "confio em todo mundo".
+    """
+    redes = []
+    for pedaco in (cru or "").split(","):
+        pedaco = pedaco.strip()
+        if not pedaco:
+            continue
+        try:
+            redes.append(ipaddress.ip_network(pedaco, strict=False))
+        except ValueError:
+            continue
+    return tuple(redes)
+
+
+def _vem_de_proxy(endereco: str, redes) -> bool:
+    """Se `endereco` esta em alguma das redes confiaveis.
+
+    Endereco ilegivel devolve False. `client_address` pode ser "?" quando a
+    conexao ja morreu, e nesse caso a resposta e nao — nunca sim.
+    """
+    if not redes or not endereco:
+        return False
+    try:
+        ip = ipaddress.ip_address(endereco)
+    except ValueError:
+        return False
+    return any(ip in rede for rede in redes)
+
+
+def _aviso_do_teto(dominio: str, redes):
+    """O aviso a gritar quando o teto por origem virou balde unico. Ou None.
+
+    O `except ValueError` de `_redes_confiaveis` descarta item mal escrito em
+    silencio, e a lista pode ficar vazia de duas formas: erro de digitacao no
+    `.env`, ou uma faixa perfeitamente escrita que nao casa com o gateway real —
+    o pool padrao do Docker cai em `192.168.0.0/16` quando as faixas 172
+    acabam, e naquela VPS ha 26 containers.
+
+    Nos dois casos `_origem_do_pedido` volta a devolver o MESMO endereco para o
+    mundo inteiro, o teto de cinco tentativas vira um balde unico, e o sintoma
+    na tela e indistinguivel de um ataque de verdade.
+
+    AVISA, NAO DERRUBA. Cair por causa de um erro de digitacao no `.env` tira o
+    site do ar, e isso e pior que o problema que se quer evitar. Quem reprova a
+    publicacao e o workflow, que confere o gateway de verdade depois de subir.
+    Achado da revisao de seguranca da etapa 16, na conferencia das correcoes.
+    """
+    if dominio and not redes:
+        return ("AVISO GRAVE: DERVS_PROXIES_CONFIAVEIS esta vazia e ha dominio"
+                " publico. Atras do nginx TODO pedido chega com o mesmo"
+                " endereco, entao o teto de tentativas virou um balde unico"
+                " para a internet inteira: cinco chamadas de um estranho"
+                " trancam o dono para fora. Ver docker-compose.yml.")
+    return None
+
+
+def _dominio_publico() -> str:
+    """O dominio pelo qual o DERVS e acessado de fora. Vazio nesta maquina.
+
+    Aceita o valor colado da barra do navegador — com esquema, com barra no fim,
+    com maiuscula, com caminho. Um dominio mal digitado aqui nao da erro: da 403
+    no site inteiro, calado, e a causa levaria uma tarde para ser achada.
+    """
+    bruto = (os.environ.get("DERVS_DOMINIO") or "").strip().lower()
+    if not bruto:
+        return ""
+    return bruto.split("://", 1)[-1].strip("/").split("/", 1)[0]
+
+
+def _enderecos_permitidos(porta: int, dominio: str):
+    """Os conjuntos fechados de `Host` e de `Origin` aceitos. (hosts, origens)
+
+    O loopback NAO sai dos HOSTS quando ha dominio: e por ele que o healthcheck
+    do container bate na porta, de dentro. Tira-lo daqui deixaria o container
+    eternamente `unhealthy` e a publicacao nunca concluiria.
+
+    Das ORIGENS ele sai, e essa assimetria e de proposito. `Origin` so aparece
+    em pedido que escreve, e no servidor nao existe pedido legitimo que se
+    apresente como vindo de `http://localhost:4777` — mas existe uma pagina
+    assim: o proprio DERVS rodando no computador do dono, na mesma porta e no
+    mesmo navegador. Ela nao consegue nada hoje (o cookie de sessao e
+    `SameSite=Lax` e nao viaja num POST entre sites, entao o pedido chega sem
+    sessao e morre no 401), e continuar aceitando a origem seria confiar numa
+    unica defesa. Apontado pela revisao de seguranca da etapa 16.
+
+    A origem do dominio e `https://` e so. O nginx manda a porta 80 para a 443,
+    entao um pedido que se apresente como `http://dervs.com.br` ou viajou em
+    claro ou foi forjado — nos dois casos nao entra.
+    """
+    hosts = {"localhost:%d" % porta, "127.0.0.1:%d" % porta}
+    if not dominio:
+        return hosts, {"http://localhost:%d" % porta,
+                       "http://127.0.0.1:%d" % porta}
+    hosts.add(dominio)
+    return hosts, {"https://" + dominio}
+
+
+# Vazio nesta maquina, `dervs.com.br` no servidor. Tres comentarios deste
+# arquivo — no `_entrar_github`, no `_entrar_local` e no que explica de onde sai
+# o anfitriao — prometiam que a etapa 16 acrescentaria o dominio publico aqui.
+# E esta linha.
+DOMINIO = _dominio_publico()
+HOSTS_OK, ORIGENS_OK = _enderecos_permitidos(PORTA, DOMINIO)
 
 # O TOKEN GLOBAL SAIU DE CENA (etapa 9). Ele era sorteado a cada inicializacao e
 # injetado na pagina: servia de defesa contra pedido forjado de outro site, e so
@@ -373,13 +523,15 @@ class Hub(SimpleHTTPRequestHandler):
     # balde unico de cinco tentativas por 15 min: um estranho gastaria o teto de
     # graca e o dono nunca mais parearia maquina nenhuma. Achado da revisao de
     # seguranca da etapa 11.
-    PROXIES_CONFIAVEIS = frozenset(
-        p.strip() for p in (os.environ.get("DERVS_PROXIES_CONFIAVEIS") or "").split(",")
-        if p.strip())
+    # Aceita endereco solto (`172.17.0.1`) e faixa (`172.16.0.0/12`), porque o
+    # gateway do Docker nao e previsivel: cada rede que o compose cria pega a
+    # sub-rede que estiver livre. Fixar a sub-rede foi tentado na etapa 16 e
+    # colide com quem ja mora na VPS. Ver `_redes_confiaveis`.
+    PROXIES_CONFIAVEIS = None      # preenchido logo abaixo da classe
 
     def _origem_do_pedido(self) -> str:
         de = self.client_address[0] if self.client_address else "?"
-        if de not in self.PROXIES_CONFIAVEIS:
+        if not _vem_de_proxy(de, self.PROXIES_CONFIAVEIS):
             return de
         # O ULTIMO salto e o unico confiavel: o comeco da lista e escrito pelo
         # cliente e pode ser inventado inteiro.
@@ -1410,6 +1562,13 @@ ROTAS = {
 ROTAS.update({caminho: Rota("GET", Hub._estatico, "aberta")
               for caminho in ESTATICOS_OK})
 
+# Fica FORA da classe porque `_redes_confiaveis` precisa existir antes, e uma
+# funcao do modulo nao pode ser chamada de dentro do corpo da classe que ela
+# vem depois. O valor e o mesmo de sempre: vazio nesta maquina, a faixa privada
+# do Docker no servidor.
+Hub.PROXIES_CONFIAVEIS = _redes_confiaveis(
+    os.environ.get("DERVS_PROXIES_CONFIAVEIS"))
+
 # A porta do ambiente local NAO EXISTE no servidor — nem como 403, nem como
 # caminho reconhecido. Nao ha `if` dentro da rota que segure tanto quanto a rota
 # nao estar na tabela: `test_rotas.py` le esta estrutura em memoria, entao a
@@ -1432,6 +1591,11 @@ def main():
         print("COMBINACAO DE ACESSO: %s" % combinacao)
         print("Anote agora. Ela NAO aparece de novo.")
         print("=" * 62)
+    aviso = _aviso_do_teto(DOMINIO, Hub.PROXIES_CONFIAVEIS)
+    if aviso:
+        print("=" * 62)
+        print(aviso)
+        print("=" * 62)
     if not GITHUB_ID or not GITHUB_SECRET:
         print("AVISO: sem DERVS_GITHUB_ID/DERVS_GITHUB_SECRET, a entrada por"
               " GitHub responde 404. Ver docs/operacao/registrar-app-github.md.")
@@ -1439,17 +1603,28 @@ def main():
         print("AMBIENTE LOCAL: dado de mentira, e a porta /entrar/local esta"
               " aberta atras da cortina. Combinacao: %s"
               % cortina.COMBINACAO_LOCAL)
-    if vazio:
+    mede_aqui = _mede_esta_maquina()
+    if vazio and mede_aqui:
         coletar("local", "primeira")
 
-    threading.Thread(target=laco, args=("local", INTERVALO), daemon=True).start()
+    if mede_aqui:
+        threading.Thread(target=laco, args=("local", INTERVALO), daemon=True).start()
     for camada, (_, intervalo) in COLETORES.items():
-        if intervalo:
-            threading.Thread(target=laco, args=(camada, intervalo), daemon=True).start()
+        if not intervalo:
+            continue
+        if camada in CAMADAS_DESTA_MAQUINA and not mede_aqui:
+            continue
+        threading.Thread(target=laco, args=(camada, intervalo), daemon=True).start()
 
-    srv = ThreadingHTTPServer(("127.0.0.1", PORTA), Hub)
-    print("HUB do dev no ar: http://localhost:%d" % PORTA)
-    print("Camadas: local %ds · github 20min · pesado 24h. Ctrl+C encerra." % INTERVALO)
+    escuta = _endereco_de_escuta()
+    srv = ThreadingHTTPServer((escuta, PORTA), Hub)
+    print("HUB do dev no ar: http://localhost:%d (escutando em %s)" % (PORTA, escuta))
+    if mede_aqui:
+        print("Camadas: local %ds · github 20min · pesado 24h. Ctrl+C encerra."
+              % INTERVALO)
+    else:
+        print("Camadas: so github (20min). A medicao desta maquina esta"
+              " desligada; quem mede e o agente pareado. Ctrl+C encerra.")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

@@ -1078,5 +1078,222 @@ class _Resposta:
                 self.cookies[nome.strip()] = valor
 
 
+class DentroDoContainer(unittest.TestCase):
+    """Os dois ajustes sem os quais a imagem publicada nao atende ninguem.
+
+    1. ENDERECO DE ESCUTA. `127.0.0.1` dentro de um container e o loopback DO
+       CONTAINER: o nginx do host bate na porta publicada, o Docker encaminha
+       para o IP do container, e ninguem esta escutando ali. O site responderia
+       502 para sempre, e o log do servidor nao teria uma linha de erro — ele
+       subiu, so nao estava no endereco certo.
+
+    2. COLETA DA PROPRIA MAQUINA. `coletar.py` mede as pastas de projeto DESTA
+       maquina. No servidor essa pasta nao existe, entao a medicao volta com
+       zero projetos — e gravar "zero" por cima do que o agente pareado mandou
+       e exatamente a lei 2 deste repositorio sendo violada: um numero errado
+       com cara de certo. No servidor a medicao local fica desligada.
+    """
+
+    def setUp(self):
+        self._antes = {v: os.environ.get(v)
+                       for v in ("DERVS_ESCUTA", "DERVS_COLETA_LOCAL")}
+        self.addCleanup(self._restaurar)
+
+    def _restaurar(self):
+        for nome, valor in self._antes.items():
+            if valor is None:
+                os.environ.pop(nome, None)
+            else:
+                os.environ[nome] = valor
+
+    def test_sem_variavel_escuta_so_o_loopback(self):
+        """O padrao continua sendo o de sempre: nesta maquina, so localhost."""
+        os.environ.pop("DERVS_ESCUTA", None)
+        self.assertEqual(servir._endereco_de_escuta(), "127.0.0.1")
+
+    def test_com_variavel_escuta_onde_ela_mandar(self):
+        os.environ["DERVS_ESCUTA"] = "0.0.0.0"
+        self.assertEqual(servir._endereco_de_escuta(), "0.0.0.0")
+
+    def test_escuta_vazia_volta_para_o_loopback(self):
+        os.environ["DERVS_ESCUTA"] = "  "
+        self.assertEqual(servir._endereco_de_escuta(), "127.0.0.1")
+
+    def test_por_padrao_mede_esta_maquina(self):
+        os.environ.pop("DERVS_COLETA_LOCAL", None)
+        self.assertTrue(servir._mede_esta_maquina())
+
+    def test_zero_desliga_a_medicao_desta_maquina(self):
+        for desligado in ("0", "nao", "false", "NAO", " 0 "):
+            os.environ["DERVS_COLETA_LOCAL"] = desligado
+            self.assertFalse(servir._mede_esta_maquina(),
+                             "%r devia desligar a coleta" % desligado)
+
+    def test_qualquer_outro_valor_mantem_ligado(self):
+        os.environ["DERVS_COLETA_LOCAL"] = "1"
+        self.assertTrue(servir._mede_esta_maquina())
+
+
+class QuemPodeDizerDeOndeVeioOPedido(unittest.TestCase):
+    """A lista de proxies confiaveis, que ate a etapa 16 nao tinha teste nenhum.
+
+    O PROBLEMA QUE ELA RESOLVE. Atras do nginx, o endereco de quem chega e
+    sempre o mesmo: o gateway do Docker. Se o servidor acreditar nisso, o teto
+    de cinco tentativas por quinze minutos vira UM BALDE UNICO para a internet
+    inteira — e `/entrada` e `/agente/parear` sao rotas abertas. Cinco chamadas
+    de um estranho, repetidas de tres em tres minutos, e o dono nunca mais entra
+    no proprio painel nem pareia computador nenhum. A resposta e 204 por
+    desenho, entao a tela nem tem como dizer por que parou.
+
+    O PROBLEMA QUE ELA CRIA SE FOR LARGA DEMAIS. Se qualquer um pudesse mandar
+    `X-Forwarded-For`, bastaria variar o cabecalho a cada chute e o teto sumiria
+    do outro lado.
+
+    POR QUE FAIXA E NAO ENDERECO EXATO. O gateway do Docker nao e previsivel: a
+    rede que o compose cria ganha a sub-rede que estiver livre na maquina —
+    medido em 28/08/2026, `172.17.0.1` na rede padrao, e outra a cada rede nova.
+    Fixar a sub-rede no compose foi tentado e colide com quem ja esta la (a VPS
+    tem 26 containers). Uma faixa privada resolve sem adivinhacao, e nao alarga
+    de verdade: a porta do container so aceita conexao de 127.0.0.1 do host.
+    """
+
+    def test_vazio_nao_confia_em_ninguem(self):
+        """O padrao desta maquina. Sem proxy na frente, ninguem pode reescrever
+        de onde veio o pedido — e e assim que tem de continuar."""
+        self.assertEqual(servir._redes_confiaveis(""), ())
+        self.assertEqual(servir._redes_confiaveis(None), ())
+
+    def test_endereco_solto_continua_valendo(self):
+        redes = servir._redes_confiaveis("172.17.0.1")
+        self.assertTrue(servir._vem_de_proxy("172.17.0.1", redes))
+        self.assertFalse(servir._vem_de_proxy("172.17.0.2", redes))
+
+    def test_faixa_inteira(self):
+        redes = servir._redes_confiaveis("172.16.0.0/12")
+        for dentro in ("172.16.0.1", "172.17.0.1", "172.18.0.1", "172.31.255.254"):
+            self.assertTrue(servir._vem_de_proxy(dentro, redes), dentro)
+        for fora in ("172.15.0.1", "172.32.0.1", "8.8.8.8", "192.168.1.1"):
+            self.assertFalse(servir._vem_de_proxy(fora, redes), fora)
+
+    def test_varias_entradas_separadas_por_virgula(self):
+        redes = servir._redes_confiaveis(" 127.0.0.1 , 172.16.0.0/12 ")
+        self.assertTrue(servir._vem_de_proxy("127.0.0.1", redes))
+        self.assertTrue(servir._vem_de_proxy("172.20.5.9", redes))
+        self.assertFalse(servir._vem_de_proxy("10.0.0.1", redes))
+
+    def test_entrada_mal_escrita_nao_vira_permissao(self):
+        """Falha FECHADA. Um erro de digitacao no `.env` do servidor nao pode
+        virar "confia em todo mundo" — tem de virar "nao confia nisso"."""
+        redes = servir._redes_confiaveis("nao-e-ip, 999.1.1.1, /24, 172.17.0.1")
+        self.assertEqual(len(redes), 1)
+        self.assertTrue(servir._vem_de_proxy("172.17.0.1", redes))
+
+    def test_endereco_de_cliente_ilegivel_nao_e_confiavel(self):
+        """`client_address` pode ser "?" quando a conexao ja morreu. Nesse caso
+        a resposta e nao, nunca sim."""
+        redes = servir._redes_confiaveis("172.16.0.0/12")
+        for esquisito in ("?", "", "nao-e-ip", "172.17.0.1:4777"):
+            self.assertFalse(servir._vem_de_proxy(esquisito, redes), esquisito)
+
+    def test_o_silencio_e_o_perigo_entao_ele_grita(self):
+        """Lista vazia COM dominio publico = o balde unico de volta, e nada
+        avisava. Duas formas de cair nisso, e a segunda nao depende de erro
+        humano: o pool padrao do Docker cai em 192.168.0.0/16 quando as faixas
+        172 acabam, e a VPS tem 26 containers — a faixa estaria escrita certa e
+        seria inutil. Achado da conferencia das correcoes."""
+        self.assertIsNotNone(servir._aviso_do_teto("dervs.com.br", ()))
+        self.assertIn("balde unico", servir._aviso_do_teto("dervs.com.br", ()))
+
+    def test_sem_dominio_nao_grita(self):
+        """Nesta maquina a lista vazia e o certo: nao ha proxy na frente."""
+        self.assertIsNone(servir._aviso_do_teto("", ()))
+
+    def test_com_lista_preenchida_nao_grita(self):
+        redes = servir._redes_confiaveis("172.16.0.0/12")
+        self.assertIsNone(servir._aviso_do_teto("dervs.com.br", redes))
+
+    def test_ipv6_tambem(self):
+        redes = servir._redes_confiaveis("fd00::/8")
+        self.assertTrue(servir._vem_de_proxy("fd00::1", redes))
+        self.assertFalse(servir._vem_de_proxy("2001:db8::1", redes))
+
+
+class ODominioDeFora(unittest.TestCase):
+    """`dervs.com.br` precisa entrar em `HOSTS_OK`, e so por variavel.
+
+    O servidor recusa com 403 todo pedido cujo cabecalho `Host` nao esteja num
+    conjunto fechado — e isso e defesa, nao defeito: sem ela, apontar um dominio
+    qualquer para o IP do servidor daria acesso ao painel. O preco e que, atras
+    do nginx, o `Host` que chega e `dervs.com.br`, e o site inteiro responderia
+    403 ate alguem colocar esse nome na lista.
+
+    Tres comentarios espalhados por `servir.py` (linhas 682, 743 e 796) ja
+    prometiam que a etapa 16 faria exatamente isto. E aqui.
+    """
+
+    def setUp(self):
+        self._antes = os.environ.get("DERVS_DOMINIO")
+        self.addCleanup(self._restaurar)
+
+    def _restaurar(self):
+        if self._antes is None:
+            os.environ.pop("DERVS_DOMINIO", None)
+        else:
+            os.environ["DERVS_DOMINIO"] = self._antes
+
+    def test_sem_variavel_nao_ha_dominio_de_fora(self):
+        os.environ.pop("DERVS_DOMINIO", None)
+        self.assertEqual(servir._dominio_publico(), "")
+
+    def test_le_o_dominio_cru(self):
+        os.environ["DERVS_DOMINIO"] = "dervs.com.br"
+        self.assertEqual(servir._dominio_publico(), "dervs.com.br")
+
+    def test_aceita_colado_com_esquema_e_barra(self):
+        """Quem preenche a variavel copia da barra do navegador. Colar
+        "https://dervs.com.br/" nao pode virar um Host que nunca casa —
+        seria o site inteiro em 403 por um erro de digitacao."""
+        for cru in ("https://dervs.com.br", "https://dervs.com.br/",
+                    "HTTPS://DERVS.COM.BR/painel", "  dervs.com.br  "):
+            os.environ["DERVS_DOMINIO"] = cru
+            self.assertEqual(servir._dominio_publico(), "dervs.com.br",
+                             "nao normalizou %r" % cru)
+
+    def test_sem_dominio_so_o_localhost_entra(self):
+        hosts, origens = servir._enderecos_permitidos(4777, "")
+        self.assertEqual(hosts, {"localhost:4777", "127.0.0.1:4777"})
+        self.assertEqual(origens,
+                         {"http://localhost:4777", "http://127.0.0.1:4777"})
+
+    def test_com_dominio_ele_entra_e_o_localhost_fica(self):
+        """O localhost NAO sai no servidor: e por ele que o healthcheck do
+        container bate na porta, de dentro. Tirar dali derrubaria a
+        verificacao de saude e a publicacao nunca concluiria."""
+        hosts, origens = servir._enderecos_permitidos(4777, "dervs.com.br")
+        self.assertIn("dervs.com.br", hosts)
+        self.assertIn("localhost:4777", hosts)
+        self.assertIn("127.0.0.1:4777", hosts)
+
+    def test_a_origem_do_dominio_e_https_e_so_https(self):
+        """`http://dervs.com.br` nao entra. O nginx redireciona 80 para 443, e
+        aceitar a origem em claro seria aceitar um pedido que viajou aberto."""
+        _, origens = servir._enderecos_permitidos(4777, "dervs.com.br")
+        self.assertIn("https://dervs.com.br", origens)
+        self.assertNotIn("http://dervs.com.br", origens)
+
+    def test_com_dominio_o_loopback_sai_das_ORIGENS(self):
+        """A assimetria de proposito: o loopback fica nos HOSTS (o healthcheck
+        bate ali de dentro) e sai das ORIGENS.
+
+        `Origin` so aparece em pedido que escreve, e no servidor nao ha pedido
+        legitimo vindo de `http://localhost:4777` — mas ha uma pagina assim: o
+        proprio DERVS rodando no computador do dono, mesma porta, mesmo
+        navegador. Hoje ela nao consegue nada (SameSite=Lax segura o cookie),
+        e depender de uma defesa so e o que a revisao apontou."""
+        hosts, origens = servir._enderecos_permitidos(4777, "dervs.com.br")
+        self.assertEqual(origens, {"https://dervs.com.br"})
+        self.assertIn("127.0.0.1:4777", hosts)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)

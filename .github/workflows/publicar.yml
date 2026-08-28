@@ -1,0 +1,349 @@
+name: Publicar
+
+# PUBLICAR NÃO É AUTOMÁTICO, E ESSA É A DECISÃO CENTRAL DESTE ARQUIVO.
+#
+# Não há `push`, não há `workflow_run`, não há `schedule`. Publicar a cada
+# commit é mandar todo rascunho para a gráfica; quem decide é uma pessoa, e o
+# sinal vale para um lote de mudanças, não para cada uma.
+#
+# Quem verifica é a CI, em todo push, de graça e sem perguntar. São coisas
+# diferentes que moram na mesma pasta e por isso se confundem.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmar:
+        description: "Digite PUBLICAR (em maiúsculas) para confirmar"
+        required: true
+        type: string
+
+# `cancel-in-progress: false` de propósito. Numa publicação cortada no meio, o
+# servidor fica com metade do container novo e metade do velho, e ninguém sabe
+# qual metade. Publicação espera a anterior terminar.
+concurrency:
+  group: publicar-producao
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1. A verificação inteira, de novo, antes de qualquer coisa ir para o ar.
+  #    Sim, a CI já rodou no push. Mas a publicação é disparada à mão, num
+  #    commit escolhido à mão, e "eu acho que a CI passou naquele" não é prova.
+  # -------------------------------------------------------------------------
+  conferir:
+    if: inputs.confirmar == 'PUBLICAR'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: A suíte inteira, duas corridas
+        run: |
+          # Duas corridas seguidas, não uma. A segunda pega o teste que passa
+          # por sorte — o que lê estado deixado pela corrida anterior.
+          for volta in 1 2; do
+            for t in test_*.py; do
+              echo "::group::$volta $t"
+              python "$t" || exit 1
+              echo "::endgroup::"
+            done
+          done
+          echo "DUAS-CORRIDAS-OK"
+
+      - name: O gatilho automático continua desligado
+        run: |
+          # Esta é a trava contra o dia em que alguém "só facilita um pouco" e
+          # religa a publicação automática. Ela falha ANTES do deploy.
+          if grep -nE '^\s*(push|workflow_run|schedule)\s*:' .github/workflows/publicar.yml; then
+            echo "Publicação com gatilho automático. Ver CLAUDE.md, seção 0.9."
+            exit 1
+          fi
+          echo "só workflow_dispatch: ok"
+
+  # -------------------------------------------------------------------------
+  # 2. A imagem. Construída AQUI e não no servidor: a VPS serve 8 sistemas e
+  #    não vai parar para compilar, e o que está no ar não pode depender do
+  #    que estava no disco dela.
+  # -------------------------------------------------------------------------
+  imagem:
+    needs: conferir
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      # O DIGEST, nao a etiqueta. Ver o passo "Enviar a imagem".
+      referencia: ${{ steps.enviar.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: nome
+        run: |
+          repo=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "referencia=ghcr.io/$repo:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Entrar no registro de imagens
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Construir
+        run: docker build -t "${{ steps.nome.outputs.referencia }}" .
+
+      # A barreira do vivo/ conferida DENTRO da imagem, não no repositório.
+      # O .dockerignore e o Dockerfile são duas trancas; esta é a prova de que
+      # as duas seguraram. Se um dia alguém trocar a cópia por `COPY . .`, é
+      # aqui que a publicação para.
+      - name: Nada de vivo/, execucao ou teste dentro da imagem
+        run: |
+          ref="${{ steps.nome.outputs.referencia }}"
+          proibidos=$(docker run --rm --entrypoint sh "$ref" -c \
+            'ls -d /app/vivo /app/execucao.py /app/fila.py /app/barreira.py /app/test_*.py 2>/dev/null | wc -l')
+          if [ "$proibidos" != "0" ]; then
+            docker run --rm --entrypoint sh "$ref" -c 'ls -la /app'
+            echo "A imagem levou código que não podia ir para o ar."
+            exit 1
+          fi
+          # A permissão de pular a confirmação do Claude não pode existir em
+          # lugar nenhum de dentro da imagem.
+          if docker run --rm --entrypoint sh "$ref" -c \
+             'grep -rl "dangerously-skip-permissions" /app 2>/dev/null | head -1' | grep -q .; then
+            echo "A imagem contém dangerously-skip-permissions."
+            exit 1
+          fi
+          echo "a imagem está limpa"
+
+      # Container que subiu não é container que respondeu. Esta é a lição da
+      # etapa 16: entre a etapa 9 e a 14 nasceram sete arquivos de runtime que
+      # o Dockerfile não copiava, a imagem morria no primeiro import, e a CI
+      # não pegava — porque a CI roda os testes, não a imagem.
+      - name: A imagem responde de verdade
+        run: |
+          docker run -d --name prova -p 127.0.0.1:14777:4777 \
+            -e DERVS_COFRE="cofre-de-conferencia-que-nao-abre-nada-0123456789" \
+            -e DERVS_DOMINIO="dervs.com.br" \
+            "${{ steps.nome.outputs.referencia }}"
+          for i in $(seq 1 30); do
+            estado=$(docker inspect -f '{{.State.Health.Status}}' prova 2>/dev/null || echo partiu)
+            [ "$estado" = "healthy" ] && break
+            sleep 2
+          done
+          if [ "$estado" != "healthy" ]; then
+            # Sem `docker logs`: a subida imprime a combinação de acesso, e o
+            # log do Actions é lido por quem tiver acesso ao repositório.
+            echo "A imagem não ficou saudável em 60s. Estado: $estado"
+            docker inspect -f '{{json .State.Health}}' prova | head -c 2000
+            exit 1
+          fi
+          capa=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: dervs.com.br' http://127.0.0.1:14777/)
+          api=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: dervs.com.br' http://127.0.0.1:14777/api/dados)
+          local=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: dervs.com.br' http://127.0.0.1:14777/entrar/local)
+          echo "capa=$capa api=$api entrar/local=$local"
+          [ "$capa" = "200" ] || { echo "a capa não respondeu 200"; exit 1; }
+          [ "$api" = "401" ] || { echo "a API respondeu $api sem sessão; devia ser 401"; exit 1; }
+          [ "$local" = "404" ] || { echo "a porta local EXISTE fora do ambiente local"; exit 1; }
+          docker rm -f prova >/dev/null
+
+      # A ETIQUETA VAI, MAS QUEM MANDA É O DIGEST.
+      #
+      # `apt-get upgrade` no Dockerfile é de propósito (é como a correção do
+      # sistema base entra sozinha), e o preço dele é que reconstruir o MESMO
+      # commit produz bytes diferentes — sobrescrevendo a etiqueta
+      # `:<sha do commit>`. Se o servidor guardasse a etiqueta, o procedimento
+      # de voltar atrás apontaria para "o que quer que esteja naquela etiqueta
+      # hoje", não para o que estava no ar. O digest é o conteúdo, não o nome:
+      # ele identifica UMA imagem, para sempre. Achado da conferência das
+      # correções da revisão de segurança.
+      - name: Enviar a imagem, e fixar o digest
+        id: enviar
+        run: |
+          etiqueta="${{ steps.nome.outputs.referencia }}"
+          docker push "$etiqueta"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$etiqueta")
+          echo "a imagem publicada é $digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+  # -------------------------------------------------------------------------
+  # 3. O servidor. Só aqui alguma coisa muda no que está no ar.
+  # -------------------------------------------------------------------------
+  publicar:
+    needs: imagem
+    runs-on: ubuntu-latest
+    environment: producao
+    # `packages: read` no JOB, e não no topo do arquivo. O pacote no GHCR nasce
+    # privado (herda a visibilidade do repositório), e sem esta linha o
+    # `docker compose pull` do servidor bate em `denied` — a primeira
+    # publicação falharia por permissão, não por defeito.
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preparar a chave de acesso ao servidor
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_CHAVE_SSH }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          # A impressão digital do servidor é conferida, não aceita no escuro.
+          # Sem isto, qualquer máquina que responda pelo IP receberia o deploy.
+          printf '%s\n' "${{ secrets.VPS_IMPRESSAO_DIGITAL }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Levar o compose para o servidor
+        run: |
+          scp -i ~/.ssh/id_deploy -P "${{ secrets.VPS_PORTA_SSH || 22 }}" \
+            docker-compose.yml \
+            "${{ secrets.VPS_USUARIO }}@${{ secrets.VPS_HOST }}:/opt/dervs/docker-compose.yml"
+
+      - name: Trocar o container e esperar ele responder
+        env:
+          REFERENCIA: ${{ needs.imagem.outputs.referencia }}
+          REGISTRO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRO_USUARIO: ${{ github.actor }}
+          ALVO: ${{ secrets.VPS_USUARIO }}@${{ secrets.VPS_HOST }}
+          PORTA_SSH: ${{ secrets.VPS_PORTA_SSH || 22 }}
+        run: |
+          # NADA DE SEGREDO NA LINHA DE COMANDO DO `ssh`.
+          #
+          # A versão anterior passava o token como prefixo de ambiente do
+          # comando remoto. O sshd executa esse comando como `shell -c '<a
+          # string inteira>'`, e essa string é o `argv` do processo — legível em
+          # `/proc/<pid>/cmdline` por QUALQUER usuário local do servidor. Numa
+          # VPS que serve outros 8 sistemas, uma conta de serviço qualquer
+          # colheria o token durante a janela da publicação. Achado da revisão
+          # de segurança da etapa 16.
+          #
+          # A correção: tudo viaja pelo STDIN do ssh, que nenhum `ps` mostra. As
+          # três primeiras linhas do que chega são as atribuições; o resto é o
+          # roteiro, escrito num heredoc protegido para que nada expanda aqui.
+          cat > roteiro.sh <<'REMOTO'
+          # A primeira coisa, antes de qualquer arquivo ser tocado: arquivo
+          # novo nasce só para o dono. Sem isto o `.env` reescrito lá embaixo
+          # nasceria 0644 — legível por todo o sistema — e só depois receberia
+          # o `chmod`. A janela é de milissegundos, mas repete a cada
+          # publicação, e vira permanente se o passo morrer no meio.
+          umask 077
+          set -euo pipefail
+          cd /opt/dervs
+
+          # O .env com os segredos foi criado à mão, dentro do servidor, uma vez.
+          # Ele nunca passa por este workflow, por commit, por log ou por chat.
+          test -f .env || { echo "/opt/dervs/.env não existe. Ver docs/operacao/publicar-no-servidor.md"; exit 1; }
+
+          # A imagem desta publicação, gravada no .env para que o compose e um
+          # `docker compose up` feito à mão amanhã usem exatamente a mesma.
+          grep -v '^DERVS_IMAGEM=' .env > .env.novo || true
+          echo "DERVS_IMAGEM=$REFERENCIA" >> .env.novo
+          mv .env.novo .env
+          chmod 600 .env
+
+          # O `trap` vem ANTES do login, e é o que torna verdadeira a frase "o
+          # servidor não guarda credencial de registro nenhuma". Sem ele, com
+          # `set -e`, uma falha no `pull` ou no `up` abortaria antes do
+          # `logout` — e a credencial ficaria gravada em `~/.docker/config.json`
+          # justamente no caminho em que ninguém volta para conferir. Prometer
+          # defesa que não existe é pior que não ter a defesa.
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          echo "$REGISTRO_TOKEN" | docker login ghcr.io -u "$REGISTRO_USUARIO" --password-stdin
+          docker compose pull
+          docker compose up -d --wait
+
+          # Bater na porta de dentro do servidor, com o Host de verdade. Sem
+          # isto, "publicado" seria só "o comando não deu erro".
+          #
+          # Os valores saem do próprio .env, e por leitura do arquivo — não por
+          # `grep ... | cut ... || echo padrão`, que era o que estava aqui e não
+          # funcionava: num pipe quem decide o sucesso é o ÚLTIMO comando, e
+          # `cut` termina bem mesmo sem receber nada. O `|| echo` nunca
+          # dispararia, a porta sairia vazia, e a conferência bateria em
+          # `http://127.0.0.1:/robots.txt` — falha estranha, causa escondida.
+          set -a; . ./.env; set +a
+          porta="${DERVS_PORTA:-4877}"
+          codigo=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Host: ${DERVS_DOMINIO}" \
+            "http://127.0.0.1:${porta}/robots.txt")
+          echo "o container respondeu $codigo em 127.0.0.1:${porta}"
+          [ "$codigo" = "200" ] || exit 1
+
+          # O GATEWAY DE VERDADE CONTRA O QUE FOI CONFIGURADO.
+          #
+          # Sem esta conferência, `DERVS_PROXIES_CONFIAVEIS` pode estar
+          # perfeitamente escrita e ser inútil: o pool padrão do Docker cai em
+          # `192.168.0.0/16` quando as faixas 172 acabam, e naquela máquina há
+          # 26 containers. Aí o teto de tentativas volta a ser um balde único
+          # para a internet inteira — e o sintoma, na tela, é indistinguível de
+          # um ataque de verdade. Regressão muda vira publicação vermelha, que
+          # é a lei 2 deste repositório aplicada à configuração.
+          gateway=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' dervs)
+          echo "o container vê o gateway $gateway"
+          # A conferência roda DENTRO do próprio container, com o mesmo código
+          # que o servidor usa para decidir em quem confiar. Não é uma segunda
+          # implementação da mesma regra — que é como duas verdades sobre a
+          # mesma coisa nascem — e não depende de haver python no servidor,
+          # que é uma VPS de outra pessoa e não promete nada.
+          confere=$(docker exec dervs python -c \
+            'import sys, servir; print("sim" if servir._vem_de_proxy(sys.argv[1], servir.Hub.PROXIES_CONFIAVEIS) else "nao")' \
+            "$gateway")
+          if [ "$confere" != "sim" ]; then
+            echo "O gateway $gateway está FORA de DERVS_PROXIES_CONFIAVEIS."
+            echo "Com isso o teto de tentativas vira um balde único: cinco"
+            echo "chamadas de um estranho trancam o dono para fora do painel."
+            echo "Ajuste DERVS_PROXIES_CONFIAVEIS no /opt/dervs/.env e publique"
+            echo "de novo. Ver docs/operacao/publicar-no-servidor.md."
+            exit 1
+          fi
+          echo "o gateway está dentro da faixa confiável"
+
+          # Imagens antigas do DERVS acumulam disco numa VPS que serve outros 8
+          # sistemas. Só as sem uso, e só as deste projeto.
+          docker image prune -f --filter "label=org.opencontainers.image.source=https://github.com/garcia-goncalves/dervs" || true
+          REMOTO
+
+          # Aqui os valores entram — por stdin, nunca por argv. `%q` cita cada
+          # um de forma que o shell remoto leia exatamente o que foi mandado,
+          # mesmo com caractere esquisito no meio.
+          {
+            printf 'REFERENCIA=%q\n'        "$REFERENCIA"
+            printf 'REGISTRO_USUARIO=%q\n'  "$REGISTRO_USUARIO"
+            printf 'REGISTRO_TOKEN=%q\n'    "$REGISTRO_TOKEN"
+            cat roteiro.sh
+          } | ssh -i ~/.ssh/id_deploy -p "$PORTA_SSH" "$ALVO" 'bash -s'
+
+          # O arquivo com o roteiro fica no runner, que é descartado — mas o
+          # token nunca chegou a entrar nele, e é isso que importa.
+          rm -f roteiro.sh
+
+      - name: O site responde pelo domínio de verdade
+        run: |
+          dominio="dervs.com.br"
+          for i in $(seq 1 10); do
+            capa=$(curl -s -o /dev/null -w '%{http_code}' "https://$dominio/" || echo 000)
+            [ "$capa" = "200" ] && break
+            sleep 3
+          done
+          api=$(curl -s -o /dev/null -w '%{http_code}' "https://$dominio/api/dados")
+          robots=$(curl -s "https://$dominio/robots.txt" | grep -c '/api' || true)
+          echo "capa=$capa api=$api linhas-de-robots-com-api=$robots"
+          [ "$capa" = "200" ] || { echo "a capa não respondeu"; exit 1; }
+          case "$api" in 401|302) ;; *) echo "a API respondeu $api sem sessão"; exit 1;; esac
+          [ "$robots" -ge 1 ] || { echo "robots.txt não protege /api"; exit 1; }
+
+  # -------------------------------------------------------------------------
+  # 4. A etiqueta. Sem ela, voltar atrás vira arqueologia: ninguém sabe que
+  #    código estava no ar em que dia.
+  # -------------------------------------------------------------------------
+  etiquetar:
+    needs: publicar
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          etiqueta="publicado-$(date -u +%Y%m%d-%H%M%S)"
+          git tag -a "$etiqueta" -m "Publicado por ${{ github.actor }} de ${{ github.sha }}"
+          git push origin "$etiqueta"
+          echo "voltar atrás é: git checkout $etiqueta" >> "$GITHUB_STEP_SUMMARY"

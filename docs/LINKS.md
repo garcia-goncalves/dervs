@@ -188,3 +188,48 @@ teste.
 
 **Do servidor:** a combinação é sorteada lá dentro e mostrada uma vez; a chave
 do cofre (`DERVS_COFRE`) nasce lá e nunca passa por chat, repositório ou commit.
+
+## O servidor (etapa 16, 28/08/2026)
+
+O painel também roda em `https://dervs.com.br`, dentro de um container. **Colocar
+lá é um botão no GitHub**, e o roteiro inteiro — inclusive o que só a sua mão
+resolve — está em `docs/operacao/publicar-no-servidor.md`.
+
+O que muda entre este computador e o servidor é **só configuração**, nunca
+código. São seis variáveis, e cada uma existe por um motivo concreto:
+
+| Variável | Aqui | No servidor | Se estiver errada |
+|---|---|---|---|
+| `DERVS_DOMINIO` | vazia | `dervs.com.br` | o site inteiro responde 403, calado |
+| `DERVS_ESCUTA` | vazia (`127.0.0.1`) | `0.0.0.0` | o nginx dá 502 e o log do painel não acusa nada |
+| `DERVS_BANCO` | vazia (ao lado do código) | `/dados/hub.db` | toda conta e todo pareamento somem a cada publicação |
+| `DERVS_COLETA_LOCAL` | vazia (liga) | `0` | o painel grava "zero projetos" por cima do que o agente mandou |
+| `DERVS_PROXIES_CONFIAVEIS` | vazia | `172.16.0.0/12` | um estranho tranca você para fora com 5 chamadas |
+| `DERVS_COFRE` | arquivo `cofre.chave` | gerada lá dentro | o painel não sobe (falha fechada, de propósito) |
+| `DERVS_AMBIENTE` | `local` | **não definida** | com `local`, o servidor aceitaria conta de teste e a porta sem senha |
+
+**Nada disso precisa ser feito aqui.** Neste computador o painel sobe com
+`pythonw servir.py` e ponto — os padrões são os de sempre.
+
+Os arquivos: `Dockerfile` (a imagem), `docker-compose.yml` (como o container
+roda no servidor), `infra/nginx-dervs.conf` (o porteiro do site) e
+`.github/workflows/publicar.yml` (o botão).
+
+### Rodar a imagem de produção aqui, para conferir
+
+Serve para ver a imagem exatamente como ela vai para o ar, sem tocar no
+servidor. **Onde:** terminal na pasta do projeto.
+
+```
+docker build -t dervs:teste-local .
+docker run --rm -p 127.0.0.1:14777:4777 -e DERVS_COFRE="chave-de-teste-que-nao-e-segredo-0123456789" -e DERVS_DOMINIO="dervs.com.br" dervs:teste-local
+```
+
+Depois, noutra janela:
+
+```
+curl -s -o NUL -w "%{http_code}" -H "Host: dervs.com.br" http://127.0.0.1:14777/
+```
+
+**Se der certo:** sai `200`. **Se sair `403`:** faltou o `-H "Host: ..."` — o
+painel recusa endereço que não conhece, e isso é defesa, não defeito.
