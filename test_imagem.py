@@ -50,9 +50,15 @@ def copiados() -> set[str]:
         limpa = linha.strip()
         if not limpa.upper().startswith("COPY "):
             continue
-        partes = limpa.split()
-        if len(partes) >= 3:
-            achados.add(partes[1].rstrip("/"))
+        # As opções do COPY (`--chown=`, `--from=`) vêm antes da origem. Sem
+        # descartá-las, `partes[1]` pegaria a opção no lugar do nome do
+        # arquivo: o arquivo real ficaria fora de `copiados()` e o teste
+        # acusaria como faltando algo que na verdade entrou. Apontado pela
+        # revisão de Python de 28/08/2026 — hoje o Dockerfile não usa opção
+        # nenhuma, e é justamente por isso que valia consertar antes.
+        partes = [p for p in limpa.split()[1:] if not p.startswith("--")]
+        if len(partes) >= 2:
+            achados.add(partes[0].rstrip("/"))
     return achados
 
 

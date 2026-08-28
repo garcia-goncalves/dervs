@@ -26,6 +26,30 @@ LABEL org.opencontainers.image.source="https://github.com/garcia-goncalves/dervs
 LABEL org.opencontainers.image.title="DERVS"
 LABEL org.opencontainers.image.description="O painel que mostra o estado dos projetos de quem programa com o Claude."
 
+# As correções de segurança do sistema base, no momento em que a imagem é
+# construída. Sem esta linha a imagem carrega para sempre o que havia de errado
+# no dia em que a etiqueta `python:3.12-slim` foi publicada — e como toda
+# publicação reconstrói a imagem, o que está corrigido lá fora entra sozinho.
+#
+# Em 28/08/2026 isto fechava três falhas graves do `openssl`, e o openssl não é
+# detalhe aqui: é ele que protege as conversas do painel com a API do GitHub.
+#
+# `--no-install-recommends` e a limpeza da lista no fim da mesma camada: sem os
+# dois, a imagem engorda com pacote que ninguém pediu e com índice do apt que
+# não serve para nada depois do build.
+# O QUE SOBRA DEPOIS DESTA LINHA, e por que sobra (medido em 28/08/2026):
+# quatro falhas do `perl` (duas críticas), e nenhuma delas tem correção
+# publicada — o Debian ainda não lançou versão corrigida. O pacote é
+# `perl-base`, marcado como ESSENCIAL: remover derruba o `dpkg`. E o painel
+# nunca executa perl: o processo é `python servir.py`, não há script de shell
+# na imagem e não há `pip install`. Registrado aqui para que a próxima pessoa
+# que rodar um verificador de vulnerabilidade não refaça esta investigação.
+# Quando o Debian corrigir, a próxima publicação já leva a correção sozinha.
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
 # Usuário sem privilégio: o processo do servidor não precisa ser root.
 RUN useradd --create-home --shell /usr/sbin/nologin dervs
 WORKDIR /app

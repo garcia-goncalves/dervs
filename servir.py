@@ -227,8 +227,9 @@ def _enderecos_permitidos(porta: int, dominio: str):
 
 
 # Vazio nesta maquina, `dervs.com.br` no servidor. Tres comentarios deste
-# arquivo (no `_ida_github`, no `_entrar_local` e no `_anfitriao`) prometiam que
-# a etapa 16 acrescentaria o dominio publico aqui. E esta linha.
+# arquivo — no `_entrar_github`, no `_entrar_local` e no que explica de onde sai
+# o anfitriao — prometiam que a etapa 16 acrescentaria o dominio publico aqui.
+# E esta linha.
 DOMINIO = _dominio_publico()
 HOSTS_OK, ORIGENS_OK = _enderecos_permitidos(PORTA, DOMINIO)
 

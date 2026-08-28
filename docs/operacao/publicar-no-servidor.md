@@ -236,6 +236,14 @@ endereço novo:
 
 **Se você pular o 6.2:** o site sobe igual, só sem o botão "entrar com GitHub".
 
+**6.3 — uma trava a mais, se você quiser (opcional).** O ambiente `producao` já
+existe no repositório. Em
+<https://github.com/garcia-goncalves/dervs/settings/environments> você pode
+abrir `producao` e ligar **Required reviewers**, marcando você mesmo. A partir
+daí toda publicação para e espera você aprovar no navegador — é um segundo
+"sim", depois da palavra `PUBLICAR`. Útil no dia em que houver mais gente com
+acesso ao repositório; hoje, com você sozinho, é cinto sobre suspensório.
+
 ---
 
 ## Passo 7 — Publicar (este é o passo de sempre)
