@@ -1,136 +1,93 @@
-# Continue daqui — DERVS, 27/08/2026 (fim da tarde)
+# O que fazer no próximo chat
 
-Pasta: `C:\Users\Desktop\source\repos\dervs` · `main @ 1e30304` · árvore limpa,
-tudo no GitHub. **Nada pendente meu.** Leia inteiro antes de agir, e confirme no
-código o que ele afirma.
+Escrito em 27/08/2026, ao fim da etapa 14. Este arquivo é versionado de propósito:
+handoff que vive só na conversa some no `/clear` seguinte.
 
----
+## Onde estamos
 
-## LEIA PRIMEIRO, sempre
+- **Branch `etapa-14-as-seis-telas`, PR #14 aberto, verificação automática verde.**
+  998 testes passando. **Ainda não mesclado.**
+- `main` está em `74c509d` (a etapa 13).
 
-**`docs/A-APLICACAO.md` — a fonte única.** Criado nesta sessão. Responde numa
-leitura só o que o DERVS é, para quem, o que mostra, o que faz, o que nunca vai
-fazer, o caminho e o que não se relitiga. **Em conflito com qualquer outro
-documento do repositório, ele vence.** Também publicado como página:
-https://claude.ai/code/artifact/804ce5f2-1ae9-4298-8f8c-b38de6ae58b1
+## Leia primeiro
 
-Depois dele: `CLAUDE.md` na raiz (as armadilhas desta máquina) e
-`docs/esteira/dervs/design.md` (669 linhas de direção visual, **aprovado, não
-refazer**).
+1. `docs/A-APLICACAO.md` — a fonte única. Vence qualquer outro documento em conflito.
+2. `CLAUDE.md` na raiz — as três leis do código.
+3. `docs/esteira/dervs/design.md` — a direção visual. **Aprovado, não refazer.**
+4. `docs/LINKS.md` — como subir, os endereços das telas, e as três armadilhas de
+   navegador que custaram meia hora nesta etapa.
 
----
+## O que a etapa 14 entregou
 
-## O QUE FAZER: a etapa 14, e ela é a tarefa inteira
+O `index.html` deixou de ser o HUB do dev. Agora são as telas do DERVS, em português,
+na direção Torre de Controle: **Painel** (`#/painel`), **Projeto** (`#/projeto/<nome>`),
+**Alerta** (`#/alerta/<id>`), **Conectar projeto** (`#/conectar`), **Computadores**
+(`#/computadores`) e **Formas de entrar** (`#/entrada`). A tela **Entrar** continua
+sendo outra página (`index-cortina.html` + `portas.html`).
 
-**As seis telas, em português.** É o que resolve o "está tudo feio" do dono.
-O plano está em `docs/superpowers/plans/dervs-fatia-1.md`, seção 14 — leia-a
-inteira, ela tem as provas e as armadilhas.
+Zero cor literal no `index.html` (eram 32). Os quatro estados do selo estão declarados
+no HTML, com cor, forma, glifo e rótulo escrito.
 
-Resumo do que a etapa 14 pede:
+**No servidor, três coisas além do previsto no plano:**
 
-- `index.html` **reescrito**: hoje tem 1.549 linhas e **32 cores literais**, que
-  precisam virar `var(--…)`. As telas são Entrar, Painel, Projeto, Conectar
-  projeto, **Computadores** e Alerta.
-- `servir.py`: **uma linha** — o `ESTATICOS_OK` ganha `assets/`. Foi deixado de
-  fora da etapa 13 de propósito.
-- `robots.txt` novo, bloqueando `/painel`, `/projeto`, `/maquinas`, `/api`.
+- `ESTATICOS_OK` ganhou a pasta `assets/` e o `/robots.txt`, por caminho exato.
+- `_guarda_de_escrita` extraída: Origin + sessão + anti-CSRF + corpo JSON, num lugar só.
+- **Rotas novas `/api/arquivar` e `/api/desarquivar`**, porque "isto está certo assim"
+  era botão sem rota nenhuma.
 
-**As três armadilhas da etapa 14, nas palavras do plano:**
+E `/api/dados` passou a devolver `selo` e `camadas` por projeto — o motor da etapa 10
+nunca era chamado por ninguém.
 
-1. **Não dê a tela por pronta porque ela *aparece* certa.** Já aconteceu nesta
-   casa: a faixa da fila apareceu e o botão nunca disparava. **Cada botão é
-   clicado uma vez** antes de a etapa fechar.
-2. **Palavra em inglês escapando** — `dashboard`, `deploy`, `loading`,
-   `deletar`, `login` estão no vocabulário proibido.
-3. **"máquina" agora é "computador".** Decisão de produto de 27/08: foi o
-   exemplo que o dono deu de termo confuso. O `design.md` ainda diz "máquina" na
-   tabela de vocabulário — `docs/A-APLICACAO.md` corrige, e ele vence.
+## O PRÓXIMO PASSO: uma decisão sua, e depois a etapa 15
 
-Depois da 14 vêm a 15 (o teste dos oito itens de design, que roda na CI), a 16
-(publicar) e a 17 (conferência final).
+### 1. Mesclar o PR #14 (decisão sua)
 
----
+A verificação automática está verde. O `CLAUDE.md` global pede revisor especialista
+(`python` e `security`) antes de mesclar, porque isto mexe em rota de escrita e no
+anti-falsificação. **Escolha: mesclar direto, ou rodar os dois revisores antes.**
 
-## FEITO nesta sessão
+### 2. A meta de 360px que não fecha (decisão sua)
 
-**1. `docs/A-APLICACAO.md`** (commit `1f5bbb2`). Três decisões de produto tomadas
-junto, com motivo escrito:
+O desenho pede duas coisas que não cabem juntas:
 
-- **"máquina" vira "computador"** no vocabulário fixo.
-- **A tela inicial mostra UMA ação recomendada**, não a lista inteira. Lista de
-  203 alertas treina o dono a fechar a aba.
-- **O painel de ferramental do Claude adota o Agent Plugins 1.0.0** — padrão
-  aberto publicado em 06/08/2026 por Amazon, Anysphere, Microsoft, OpenAI e
-  Vercel — em vez de formato próprio. Fica na Fatia 4.
+- "10 projetos visíveis sem rolagem em 360×640";
+- uma linha de projeto com *selo · nome · o motivo em uma frase · o carimbo*.
 
-**2. Etapa 13 — a paleta e a tipografia viram código** (PR #13, mesclado em
-`1e30304`). CI verde em 33s.
+**Medido no navegador**, dentro de um quadro de 360×640: a linha mede 90–113px, e a
+frase de resumo + a régua de quatro contadores + a ação recomendada somam outros 350px.
+Cabem 5 a 7 projetos, não 10. **Chegar a 10 exige tirar o motivo da linha.** A tela foi
+entregue com o motivo — é ele que responde "o que houve" sem um clique. A meta está
+registrada como não cumprida em `docs/A-APLICACAO.md`.
 
-- `assets/dervs.css`: 45 tokens nos três blocos de tema, mais as primitivas
-  (selo de quatro estados, botão, campo, cartão, lista, tabela, faixa, vazio).
-- Fontes IBM Plex Sans e Mono servidas do próprio domínio, 76 KB, OFL 1.1.
-- Marca: três camadas com a do meio fora de alinhamento — é o *drift*.
-- `assets/CREDITOS.md` com origem e licença de tudo.
+### 3. Etapa 15 — o teste dos oito itens verificáveis do design
 
-**3. O conserto que era o mais importante do PR:**
-`docs/esteira/dervs/contraste.py` tinha a paleta **digitada dentro dele**,
-copiada do `design.md`. No instante em que `assets/dervs.css` passou a existir,
-essa cópia virou mentira em potencial — bastava mudar uma cor no CSS para o
-script seguir aprovando a cor velha, **com cara de verificação**. Agora ele lê o
-CSS, sai com código 1, cobra que o escuro do sistema seja igual ao escuro do
-botão, e é passo da CI. **Provado ao contrário:** clareei `--texto-suave` e ele
-reprovou com 2,08:1.
+Plano em `docs/superpowers/plans/dervs-fatia-1.md`, seção 15. Cria `test_design.py` e
+acrescenta **um passo à mão** em `.github/workflows/ci.yml` (há um teste que cobra essa
+lista; arquivo novo que não estiver lá deixa a verificação vermelha).
 
----
+Os oito itens já foram conferidos à mão nesta etapa e passam; o trabalho é transformá-los
+em teste. **A armadilha nomeada no plano:** escrever o item 8 como busca de texto e ele
+passar vazio porque não achou número nenhum. O caso tem de começar afirmando que há pelo
+menos 20 números na tela, e só então verificar os carimbos.
 
-## PESQUISA JÁ FEITA — não refazer
+## Dívidas abertas
 
-Da sessão anterior: Backstage (auto-hospedado custa 3–12 engenheiros) · Coolify
-e Dokploy · Uptime Kuma + Beszel + GlitchTip · Apache DevLake. **Confirmado: não
-existe ferramenta pronta para o drift entre o git e o que está publicado** — é o
-diferencial do produto.
+- **Issue #12** — POST que recebe 401/403 fecha a conexão sem entregar a resposta.
+  ~1 em 8 corridas de `test_servir.py`. Verificação vermelha do nada nesse arquivo é isto.
+- **A faixa `AMBIENTE LOCAL` nunca aparece nesta máquina.** `E_LOCAL` exige
+  `DERVS_AMBIENTE=local`, e o `docs/LINKS.md` manda subir com `pythonw servir.py` sem a
+  variável. A falha é fechada (o certo), mas o `CLAUDE.md` global pede a faixa no
+  ambiente local. Conserto: a receita de subida define a variável. **Não foi feito**
+  porque muda como o painel sobe, e isso é fora do escopo da etapa 14.
+- **"Conectar projeto" não lista pastas.** O agente ainda não tem rota que devolva as
+  pastas com Git. É da Fatia 2, e a tela diz isso na cara em vez de fingir.
 
-Desta sessão: **Agent Plugins 1.0.0** (06/08/2026, cinco empresas) e
-gerenciadores de skill/MCP prontos como o SkillDock — por isso o DERVS **não**
-inventa formato próprio. E o consenso de 2026 para observar máquina sem expor
-porta é exatamente o desenho já aprovado aqui (agente só de saída, pareado por
-token): a pesquisa **confirmou**, não mudou nada.
+## Armadilhas desta máquina, confirmadas nesta sessão
 
----
-
-## DÍVIDAS NOMEADAS, ainda abertas
-
-- **Issue #12 (nova)** — POST que recebe 401/403 **fecha a conexão sem entregar
-  a resposta**: o servidor não drena `rfile` antes de responder erro, e no
-  Windows isso vira RST. Falha ~1 em 8 corridas de `test_servir.py`. É caminho
-  de autenticação, mas a falha é **fechada** (o acesso é negado certo), então
-  não é brecha. O conserto certo toca o despacho de **todas** as rotas POST —
-  merece etapa própria com revisor de segurança. **Se a CI ficar vermelha do
-  nada em `test_servir.py`, é isto.**
-- **Issue #10** — peneirar `remoto_slug` na ENTRADA (`receber_relatorio`), e não
-  na hora de montar a consulta. Defeito pré-existente.
-- **Quando o servidor existir**: levar `DERVS_GITHUB_APP_ID` e
-  `DERVS_GITHUB_INSTALLATION_ID` (públicas) e os dois segredos para lá, e
-  convidar cada pessoa (`python autenticacao.py convidar <login> <email>`).
-- **A troca chave → token nunca rodou contra o GitHub de verdade.** Está certa
-  contra o OpenSSL e contra o formato documentado, e mais nada.
-
-## ARMADILHAS JÁ PAGAS (não pagar de novo)
-
-- **Verificador que guarda cópia do que verifica passa por engano.** Foi o
-  `contraste.py`. Todo verificador tem de LER o artefato, e **prove ao
-  contrário** antes de acreditar nele.
-- **Ícone literal não se lê em 16px.** Tentei a torre de controle três vezes:
-  virou abajur, depois taça. **Renderize e olhe o PNG** antes de dar por pronto.
-- **O IBM Plex Sans do Google é fonte variável** — os três pesos são o mesmo
-  binário (mesmo md5). Confira o md5 antes de versionar fonte.
-- O **heredoc do Bash troca o fim de linha** nesta máquina. Para editar por
-  script, escreva o script com `Write` e **rode o arquivo**.
-- O **varredor de segredo barra por FORMA**; o hook `secret-read-guard` barra
-  pelo **texto do comando** (mencionar um `.pem` é recusado).
-- Cada `test_*.py` entra **à mão** no `ci.yml`; há um passo que cobra a lista.
-- Teste com data fixa tem de passar `agora_iso`, senão apodrece sozinho.
-
-## NÃO É MEU
-
-Nada.
+- **Mudar só o `#` do endereço não recarrega a página.** Editei o HTML e fiquei olhando
+  a versão velha.
+- **Dois `servir.py` de pé ao mesmo tempo**: o antigo segura a porta, o navegador fala
+  com ele, e as rotas novas respondem 404 com a tela idêntica. A receita para listar os
+  dois está em `docs/LINKS.md`.
+- O heredoc do Bash troca o fim de linha: para editar arquivo por script, escreva o
+  script com a ferramenta `Write` e rode o arquivo.
