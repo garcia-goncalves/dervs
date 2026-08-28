@@ -76,7 +76,8 @@ jobs:
       contents: read
       packages: write
     outputs:
-      referencia: ${{ steps.nome.outputs.referencia }}
+      # O DIGEST, nao a etiqueta. Ver o passo "Enviar a imagem".
+      referencia: ${{ steps.enviar.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -145,8 +146,24 @@ jobs:
           [ "$local" = "404" ] || { echo "a porta local EXISTE fora do ambiente local"; exit 1; }
           docker rm -f prova >/dev/null
 
-      - name: Enviar a imagem
-        run: docker push "${{ steps.nome.outputs.referencia }}"
+      # A ETIQUETA VAI, MAS QUEM MANDA É O DIGEST.
+      #
+      # `apt-get upgrade` no Dockerfile é de propósito (é como a correção do
+      # sistema base entra sozinha), e o preço dele é que reconstruir o MESMO
+      # commit produz bytes diferentes — sobrescrevendo a etiqueta
+      # `:<sha do commit>`. Se o servidor guardasse a etiqueta, o procedimento
+      # de voltar atrás apontaria para "o que quer que esteja naquela etiqueta
+      # hoje", não para o que estava no ar. O digest é o conteúdo, não o nome:
+      # ele identifica UMA imagem, para sempre. Achado da conferência das
+      # correções da revisão de segurança.
+      - name: Enviar a imagem, e fixar o digest
+        id: enviar
+        run: |
+          etiqueta="${{ steps.nome.outputs.referencia }}"
+          docker push "$etiqueta"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$etiqueta")
+          echo "a imagem publicada é $digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
   # -------------------------------------------------------------------------
   # 3. O servidor. Só aqui alguma coisa muda no que está no ar.
@@ -250,6 +267,35 @@ jobs:
             "http://127.0.0.1:${porta}/robots.txt")
           echo "o container respondeu $codigo em 127.0.0.1:${porta}"
           [ "$codigo" = "200" ] || exit 1
+
+          # O GATEWAY DE VERDADE CONTRA O QUE FOI CONFIGURADO.
+          #
+          # Sem esta conferência, `DERVS_PROXIES_CONFIAVEIS` pode estar
+          # perfeitamente escrita e ser inútil: o pool padrão do Docker cai em
+          # `192.168.0.0/16` quando as faixas 172 acabam, e naquela máquina há
+          # 26 containers. Aí o teto de tentativas volta a ser um balde único
+          # para a internet inteira — e o sintoma, na tela, é indistinguível de
+          # um ataque de verdade. Regressão muda vira publicação vermelha, que
+          # é a lei 2 deste repositório aplicada à configuração.
+          gateway=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' dervs)
+          echo "o container vê o gateway $gateway"
+          # A conferência roda DENTRO do próprio container, com o mesmo código
+          # que o servidor usa para decidir em quem confiar. Não é uma segunda
+          # implementação da mesma regra — que é como duas verdades sobre a
+          # mesma coisa nascem — e não depende de haver python no servidor,
+          # que é uma VPS de outra pessoa e não promete nada.
+          confere=$(docker exec dervs python -c \
+            'import sys, servir; print("sim" if servir._vem_de_proxy(sys.argv[1], servir.Hub.PROXIES_CONFIAVEIS) else "nao")' \
+            "$gateway")
+          if [ "$confere" != "sim" ]; then
+            echo "O gateway $gateway está FORA de DERVS_PROXIES_CONFIAVEIS."
+            echo "Com isso o teto de tentativas vira um balde único: cinco"
+            echo "chamadas de um estranho trancam o dono para fora do painel."
+            echo "Ajuste DERVS_PROXIES_CONFIAVEIS no /opt/dervs/.env e publique"
+            echo "de novo. Ver docs/operacao/publicar-no-servidor.md."
+            exit 1
+          fi
+          echo "o gateway está dentro da faixa confiável"
 
           # Imagens antigas do DERVS acumulam disco numa VPS que serve outros 8
           # sistemas. Só as sem uso, e só as deste projeto.

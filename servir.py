@@ -240,6 +240,33 @@ def _vem_de_proxy(endereco: str, redes) -> bool:
     return any(ip in rede for rede in redes)
 
 
+def _aviso_do_teto(dominio: str, redes):
+    """O aviso a gritar quando o teto por origem virou balde unico. Ou None.
+
+    O `except ValueError` de `_redes_confiaveis` descarta item mal escrito em
+    silencio, e a lista pode ficar vazia de duas formas: erro de digitacao no
+    `.env`, ou uma faixa perfeitamente escrita que nao casa com o gateway real —
+    o pool padrao do Docker cai em `192.168.0.0/16` quando as faixas 172
+    acabam, e naquela VPS ha 26 containers.
+
+    Nos dois casos `_origem_do_pedido` volta a devolver o MESMO endereco para o
+    mundo inteiro, o teto de cinco tentativas vira um balde unico, e o sintoma
+    na tela e indistinguivel de um ataque de verdade.
+
+    AVISA, NAO DERRUBA. Cair por causa de um erro de digitacao no `.env` tira o
+    site do ar, e isso e pior que o problema que se quer evitar. Quem reprova a
+    publicacao e o workflow, que confere o gateway de verdade depois de subir.
+    Achado da revisao de seguranca da etapa 16, na conferencia das correcoes.
+    """
+    if dominio and not redes:
+        return ("AVISO GRAVE: DERVS_PROXIES_CONFIAVEIS esta vazia e ha dominio"
+                " publico. Atras do nginx TODO pedido chega com o mesmo"
+                " endereco, entao o teto de tentativas virou um balde unico"
+                " para a internet inteira: cinco chamadas de um estranho"
+                " trancam o dono para fora. Ver docker-compose.yml.")
+    return None
+
+
 def _dominio_publico() -> str:
     """O dominio pelo qual o DERVS e acessado de fora. Vazio nesta maquina.
 
@@ -1563,6 +1590,11 @@ def main():
         print("=" * 62)
         print("COMBINACAO DE ACESSO: %s" % combinacao)
         print("Anote agora. Ela NAO aparece de novo.")
+        print("=" * 62)
+    aviso = _aviso_do_teto(DOMINIO, Hub.PROXIES_CONFIAVEIS)
+    if aviso:
+        print("=" * 62)
+        print(aviso)
         print("=" * 62)
     if not GITHUB_ID or not GITHUB_SECRET:
         print("AVISO: sem DERVS_GITHUB_ID/DERVS_GITHUB_SECRET, a entrada por"

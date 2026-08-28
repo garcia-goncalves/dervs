@@ -1195,6 +1195,23 @@ class QuemPodeDizerDeOndeVeioOPedido(unittest.TestCase):
         for esquisito in ("?", "", "nao-e-ip", "172.17.0.1:4777"):
             self.assertFalse(servir._vem_de_proxy(esquisito, redes), esquisito)
 
+    def test_o_silencio_e_o_perigo_entao_ele_grita(self):
+        """Lista vazia COM dominio publico = o balde unico de volta, e nada
+        avisava. Duas formas de cair nisso, e a segunda nao depende de erro
+        humano: o pool padrao do Docker cai em 192.168.0.0/16 quando as faixas
+        172 acabam, e a VPS tem 26 containers — a faixa estaria escrita certa e
+        seria inutil. Achado da conferencia das correcoes."""
+        self.assertIsNotNone(servir._aviso_do_teto("dervs.com.br", ()))
+        self.assertIn("balde unico", servir._aviso_do_teto("dervs.com.br", ()))
+
+    def test_sem_dominio_nao_grita(self):
+        """Nesta maquina a lista vazia e o certo: nao ha proxy na frente."""
+        self.assertIsNone(servir._aviso_do_teto("", ()))
+
+    def test_com_lista_preenchida_nao_grita(self):
+        redes = servir._redes_confiaveis("172.16.0.0/12")
+        self.assertIsNone(servir._aviso_do_teto("dervs.com.br", redes))
+
     def test_ipv6_tambem(self):
         redes = servir._redes_confiaveis("fd00::/8")
         self.assertTrue(servir._vem_de_proxy("fd00::1", redes))

@@ -201,6 +201,15 @@ nginx -t
 dentro do arquivo:
 `sed -i 's|127.0.0.1:4877|127.0.0.1:SUA-PORTA|' /etc/nginx/sites-available/dervs.conf`
 
+> **Um cuidado, e ele é específico desta máquina:** nunca deixe uma segunda
+> cópia do arquivo em `/etc/nginx/sites-enabled/` — nem com outro nome, nem
+> como `dervs.conf.bak`, nem como `dervs.conf~`. O nginx do Debian inclui
+> **tudo** o que está naquela pasta, sem olhar a extensão, e uma cópia
+> esquecida faz ele recusar a configuração inteira. Se isso acontecer, o
+> `nginx -t` acima fica vermelho e o `reload` não é aplicado — os outros 8
+> sistemas continuam no ar, e é para isso que o teste vem antes. Para guardar
+> uma cópia, guarde fora: `cp dervs.conf /root/dervs.conf.guardado`.
+
 Só depois do `test is successful`, aplique:
 
 ```
