@@ -44,6 +44,19 @@ criptografia sem testemunha externa não entra.
   arquivo `.pem` numa linha de comando é recusado, mesmo que a leitura seja
   inofensiva. Renomeie o arquivo temporário.
 
+## Os arquivos de `assets/` sao permissao por caminho EXATO
+
+A lista nasce de uma leitura da pasta **na subida** — arquivo novo so passa a
+ser servido depois de reiniciar `servir.py`. E `assets/painel.js` e
+`assets/painel.css` **exigem sessao** (classe de acesso `dado`), porque juntos
+eles sao a tela inteira do painel; o resto de `assets/` e aberto, porque a
+cortina precisa carregar antes de qualquer login.
+
+A trava casa por caminho exato: **renomear um dos dois a desliga em silencio.**
+`test_rotas.py` cobra que os dois nomes existam na tabela, e `test_servir.py`
+sobe o servidor de verdade para conferir 401 sem sessao e 200 com ela — ler a
+tabela nao basta, as duas ja divergiram aqui.
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em
@@ -75,9 +88,18 @@ criptografia sem testemunha externa não entra.
 - `docs/esteira/dervs/briefing.md` e `spec.md` — o contrato do produto, fase 1
   e 2, aprovados. **Não refazer.**
 - `docs/superpowers/plans/dervs-fatia-1.md` — as 17 etapas, **todas entregues**
-  em 28/08/2026. A saida dos oito comandos da etapa 17 esta colada em
-  `docs/esteira/dervs/verificacao.md`, junto com o que eles NAO provam e foi
-  conferido clicando, e com quatro pendencias nomeadas que nao bloqueiam nada.
+  em 28/08/2026, e **o site esta no ar** em `https://dervs.com.br`. A saida dos
+  oito comandos da etapa 17 esta colada em `docs/esteira/dervs/verificacao.md`,
+  junto com o que eles NAO provam e foi conferido clicando. Das quatro
+  pendencias nomeadas la, **duas foram fechadas** no mesmo dia (o `painel.js`
+  aberto e a conta que nao dava para apagar) e **duas continuam abertas — as
+  duas dependem so da mao do dono**, nao de codigo.
+- **A Fatia 2 ainda nao comecou.** O pedido do dono em 28/08 a noite ("a fusao
+  das aplicacoes... tudo que um DEV precisa") esta transcrito no §11 da fonte
+  unica. **Cuidado com a palavra "fusao":** a dos REPOSITORIOS esta entregue
+  desde a etapa 1 (o `dervs-hub` vive em `vivo/`); o que ele pede agora e a das
+  CAPACIDADES, reescritas em Python. Isso entra pela esteira, comecando pelo
+  briefing — "tudo que um DEV precisa" e intencao, nao escopo.
 - `docs/operacao/` — os roteiros que exigem a mão do dono (GitHub App, entrar,
   conectar computador, **publicar no servidor**).
 
