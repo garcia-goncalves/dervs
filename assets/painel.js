@@ -891,8 +891,8 @@ function pdCobrar(d) {
   const nenhuma = d.chaves.length === 0;
   p.hidden = !d.cobrar_a_segunda || d.restantes > 0;
   p.textContent = nenhuma
-    ? "Você ainda não cadastrou nenhuma chave de acesso. Hoje entra pela porta "
-      + "do ambiente local, que não existe no servidor. Cadastre a primeira "
+    ? "Você ainda não cadastrou nenhuma chave de acesso: esta conta depende "
+      + "só da porta pela qual você acabou de entrar. Cadastre a primeira "
       + "abaixo, ou gere os códigos do papel."
     : "Você tem uma forma de entrar só. Se ela se perder, ninguém abre esta "
       + "conta — e não há recuperação por e-mail aqui, de propósito. Cadastre "
