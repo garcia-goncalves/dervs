@@ -266,7 +266,7 @@ liga e desliga ferramenta do agente é uma superfície de ataque de primeira ord
 
 ## 11. O caminho — o que está pronto, o que falta
 
-**Entregue (etapas 1 a 15 de 17, 1022 testes passando):** a fusão dos dois repositórios com
+**Entregue (etapas 1 a 16 de 17, 1049 testes passando):** a fusão dos dois repositórios com
 as duas autorias preservadas · a verificação automática escalonada · a amputação de toda
 rota que executava comando · o banco de vários usuários · o login com cortina e entrada
 pelo GitHub · o motor do selo de quatro estados · o agente do computador e o pareamento
@@ -274,6 +274,24 @@ por código de seis dígitos · as pendências do GitHub e o drift · a troca de
 token do aplicativo do GitHub, conferida byte a byte contra o OpenSSL · a paleta e a
 tipografia em tokens, servidas do próprio domínio · **e as telas, em português, com o
 selo de quatro estados ligado ao motor e "isto está certo assim" gravando no banco.**
+
+**A etapa 16 fechou o caminho até o ar, mas não passou por ele ainda.** Existem a imagem
+de produção, o arquivo que descreve o container no servidor, a configuração do nginx e o
+workflow de publicação — que só dispara por botão, com a palavra `PUBLICAR` digitada, e
+que sobe a imagem e bate na porta dela antes de trocar o que está no ar. O que falta é a
+mão do dono, em dois pontos que ninguém pode fazer por ele: gravar os segredos (a chave do
+servidor, no GitHub; a chave do cofre, gerada dentro da VPS) e dizer "pode subir". O
+roteiro completo está em `docs/operacao/publicar-no-servidor.md`.
+
+**O que a etapa 16 achou, e vale registrar porque é o tipo de erro que volta:** o
+`Dockerfile` não era aberto desde a etapa 7. Entre uma coisa e outra nasceram sete
+arquivos de runtime — `autenticacao.py`, `cortina.py`, `passkey.py`, `p256.py`,
+`index-cortina.html`, `portas.html` e a pasta `assets/` — e nenhum entrava na imagem. Ela
+morria no primeiro `import autenticacao`, e a verificação automática ficava verde o tempo
+todo, **porque ela roda os testes, não a imagem**. Agora `test_imagem.py` compara a lista
+de cópia com o que `servir.py` de fato importa, seguindo import por import, e o workflow
+de publicação sobe o container antes de publicar. Rodado contra o `Dockerfile` antigo, o
+teste acusa os oito arquivos.
 
 **Uma contradição achada na etapa 14, decidida pelo dono em 28/08/2026.** O desenho pedia
 duas coisas que não cabem juntas: "10 projetos visíveis sem rolagem em 360×640" e uma

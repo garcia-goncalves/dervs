@@ -1078,5 +1078,125 @@ class _Resposta:
                 self.cookies[nome.strip()] = valor
 
 
+class DentroDoContainer(unittest.TestCase):
+    """Os dois ajustes sem os quais a imagem publicada nao atende ninguem.
+
+    1. ENDERECO DE ESCUTA. `127.0.0.1` dentro de um container e o loopback DO
+       CONTAINER: o nginx do host bate na porta publicada, o Docker encaminha
+       para o IP do container, e ninguem esta escutando ali. O site responderia
+       502 para sempre, e o log do servidor nao teria uma linha de erro — ele
+       subiu, so nao estava no endereco certo.
+
+    2. COLETA DA PROPRIA MAQUINA. `coletar.py` mede as pastas de projeto DESTA
+       maquina. No servidor essa pasta nao existe, entao a medicao volta com
+       zero projetos — e gravar "zero" por cima do que o agente pareado mandou
+       e exatamente a lei 2 deste repositorio sendo violada: um numero errado
+       com cara de certo. No servidor a medicao local fica desligada.
+    """
+
+    def setUp(self):
+        self._antes = {v: os.environ.get(v)
+                       for v in ("DERVS_ESCUTA", "DERVS_COLETA_LOCAL")}
+        self.addCleanup(self._restaurar)
+
+    def _restaurar(self):
+        for nome, valor in self._antes.items():
+            if valor is None:
+                os.environ.pop(nome, None)
+            else:
+                os.environ[nome] = valor
+
+    def test_sem_variavel_escuta_so_o_loopback(self):
+        """O padrao continua sendo o de sempre: nesta maquina, so localhost."""
+        os.environ.pop("DERVS_ESCUTA", None)
+        self.assertEqual(servir._endereco_de_escuta(), "127.0.0.1")
+
+    def test_com_variavel_escuta_onde_ela_mandar(self):
+        os.environ["DERVS_ESCUTA"] = "0.0.0.0"
+        self.assertEqual(servir._endereco_de_escuta(), "0.0.0.0")
+
+    def test_escuta_vazia_volta_para_o_loopback(self):
+        os.environ["DERVS_ESCUTA"] = "  "
+        self.assertEqual(servir._endereco_de_escuta(), "127.0.0.1")
+
+    def test_por_padrao_mede_esta_maquina(self):
+        os.environ.pop("DERVS_COLETA_LOCAL", None)
+        self.assertTrue(servir._mede_esta_maquina())
+
+    def test_zero_desliga_a_medicao_desta_maquina(self):
+        for desligado in ("0", "nao", "false", "NAO", " 0 "):
+            os.environ["DERVS_COLETA_LOCAL"] = desligado
+            self.assertFalse(servir._mede_esta_maquina(),
+                             "%r devia desligar a coleta" % desligado)
+
+    def test_qualquer_outro_valor_mantem_ligado(self):
+        os.environ["DERVS_COLETA_LOCAL"] = "1"
+        self.assertTrue(servir._mede_esta_maquina())
+
+
+class ODominioDeFora(unittest.TestCase):
+    """`dervs.com.br` precisa entrar em `HOSTS_OK`, e so por variavel.
+
+    O servidor recusa com 403 todo pedido cujo cabecalho `Host` nao esteja num
+    conjunto fechado — e isso e defesa, nao defeito: sem ela, apontar um dominio
+    qualquer para o IP do servidor daria acesso ao painel. O preco e que, atras
+    do nginx, o `Host` que chega e `dervs.com.br`, e o site inteiro responderia
+    403 ate alguem colocar esse nome na lista.
+
+    Tres comentarios espalhados por `servir.py` (linhas 682, 743 e 796) ja
+    prometiam que a etapa 16 faria exatamente isto. E aqui.
+    """
+
+    def setUp(self):
+        self._antes = os.environ.get("DERVS_DOMINIO")
+        self.addCleanup(self._restaurar)
+
+    def _restaurar(self):
+        if self._antes is None:
+            os.environ.pop("DERVS_DOMINIO", None)
+        else:
+            os.environ["DERVS_DOMINIO"] = self._antes
+
+    def test_sem_variavel_nao_ha_dominio_de_fora(self):
+        os.environ.pop("DERVS_DOMINIO", None)
+        self.assertEqual(servir._dominio_publico(), "")
+
+    def test_le_o_dominio_cru(self):
+        os.environ["DERVS_DOMINIO"] = "dervs.com.br"
+        self.assertEqual(servir._dominio_publico(), "dervs.com.br")
+
+    def test_aceita_colado_com_esquema_e_barra(self):
+        """Quem preenche a variavel copia da barra do navegador. Colar
+        "https://dervs.com.br/" nao pode virar um Host que nunca casa —
+        seria o site inteiro em 403 por um erro de digitacao."""
+        for cru in ("https://dervs.com.br", "https://dervs.com.br/",
+                    "HTTPS://DERVS.COM.BR/painel", "  dervs.com.br  "):
+            os.environ["DERVS_DOMINIO"] = cru
+            self.assertEqual(servir._dominio_publico(), "dervs.com.br",
+                             "nao normalizou %r" % cru)
+
+    def test_sem_dominio_so_o_localhost_entra(self):
+        hosts, origens = servir._enderecos_permitidos(4777, "")
+        self.assertEqual(hosts, {"localhost:4777", "127.0.0.1:4777"})
+        self.assertEqual(origens,
+                         {"http://localhost:4777", "http://127.0.0.1:4777"})
+
+    def test_com_dominio_ele_entra_e_o_localhost_fica(self):
+        """O localhost NAO sai no servidor: e por ele que o healthcheck do
+        container bate na porta, de dentro. Tirar dali derrubaria a
+        verificacao de saude e a publicacao nunca concluiria."""
+        hosts, origens = servir._enderecos_permitidos(4777, "dervs.com.br")
+        self.assertIn("dervs.com.br", hosts)
+        self.assertIn("localhost:4777", hosts)
+        self.assertIn("127.0.0.1:4777", hosts)
+
+    def test_a_origem_do_dominio_e_https_e_so_https(self):
+        """`http://dervs.com.br` nao entra. O nginx redireciona 80 para 443, e
+        aceitar a origem em claro seria aceitar um pedido que viajou aberto."""
+        _, origens = servir._enderecos_permitidos(4777, "dervs.com.br")
+        self.assertIn("https://dervs.com.br", origens)
+        self.assertNotIn("http://dervs.com.br", origens)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)

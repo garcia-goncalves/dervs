@@ -169,6 +169,15 @@ jobs:
       - name: Os oito itens do design
         run: python test_design.py
 
+      # ETAPA 16 — a lista de copia do Dockerfile acompanha o que servir.py
+      # importa. Entre a etapa 9 e a 14 nasceram sete arquivos de runtime e
+      # nenhum entrou na imagem: ela morria no primeiro `import autenticacao` e
+      # esta verificacao ficava verde o tempo todo, porque ela roda os testes e
+      # nao a imagem. O teste le o Dockerfile como texto e nao precisa de
+      # Docker; quem sobe a imagem de verdade e o workflow de publicacao.
+      - name: A imagem leva tudo o que precisa, e nada alem
+        run: python test_imagem.py
+
       # ETAPA 13 — a paleta. O script LE assets/dervs.css, nao uma copia dos
       # valores: ate 27/08/2026 ele tinha a paleta digitada dentro dele, e
       # bastava mudar uma cor no CSS para a verificacao continuar aprovando a

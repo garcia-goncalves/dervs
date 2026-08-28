@@ -437,7 +437,40 @@ vira exatamente o que ela existe para não ser.
   número nenhum. Teste que não encontra o que deveria examinar **passa por engano**: o caso
   começa afirmando que há pelo menos 20 números na tela, e só então verifica os carimbos.
 
-## 16. Publicação: imagem, porteiro de site e workflow de publicação
+## 16. Publicação: imagem, porteiro de site e workflow de publicação — ENTREGUE (28/08/2026)
+
+> **O que ficou pronto e o que ficou faltando.** Estão prontos: o `Dockerfile`
+> corrigido, o `docker-compose.yml`, o `infra/nginx-dervs.conf`, o
+> `.github/workflows/publicar.yml` (`workflow_dispatch` e só ele, palavra
+> `PUBLICAR`, `cancel-in-progress: false`, job que etiqueta) e o roteiro do dono
+> em `docs/operacao/publicar-no-servidor.md`. Falta **só a mão do dono**: gravar
+> os quatro segredos no GitHub, gerar a chave do cofre dentro da VPS e apertar o
+> botão. Enquanto isso não acontecer, `dervs.com.br` não responde — e por isso a
+> etapa 17 não pode rodar.
+>
+> **Quatro coisas que a etapa achou e que não estavam previstas aqui:**
+>
+> 1. **O `Dockerfile` estava quebrado desde a etapa 9.** Faltavam
+>    `autenticacao.py`, `cortina.py`, `passkey.py`, `p256.py`,
+>    `index-cortina.html`, `portas.html`, `robots.txt` e `assets/`. A imagem
+>    morria no primeiro import e a CI não pegava, porque a CI roda os testes e
+>    não a imagem. Virou `test_imagem.py` (12 testes) mais um passo do workflow
+>    que sobe o container e bate na porta antes de publicar.
+> 2. **O servidor escutava em `127.0.0.1`.** Dentro de um container isso é o
+>    loopback do container: o nginx daria 502 para sempre, sem uma linha de log.
+>    Virou `DERVS_ESCUTA`.
+> 3. **O `hub.db` morava dentro da imagem**, que é reconstruída a cada
+>    publicação. Virou `DERVS_BANCO` mais um volume — provado recriando o
+>    container com uma conta gravada e conferindo que ela sobreviveu.
+> 4. **A coleta local rodaria no servidor**, onde não há pasta de projeto: ela
+>    voltaria com zero e gravaria esse zero por cima do que o agente pareado
+>    mandou. É a lei 2 do repositório. Virou `DERVS_COLETA_LOCAL=0`.
+>
+> **E uma correção de documento:** o critério falava em `/api/projetos`, rota
+> que nunca existiu. A real é `/api/dados`, e ela devolve `401` sem sessão.
+> Estava errado em quatro arquivos.
+
+
 
 - **objetivo** — o DERVS de pé em `dervs.com.br`, publicado por botão e só por botão.
 - **arquivos** — `Dockerfile` (finalizado; `vivo/` já fora desde a etapa 5),
@@ -455,7 +488,7 @@ vira exatamente o que ela existe para não ser.
   `grep -cE '^\s*(push|workflow_run):' .github/workflows/publicar.yml` imprime `0` ·
   `python -c "import yaml,sys;d=yaml.safe_load(open('.github/workflows/publicar.yml'));print(list(d[True]))"`
   imprime `['workflow_dispatch']` ·
-  `curl -si https://dervs.com.br/api/projetos | head -1` devolve `401` ou `302` ·
+  `curl -si https://dervs.com.br/api/dados | head -1` devolve `401` ou `302` ·
   `curl -s https://dervs.com.br/robots.txt | grep -c '/api'` ≥ 1 ·
   `gh release list --repo garcia-goncalves/dervs --limit 1` mostra a etiqueta criada pelo
   próprio workflow.
@@ -474,7 +507,7 @@ vira exatamente o que ela existe para não ser.
 - **paralelizavel_com** — nenhuma.
 - **precisa_da_mao_de_alguem** — não.
 - **como_provar** — os oito comandos, nesta ordem, com a saída colada no arquivo:
-  1. `curl -si https://dervs.com.br/api/projetos | head -1` → `401` ou `302`
+  1. `curl -si https://dervs.com.br/api/dados | head -1` → `401` ou `302`
   2. `python test_autenticacao.py` → `OK` (403 sem segundo fator, 403 no registro)
   3. `python test_rotas.py` → `OK`
   4. `grep -rn "dangerously-skip-permissions" $(git ls-files | grep -v '^vivo/') | wc -l` → `0`,

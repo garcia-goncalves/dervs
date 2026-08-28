@@ -27,7 +27,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 AQUI = Path(__file__).resolve().parent
-BANCO = AQUI / "hub.db"
+
+
+def _caminho_do_banco() -> Path:
+    """Onde mora o `hub.db`. `DERVS_BANCO` tira ele da pasta do codigo.
+
+    Nesta maquina o padrao serve: o banco fica ao lado do codigo, e apagar o
+    arquivo custa uma coleta. No servidor nao serve. La o codigo vive dentro de
+    uma imagem que e jogada fora e reconstruida a cada publicacao, e um banco
+    dentro dela seria apagado junto — toda conta, todo computador pareado e
+    toda medicao, em silencio, a cada deploy. A variavel aponta o arquivo para
+    um volume, que sobrevive a troca da imagem.
+
+    Variavel definida e vazia vale como nao definida: e o que um
+    `docker compose` produz quando a variavel do ambiente nao existe, e
+    gravar em `Path("")` seria pior que usar o padrao.
+    """
+    fora = (os.environ.get("DERVS_BANCO") or "").strip()
+    return Path(fora) if fora else AQUI / "hub.db"
+
+
+BANCO = _caminho_do_banco()
 
 INFRA = "_infra"          # projeto sintetico: containers e portas da maquina
 QUOTA = "_quota"          # projeto sintetico: cota de minutos do Actions, da CONTA

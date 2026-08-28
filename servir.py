@@ -139,6 +139,38 @@ COLETORES = {
     "pesado": (AQUI / "coletar_pesado.py", 24 * 60 * 60),
 }
 
+# As camadas que medem A MAQUINA ONDE ESTE PROCESSO RODA: `local` varre as
+# pastas de projeto, `pesado` abre o historico de cada uma. A camada `github`
+# nao esta aqui porque ela mede a API do GitHub, que responde igual de qualquer
+# lugar — e no servidor ela e justamente o que continua fazendo sentido.
+CAMADAS_DESTA_MAQUINA = ("local", "pesado")
+
+
+def _endereco_de_escuta() -> str:
+    """Em que endereco o servidor abre a porta. Padrao: so o loopback.
+
+    O padrao e o certo nesta maquina — a porta 4777 nao deve estar visivel na
+    rede de casa. Dentro de um container ele e o errado, e o erro e mudo:
+    `127.0.0.1` la dentro e o loopback DO CONTAINER, entao o nginx do host bate
+    na porta publicada, o Docker encaminha para o IP do container, e ninguem
+    esta escutando ali. O site responde 502 para sempre e o log do servidor nao
+    tem uma linha de erro, porque ele subiu — so nao no endereco certo.
+    """
+    return (os.environ.get("DERVS_ESCUTA") or "").strip() or "127.0.0.1"
+
+
+def _mede_esta_maquina() -> bool:
+    """Se as camadas `local` e `pesado` devem rodar. `DERVS_COLETA_LOCAL=0` nao.
+
+    No servidor a pasta de projetos nao existe, entao a varredura local volta
+    com zero projetos. Gravar esse zero por cima do que o agente pareado mandou
+    e a lei 2 deste repositorio sendo violada da pior forma: nao e o painel
+    dizendo "nao sei", e o painel dizendo "nenhum" com a mesma cara de quem
+    sabe. La o dado chega pelo agente, e quem mede a maquina e o agente.
+    """
+    valor = (os.environ.get("DERVS_COLETA_LOCAL") or "1").strip().lower()
+    return valor not in ("0", "nao", "não", "false")
+
 def _numero_de(args, i, padrao, minimo, maximo):
     """Le um numero da linha de comando SEM derrubar o import.
 
@@ -162,8 +194,43 @@ def porta_de(args, padrao=4777):
 PORTA = porta_de(sys.argv)
 INTERVALO = _numero_de(sys.argv, 2, 60, 1, 86400)
 
-ORIGENS_OK = {"http://localhost:%d" % PORTA, "http://127.0.0.1:%d" % PORTA}
-HOSTS_OK = {"localhost:%d" % PORTA, "127.0.0.1:%d" % PORTA}
+def _dominio_publico() -> str:
+    """O dominio pelo qual o DERVS e acessado de fora. Vazio nesta maquina.
+
+    Aceita o valor colado da barra do navegador — com esquema, com barra no fim,
+    com maiuscula, com caminho. Um dominio mal digitado aqui nao da erro: da 403
+    no site inteiro, calado, e a causa levaria uma tarde para ser achada.
+    """
+    bruto = (os.environ.get("DERVS_DOMINIO") or "").strip().lower()
+    if not bruto:
+        return ""
+    return bruto.split("://", 1)[-1].strip("/").split("/", 1)[0]
+
+
+def _enderecos_permitidos(porta: int, dominio: str):
+    """Os conjuntos fechados de `Host` e de `Origin` aceitos. (hosts, origens)
+
+    O loopback NAO sai quando ha dominio: e por ele que o healthcheck do
+    container bate na porta, de dentro. Tira-lo daqui deixaria o container
+    eternamente `unhealthy` e a publicacao nunca concluiria.
+
+    A origem do dominio e `https://` e so. O nginx manda a porta 80 para a 443,
+    entao um pedido que se apresente como `http://dervs.com.br` ou viajou em
+    claro ou foi forjado — nos dois casos nao entra.
+    """
+    hosts = {"localhost:%d" % porta, "127.0.0.1:%d" % porta}
+    origens = {"http://localhost:%d" % porta, "http://127.0.0.1:%d" % porta}
+    if dominio:
+        hosts.add(dominio)
+        origens.add("https://" + dominio)
+    return hosts, origens
+
+
+# Vazio nesta maquina, `dervs.com.br` no servidor. Tres comentarios deste
+# arquivo (no `_ida_github`, no `_entrar_local` e no `_anfitriao`) prometiam que
+# a etapa 16 acrescentaria o dominio publico aqui. E esta linha.
+DOMINIO = _dominio_publico()
+HOSTS_OK, ORIGENS_OK = _enderecos_permitidos(PORTA, DOMINIO)
 
 # O TOKEN GLOBAL SAIU DE CENA (etapa 9). Ele era sorteado a cada inicializacao e
 # injetado na pagina: servia de defesa contra pedido forjado de outro site, e so
@@ -1439,17 +1506,28 @@ def main():
         print("AMBIENTE LOCAL: dado de mentira, e a porta /entrar/local esta"
               " aberta atras da cortina. Combinacao: %s"
               % cortina.COMBINACAO_LOCAL)
-    if vazio:
+    mede_aqui = _mede_esta_maquina()
+    if vazio and mede_aqui:
         coletar("local", "primeira")
 
-    threading.Thread(target=laco, args=("local", INTERVALO), daemon=True).start()
+    if mede_aqui:
+        threading.Thread(target=laco, args=("local", INTERVALO), daemon=True).start()
     for camada, (_, intervalo) in COLETORES.items():
-        if intervalo:
-            threading.Thread(target=laco, args=(camada, intervalo), daemon=True).start()
+        if not intervalo:
+            continue
+        if camada in CAMADAS_DESTA_MAQUINA and not mede_aqui:
+            continue
+        threading.Thread(target=laco, args=(camada, intervalo), daemon=True).start()
 
-    srv = ThreadingHTTPServer(("127.0.0.1", PORTA), Hub)
-    print("HUB do dev no ar: http://localhost:%d" % PORTA)
-    print("Camadas: local %ds · github 20min · pesado 24h. Ctrl+C encerra." % INTERVALO)
+    escuta = _endereco_de_escuta()
+    srv = ThreadingHTTPServer((escuta, PORTA), Hub)
+    print("HUB do dev no ar: http://localhost:%d (escutando em %s)" % (PORTA, escuta))
+    if mede_aqui:
+        print("Camadas: local %ds · github 20min · pesado 24h. Ctrl+C encerra."
+              % INTERVALO)
+    else:
+        print("Camadas: so github (20min). A medicao desta maquina esta"
+              " desligada; quem mede e o agente pareado. Ctrl+C encerra.")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

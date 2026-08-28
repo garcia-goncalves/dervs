@@ -1488,5 +1488,40 @@ class AContaLocalDesativada(unittest.TestCase):
         self.assertEqual(banco.conta_local(con), banco.DONO_LOCAL)
 
 
+class OndeMoraOBanco(unittest.TestCase):
+    """O `hub.db` precisa poder morar FORA da pasta do codigo.
+
+    No servidor o codigo vive dentro de uma imagem que e jogada fora e
+    reconstruida a cada publicacao. Um `hub.db` em `/app` seria apagado junto
+    com ela: toda conta, todo pareamento e toda medicao sumiriam a cada deploy,
+    em silencio, e o painel voltaria a dizer "sem dados" para tudo. A variavel
+    `DERVS_BANCO` aponta o arquivo para um volume, que sobrevive.
+    """
+
+    def setUp(self):
+        self._antes = os.environ.get("DERVS_BANCO")
+        self.addCleanup(self._restaurar)
+
+    def _restaurar(self):
+        if self._antes is None:
+            os.environ.pop("DERVS_BANCO", None)
+        else:
+            os.environ["DERVS_BANCO"] = self._antes
+
+    def test_sem_a_variavel_fica_ao_lado_do_codigo(self):
+        os.environ.pop("DERVS_BANCO", None)
+        self.assertEqual(banco._caminho_do_banco(), banco.AQUI / "hub.db")
+
+    def test_com_a_variavel_vai_para_onde_ela_mandar(self):
+        os.environ["DERVS_BANCO"] = "/dados/hub.db"
+        self.assertEqual(banco._caminho_do_banco(), Path("/dados/hub.db"))
+
+    def test_variavel_vazia_nao_vira_caminho_vazio(self):
+        """Variavel definida como "" e um `docker compose` sem valor, nao um
+        pedido de gravar em Path(""). Vale o padrao."""
+        os.environ["DERVS_BANCO"] = "   "
+        self.assertEqual(banco._caminho_do_banco(), banco.AQUI / "hub.db")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
