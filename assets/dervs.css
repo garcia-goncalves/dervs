@@ -194,6 +194,15 @@ html {
   color-scheme: light dark;
 }
 
+/* O `hidden` do HTML tem de vencer, e sem esta linha ele NAO vence.
+   `.faixa { display: flex }` e `.vazio { display: flex }` sobrescrevem o
+   atributo em silencio: o elemento marcado como escondido continua na tela,
+   vazio, e ninguem ve erro nenhum. Foi assim que a faixa de "nao conseguimos
+   atualizar" apareceu como uma tarja em branco no topo do painel. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   /* fundo explicito: sem ele a pagina toma emprestado o fundo de quem hospeda */

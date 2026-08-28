@@ -1740,6 +1740,28 @@ def desarquivar(pid: str, usuario_id: int = DONO_LOCAL, con=None) -> None:
             con.close()
 
 
+def arquivadas_detalhe(usuario_id: int = DONO_LOCAL, con=None) -> list:
+    """O que `arquivadas` esconde, com o rastro junto — para a tela mostrar.
+
+    `arquivadas` devolve so o conjunto de ids, que e o que o motor de regras
+    precisa. A secao "Arquivados" da tela do projeto precisa de mais: o motivo
+    escrito na hora e a data. Sem os dois, "isto esta certo assim" vira um
+    sumico sem explicacao, e daqui a tres meses ninguem responde por que aquele
+    alerta parou de aparecer.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return [{"id": l[0], "motivo": l[1], "arquivado_em": l[2]}
+                for l in con.execute(
+                    "SELECT id, motivo, arquivado_em FROM pendencia_arquivada"
+                    " WHERE usuario_id = ? AND desarquivado_em IS NULL"
+                    " ORDER BY arquivado_em DESC", (usuario_id,))]
+    finally:
+        if fechar:
+            con.close()
+
+
 def arquivadas(usuario_id: int = DONO_LOCAL, con=None) -> set:
     fechar = con is None
     con = con or conectar()

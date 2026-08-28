@@ -3,1260 +3,1439 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HUB do dev</title>
-<link rel="icon" href="/painel-projetos.svg">
+<title>DERVS — painel</title>
+<!-- Cinto além da suspensória: o robots.txt impede a VISITA, este cabeçalho
+     impede a INDEXAÇÃO de um endereço que tenha vazado por outro caminho.
+     O servidor manda o mesmo em `X-Robots-Tag`. -->
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="/assets/favicon.svg">
+<link rel="stylesheet" href="/assets/dervs.css">
 <!--
-  HUB do dev — uma pergunta so: "o que precisa de mim agora?".
+  DERVS — "dá para confiar no que está no ar?"
 
-  A arquitetura da tela e deliberada e vem da pesquisa de 24/08/2026:
-    - CAIXA NO TOPO. O que pede acao ocupa o alto. O que esta saudavel nao ocupa
-      tela nenhuma. Rolagem mata habito: painel que exige rolar para achar o que
-      importa e aberto uma vez por semana e depois nunca mais.
-    - TABELA, NAO CARTAO. Uma linha por projeto, colapsada por padrao. Cartao
-      grande e bonito na primeira semana e custa rolagem todo dia depois.
-    - CARIMBO EM TODO NUMERO. Cada camada mostra ha quanto tempo foi medida e
-      esmaece quando envelhece. Se o painel mentir uma vez, o habito morre.
-    - MOSTRA O VELHO ENQUANTO BUSCA O NOVO. A tela nunca espera coleta.
+  Etapa 14 da Fatia 1. As telas, em português, na direção Torre de Controle.
+  O contrato desta tela é `docs/A-APLICACAO.md` (a fonte única) e
+  `docs/esteira/dervs/design.md` (aprovado, não refazer).
 
-  Sem build, sem dependencia externa, um arquivo so — a virtude do projeto.
+  AS QUATRO COISAS QUE ESTE ARQUIVO NÃO PODE ESQUECER:
+
+  1. NENHUMA COR LITERAL AQUI. A paleta inteira vive em `assets/dervs.css`, em
+     tokens, nos três blocos de tema. Cor no componente é sempre `var(--…)`.
+     `grep -coE '#[0-9a-fA-F]{3,8}|rgb\(|oklch\(' index.html` tem de imprimir 0.
+  2. O SELO NÃO É CALCULADO AQUI. Ele chega pronto em `/api/dados`, vindo de
+     `regras.selo_do_projeto`. Recalcular os quatro estados em JavaScript
+     criaria uma segunda cópia da regra mais importante do produto — e a cópia
+     que diverge é sempre a que ninguém lê.
+  3. NENHUM NÚMERO SEM CARIMBO. Todo valor na tela mostra quando foi medido.
+     Sem carimbo, um número velho é indistinguível de um número de agora.
+  4. NADA DE INGLÊS NA TELA. painel (não dashboard), publicar (não deploy),
+     verificação automática (não CI), computador (não máquina), carregando
+     (não loading), excluir (não deletar), entrar/sair (não login/logout).
+
+  Sem construção, sem dependência externa, um arquivo só.
 -->
 <style>
-:root{
-  color-scheme:light dark;
-  --bg:#f6f7f9; --painel:#fff; --borda:#e2e5ea; --texto:#12151a; --fraco:#5f6672;
-  --fraquinho:#8b93a1; --acento:#3b6ef5; --ok:#1a8a52; --alerta:#b8720b; --erro:#c8382f;
-  --grade:#eceff3; --sombra:0 1px 2px rgba(16,20,28,.06),0 4px 14px rgba(16,20,28,.05);
-  /* Tres tokens SO para texto pequeno sobre fundo claro. Os tons de cima foram
-     escolhidos para preencher area e borda, e medem 4,44:1 (--acento), 3,85:1
-     (--alerta) e 3,09:1 (--fraquinho) — abaixo dos 4,5:1 que a WCAG exige para
-     texto normal. Este projeto ja tinha aprendido isso uma vez, no link do PR. */
-  --selo-fundo:#2f57c4; --selo-texto:#fff;   /* 6,4:1  */
-  --alerta-texto:#8a5408;                    /* 6,26:1 */
-  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
-  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
-}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  --bg:#0d1014; --painel:#151a21; --borda:#252c36; --texto:#e6eaf0; --fraco:#98a1af;
-  --fraquinho:#6b7482; --acento:#6f97ff; --ok:#3fbb7a; --alerta:#e0a038; --erro:#ef6b60;
-  --grade:#1c222b; --sombra:0 1px 2px rgba(0,0,0,.4),0 6px 18px rgba(0,0,0,.28);
-  /* No escuro o selo inverte: fundo claro, texto escuro (6,85:1). Branco
-     sobre --acento aqui mediria 2,78:1 — reprovacao franca. */
-  --selo-fundo:#6f97ff; --selo-texto:#0d1014;
-  --alerta-texto:#e0a038;    /* 7,7:1 sobre --painel, ja passava */
-}}
-:root[data-theme="dark"]{
-  --bg:#0d1014; --painel:#151a21; --borda:#252c36; --texto:#e6eaf0; --fraco:#98a1af;
-  --fraquinho:#6b7482; --acento:#6f97ff; --ok:#3fbb7a; --alerta:#e0a038; --erro:#ef6b60;
-  --grade:#1c222b; --sombra:0 1px 2px rgba(0,0,0,.4),0 6px 18px rgba(0,0,0,.28);
-  /* No escuro o selo inverte: fundo claro, texto escuro (6,85:1). Branco
-     sobre --acento aqui mediria 2,78:1 — reprovacao franca. */
-  --selo-fundo:#6f97ff; --selo-texto:#0d1014;
-  --alerta-texto:#e0a038;    /* 7,7:1 sobre --painel, ja passava */
-}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--texto);font-family:var(--sans);
-  font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
-a{color:var(--acento)}
-.env{max-width:1200px;margin:0 auto;padding:20px 22px 80px}
-/* A faixa de ambiente. So aparece fora do servidor: quem esta vendo esta
-   tela entrou por uma porta que nao pede senha, e precisa saber disso. */
-.faixa-local{background:#3a2a05;color:#f0d488;border-bottom:1px solid #5c4409;text-align:center;padding:7px 12px;font-size:12px;letter-spacing:.14em;text-transform:uppercase}
+/* Só layout. A cor, a tipografia, o selo, o botão, o campo, a lista, a faixa e
+   o estado vazio vêm todos de `assets/dervs.css`. */
 
-header.topo{display:flex;align-items:flex-end;justify-content:space-between;
-  gap:20px;flex-wrap:wrap;margin-bottom:20px}
-h1{font-size:21px;margin:0;letter-spacing:-.02em;font-weight:650}
-.sub{color:var(--fraco);font-size:12.5px;margin-top:3px}
-.acoes{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-button.btn{font:inherit;font-size:12.5px;padding:6px 12px;border-radius:7px;
-  border:1px solid var(--borda);background:var(--painel);color:var(--texto);cursor:pointer}
-button.btn:hover{border-color:var(--acento)}
-button.btn:disabled{opacity:.5;cursor:progress}
-
-/* ------------------------------------------------------------- o briefing */
-/* A primeira coisa que o olho pega. Uma frase, escrita a partir do dado — se
-   ela nao mudar quando o dado muda, e decoracao, e decoracao no topo de um
-   painel operacional ensina a nao ler o topo. */
-.briefing{background:var(--painel);border:1px solid var(--borda);border-radius:11px;
-  padding:15px 17px;margin-bottom:16px;box-shadow:var(--sombra);
-  display:flex;gap:16px;align-items:center;flex-wrap:wrap}
-.briefing .frase{flex:1;min-width:min(100%,260px);font-size:16px;font-weight:500;
-  line-height:1.45}
-.briefing.urgente{border-left:3px solid var(--erro)}
-.briefing.calmo{border-left:3px solid var(--ok)}
-.placar{display:flex;gap:14px;align-items:center;flex-shrink:0}
-/* Menor e mais leve que a frase de proposito: o placar apoia, nao compete. */
-.placar .n{font-family:var(--mono);font-size:17px;font-weight:600;line-height:1.1}
-/* --fraco, nao --fraquinho: este rotulo e para LER (3,09:1 nao passa). O tom
-   mais claro fica reservado a borda e enfeite, como no resto do arquivo. */
-.placar .r{font-size:10.5px;color:var(--fraco);text-transform:uppercase;
-  letter-spacing:.05em;white-space:nowrap}
-.placar .peca{text-align:center}
-.placar .peca.mal .n{color:var(--erro)}
-.placar .peca.bem .n{color:var(--ok)}
-.linha-tendencia{display:block;flex-shrink:0}
-.seta{font-size:11px;font-family:var(--mono)}
-.seta.piorando{color:var(--erro)} .seta.melhorando{color:var(--ok)}
-.seta.estavel{color:var(--fraquinho)}
-/* Em 360px sobram ~282px uteis dentro do .briefing. O placar tem 2-3 pecas mais
-   96px de sparkline, tudo flex-shrink:0 — sem isto ele estoura a caixa e leva a
-   pagina inteira para a rolagem horizontal. O sparkline e o primeiro a sair:
-   e o que menos perde ao sumir, porque a seta ao lado diz a mesma direcao. */
-@media (max-width:420px){
-  .placar{flex-wrap:wrap;width:100%;gap:12px;justify-content:flex-start}
-  .linha-tendencia{display:none}
+.pular {
+  position: absolute;
+  left: -9999px;
+  top: var(--e2);
+  padding: var(--e2) var(--e4);
+  background: var(--fundo-elevado);
+  color: var(--acao);
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+}
+.pular:focus {
+  left: var(--e4);
+  z-index: 9;
 }
 
-/* ---------------------------------------------------------------- a caixa */
-h2.secao{font-size:12px;text-transform:uppercase;letter-spacing:.09em;
-  color:var(--fraco);font-weight:650;margin:0 0 10px}
-/* O selo de "nova" e a idade. Sem eles, uma coisa nascida ha uma hora e outra
-   aberta ha 23 dias ocupavam a mesma linha, do mesmo tamanho, na mesma cor. */
-.selo{font-size:10px;font-weight:650;text-transform:uppercase;letter-spacing:.05em;
-  background:var(--selo-fundo);color:var(--selo-texto);padding:1px 6px;border-radius:4px;
-  margin-left:7px;vertical-align:1px}
-.idade{color:var(--fraquinho)}
-.idade.velha{color:var(--alerta-texto)}
-/* O grupo: 3+ pendencias da mesma regra numa linha so. Herda o .item para nao
-   inventar um segundo vocabulario visual na mesma lista. */
-details.grupo{background:var(--painel);border:1px solid var(--borda);
-  border-left:3px solid var(--fraquinho);border-radius:9px;box-shadow:var(--sombra)}
-details.grupo.alta{border-left-color:var(--erro)}
-details.grupo.media{border-left-color:var(--alerta)}
-details.grupo.baixa{border-left-color:var(--fraquinho)}
-details.grupo>summary{cursor:pointer;padding:10px 13px;font-size:13.5px;
-  list-style:none;display:flex;align-items:center;gap:11px}
-details.grupo>summary::-webkit-details-marker{display:none}
-details.grupo>summary:hover{background:var(--grade);border-radius:7px}
-details.grupo>summary .conta-txt{flex:1;min-width:0}
-details.grupo>summary .abre{color:var(--fraquinho);font-size:11px;flex-shrink:0}
-details.grupo[open]>summary .abre::after{content:"▴"}
-details.grupo>summary .abre::after{content:"▾"}
-details.grupo .dentro{padding:0 10px 10px;display:flex;flex-direction:column;gap:6px}
-details.grupo .dentro .item{box-shadow:none;background:var(--bg)}
-.caixa{display:flex;flex-direction:column;gap:7px;margin-bottom:26px}
-.item{display:flex;gap:11px;align-items:center;background:var(--painel);
-  border:1px solid var(--borda);border-left:3px solid var(--fraquinho);
-  border-radius:9px;padding:10px 13px;box-shadow:var(--sombra)}
-.item.alta{border-left-color:var(--erro)}
-.item.media{border-left-color:var(--alerta)}
-.item.baixa{border-left-color:var(--fraquinho)}
-.item .corpo{flex:1;min-width:0}
-.item .txt{font-size:13.5px}
-.item .meta{font-size:11.5px;color:var(--fraquinho);margin-top:2px;
-  font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chip{font-family:var(--mono);font-size:11px;background:var(--grade);
-  padding:1px 6px;border-radius:4px;color:var(--fraco)}
-.item .botoes{display:flex;gap:6px;flex-shrink:0}
-button.agir{font:inherit;font-size:12.5px;padding:6px 13px;border-radius:7px;
-  border:1px solid var(--acento);background:var(--acento);color:#fff;cursor:pointer;
-  white-space:nowrap}
-button.agir:hover{filter:brightness(1.08)}
-button.agir:disabled{opacity:.55;cursor:progress}
-button.calar{font:inherit;font-size:12.5px;padding:6px 9px;border-radius:7px;
-  border:1px solid var(--borda);background:transparent;color:var(--fraco);cursor:pointer}
-.limpa{background:var(--painel);border:1px solid var(--borda);border-radius:9px;
-  padding:18px;text-align:center;color:var(--fraco);box-shadow:var(--sombra)}
-.limpa b{color:var(--ok)}
-details.gaveta>summary{font-weight:500;color:var(--fraco)}
-.caixa.dentro{padding:10px;border-top:1px solid var(--borda);margin-bottom:0;
-  background:var(--bg);content-visibility:auto;contain-intrinsic-size:auto none auto 400px}
-
-/* ---------------------------------------------------------------- a tabela */
-details.todos{background:var(--painel);border:1px solid var(--borda);
-  border-radius:10px;box-shadow:var(--sombra);overflow:hidden}
-details.todos>summary{cursor:pointer;padding:11px 14px;font-size:13px;
-  font-weight:600;list-style:none;display:flex;justify-content:space-between;gap:12px}
-details.todos>summary::-webkit-details-marker{display:none}
-details.todos>summary::after{content:"▾";color:var(--fraquinho);font-size:11px}
-details.todos[open]>summary::after{content:"▴"}
-details.todos>summary:hover{background:var(--grade)}
-.rolagem{overflow-x:auto;border-top:1px solid var(--borda);
-  /* Tabela colapsada e conteudo fora da dobra: o navegador so calcula o layout
-     dela quando o dono abre. contain-intrinsic-size evita o pulo de rolagem. */
-  content-visibility:auto;contain-intrinsic-size:auto none auto 520px}
-table{width:100%;border-collapse:collapse;font-size:12.5px}
-th{text-align:left;font-weight:600;color:var(--fraco);font-size:11px;
-  text-transform:uppercase;letter-spacing:.05em;padding:9px 12px;
-  border-bottom:1px solid var(--borda);white-space:nowrap}
-td{padding:8px 12px;border-bottom:1px solid var(--grade);white-space:nowrap}
-tr:last-child td{border-bottom:none}
-td.nome{font-weight:600}
-td.num{font-family:var(--mono);text-align:right}
-.pt{color:var(--ok)} .pt.mal{color:var(--erro)} .pt.meio{color:var(--alerta)}
-.tenue{color:var(--fraquinho)}
-.velho{opacity:.45}
-/* "?" nao e numero. Fica na cor de alerta e em italico para o olho nao
-   lê-lo como zero — que foi exatamente o defeito que esta tela tinha. */
-.nao-medi{color:var(--alerta-texto);font-style:italic;cursor:help}
-.peca.nm{color:var(--alerta-texto)}
-
-/* ------------------------------------------------------------------ paleta */
-.btn.busca{display:inline-flex;align-items:center;gap:9px;color:var(--fraco)}
-.btn.busca kbd{font-size:10px}
-kbd{font-family:var(--mono);font-size:10.5px;border:1px solid var(--borda);
-  border-radius:4px;padding:1px 5px;color:var(--fraquinho);background:var(--grade)}
-
-#paleta{width:min(620px,92vw);max-height:min(70vh,560px);padding:0;border:none;
-  border-radius:13px;background:var(--painel);color:var(--texto);
-  box-shadow:0 18px 60px rgba(0,0,0,.28);overflow:hidden;
-  /* margin auto + top fixo: a paleta abre onde o olho ja esta, nao no centro
-     vertical da tela, que num monitor grande fica longe demais da leitura. */
-  margin:12vh auto auto}
-#paleta::backdrop{background:rgba(0,0,0,.42)}
-#paleta .p-topo{display:flex;align-items:center;gap:10px;padding:13px 15px;
-  border-bottom:1px solid var(--borda)}
-#p-busca{flex:1;border:none;background:none;color:var(--texto);font:inherit;
-  font-size:15px;outline:none}
-#p-busca::placeholder{color:var(--fraquinho)}
-#p-lista{list-style:none;margin:0;padding:6px;overflow-y:auto;
-  max-height:calc(min(70vh,560px) - 104px)}
-#p-lista li{display:flex;align-items:baseline;gap:10px;padding:8px 11px;
-  border-radius:8px;cursor:pointer;scroll-margin:6px}
-#p-lista li[aria-selected="true"]{background:var(--grade)}
-#p-lista li .rot{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;font-size:13.5px}
-#p-lista li .sub{font-size:11px;color:var(--fraquinho);font-family:var(--mono);
-  white-space:nowrap}
-#p-lista li .selo{font-size:10px;text-transform:uppercase;letter-spacing:.04em;
-  color:var(--fraquinho);border:1px solid var(--borda);border-radius:99px;
-  padding:1px 7px;white-space:nowrap}
-#p-lista li.alta .selo{color:var(--erro);border-color:var(--erro)}
-#p-lista .vazio{padding:22px 13px;color:var(--fraquinho);font-size:13px;
-  cursor:default;justify-content:center}
-#paleta .p-rodape{display:flex;gap:14px;align-items:center;padding:9px 15px;
-  border-top:1px solid var(--borda);font-size:11px;color:var(--fraquinho)}
-#paleta .p-rodape span{display:inline-flex;gap:5px;align-items:center}
-#p-conta{margin-left:auto;font-family:var(--mono)}
-@media (prefers-reduced-motion:no-preference){
-  #paleta[open]{animation:sobe .13s ease-out}
-  @keyframes sobe{from{opacity:0;transform:translateY(-6px)}}
+/* A faixa de ambiente, injetada pelo servidor. Quem vê esta tela entrou por
+   uma porta que não pede senha e precisa saber disso. Ela NÃO usa `--estado-*`:
+   não é o selo de um projeto, é um aviso sobre a própria leitura. */
+.faixa-local {
+  padding: var(--e2) var(--e4);
+  border-bottom: var(--traco) solid var(--borda-forte);
+  background: var(--fundo-elevado);
+  color: var(--texto-suave);
+  text-align: center;
+  font-size: var(--fs-etiqueta);
+  font-weight: var(--peso-forte);
+  letter-spacing: var(--rastreio-etiqueta);
+  text-transform: uppercase;
 }
 
-/* A conta por trás da nota: o número é um botão que abre os critérios. */
-.conta-btn{background:none;border:none;padding:0;cursor:pointer;color:inherit;
-  font:inherit;border-bottom:1px dotted currentColor}
-.conta-btn:hover,.conta-btn:focus-visible{opacity:.75}
-tr.conta>td{white-space:normal;background:var(--grade);padding:11px 14px}
-tr.conta .pecas{display:flex;flex-wrap:wrap;gap:6px}
-tr.conta .peca{font-size:12px;padding:3px 9px;border-radius:99px;
-  border:1px solid var(--borda);display:inline-flex;gap:7px;align-items:baseline}
-tr.conta .peca i{font-style:normal;font-size:10.5px;color:var(--fraquinho);
-  font-family:var(--mono)}
-tr.conta .peca.ok{color:var(--ok)}
-tr.conta .peca.mal{color:var(--erro);border-color:var(--erro)}
-tr.conta .peca.na{color:var(--fraquinho);opacity:.7}
-tr.conta p{margin:10px 0 0;font-size:11.5px;font-family:var(--mono)}
-
-.rodape{margin-top:22px;font-size:12px;color:var(--fraquinho);
-  display:flex;gap:16px;flex-wrap:wrap;font-family:var(--mono)}
-.aviso{margin-top:14px;background:var(--painel);border:1px solid var(--erro);
-  border-radius:9px;padding:10px 13px;font-size:12.5px;color:var(--erro)}
-/* Correcao 2 do juiz de design (24/08/2026): troca SO a cor da borda. O aviso
-   do proprio painel-projetos nao e erro nenhum — e informacao — e pintar de
-   vermelho o que nao e problema ensina o dono a ignorar vermelho. */
-.aviso.neutro{border-color:var(--acento);color:var(--texto)}
-
-#recado{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);
-  background:var(--texto);color:var(--bg);padding:9px 16px;border-radius:8px;
-  font-size:13px;max-width:min(680px,90vw);box-shadow:var(--sombra);
-  opacity:0;pointer-events:none;transition:opacity .18s}
-#recado.ver{opacity:1}
-/* ---------------------------------------------------- formas de entrar --- */
-.dlg-pd{width:min(560px,92vw);max-height:min(84vh,720px);padding:0;border:none;
-  border-radius:14px;background:var(--painel);color:var(--texto);
-  box-shadow:var(--sombra)}
-.dlg-pd::backdrop{background:rgba(0,0,0,.42)}
-.dlg-pd .pd-topo{display:flex;align-items:center;justify-content:space-between;
-  gap:12px;padding:14px 16px;border-bottom:1px solid var(--borda)}
-.dlg-pd h2{margin:0;font-size:15px}
-.dlg-pd .pd-corpo{padding:16px;overflow-y:auto}
-.dlg-pd .pd-titulo{margin:20px 0 6px;font-size:13px;letter-spacing:.02em}
-.dlg-pd .pd-titulo:first-of-type{margin-top:0}
-.dlg-pd .pd-nota{margin:0 0 10px;font-size:12.5px;line-height:1.55;
-  color:var(--fraco)}
-.dlg-pd .pd-cobra{margin:0 0 16px;padding:11px 13px;border-radius:9px;
-  font-size:12.5px;line-height:1.55;
-  background:color-mix(in srgb,var(--alerta) 12%,transparent);
-  border:1px solid color-mix(in srgb,var(--alerta) 40%,transparent)}
-.dlg-pd .pd-lista{list-style:none;margin:0 0 14px;padding:0;
-  display:flex;flex-direction:column;gap:7px}
-.dlg-pd .pd-lista li{display:flex;align-items:center;gap:10px;
-  padding:9px 11px;border:1px solid var(--borda);border-radius:9px}
-.dlg-pd .pd-nome{font-weight:600;font-size:13px}
-.dlg-pd .pd-quando{margin-left:auto;font-size:11.5px;color:var(--fraco)}
-.dlg-pd .pd-vazia{justify-content:center;color:var(--fraco);font-size:12.5px}
-.dlg-pd .pd-nova{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
-.dlg-pd .pd-rotulo{flex-basis:100%;font-size:11.5px;color:var(--fraco)}
-.dlg-pd input{flex:1 1 12rem;font:inherit;font-size:13px;padding:8px 10px;
-  border:1px solid var(--borda);border-radius:8px;
-  background:var(--bg);color:var(--texto)}
-.dlg-pd .pd-codigos{margin:12px 0 0;padding-left:26px;
-  font-family:ui-monospace,Consolas,monospace;font-size:13.5px;line-height:1.9;
-  letter-spacing:.06em}
-.dlg-pd .pd-aviso:not(:empty){margin:16px 0 0;padding:9px 12px;
-  border-radius:8px;font-size:12.5px;
-  background:color-mix(in srgb,var(--texto) 7%,transparent)}
-.dlg-pd .pd-aviso.ruim{
-  background:color-mix(in srgb,var(--alerta) 14%,transparent)}
-@media (prefers-reduced-motion:no-preference){
-  .dlg-pd[open]{animation:sobe .13s ease-out}
+/* Largura máxima de leitura em 1100px. Nada de painel lateral fixo: em 360px
+   ele viraria gaveta, e gaveta escondida é onde informação vai morrer. */
+.limite {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 var(--e4);
 }
-#maq-dlg .maq-numero{margin:14px 0 10px;font-family:ui-monospace,Consolas,monospace;
-  font-size:30px;letter-spacing:.22em;text-align:center;font-weight:600}
-#maq-dlg .maq-linha{margin:0 0 10px;padding:10px 12px;border-radius:8px;
-  border:1px solid var(--borda);background:var(--bg);overflow-x:auto;
-  font-family:ui-monospace,Consolas,monospace;font-size:12.5px;
-  white-space:pre-wrap;word-break:break-all}
-@media (prefers-reduced-motion:reduce){#recado{transition:none}}
+
+header.topo {
+  border-bottom: var(--traco) solid var(--borda);
+  margin-bottom: var(--e6);
+}
+.topo .linha {
+  display: flex;
+  align-items: center;
+  gap: var(--e4);
+  flex-wrap: wrap;
+  padding: var(--e3) var(--e4);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.marca {
+  display: flex;
+  align-items: center;
+  gap: var(--e2);
+  font-weight: var(--peso-forte);
+  letter-spacing: var(--rastreio-etiqueta);
+  color: var(--texto);
+  text-decoration: none;
+}
+.marca svg { display: block; flex: none; }
+
+nav.mapa {
+  display: flex;
+  gap: var(--e1);
+  flex-wrap: wrap;
+  flex: 1;
+}
+nav.mapa a {
+  padding: var(--e2) var(--e3);
+  border: var(--traco) solid transparent;
+  border-radius: var(--raio);
+  color: var(--texto-suave);
+  text-decoration: none;
+  font-size: var(--fs-metadado);
+  font-weight: var(--peso-medio);
+  /* alvo de toque de 44px: --e2 em cima e embaixo + a altura da linha */
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+nav.mapa a:hover { background: var(--fundo-elevado); }
+/* O item ativo é `--acao`, nunca verde. Verde é estado saudável. */
+nav.mapa a[aria-current="page"] {
+  color: var(--acao);
+  border-color: var(--borda-forte);
+  background: var(--fundo-elevado);
+}
+.topo .canto { display: flex; gap: var(--e2); flex-shrink: 0; }
+
+/* Em 360px o cabeçalho inteiro quebrava em quatro linhas e comia 217px — um
+   terço da tela, antes de o primeiro projeto aparecer. Agora a marca e os dois
+   botões ficam na primeira linha, e a navegação vira uma faixa que rola DENTRO
+   de si mesma. A página continua sem rolar de lado. */
+@media (max-width: 720px) {
+  .topo .linha { padding: var(--e2) var(--e3); gap: var(--e2); }
+  .marca { order: 1; }
+  .topo .canto { order: 2; margin-left: auto; }
+  nav.mapa {
+    order: 3;
+    flex-basis: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  nav.mapa a { min-height: 36px; white-space: nowrap; }
+  .topo .canto .botao { padding: var(--e1) var(--e2); font-size: var(--fs-metadado); }
+}
+
+/* --- painel ------------------------------------------------------------- */
+
+/* A frase. Responde a pergunta das cinco da manhã antes de qualquer número. */
+.resumo { margin: 0 0 var(--e4); }
+
+/* A régua de contagem: quatro contadores, e cada um é um filtro. */
+.regua {
+  display: flex;
+  gap: var(--e2);
+  flex-wrap: wrap;
+  margin-bottom: var(--e4);
+}
+.regua .selo { min-height: 44px; }
+.regua .selo[aria-pressed="true"] { outline: var(--foco-largura) solid var(--acao); }
+
+/* Lista de linha cheia, de borda a borda, com zero vão entre as linhas e um
+   traço de 1px separando. O espaço generoso vive DENTRO de cada linha, nunca
+   entre elas: o olho varre como sumário de jornal. */
+.projetos { border-top: var(--traco) solid var(--borda); }
+.projetos > li { flex-wrap: wrap; align-items: flex-start; }
+.projetos .dizeres { flex: 1; min-width: min(100%, 220px); }
+.projetos .nome {
+  font-size: var(--fs-destaque);
+  font-weight: var(--peso-medio);
+  line-height: var(--lh-apertada);
+}
+.projetos .motivo {
+  color: var(--texto-suave);
+  font-size: var(--fs-metadado);
+  /* Em 360px o motivo quebra em até duas linhas e corta na terceira. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.projetos .abrir { flex: none; }
+
+/* Em 360px a linha tem de encolher, e o que sai é o botão de texto — não a
+   informação. O selo JÁ é o botão que abre a prova, e ele continua ali: manter
+   os dois empilhados custava 100px por linha e não cabia projeto nenhum na
+   tela. O carimbo sobe para a mesma linha do motivo pelo mesmo motivo. */
+@media (max-width: 720px) {
+  .projetos > li { gap: var(--e2); padding: var(--e2) var(--e3); }
+  .projetos .abrir { display: none; }
+  .projetos .motivo { -webkit-line-clamp: 2; }
+  .projetos .dizeres { min-width: 0; }
+  .projetos .nome { font-size: var(--fs-corpo); }
+}
+
+/* O esqueleto tem a altura exata das linhas, para a tela não saltar quando o
+   dado chegar. Nunca uma roda girando no meio da tela. */
+.esqueleto > li { display: block; }
+.esqueleto .barra {
+  height: 1em;
+  background: var(--fundo-elevado);
+  border-radius: var(--raio);
+}
+.esqueleto .barra + .barra { margin-top: var(--e2); width: 60%; }
+
+/* --- projeto ------------------------------------------------------------ */
+
+.cabeca {
+  display: flex;
+  align-items: center;
+  gap: var(--e3);
+  flex-wrap: wrap;
+  margin-bottom: var(--e2);
+}
+.colunas {
+  display: grid;
+  gap: var(--e6);
+  grid-template-columns: 1fr;
+  margin-top: var(--e6);
+}
+/* Uma coluna só até 720px; duas acima disso, nunca três. */
+@media (min-width: 721px) {
+  .colunas { grid-template-columns: 1fr 1fr; }
+}
+.coluna > h2 {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--fundo);
+  padding: var(--e2) 0;
+  border-bottom: var(--traco) solid var(--borda-forte);
+  margin-bottom: var(--e2);
+}
+.criterio { border-bottom: var(--traco) solid var(--borda); padding: var(--e3) 0; }
+.criterio > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--e3);
+  flex-wrap: wrap;
+  cursor: pointer;
+  list-style: none;
+  min-height: 44px;
+}
+.criterio > summary::-webkit-details-marker { display: none; }
+.criterio .rotulo { flex: 1; min-width: min(100%, 140px); }
+.criterio .prova {
+  margin-top: var(--e2);
+  padding: var(--e3);
+  background: var(--fundo-elevado);
+  border: var(--traco) solid var(--borda);
+  border-radius: var(--raio);
+  font-family: var(--fonte-mono);
+  font-size: var(--fs-metadado);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- computadores, conectar, entrada ------------------------------------ */
+
+.numerao {
+  font-family: var(--fonte-mono);
+  font-size: var(--fs-pagina);
+  font-weight: var(--peso-forte);
+  letter-spacing: 0.12em;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+.numerao.vencido { text-decoration: line-through; }
+
+/* O comando rola na horizontal DENTRO da própria caixa. A página nunca rola
+   de lado — comportamento transversal C do design. */
+.receita {
+  margin: var(--e2) 0;
+  padding: var(--e3);
+  background: var(--fundo-elevado);
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+  font-family: var(--fonte-mono);
+  font-size: var(--fs-metadado);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.pilha { display: flex; flex-direction: column; gap: var(--e4); }
+.acoes { display: flex; gap: var(--e2); flex-wrap: wrap; margin-top: var(--e3); }
+.acoes .botao { min-height: 44px; }
+.mole { color: var(--texto-suave); }
+
+/* A ação recomendada aperta em 360px, mas não some: ela é o motivo de a tela
+   existir às cinco da manhã. O que encolhe é o respiro, não a informação. */
+@media (max-width: 720px) {
+  #recomendada { padding: var(--e3); }
+  #recomendada p { margin-bottom: var(--e1); }
+  #recomendada .acoes { margin-top: var(--e2); }
+  #resumo { font-size: var(--fs-titulo); }
+}
+
+/* --- o recado ------------------------------------------------------------ */
+
+#recado {
+  position: fixed;
+  left: 50%;
+  bottom: var(--e4);
+  transform: translateX(-50%);
+  max-width: min(560px, 92vw);
+  padding: var(--e2) var(--e4);
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+  background: var(--fundo-elevado);
+  color: var(--texto);
+  font-size: var(--fs-metadado);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transicao);
+}
+#recado.ver { opacity: 1; }
+
+dialog {
+  width: min(520px, 92vw);
+  padding: var(--e6);
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+  background: var(--fundo-elevado);
+  color: var(--texto);
+}
+dialog::backdrop { background: var(--texto); opacity: 0.4; }
+dialog .acoes { margin-top: var(--e4); }
+
+main { padding-bottom: var(--e12); }
 </style>
 </head>
 <body>
 __FAIXA__
-<div class="env">
-  <header class="topo">
-    <div>
-      <h1>HUB do dev</h1>
-      <div class="sub" id="linhafina">carregando…</div>
+<a class="pular" href="#conteudo">Pular para o conteúdo</a>
+
+<header class="topo">
+  <div class="linha">
+    <!-- O símbolo vem INLINE, e não por `<img src>`, porque ele é pintado com
+         `currentColor`: dentro de um `<img>` o navegador isola o arquivo e a
+         cor cai no preto padrão do próprio SVG — preto sobre preto, invisível
+         no tema escuro. Inline ele herda `--acao` e inverte junto com o tema.
+         O arquivo `assets/logo.svg` continua existindo para quem precisar dele
+         solto (aba, compartilhamento).
+         E o nome é TEXTO de verdade, não desenho: letra virada em caminho sai
+         torta e não acompanha o peso da fonte. -->
+    <a class="marca" href="#/painel" aria-label="DERVS, ir para o painel">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"
+           focusable="false" fill="currentColor">
+        <rect x="2" y="4" width="17" height="3.5" rx="1"/>
+        <rect x="6" y="10.25" width="13" height="3.5" rx="1"/>
+        <rect x="2" y="16.5" width="17" height="3.5" rx="1"/>
+      </svg>
+      <span class="mono" aria-hidden="true">DERVS</span>
+    </a>
+    <nav class="mapa" aria-label="Telas">
+      <a href="#/painel" data-tela="painel">Painel</a>
+      <a href="#/conectar" data-tela="conectar">Conectar projeto</a>
+      <a href="#/computadores" data-tela="computadores">Computadores</a>
+      <a href="#/entrada" data-tela="entrada">Formas de entrar</a>
+    </nav>
+    <div class="canto">
+      <button class="botao botao--secundario" type="button" id="btn-tema">Tema</button>
+      <button class="botao botao--secundario" type="button" id="btn-sair">Sair</button>
     </div>
-    <div class="acoes">
-      <!-- O atalho precisa ser VISIVEL. Paleta que so existe no Ctrl+K e paleta
-           que o dono nunca descobre — e este dono nao vive em teclado. -->
-      <button class="btn busca" id="btn-paleta"
-              aria-keyshortcuts="Control+K Meta+K">
-        <span>Buscar projeto ou ação</span><kbd>Ctrl K</kbd>
-      </button>
-      <button class="btn" id="btn-tema">Tema</button>
-      <button class="btn" id="btn-portas">Formas de entrar</button>
-      <button class="btn" id="btn-maquinas">M&#225;quinas</button>
-      <button class="btn" id="btn-sair">Sair</button>
-    </div>
-  </header>
-
-  <!-- A regiao viva e SO a frase, e ela so e reescrita quando o texto muda de
-       verdade. O bloco inteiro com aria-live, redesenhado a cada 15 s, faria o
-       leitor de tela reanunciar frase, placar e seta em todo ciclo, tenha
-       mudado algo ou nao — isso e ruido constante, nao aviso. O placar fica
-       fora da regiao viva de proposito: ele repete em numero o que a frase ja
-       disse em portugues. -->
-  <div class="briefing" id="briefing">
-    <div class="frase" id="briefing-frase" aria-live="polite"></div>
-    <div class="placar" id="briefing-placar"></div>
   </div>
+</header>
 
-  <h2 class="secao">Precisa de você agora</h2>
-  <div class="caixa" id="caixa"></div>
+<!-- =========================================================================
+     OS QUATRO ESTADOS DO SELO, DECLARADOS AQUI E NÃO NO JAVASCRIPT.
 
-  <details class="todos" id="todos">
-    <summary><span id="rot-todos">Todos os projetos</span><span></span></summary>
-    <div class="rolagem">
-      <table>
-        <thead><tr>
-          <th>Projeto</th><th>Fase</th><th>Ramo</th><th>CI</th><th>A fazer</th><th>Contêineres</th>
-          <th>Sem commit</th><th>Sem enviar</th><th>Última atividade</th>
-          <th>Prontidão</th><th>Grafo</th><th>Medido</th>
-        </tr></thead>
-        <tbody id="linhas"></tbody>
-      </table>
-    </div>
-  </details>
+     Cada um traz os quatro sinais independentes — cor (pelo `data-selo`, que a
+     folha de estilo lê), forma (`.selo__forma`), glifo textual e rótulo
+     escrito. Nenhum é indispensável sozinho: a tela continua legível impressa
+     em preto e branco, para quem não distingue cores, e no leitor de tela.
 
-  <div id="falhas"></div>
+     Estão no HTML de propósito. Montados só em JavaScript, os quatro estados
+     não existiriam no arquivo — e o item 7 da lista de verificação do desenho
+     ("todo estado de selo tem, no HTML, cor + forma + glifo + rótulo") passaria
+     a ser uma promessa que nada confere.
+     ========================================================================= -->
+<template id="moldes-de-selo">
+  <span class="selo" data-selo="saudavel">
+    <span class="selo__forma" aria-hidden="true"></span>
+    <span class="selo__glifo" aria-hidden="true">[OK]</span>
+    <span class="selo__rotulo">saudável</span>
+  </span>
+  <span class="selo" data-selo="atencao">
+    <span class="selo__forma" aria-hidden="true"></span>
+    <span class="selo__glifo" aria-hidden="true">[!]</span>
+    <span class="selo__rotulo">atenção</span>
+  </span>
+  <span class="selo" data-selo="quebrado">
+    <span class="selo__forma" aria-hidden="true"></span>
+    <span class="selo__glifo" aria-hidden="true">[X]</span>
+    <span class="selo__rotulo">quebrado</span>
+  </span>
+  <span class="selo" data-selo="sem_dados">
+    <span class="selo__forma" aria-hidden="true"></span>
+    <span class="selo__glifo" aria-hidden="true">[···]</span>
+    <span class="selo__rotulo">sem dados</span>
+  </span>
+</template>
 
-  <div class="rodape" id="rodape"></div>
-</div>
+<main id="conteudo" class="limite">
 
-<!-- ------------------------------------------------------------- paleta ----
-     closedby="any" + showModal() dao de graca o que se costuma escrever a mao
-     e errado: foco preso dentro, Esc fechando, clique fora fechando, e camada
-     acima de tudo sem guerra de z-index. O fallback do closedby esta no JS. -->
-<dialog id="paleta" closedby="any" aria-label="Buscar projeto ou ação">
-  <div class="p-topo">
-    <input id="p-busca" type="text" role="combobox" autocomplete="off"
-           spellcheck="false" aria-expanded="true" aria-controls="p-lista"
-           aria-autocomplete="list" placeholder="Digite um projeto, ou o que quer fazer…">
-    <kbd>Esc</kbd>
-  </div>
-  <ul id="p-lista" role="listbox" aria-label="Resultados"></ul>
-  <div class="p-rodape">
-    <span><kbd>↑</kbd><kbd>↓</kbd> escolher</span>
-    <span><kbd>Enter</kbd> fazer</span>
-    <span><kbd>Esc</kbd> fechar</span>
-    <span id="p-conta"></span>
-  </div>
-</dialog>
-<!-- ------------------------------------------------- formas de entrar ----
-     Mesmo desenho da paleta: <dialog> nativo com closedby="any", que ja da
-     foco preso, Esc e clique fora sem uma linha de JS. -->
-<dialog id="portas-dlg" class="dlg-pd" closedby="any" aria-labelledby="portas-titulo">
-  <div class="pd-topo">
-    <h2 id="portas-titulo">Formas de entrar</h2>
-    <button class="btn" id="pd-fechar" type="button">Fechar</button>
-  </div>
+  <!-- ================================================== 2. Painel ======= -->
+  <section id="tela-painel">
+    <!-- A faixa do servidor mudo. A lista anterior CONTINUA na tela,
+         acinzentada: tela vazia é indistinguível de "você não tem projetos". -->
+    <p class="faixa" id="aviso-painel" hidden></p>
 
-  <div class="pd-corpo">
-    <!-- O aviso da forma que falta. Nao e decoracao: uma credencial so e uma
-         perda de distancia do bloqueio total, e o unico momento de resolver
-         isso e ANTES de a perda acontecer.
+    <h1 class="resumo" id="resumo" aria-live="polite">Carregando as medições…</h1>
 
-         O TEXTO E ESCRITO PELO JS, e nao fixo aqui, porque ZERO e UM sao
-         situacoes diferentes e a versao fixa mentia na primeira: com nenhuma
-         chave cadastrada ela dizia "voce tem so uma forma de entrar".
-
-         E ele NAO afirma mais que formatar o PC tranca a conta. Onde a chave
-         mora depende de o navegador te-la guardado no chip da maquina ou num
-         gerenciador que sincroniza — no segundo caso ela sobrevive ao format, e
-         o servidor nao tem como saber qual dos dois foi. Afirmar o pior como
-         se fosse certo e o mesmo erro de afirmar o melhor. -->
-    <p class="pd-cobra" id="pd-cobra" hidden></p>
-
-    <h3 class="pd-titulo">Chaves de acesso</h3>
-    <p class="pd-nota">
-      A chave fica dentro do aparelho e nunca sai dele. No seu PC quem a
-      destranca é o PIN do Windows; no celular, a digital. Nós guardamos só a
-      metade pública, que não abre nada.
-    </p>
-    <ul class="pd-lista" id="pd-lista"></ul>
-
-    <div class="pd-nova">
-      <label class="pd-rotulo" for="pd-apelido">Apelido deste aparelho</label>
-      <input id="pd-apelido" type="text" maxlength="60" spellcheck="false"
-             placeholder="PC da sala, celular, chave USB…">
-      <button class="btn primario" id="pd-cadastrar" type="button">
-        Cadastrar este aparelho
-      </button>
+    <!-- A ação recomendada: UMA, a mais grave. Painel com cinco chamadas de
+         igual peso não tem nenhuma. -->
+    <div class="cartao" id="recomendada" hidden style="margin-bottom: var(--e6)">
+      <p class="etiqueta">O que eu faria agora</p>
+      <p id="recomendada-texto"></p>
+      <p class="carimbo" id="recomendada-carimbo"></p>
+      <div class="acoes">
+        <button class="botao" type="button" id="recomendada-abrir">
+          Ver o que gerou este alerta
+        </button>
+      </div>
     </div>
 
-    <h3 class="pd-titulo">Códigos de papel</h3>
-    <p class="pd-nota">
-      Dez códigos de uso único, para o dia em que nenhum aparelho estiver à mão.
-      Aparecem <strong>uma vez só</strong> — imprima ou anote.
-      Restam <strong id="pd-restantes">—</strong>.
+    <div class="regua" id="regua" role="group" aria-label="Filtrar por estado"></div>
+
+    <ul class="lista projetos esqueleto" id="lista-projetos">
+      <li><span class="barra"></span><span class="barra"></span></li>
+      <li><span class="barra"></span><span class="barra"></span></li>
+      <li><span class="barra"></span><span class="barra"></span></li>
+    </ul>
+  </section>
+
+  <!-- ================================================== 3. Projeto ====== -->
+  <section id="tela-projeto" hidden>
+    <p><a href="#/painel">Voltar ao painel</a></p>
+    <div class="cabeca">
+      <h1 id="projeto-nome"></h1>
+      <span id="projeto-selo"></span>
+    </div>
+    <p id="projeto-porque" class="mole"></p>
+
+    <section style="margin-top: var(--e6)">
+      <h2>O que pede você</h2>
+      <ul class="lista" id="projeto-alertas"></ul>
+    </section>
+
+    <div class="colunas" id="projeto-colunas"></div>
+
+    <section style="margin-top: var(--e12)">
+      <h2>Arquivados</h2>
+      <div id="projeto-arquivados"></div>
+    </section>
+  </section>
+
+  <!-- ================================================== 6. Alerta ======= -->
+  <section id="tela-alerta" hidden>
+    <p><a href="#/painel">Voltar ao painel</a></p>
+    <h1 id="alerta-titulo"></h1>
+    <p id="alerta-texto"></p>
+    <p class="carimbo" id="alerta-carimbo"></p>
+    <div class="receita" id="alerta-detalhe" hidden></div>
+    <div class="acoes" id="alerta-acoes"></div>
+  </section>
+
+  <!-- ============================================ 4. Conectar projeto === -->
+  <section id="tela-conectar" hidden>
+    <h1>Conectar projeto</h1>
+    <p>
+      O navegador não enxerga o disco do seu computador, e o DERVS roda num
+      servidor. Quem lista as pastas com Git é o <strong>agente</strong> — o
+      programinha que roda no seu computador e só faz saídas, nunca abre porta.
     </p>
-    <button class="btn" id="pd-gerar" type="button">Gerar dez códigos novos</button>
-    <ol class="pd-codigos" id="pd-codigos" hidden></ol>
-    <p class="pd-nota" id="pd-queima" hidden>
-      Os códigos anteriores deixaram de valer neste instante.
+    <div class="pilha" id="conectar-corpo"></div>
+  </section>
+
+  <!-- ============================================== 5. Computadores ===== -->
+  <section id="tela-computadores" hidden>
+    <h1>Computadores</h1>
+    <p class="mole">
+      Quais estão conectados, e quando cada um deu notícia pela última vez.
     </p>
 
-    <p class="pd-aviso" id="pd-aviso" role="status" aria-live="polite"></p>
+    <div class="cartao" style="margin-bottom: var(--e6)">
+      <h2>Conectar um computador</h2>
+      <p class="mole">
+        Gere um número, e cole o comando abaixo dele no computador que vai
+        reportar. O número vale por poucos minutos e serve para um só.
+      </p>
+      <button class="botao" type="button" id="btn-gerar-numero">Gerar o número</button>
+      <div id="pareamento" hidden>
+        <p class="numerao" id="numero-pareamento"></p>
+        <p class="carimbo" id="numero-prazo"></p>
+        <div class="receita" id="comando-pareamento"></div>
+        <button class="botao botao--secundario" type="button" id="btn-copiar-comando">
+          Copiar comando
+        </button>
+      </div>
+    </div>
+
+    <h2>Conectados</h2>
+    <ul class="lista" id="lista-computadores"></ul>
+    <p class="carimbo" id="computadores-carimbo"></p>
+  </section>
+
+  <!-- ========================================== Formas de entrar ======== -->
+  <section id="tela-entrada" hidden>
+    <h1>Formas de entrar</h1>
+    <p class="mole">
+      Não há recuperação por e-mail aqui, de propósito: quem perde todas as
+      formas de entrar não abre a conta. Por isso vale ter duas.
+    </p>
+    <p class="faixa" id="pd-cobra" hidden></p>
+
+    <div class="cartao" style="margin-bottom: var(--e6)">
+      <h2>Chaves de acesso</h2>
+      <p class="mole">
+        A chave de acesso é o PIN do Windows ou a digital do celular. Não há
+        senha para vazar.
+      </p>
+      <ul class="lista" id="pd-lista"></ul>
+      <div class="campo" style="margin-top: var(--e4)">
+        <label for="pd-apelido">Apelido deste aparelho</label>
+        <input id="pd-apelido" type="text" maxlength="60" spellcheck="false"
+               placeholder="notebook do trabalho">
+      </div>
+      <div class="acoes">
+        <button class="botao" type="button" id="pd-cadastrar">
+          Cadastrar este aparelho
+        </button>
+      </div>
+    </div>
+
+    <div class="cartao">
+      <h2>Códigos do papel</h2>
+      <p class="mole">
+        Dez códigos de uso único, para o dia em que o aparelho não estiver com
+        você. Restam <strong id="pd-restantes">—</strong>.
+      </p>
+      <ol class="receita" id="pd-codigos" hidden></ol>
+      <p class="mole" id="pd-queima" hidden>
+        Anote agora. Eles não aparecem de novo, e cada um vale uma vez só.
+      </p>
+      <div class="acoes">
+        <button class="botao botao--secundario" type="button" id="pd-gerar">
+          Gerar dez códigos novos
+        </button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<p id="recado" role="status" aria-live="polite"></p>
+
+<!-- A confirmação nomeia o que morre, e o motivo é exigido: sumiço permanente
+     sem rastro não tem volta explicável daqui a três meses. -->
+<dialog id="dlg-arquivar" aria-labelledby="arq-titulo">
+  <h2 id="arq-titulo">Isto está certo assim?</h2>
+  <p id="arq-alvo" class="mole"></p>
+  <p>
+    Este alerta some da sua lista <strong>para sempre</strong>, e não volta
+    sozinho. Ele fica guardado em “Arquivados”, com o motivo e a data, e dá
+    para trazer de volta a qualquer momento.
+  </p>
+  <div class="campo">
+    <label for="arq-motivo">Por que isto está certo assim?</label>
+    <input id="arq-motivo" type="text" maxlength="300"
+           placeholder="este projeto não publica de propósito">
+    <span class="ajuda">
+      Uma linha. Não é auditoria — é para você lembrar em três meses.
+    </span>
   </div>
-</dialog>
-
-<!-- ----------------------------------------------------------- maquinas ----
-     As maquinas que reportam para este painel. O dono gera um numero de seis
-     digitos aqui e digita na outra maquina; a partir dai ela manda a medicao
-     sozinha.
-
-     O QUE ESTA TELA NAO FAZ: nao manda comando para maquina nenhuma. O sentido
-     e sempre da maquina para ca — ela reporta, este painel le. Foi isso que a
-     etapa 7 amputou, e nao volta por uma tela bonita. -->
-<dialog id="maq-dlg" class="dlg-pd" closedby="any" aria-labelledby="maq-titulo">
-  <div class="pd-topo">
-    <h2 id="maq-titulo">M&#225;quinas</h2>
-    <button class="btn" id="maq-fechar" type="button">Fechar</button>
-  </div>
-
-  <div class="pd-corpo">
-    <p class="pd-nota">
-      Cada computador que voc&#234; conecta aqui mede a si mesmo &#8212; git,
-      Docker, portas, chaves de <code>.env</code> &#8212; e manda o resultado
-      para este painel. O envio &#233; que conta como sinal de vida: se a
-      medi&#231;&#227;o parar, a m&#225;quina aparece parada, e n&#227;o
-      saud&#225;vel.
-    </p>
-    <ul class="pd-lista" id="maq-lista"></ul>
-
-    <h3 class="pd-titulo">Conectar uma m&#225;quina nova</h3>
-    <p class="pd-nota">
-      O n&#250;mero vale por <strong>dez minutos</strong> e serve
-      <strong>uma vez s&#243;</strong>.
-    </p>
-    <button class="btn primario" id="maq-gerar" type="button">
-      Gerar o n&#250;mero
+  <div class="acoes">
+    <button class="botao" type="button" id="arq-confirmar">Isto está certo assim</button>
+    <button class="botao botao--secundario" type="button" id="arq-cancelar">
+      Manter na lista
     </button>
-
-    <div id="maq-receita" hidden>
-      <p class="maq-numero" id="maq-numero"></p>
-      <p class="pd-nota">
-        Na outra m&#225;quina, dentro da pasta do DERVS, cole isto:
-      </p>
-      <pre class="maq-linha" id="maq-comando"></pre>
-      <p class="pd-nota">
-        Se der certo, ela imprime <strong>pareado com</strong> e, logo depois,
-        <strong>enviado: N projetos</strong>. Se disser que o n&#250;mero
-        n&#227;o serve, ele venceu &#8212; gere outro aqui.
-      </p>
-    </div>
-
-    <p class="pd-aviso" id="maq-aviso" role="status" aria-live="polite"></p>
   </div>
 </dialog>
+
+<!-- Título e rótulo do botão são preenchidos por quem chama. Botão genérico
+     ("Remover", "Confirmar", "OK") numa confirmação de gerar códigos mente
+     sobre o que vai acontecer — e cada botão deste produto diz o que faz. -->
+<dialog id="dlg-confirmar" aria-labelledby="conf-titulo">
+  <h2 id="conf-titulo"></h2>
+  <p id="conf-texto"></p>
+  <div class="acoes">
+    <button class="botao" type="button" id="conf-sim"></button>
+    <button class="botao botao--secundario" type="button" id="conf-nao"></button>
+  </div>
+</dialog>
+
 <script>
+/* ==========================================================================
+   O anti-falsificação DESTA sessão, injetado pelo servidor dentro da página.
+   Ele não é credencial: é a prova de que o pedido saiu desta tela.
+   ========================================================================== */
 const TOKEN = "__TOKEN__";
 const $ = s => document.querySelector(s);
-let ESTADO = null;
 
-/* ------------------------------------------------------------------ tempo */
-function haQuanto(iso){
-  if(!iso) return "—";
-  const s = (Date.now() - Date.parse(iso)) / 1000;
-  if (s < 0) return "agora";
-  if (s < 90) return Math.round(s) + " s";
-  if (s < 5400) return Math.round(s/60) + " min";
-  if (s < 172800) return Math.round(s/3600) + " h";
-  return Math.round(s/86400) + " d";
-}
-/* Cada camada tem sua propria expectativa de frescor. Passou do dobro dela, o
-   numero esmaece — o dono ve que aquilo esta velho antes de confiar nele. */
-const FRESCOR = {local: 120, github: 2400, pesado: 172800};
-function velho(iso, camada){
-  if(!iso) return true;
-  return (Date.now() - Date.parse(iso))/1000 > (FRESCOR[camada]||120) * 2;
+let ESTADO = null;        // o último /api/dados que chegou inteiro
+let FILTRO = null;        // null = todos; senão um dos quatro estados
+let COMPUTADORES = null;  // último /api/maquinas
+
+/* --------------------------------------------------------------- vocabulário
+   Os quatro estados, escritos. Quatro sinais independentes: cor, forma, glifo
+   e rótulo. Nenhum é indispensável sozinho — a tela continua legível em preto
+   e branco, para quem não distingue cores, e para leitor de tela. */
+const ESTADOS = {
+  saudavel:  { rotulo: "saudável",  muitos: "saudáveis",
+               frase: "Tudo o que dá para medir passou." },
+  atencao:   { rotulo: "atenção",   muitos: "em atenção",
+               frase: "Funciona, mas alguma coisa vai piorar." },
+  quebrado:  { rotulo: "quebrado",  muitos: "quebrados",
+               frase: "Alguma coisa reprovou agora." },
+  sem_dados: { rotulo: "sem dados", muitos: "sem dados",
+               frase: "Não consegui medir." }
+};
+/* A ordem de leitura do painel. O saudável fica por último de propósito: quem
+   está bem não precisa de atenção. */
+const ORDEM = ["quebrado", "atencao", "sem_dados", "saudavel"];
+
+/* ------------------------------------------------------------------- tempo */
+/* Tempo relativo até 24 horas; data absoluta depois disso. Número sempre com
+   unidade — "há 41 segundos", nunca "41". */
+/* Só `http:` e `https:` viram href. O endereço de um alerta vem do banco, e o
+   banco é alimentado pela coleta — hoje as duas fontes são seguras (a API do
+   GitHub, e `coletar_github.url_segura`, que já exige http/https). Mas isto é
+   uma trava de uma linha contra uma classe inteira: um `javascript:` gravado
+   ali um dia executaria na origem do painel, com o TOKEN anti-falsificação ao
+   alcance. Confia-se na fonte E se confere no destino. */
+function enderecoSeguro(url) {
+  try {
+    const e = new URL(url, location.origin).protocol;
+    return e === "http:" || e === "https:";
+  } catch (_) {
+    return false;
+  }
 }
 
-function recado(txt, erro){
+function haQuanto(iso) {
+  if (!iso) return "sem carimbo";
+  const t = Date.parse(iso);
+  if (isNaN(t)) return "sem carimbo";
+  const s = (Date.now() - t) / 1000;
+  // "há 0 segundos" é uma frase que ninguém diz. Abaixo de cinco, é "agora".
+  if (s < 5) return "agora";
+  if (s < 90) return "há " + Math.round(s) + " segundos";
+  if (s < 5400) return "há " + Math.round(s / 60) + " minutos";
+  if (s < 86400) return "há " + Math.round(s / 3600) + " horas";
+  return "em " + new Date(t).toLocaleDateString("pt-BR");
+}
+
+function hora(iso) {
+  const t = Date.parse(iso);
+  return isNaN(t) ? "—"
+    : new Date(t).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function recado(texto, ruim) {
   const el = $("#recado");
-  el.textContent = txt;
-  el.style.background = erro ? "var(--erro)" : "var(--texto)";
-  el.style.color = "#fff";
+  el.textContent = texto;
   el.classList.add("ver");
-  clearTimeout(recado._t);
-  recado._t = setTimeout(() => el.classList.remove("ver"), erro ? 9000 : 4000);
+  clearTimeout(recado.t);
+  recado.t = setTimeout(() => el.classList.remove("ver"), ruim ? 9000 : 4000);
 }
 
-/* ------------------------------------------------------------------ acoes */
-/* Na etapa 7 do DERVS o servidor deixou de executar comando. Foram embora com
-   ele o "Resolver", a fila, o grafo e os botoes que rodavam `git push`,
-   `docker compose` e o VS Code. Sobrou UMA escrita: esconder um alerta. */
-async function silenciar(id, horas){
-  const r = await fetch("/api/silenciar", {
-    method:"POST", headers:{"Content-Type":"application/json","X-Token":TOKEN},
-    body: JSON.stringify({id, horas})
-  });
-  return r.json();
-}
+/* --------------------------------------------------------------- o selo ---
+   Uma função só monta o selo, na tela inteira. Duas montagens divergem, e a
+   que divergir vai ser a que esquece o rótulo escrito — justamente o sinal que
+   sobrevive à impressão em preto e branco e ao leitor de tela. */
+const MOLDES = $("#moldes-de-selo").content;
 
-/* As duas acoes que sobreviveram sao as que o NAVEGADOR faz sozinho: abrir um
-   link e copiar um texto. O que precisava do servidor nao vira botao, e quem
-   decide isso e `temAcaoNaTela()` — um lugar so, obedecido pela caixa E pela
-   paleta. Duas listas divergiriam, e a divergencia apareceria como um botao
-   que nao faz nada. */
-function temAcaoNaTela(pend){
-  const t = pend && pend.acao && pend.acao.tipo;
-  return t === "abrir_url" || t === "copiar";
-}
+function selo(estado, { como = "button", aoClicar = null, texto = "" } = {}) {
+  const e = ESTADOS[estado] ? estado : "sem_dados";
+  const molde = MOLDES.querySelector('[data-selo="' + e + '"]').cloneNode(true);
 
-async function agir(pend){
-  const a = pend.acao;
-  if (a.tipo === "abrir_url"){ window.open(a.url, "_blank", "noopener"); return; }
-  if (a.tipo === "copiar"){
-    try { await navigator.clipboard.writeText(a.texto); recado("Copiado."); }
-    catch { recado("Não consegui copiar. O texto é: " + a.texto, true); }
-    return;
+  /* O molde nasce `<span>`. O selo é sempre um botão quando abre alguma coisa:
+     clicar tem de levar à prova que o gerou — selo que não se abre é palpite
+     com cara de dado. Quando não há para onde ir, ele fica `<span>` mesmo, e
+     não um botão desabilitado que o teclado percorre à toa. */
+  let el = molde;
+  if (como !== "span" && aoClicar) {
+    el = document.createElement("button");
+    el.type = "button";
+    el.className = molde.className;
+    el.dataset.selo = e;
+    el.append(...molde.childNodes);
+    el.addEventListener("click", aoClicar);
   }
-  recado("Esta ação saiu do painel: agora ela é feita por você, fora dele.", true);
-}
-
-async function calar(pend){
-  const r = await silenciar(pend.id, 24);
-  recado(r.ok ? "Escondida por 24 h." : "Não deu certo.", !r.ok);
-  carregar();
-}
-
-/* --------------------------------------------------------------- o briefing */
-function pecaDoPlacar(n, rotulo, classe){
-  const d = document.createElement("div");
-  d.className = "peca" + (classe ? " " + classe : "");
-  const a = document.createElement("div");
-  a.className = "n"; a.textContent = String(n);
-  const b = document.createElement("div");
-  b.className = "r"; b.textContent = rotulo;
-  d.append(a, b);
-  return d;
-}
-
-/* Sparkline em SVG puro: 60 pontos, sem biblioteca e sem requisicao. Diz a
-   FORMA da semana — subindo, descendo, plana — que e o que um numero sozinho
-   nao diz. Menos de dois pontos nao tem forma nenhuma: nao desenha. */
-function sparkline(serie){
-  const pts = (serie || []).map(x => x.valor);
-  if (pts.length < 2) return null;
-  const L = 96, A = 26, min = Math.min(...pts), max = Math.max(...pts);
-  const faixa = (max - min) || 1;
-  const x = i => (i / (pts.length - 1)) * (L - 2) + 1;
-  const y = v => A - 3 - ((v - min) / faixa) * (A - 6);
-  const d = pts.map((v, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1))
-                .join(" ");
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 " + L + " " + A);
-  svg.setAttribute("width", L); svg.setAttribute("height", A);
-  svg.setAttribute("class", "linha-tendencia");
-  svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label",
-    "Pendências abertas nos últimos 7 dias: de " + pts[0] + " para " + pts[pts.length-1]);
-  const p = document.createElementNS(svg.namespaceURI, "path");
-  p.setAttribute("d", d);
-  p.setAttribute("fill", "none");
-  p.setAttribute("stroke", "currentColor");
-  p.setAttribute("stroke-width", "1.5");
-  p.setAttribute("stroke-linejoin", "round");
-  p.setAttribute("stroke-linecap", "round");
-  p.setAttribute("opacity", ".55");
-  svg.append(p);
-  return svg;
-}
-
-let ULTIMO_BRIEFING = null;      // assinatura do que ja esta na tela
-
-function desenhaBriefing(d){
-  const t = d.tendencia || {abertas:{}};
-  const ab = t.abertas || {};
-
-  // Assinatura do conteudo. Sem ela, cada ciclo de 15 s reescreveria o mesmo
-  // texto: DOM a toa, e um aria-live reanunciando o que ninguem mudou.
-  const chave = JSON.stringify([d.briefing, ab.alta, t.novas_24h,
-                                t.resolvidas_7d, t.direcao,
-                                (t.serie || []).length]);
-  if (chave === ULTIMO_BRIEFING) return;
-  ULTIMO_BRIEFING = chave;
-
-  $("#briefing").className = "briefing " + (ab.alta ? "urgente" : "calmo");
-  $("#briefing-frase").textContent = d.briefing || "";
-
-  const placar = $("#briefing-placar");
-  placar.textContent = "";
-  placar.append(pecaDoPlacar(ab.alta || 0, "urgentes", ab.alta ? "mal" : "bem"));
-  if (t.novas_24h) placar.append(pecaDoPlacar(t.novas_24h, "novas hoje"));
-  // So aparece quando ha o que comemorar. Um "0 fechadas" permanente no topo da
-  // tela e uma repreensao diaria, nao uma informacao.
-  if (t.resolvidas_7d)
-    placar.append(pecaDoPlacar(t.resolvidas_7d, "fechadas · 7d", "bem"));
-
-  const linha = sparkline(t.serie);
-  if (linha){
-    const seta = document.createElement("span");
-    seta.className = "seta " + (t.direcao || "estavel");
-    // Decorativa: o aria-label do sparkline ao lado ja diz a mesma tendencia em
-    // palavras, e `title` nao e lido de forma confiavel nem existe no toque.
-    seta.setAttribute("aria-hidden", "true");
-    seta.textContent = t.direcao === "piorando" ? "▲"
-                     : t.direcao === "melhorando" ? "▼" : "—";
-    placar.append(linha, seta);
-  }
-}
-
-/* ------------------------------------------------------------------ a caixa */
-/* A idade em portugues. Silencio quando nao se sabe — nunca "0 dias", que e um
-   numero, e numero errado num painel custa mais caro que numero ausente. */
-function idadeEmTexto(p){
-  if (p.dias === null || p.dias === undefined){
-    // Idade exata desconhecida, mas a memoria sabe ha quanto tempo ELA existe:
-    // a pendencia que ja estava aqui na estreia tem no minimo essa idade.
-    const piso = p.dias_min || 0;
-    return piso ? "aberta há mais de " + piso + (piso === 1 ? " dia" : " dias") : "";
-  }
-  if (p.dias === 0) return "de hoje";
-  return "aberta há " + p.dias + (p.dias === 1 ? " dia" : " dias");
-}
-
-const gravDaLinha = l => l.tipo === "grupo" ? l.gravidade : l.pendencia.gravidade;
-const quantasNaLinha = l => l.tipo === "grupo" ? l.n : 1;
-
-/* Uma linha de grupo: 3+ pendencias da mesma regra dobradas numa so.
-   <details> de proposito, e nao um painel escrito a mao: o Ctrl+F do navegador
-   acha o que esta la dentro sem o dono precisar abrir. */
-function linhaDeGrupo(g){
-  const det = document.createElement("details");
-  det.className = "grupo " + g.gravidade;
-  const s = document.createElement("summary");
-
-  // Sem selo de contagem ao lado: a frase JA comeca com o numero ("10 projetos
-  // com..."). Repetir viraria "10x  10 projetos com...  Ver 10" — tres vezes o
-  // mesmo dado na mesma linha, que e ruido com cara de organizacao.
-  const txt = document.createElement("span");
-  txt.className = "conta-txt";
-  txt.textContent = g.texto;
-
-  const abre = document.createElement("span");
-  abre.className = "abre";
-  abre.textContent = g.acao.rotulo + " ";
-
-  s.append(txt, abre);
-  det.append(s);
-
-  const dentro = document.createElement("div");
-  dentro.className = "dentro";
-  itensEm(dentro, g.itens || []);
-  det.append(dentro);
-  return det;
-}
-
-function linhasEm(caixa, linhas){
-  for (const l of linhas){
-    if (l.tipo === "grupo") caixa.append(linhaDeGrupo(l));
-    else itensEm(caixa, [l.pendencia]);
-  }
-}
-
-function desenhaCaixa(d){
-  const caixa = $("#caixa");
-  caixa.textContent = "";
-  const linhas = d.grupos || [];
-  if (!linhas.length){
-    const v = document.createElement("div");
-    v.className = "limpa";
-    v.innerHTML = "<b>Caixa limpa.</b> Nenhum projeto está esperando você agora.";
-    caixa.append(v);
-    return;
-  }
-  // So o urgente fica a vista. O resto entra numa gaveta fechada — 25 itens
-  // empilhados sao a rolagem que faz o dono parar de abrir o painel.
-  const altas = linhas.filter(l => gravDaLinha(l) === "alta");
-  const resto = linhas.filter(l => gravDaLinha(l) !== "alta");
-  linhasEm(caixa, altas);
-  if (!altas.length){
-    const v = document.createElement("div");
-    v.className = "limpa";
-    v.innerHTML = "<b>Nada urgente.</b> O que sobrou pode esperar.";
-    caixa.append(v);
-  }
-  if (resto.length){
-    // A contagem conta PENDENCIAS, nao linhas: o dono precisa saber que sao 21
-    // coisas ali dentro, mesmo que estejam dobradas em 4 linhas.
-    const quantas = resto.reduce((s, l) => s + quantasNaLinha(l), 0);
-    const det = document.createElement("details");
-    det.className = "todos gaveta";
-    const s = document.createElement("summary");
-    s.append(document.createTextNode("Mais " + quantas +
-      (quantas === 1 ? " item que pode esperar" : " itens que podem esperar")));
-    s.append(document.createElement("span"));
-    det.append(s);
-    const dentro = document.createElement("div");
-    dentro.className = "caixa dentro";
-    linhasEm(dentro, resto);
-    det.append(dentro);
-    caixa.append(det);
-  }
-}
-
-function itensEm(caixa, pend){
-  for (const p of pend){
-    const li = document.createElement("div");
-    li.className = "item " + p.gravidade;
-
-    const corpo = document.createElement("div");
-    corpo.className = "corpo";
-    const txt = document.createElement("div");
-    txt.className = "txt";
-    txt.textContent = p.texto;
-    // Nasceu nas ultimas 24 h: selo. E o unico jeito de a lista distinguir o
-    // que chegou hoje do que apodrece ha semanas sem obrigar a ler as datas.
-    if (p.nova){
-      const selo = document.createElement("span");
-      selo.className = "selo";
-      selo.textContent = "nova";
-      txt.append(selo);
-    }
-    corpo.append(txt);
-
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = (p.projeto ? p.projeto + " · " : "") + (p.detalhe || p.regra);
-    const quando = idadeEmTexto(p);
-    if (quando){
-      meta.append(document.createTextNode(" · "));
-      const i = document.createElement("span");
-      // Acima de 14 dias a idade muda de cor: nesse ponto ela deixou de ser
-      // informacao e virou a propria pendencia.
-      i.className = "idade" + ((p.dias >= 14 || p.dias_min >= 14) ? " velha" : "");
-      i.textContent = quando;
-      meta.append(i);
-    }
-    corpo.append(meta);
-    li.append(corpo);
-
-    const botoes = document.createElement("div");
-    botoes.className = "botoes";
-    if (temAcaoNaTela(p)){
-      const b = document.createElement("button");
-      b.className = "agir";
-      b.textContent = p.acao.rotulo;
-      b.addEventListener("click", () => agir(p));
-      botoes.append(b);
-    }
-
-    const c = document.createElement("button");
-    c.className = "calar";
-    c.title = "Esconder por 24 horas";
-    c.textContent = "×";
-    c.addEventListener("click", () => calar(p));
-    botoes.append(c);
-    li.append(botoes);
-    caixa.append(li);
-  }
-}
-
-/* ----------------------------------------------------------------- a tabela */
-function celula(texto, classe){
-  const td = document.createElement("td");
-  if (classe) td.className = classe;
-  td.textContent = texto;
-  return td;
-}
-
-function ciTexto(p){
-  const gh = p.github;
-  if (!gh) return "—";
-  const c = gh.ci || {};
-  if (c.conclusao === "failure") return "falhou";
-  if (c.conclusao === "success") return "passou";
-  return c.estado_bruto ? c.estado_bruto.toLowerCase() : "sem CI";
-}
-
-/* ------------------------------------------------------- conta da prontidão
-   A nota aparecia como um número solto ("64%", em vermelho) e nada mais. Número
-   sem conta não é medida: é acusação. Clicar abre a lista dos critérios em três
-   estados — feito, falta, e NÃO SE APLICA, que é o estado que faltava existir.  */
-function pecaDoCriterio(i){
-  const el = document.createElement("span");
-  // "não se aplica" e "não consegui medir" sao coisas opostas: a primeira diz
-  // que o criterio nao cabe a este projeto, a segunda que ele cabe e eu fiquei
-  // cega. Confundir as duas era conceder em silencio o ponto de segurança.
-  const estado = i.nao_medido ? "nm" : !i.aplica ? "na" : i.ok ? "ok" : "mal";
-  el.className = "peca " + estado;
-  el.textContent = (estado === "ok" ? "✓ " : estado === "mal" ? "✗ " : estado === "nm" ? "? " : "— ") + i.rotulo;
-  const nota = document.createElement("i");
-  nota.textContent = i.nao_medido
-    ? "não consegui medir"
-    : !i.aplica
-    ? (i.manual ? "desligado por você" : "não se aplica")
-    : (i.manual ? i.peso + " pt · exigido por você" : i.peso + " pt");
-  el.append(nota);
+  if (texto) el.querySelector(".selo__rotulo").textContent = texto;
   return el;
 }
 
-function linhaDaConta(pr){
-  const tr = document.createElement("tr");
-  tr.className = "conta";
-  const td = document.createElement("td");
-  td.colSpan = 12;   // acompanha o <thead>: mudou coluna la, muda aqui
-
-  const caixa = document.createElement("div");
-  caixa.className = "pecas";
-  for (const i of pr.itens || []) caixa.append(pecaDoCriterio(i));
-  td.append(caixa);
-
-  const fora = (pr.itens || []).filter(i => !i.aplica && !i.nao_medido).length;
-  const cego = (pr.nao_medido || []).length;
-  const p = document.createElement("p");
-  p.className = "tenue";
-  p.textContent = pr.pontos + " de " + pr.total + " pontos aplicáveis"
-    + (fora ? " · " + fora + " critério(s) não entram na conta deste projeto" : "")
-    + (cego ? " · " + cego + " critério(s) ficaram SEM VEREDITO: não consegui medir" : "")
-    + " · ajuste em casos.json → \"prontidao\"";
-  td.append(p);
-
-  tr.append(td);
-  return tr;
+/* ------------------------------------------------------------------ rotas */
+/* Endereço por âncora, e não por caminho: o servidor tem uma rota de página só
+   (`/`), e é bom que continue assim — cada caminho novo é superfície nova a
+   defender. O `robots.txt` já bloqueia /painel, /projeto e /maquinas para a
+   Fatia 2, quando essas telas ganharem endereço próprio. */
+function rota() {
+  const cru = (location.hash || "#/painel").slice(2).split("/");
+  return { tela: cru[0] || "painel", alvo: decodeURIComponent(cru[1] || "") };
 }
 
-/* A tabela inteira e redesenhada de 15 em 15 segundos (setInterval la embaixo).
-   Sem esta lista, a gaveta que o dono acabou de abrir fechava sozinha na cara
-   dele no meio da leitura. Guardamos por NOME do projeto, nao por elemento:
-   os elementos morrem a cada redesenho, o nome sobrevive. */
-const CONTAS_ABERTAS = new Set();
-
-function celulaProntidao(pr, linha, nome){
-  const td = document.createElement("td");
-  td.className = "num pt " + (pr.pct >= 80 ? "" : pr.pct >= 55 ? "meio" : "mal");
-  if (pr.pct == null){ td.textContent = "—"; return td; }
-
-  const b = document.createElement("button");
-  b.className = "conta-btn";
-  b.textContent = pr.pct + "%";
-  b.setAttribute("aria-expanded", String(CONTAS_ABERTAS.has(nome)));
-  // Nota com criterio sem veredito nao e a mesma nota. O asterisco e o aviso
-  // de que ela foi calculada sobre menos do que deveria.
-  const faltam = (pr.nao_medido || []).length;
-  if (faltam){
-    b.textContent = pr.pct + "%*";
-    b.title = "nota parcial: " + faltam + " critério(s) não pude medir";
-  } else {
-    b.title = "Ver de que é feita esta nota";
+function mostrar(tela) {
+  for (const s of document.querySelectorAll("main > section")) {
+    s.hidden = s.id !== "tela-" + tela;
   }
-  b.onclick = () => {
-    const conta = linha.nextElementSibling;
-    if (conta && conta.classList.contains("conta")){
-      conta.remove();
-      CONTAS_ABERTAS.delete(nome);
-      b.setAttribute("aria-expanded", "false");
-    } else {
-      linha.after(linhaDaConta(pr));
-      CONTAS_ABERTAS.add(nome);
-      b.setAttribute("aria-expanded", "true");
-    }
-  };
-  td.append(b);
-  return td;
-}
-
-function desenhaTabela(projetos){
-  const tb = $("#linhas");
-  tb.textContent = "";
-  for (const p of projetos){
-    const g = p.git || {}, pr = p.prontidao || {};
-    const tr = document.createElement("tr");
-    tr.append(celula(p.nome, "nome"));
-    tr.append(celula(p.fase || "—", "tenue"));
-    // Git que nao respondeu: "—" mentiria de novo (parece "nao tem"), e 0
-    // mentiria pior (parece medido). "?" com explicacao ao passar o mouse.
-    const semGit = g.medido === false;
-    const nm = (classe) => {
-      const td = celula("?", (classe || "") + " nao-medi");
-      td.title = "não consegui ler o git deste projeto — nada aqui foi medido";
-      return td;
-    };
-    tr.append(semGit ? nm("tenue") : celula(g.branch || "—", "tenue"));
-
-    const ci = celula(ciTexto(p));
-    if (ciTexto(p) === "falhou") ci.style.color = "var(--erro)";
-    else if (ciTexto(p) === "passou") ci.style.color = "var(--ok)";
-    else ci.className = "tenue";
-    tr.append(ci);
-
-    // A FAZER: issues abertas no GitHub. Fato do projeto, nao alarme — por
-    // isso mora aqui na tabela e NAO vira pendencia: todo repositorio vivo tem
-    // issue aberta o tempo todo, e uma caixa de entrada que repete isso em 17
-    // projetos ensina o dono a ignorar a caixa.
-    //
-    // Tres estados diferentes, e achatar os tres num "—" foi o defeito que este
-    // painel ja teve: sem camada do GitHub (nao coletei), total ausente (a
-    // consulta veio degradada), e zero de verdade (conferi, nao ha nada).
-    const gh = p.github || null;
-    const nIssues = gh ? gh.issues_total : undefined;
-    let tdIssues;
-    if (!gh){
-      tdIssues = celula("—", "num tenue");
-    } else if (nIssues == null){
-      tdIssues = celula("?", "num nao-medi");
-      tdIssues.title = "não consegui ler as issues deste repositório";
-    } else if (nIssues === 0){
-      tdIssues = celula("—", "num tenue");
-      tdIssues.title = "nenhuma issue aberta";
-    } else {
-      tdIssues = celula(String(nIssues), "num");
-      tdIssues.style.cursor = "pointer";
-      tdIssues.title = "abrir as issues no GitHub";
-      // A URL vem montada pelo coletor a partir do slug, nao de texto de
-      // terceiro — o titulo da issue nao entra em lugar nenhum desta linha.
-      if (gh.issues_url) tdIssues.onclick = () => window.open(gh.issues_url, "_blank", "noopener");
-    }
-    tr.append(tdIssues);
-
-    // Quantos containers SAUDAVEIS o projeto tem agora. containers_esperados e
-    // uma lista de nomes a casar, nao uma quantidade — mostrar "10/1" mentia.
-    const vivos = (p.containers||[]).filter(c => c.saudavel && !c.reiniciando).length;
-    const esperaContainer = (p.containers_esperados||[]).length > 0;
-    const cel = celula(vivos || (esperaContainer ? "0" : "—"), "num");
-    if (esperaContainer && !vivos && p.aberto_no_editor) cel.style.color = "var(--erro)";
-    else cel.classList.add("tenue");
-    tr.append(cel);
-
-    if (semGit){
-      tr.append(nm("num")); tr.append(nm("num")); tr.append(nm("num"));
-    } else {
-      tr.append(celula(g.sujos || "—", "num"));
-      tr.append(celula(g.ahead || "—", "num"));
-      tr.append(celula(g.dias_parado != null ? g.dias_parado + " d" : "—", "num tenue"));
-    }
-
-    tr.append(celulaProntidao(pr, tr, p.nome));
-
-    const gr = p.grafo || {};
-    tr.append(celula(gr.indexado ? gr.dias + " d" : "sem", "num tenue"));
-
-    const carimbo = celula(haQuanto((p.medido_em||{}).local), "num tenue");
-    if (velho((p.medido_em||{}).local, "local")) carimbo.classList.add("velho");
-    tr.append(carimbo);
-    tb.append(tr);
-    // Reabre a conta que o dono ja tinha aberto antes deste redesenho.
-    if (CONTAS_ABERTAS.has(p.nome)) tb.append(linhaDaConta(pr));
-  }
-  $("#rot-todos").textContent = "Todos os projetos (" + projetos.length + ")";
-}
-
-/* ---------------------------------------------------------------- carregar */
-async function carregar(){
-  let d;
-  try { d = await (await fetch("/api/dados")).json(); }
-  catch(e){ $("#linhafina").textContent = "servidor fora do ar — " + e.message; return; }
-  ESTADO = d;
-
-  desenhaBriefing(d);
-  desenhaCaixa(d);
-  desenhaTabela(d.projetos);
-
-  const altas = d.pendencias.filter(p => p.gravidade === "alta").length;
-  $("#linhafina").textContent =
-    d.projetos.length + " projetos · " + d.pendencias.length + " pendência(s), "
-    + altas + " urgente(s) · git medido há " + haQuanto(d.infra_medido_em);
-
-  const q = d.quota;
-  const inf = d.infra || {};
-  $("#rodape").textContent =
-    // Mesmo tratamento das portas: Docker mudo nao pode virar "0 contêineres".
-    (inf.docker_mudo ? "contêineres: não medido · "
-                       : (inf.containers||[]).length + " contêineres · ")
-    // null = o coletor nao conseguiu medir. "0 portas" seria mentira com cara
-    // de medicao: o rodape diz que nao sabe, e nao um numero inventado.
-    + (inf.portas == null ? "portas: não medido" : inf.portas.length + " portas escutando")
-    + (q ? " · Actions " + q.pct + "% de " + q.cota + " min" : "");
-
-  const falhas = $("#falhas");
-  falhas.textContent = "";
-  for (const [camada, erro] of Object.entries(d.falhas_de_coleta || {})){
-    const div = document.createElement("div");
-    div.className = "aviso";
-    div.textContent = "A coleta da camada " + camada + " falhou — os números dela "
-      + "estão velhos, não zerados. Motivo: " + erro;
-    falhas.append(div);
+  for (const a of document.querySelectorAll("nav.mapa a")) {
+    if (a.dataset.tela === tela) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
   }
 }
 
-/* ------------------------------------------------------------------- botoes */
-$("#btn-tema").addEventListener("click", () => {
-  const atual = document.documentElement.getAttribute("data-theme");
-  const novo = atual === "dark" ? "light" : "dark";
-  document.documentElement.setAttribute("data-theme", novo);
-  try { localStorage.setItem("tema", novo); } catch {}
-});
-
-/* Encerra a sessao NO SERVIDOR e nao so no navegador: apagar o cookie daqui
-   deixaria o registro vivo do outro lado, e ele voltaria a valer no proximo
-   pedido feito com a mesma sessao. O recarregar mostra a capa de novo. */
-$("#btn-sair").addEventListener("click", async () => {
-  const b = $("#btn-sair");
-  b.disabled = true;
-  try { await fetch("/sair", { method: "POST" }); } catch {}
-  location.reload();
-});
-try {
-  const t = localStorage.getItem("tema");
-  if (t) document.documentElement.setAttribute("data-theme", t);
-  const aberto = localStorage.getItem("todos-aberto");
-  if (aberto === "1") $("#todos").open = true;
-} catch {}
-$("#todos").addEventListener("toggle", () => {
-  try { localStorage.setItem("todos-aberto", $("#todos").open ? "1" : "0"); } catch {}
-});
-
-/* --------------------------------------------------------- paleta (Ctrl+K)
-   Porta de entrada unica: digitar "dents" e cair no projeto, digitar "subir" e
-   subir o contêiner. Com 17 repositorios, menu em arvore vira caca ao tesouro.
-
-   Implementacao propria de proposito: o projeto e sem build e sem dependencia,
-   e cmdk/kbar custariam as duas coisas por ~200 linhas que sabemos escrever.
-
-   A paleta NAO tem acao propria nenhuma. Ela so encontra e dispara o que ja
-   existe — mesmo `agir()`, mesma lista branca do servidor. Se ela pudesse
-   fazer algo que a tela nao faz, viraria uma segunda superficie de risco para
-   revisar; assim, o que vale para a caixa vale para ela, de graca. */
-const paleta = $("#paleta"), pBusca = $("#p-busca"), pLista = $("#p-lista");
-let pItens = [], pAtivo = 0;
-
-/* "Ajudei-Saúde" tem de casar com "ajudei saude": sem isso o dono digita o
-   nome do projeto dele, sem acento e sem hifen, e a paleta responde "nada". */
-const semAcento = s => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "")
-  .toLowerCase().replace(/[-_./]+/g, " ").trim();
-
-function pontua(alvo, termo){
-  if (!termo) return 1;
-  const a = semAcento(alvo), t = semAcento(termo);
-  if (a === t) return 1000;
-  if (a.startsWith(t)) return 500 - a.length;
-  const i = a.indexOf(t);
-  if (i >= 0) return 300 - i;
-  // Ultimo recurso: as letras aparecem na ordem ("wsmed" acha "workspace-
-  // medconsultoria"). Vale menos que qualquer casamento literal.
-  let j = 0;
-  for (const c of a) if (c === t[j]) j++;
-  return j === t.length ? 40 : -1;
+function navegar() {
+  const { tela, alvo } = rota();
+  switch (tela) {
+    case "projeto":      mostrar("projeto"); pintarProjeto(alvo); break;
+    case "alerta":       mostrar("alerta"); pintarAlerta(alvo); break;
+    case "conectar":     mostrar("conectar"); pintarConectar(); break;
+    case "computadores": mostrar("computadores"); carregarComputadores(); break;
+    case "entrada":      mostrar("entrada"); pdCarregar(); break;
+    default:             mostrar("painel"); pintarPainel(); break;
+  }
+  window.scrollTo(0, 0);
 }
 
-/* Um comando = rotulo, subtitulo, selo e o que fazer.
-   `chave` e o nome cru do projeto, so no comando de abrir: e o que faz "digitar
-   dents e cair no projeto" (a especificacao) vencer a pendencia do dents, que
-   tambem tem "dents" no meio do texto. Vale so para nome digitado inteiro ou
-   pelo comeco — em busca por letras soltas a pendencia continua ganhando, que e
-   o certo: ali o dono nao sabe o nome, esta procurando o que precisa dele. */
-function cmd(rot, sub, selo, faz, classe, chave){
-  return {rot, sub, selo, faz, classe: classe || "", chave: chave || ""};
+/* ================================================== 2. Painel ============ */
+
+/* A pior pendência de um projeto, entre as que ainda pintam o selo. É ela que
+   escreve o motivo em uma frase. */
+const PESO = { alta: 0, media: 1, baixa: 2 };
+function piorDe(nome) {
+  let pior = null;
+  for (const p of (ESTADO.pendencias || [])) {
+    if (p.projeto !== nome) continue;
+    if (pior === null || (PESO[p.gravidade] ?? 9) < (PESO[pior.gravidade] ?? 9)) pior = p;
+  }
+  return pior;
 }
-const BONUS_NOME = 400;
 
-function comandosDe(d){
-  const c = [];
+function carimboDe(p) {
+  const c = p.medido_em || {};
+  const quais = Object.values(c).filter(Boolean).map(Date.parse).filter(t => !isNaN(t));
+  return quais.length ? new Date(Math.max(...quais)).toISOString() : "";
+}
 
-  // 1. As pendencias primeiro: e a pergunta que o HUB existe para responder.
-  //    So as que ainda tem acao de tela. A paleta nao pode oferecer o que o
-  //    botao nao oferece mais — senao ela vira exatamente a porta dos fundos
-  //    que o bloco acima jura nao ser.
-  for (const p of d.pendencias || []){
-    if (!temAcaoNaTela(p)) continue;
-    c.push(cmd(p.acao.rotulo + ": " + p.texto, p.projeto || "a máquina",
-               p.gravidade === "alta" ? "urgente" : "pendência",
-               () => agir(p), p.gravidade));
+/* A frase de resumo, em linguagem humana, escrita a partir do dado. Se ela não
+   mudar quando o dado muda, é decoração — e decoração no topo de um painel
+   operacional ensina a pessoa a não ler o topo. */
+function fraseDeResumo(conta, total) {
+  if (!total) return "Você ainda não conectou nenhum projeto.";
+
+  /* Tudo bem é o caso mais curto, e merece a frase mais curta. */
+  if (conta.saudavel === total) {
+    return total === 1 ? "O seu projeto está bem."
+                       : "Os " + total + " projetos estão bem.";
   }
 
-  // 2. Um projeto = varias portas de entrada. So entram as que EXISTEM: item
-  //    que abre nada e pior que item ausente.
-  for (const p of d.projetos || []){
-    const g = p.git || {};
-    // "Abrir no VS Code", "Subir os conteineres" e "Enviar ao GitHub" moravam
-    // aqui e sairam na etapa 7: os tres rodavam programa na maquina do dono.
-    // O que sobrou abre link, e link o navegador abre sozinho.
-    if (g.remoto_slug)
-      c.push(cmd("Abrir " + p.nome + " no GitHub", g.remoto_slug, "site",
-                 () => window.open("https://github.com/" + g.remoto_slug,
-                                   "_blank", "noopener")));
-    if (p.url_prod)
-      c.push(cmd("Abrir o site no ar do " + p.nome, p.url_prod, "produção",
-                 () => window.open(p.url_prod, "_blank", "noopener")));
-    for (const porta of (p.portas || []))
-      if (porta.vivo)
-        c.push(cmd("Abrir " + p.nome + " local", "porta " + porta.porta, "local",
-                   () => window.open("http://localhost:" + porta.porta,
-                                     "_blank", "noopener")));
+  /* AS CONTAS TÊM DE FECHAR. A primeira versão desta frase dizia
+     "5 projetos quebrados, 6 bem" numa lista de 17 — os 4 em atenção sumiam
+     do texto e ficavam só na régua. Uma frase de resumo que não soma o total
+     é a mesma mentira por omissão que o quarto estado do selo existe para
+     matar, só que escrita em português. */
+  const partes = [];
+  if (conta.quebrado) {
+    partes.push(conta.quebrado === 1 ? "1 projeto quebrado"
+                                     : conta.quebrado + " projetos quebrados");
   }
-
-  // 3. Comandos da maquina inteira. "Medir agora" e "Atualizar o GitHub"
-  //    sairam na etapa 7 (os dois disparavam um coletor). As tres camadas
-  //    seguem rodando sozinhas: 60 s, 20 min e 24 h.
-  c.push(cmd("Trocar o tema (claro / escuro)", "", "hub",
-             () => $("#btn-tema").click()));
-  return c;
+  if (conta.atencao) {
+    partes.push(conta.atencao === 1 ? "1 pede atenção"
+                                    : conta.atencao + " pedem atenção");
+  }
+  if (conta.saudavel) {
+    partes.push(conta.saudavel === 1 ? "1 está bem"
+                                     : conta.saudavel + " estão bem");
+  }
+  let frase = partes.join(", ") + ".";
+  if (conta.sem_dados) {
+    frase += conta.sem_dados === 1 ? " E 1 não foi medido."
+                                   : " E " + conta.sem_dados + " não foram medidos.";
+  }
+  return frase;
 }
 
-function desenhaPaleta(){
-  const termo = pBusca.value.trim();
-  const todos = comandosDe(ESTADO || {});
-  pItens = todos
-    .map(x => {
-      const nome = x.chave ? pontua(x.chave, termo) : -1;
-      return {x, n: Math.max(
-        pontua(x.rot, termo),
-        pontua(x.sub, termo) - 60,
-        nome >= 500 ? nome + BONUS_NOME : -1)};   // >=500 = nome inteiro ou inicio
-    })
-    .filter(v => v.n > 0)
-    .sort((a, b) => b.n - a.n)
-    .slice(0, 50)
-    .map(v => v.x);
+function pintarPainel() {
+  if (!ESTADO) return;
+  const projetos = ESTADO.projetos || [];
+  const conta = { saudavel: 0, atencao: 0, quebrado: 0, sem_dados: 0 };
+  for (const p of projetos) conta[p.selo] = (conta[p.selo] || 0) + 1;
 
-  pAtivo = 0;
-  pLista.textContent = "";
-  if (!pItens.length){
-    const li = document.createElement("li");
-    li.className = "vazio";
-    li.textContent = "Nada encontrado para “" + termo + "”.";
-    pLista.append(li);
-    pBusca.removeAttribute("aria-activedescendant");
-    $("#p-conta").textContent = "0 de " + todos.length;
+  $("#resumo").textContent = fraseDeResumo(conta, projetos.length);
+  pintarRecomendada();
+
+  /* A régua de contagem: quatro contadores, um por estado, cada um com forma,
+     glifo e rótulo. São filtros — tocar em "quebrado" reduz a lista. */
+  const regua = $("#regua");
+  regua.textContent = "";
+  for (const e of ORDEM) {
+    const b = selo(e, {
+      texto: conta[e] + " "
+             + (conta[e] === 1 ? ESTADOS[e].rotulo : ESTADOS[e].muitos),
+      aoClicar: () => { FILTRO = FILTRO === e ? null : e; pintarPainel(); }
+    });
+    b.setAttribute("aria-pressed", String(FILTRO === e));
+    b.title = ESTADOS[e].frase;
+    regua.append(b);
+  }
+
+  /* Ordem: quebrado, atenção, sem dados, saudável. Dentro de cada grupo, o
+     medido mais recentemente primeiro. */
+  const visiveis = projetos
+    .filter(p => !FILTRO || p.selo === FILTRO)
+    .sort((a, b) => {
+      const d = ORDEM.indexOf(a.selo) - ORDEM.indexOf(b.selo);
+      return d || (Date.parse(carimboDe(b)) || 0) - (Date.parse(carimboDe(a)) || 0);
+    });
+
+  const lista = $("#lista-projetos");
+  lista.classList.remove("esqueleto");
+  lista.textContent = "";
+
+  if (!projetos.length) {
+    lista.append(vazio(
+      "Nenhum projeto conectado ainda. Quando você conectar, cada projeto vira "
+      + "uma linha aqui com um selo dizendo se está saudável, se pede atenção "
+      + "ou se quebrou.",
+      "Conectar um projeto", "#/conectar"));
     return;
   }
-  pItens.forEach((it, i) => {
-    const li = document.createElement("li");
-    li.id = "p-op-" + i;
-    li.setAttribute("role", "option");
-    li.className = it.classe;
-    li.setAttribute("aria-selected", i === 0 ? "true" : "false");
-    const r = document.createElement("span"); r.className = "rot"; r.textContent = it.rot;
-    const s = document.createElement("span"); s.className = "sub"; s.textContent = it.sub;
-    const e = document.createElement("span"); e.className = "selo"; e.textContent = it.selo;
-    li.append(r, s, e);
-    li.addEventListener("click", () => roda(i));
-    pLista.append(li);
-  });
-  pBusca.setAttribute("aria-activedescendant", "p-op-0");
-  $("#p-conta").textContent = pItens.length + " de " + todos.length;
-}
-
-function move(delta){
-  if (!pItens.length) return;
-  const li = pLista.children;
-  li[pAtivo].setAttribute("aria-selected", "false");
-  pAtivo = (pAtivo + delta + pItens.length) % pItens.length;
-  li[pAtivo].setAttribute("aria-selected", "true");
-  li[pAtivo].scrollIntoView({block: "nearest"});
-  pBusca.setAttribute("aria-activedescendant", "p-op-" + pAtivo);
-}
-
-function roda(i){
-  const it = pItens[i];
-  if (!it) return;
-  paleta.close();          // fecha ANTES: acao que abre aba ou janela precisa
-  it.faz();                // da paleta fora do caminho.
-}
-
-function abrePaleta(){
-  if (paleta.open) return;
-  pBusca.value = "";
-  desenhaPaleta();
-  paleta.showModal();      // showModal: foco preso, Esc e camada de topo nativos
-  pBusca.focus();
-}
-
-$("#btn-paleta").addEventListener("click", abrePaleta);
-pBusca.addEventListener("input", desenhaPaleta);
-pBusca.addEventListener("keydown", e => {
-  if (e.key === "ArrowDown"){ e.preventDefault(); move(1); }
-  else if (e.key === "ArrowUp"){ e.preventDefault(); move(-1); }
-  else if (e.key === "Home"){ e.preventDefault(); move(-pAtivo); }
-  else if (e.key === "End"){ e.preventDefault(); move(pItens.length - 1 - pAtivo); }
-  else if (e.key === "Enter"){ e.preventDefault(); roda(pAtivo); }
-});
-
-document.addEventListener("keydown", e => {
-  // Ctrl+K no Windows, Cmd+K no Mac. Sem o preventDefault o Chrome leva o foco
-  // para a barra de endereco e a paleta abre atras dela.
-  if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")){
-    e.preventDefault();
-    paleta.open ? paleta.close() : abrePaleta();
+  if (!visiveis.length) {
+    lista.append(vazio(
+      "Nenhum projeto " + ESTADOS[FILTRO].rotulo + " agora.",
+      "Ver todos", null, () => { FILTRO = null; pintarPainel(); }));
+    return;
   }
-});
 
-if (!("closedBy" in HTMLDialogElement.prototype)){
-  paleta.addEventListener("click", e => {
-    if (e.target !== paleta) return;      // clique num filho: nao e o fundo
-    const r = paleta.getBoundingClientRect();
-    const dentro = r.top <= e.clientY && e.clientY <= r.top + r.height
-                && r.left <= e.clientX && e.clientX <= r.left + r.width;
-    if (!dentro) paleta.close();
+  for (const p of visiveis) {
+    const li = document.createElement("li");
+    const pior = piorDe(p.nome);
+
+    li.append(selo(p.selo, { aoClicar: () => irPara("#/projeto/" + encodeURIComponent(p.nome)) }));
+
+    const dizeres = document.createElement("div");
+    dizeres.className = "dizeres";
+    const nome = document.createElement("div");
+    nome.className = "nome";
+    // textContent, nunca innerHTML: o nome vem do relatório de OUTRO
+    // computador, e é o campo mais fácil de envenenar em todo este painel.
+    nome.textContent = p.nome;
+    const motivo = document.createElement("div");
+    motivo.className = "motivo";
+    motivo.textContent = p.selo === "sem_dados"
+      ? "Não consegui medir. " + camadasCaladas(p)
+      : (pior ? pior.texto : ESTADOS[p.selo].frase);
+    const carimbo = document.createElement("div");
+    carimbo.className = "carimbo";
+    /* "medido há 14 minutos" num projeto SEM DADOS é a mentira que este selo
+       existe para não contar: o carimbo é da última medição que existiu, e não
+       de uma medição que valha agora. A palavra muda junto com o estado. */
+    carimbo.textContent = (p.selo === "sem_dados" ? "última medição "
+                                                  : "medido ")
+                        + haQuanto(carimboDe(p));
+    dizeres.append(nome, motivo, carimbo);
+
+    const abrir = document.createElement("button");
+    abrir.className = "botao botao--secundario abrir";
+    abrir.type = "button";
+    abrir.textContent = "Ver o que gerou este selo";
+    abrir.addEventListener("click",
+      () => irPara("#/projeto/" + encodeURIComponent(p.nome)));
+
+    li.append(dizeres, abrir);
+    lista.append(li);
+  }
+}
+
+/* A ação recomendada: a pendência mais grave da lista inteira, e o caminho até
+   a tela dela. Uma só — painel com cinco chamadas de igual peso não tem
+   nenhuma. Some quando não há nada a fazer, em vez de mostrar caixa vazia. */
+function pintarRecomendada() {
+  const caixa = $("#recomendada");
+  const abertas = (ESTADO.pendencias || [])
+    .slice()
+    .sort((a, b) => (PESO[a.gravidade] ?? 9) - (PESO[b.gravidade] ?? 9));
+  const alvo = abertas[0];
+  caixa.hidden = !alvo;
+  if (!alvo) return;
+  $("#recomendada-texto").textContent = alvo.texto;
+  $("#recomendada-carimbo").textContent =
+    "visto " + haQuanto(alvo.visto_em)
+    + (alvo.dias_min ? " · aberto há pelo menos " + alvo.dias_min + " dia(s)" : "");
+  $("#recomendada-abrir").onclick =
+    () => irPara("#/alerta/" + encodeURIComponent(alvo.id));
+}
+
+/* "Sem dados" sem dizer QUAL camada envelheceu é um veredito sem explicação —
+   a mesma mentira, só que educada. */
+function camadasCaladas(p) {
+  /* Com a contração já pronta: "de o seu computador" é o tipo de erro que
+     ninguém comete escrevendo à mão e todo mundo comete concatenando. */
+  const nomes = { local: "do seu computador", github: "do GitHub",
+                  pesado: "da medição pesada" };
+  const calados = Object.entries(p.camadas || {})
+    .filter(([, vale]) => !vale).map(([c]) => nomes[c] || c);
+  if (!calados.length) return "";
+  const ultimo = calados.pop();
+  return "Sem notícia "
+       + (calados.length ? calados.join(", ") + " nem " + ultimo : ultimo) + ".";
+}
+
+function vazio(texto, rotulo, href, aoClicar) {
+  const li = document.createElement("li");
+  const caixa = document.createElement("div");
+  caixa.className = "vazio";
+  const p = document.createElement("p");
+  p.textContent = texto;
+  caixa.append(p);
+  if (rotulo) {
+    const b = document.createElement("button");
+    b.className = "botao";
+    b.type = "button";
+    b.textContent = rotulo;
+    b.addEventListener("click", aoClicar || (() => irPara(href)));
+    caixa.append(b);
+  }
+  li.style.display = "block";
+  li.append(caixa);
+  return li;
+}
+
+function irPara(hash) { location.hash = hash; }
+
+/* ================================================== 3. Projeto =========== */
+
+/* Um critério: rótulo, veredito nos MESMOS quatro estados, o valor com o seu
+   carimbo, e a prova crua fechada por padrão. Selo na frente, prova atrás. */
+function criterio(rotulo, estado, valor, carimbo, prova) {
+  const d = document.createElement("details");
+  d.className = "criterio";
+  const s = document.createElement("summary");
+  s.append(selo(estado, { como: "span" }));
+  const r = document.createElement("span");
+  r.className = "rotulo";
+  r.textContent = rotulo;
+  const v = document.createElement("span");
+  v.className = "metadado";
+  v.textContent = valor;
+  const c = document.createElement("span");
+  c.className = "carimbo";
+  c.textContent = carimbo;
+  s.append(r, v, c);
+  d.append(s);
+  const pre = document.createElement("div");
+  pre.className = "prova";
+  pre.textContent = prova || "Sem prova crua guardada para este critério.";
+  d.append(pre);
+  return d;
+}
+
+function pintarProjeto(nome) {
+  if (!ESTADO) return;
+  const p = (ESTADO.projetos || []).find(x => x.nome === nome);
+  const colunas = $("#projeto-colunas");
+  colunas.textContent = "";
+
+  if (!p) {
+    $("#projeto-nome").textContent = nome || "Projeto";
+    $("#projeto-selo").textContent = "";
+    $("#projeto-porque").textContent =
+      "Este projeto não está na última medição. Ele pode ter sido desconectado, "
+      + "ou o computador que o reportava não dá notícia.";
+    $("#projeto-arquivados").textContent = "";
+    return;
+  }
+
+  $("#projeto-nome").textContent = p.nome;
+  const cabeca = $("#projeto-selo");
+  cabeca.textContent = "";
+  cabeca.append(selo(p.selo, { como: "span" }));
+
+  const pior = piorDe(p.nome);
+  $("#projeto-porque").textContent = p.selo === "sem_dados"
+    ? "Não consegui medir. " + camadasCaladas(p)
+    : (pior ? pior.texto : ESTADOS[p.selo].frase);
+
+  const vale = p.camadas || {};
+  const c = p.medido_em || {};
+  const g = p.git || {};
+  const gh = p.github || null;
+
+  /* --- No seu computador ------------------------------------------------ */
+  const local = coluna("No seu computador", colunas);
+  if (!vale.local) {
+    local.append(nada("O agente deste computador não reporta há mais de 10 "
+                      + "minutos. O que depende dele calou.", c.local));
+  } else {
+    const marca = "medido " + haQuanto(c.local);
+    local.append(criterio("Branch", "saudavel", g.branch || "—", marca,
+                          "caminho: " + (p.caminho || "—")));
+    local.append(criterio(
+      "Trabalho não salvo no histórico",
+      g.sujos ? "atencao" : "saudavel",
+      g.sujos ? g.sujos + " arquivo(s)" : "nenhum", marca,
+      (g.sujos_lista || []).join("\n")));
+    local.append(criterio(
+      "Commits não enviados ao GitHub",
+      g.ahead ? "quebrado" : "saudavel",
+      g.ahead ? g.ahead + " commit(s)" : "nenhum", marca,
+      g.remoto_slug ? "remoto: " + g.remoto_slug : "sem remoto configurado"));
+    const drift = (p.env_drift || {});
+    const faltando = (drift.faltando || []).length + (drift.sobrando || []).length;
+    local.append(criterio(
+      "Chaves do .env", faltando ? "atencao" : "saudavel",
+      faltando ? faltando + " diferença(s)" : "conferem", marca,
+      "faltando: " + (drift.faltando || []).join(", ")
+      + "\nsobrando: " + (drift.sobrando || []).join(", ")));
+    const vivos = (p.containers || []).filter(x => x.saudavel && !x.reiniciando);
+    local.append(criterio(
+      "Contêineres",
+      (p.containers_esperados || []).length && !vivos.length ? "quebrado" : "saudavel",
+      vivos.length + " no ar", marca,
+      (p.containers || []).map(x => x.nome + " — " + x.status).join("\n")));
+    local.append(criterio(
+      "Portas", "saudavel",
+      (p.portas || []).filter(x => x.vivo).length + " respondendo", marca,
+      (p.portas || []).map(x => x.porta + (x.vivo ? " — respondendo" : " — calada")).join("\n")));
+  }
+
+  /* --- No GitHub -------------------------------------------------------- */
+  const nogh = coluna("No GitHub", colunas);
+  if (!vale.github || !gh) {
+    nogh.append(nada("A medição do GitHub não foi lida, ou está velha demais "
+                     + "para afirmar alguma coisa.", c.github));
+  } else {
+    const marca = "medido " + haQuanto(c.github);
+    const ci = gh.ci || {};
+    nogh.append(criterio(
+      "Verificação automática",
+      ci.conclusao === "failure" ? "quebrado"
+        : ci.conclusao === "success" ? "saudavel" : "sem_dados",
+      ci.conclusao === "failure" ? "vermelha"
+        : ci.conclusao === "success" ? "verde" : "não medida",
+      marca, "estado: " + (ci.estado_bruto || "—") + "\n" + (ci.url || "")));
+    const prs = gh.prs || [];
+    nogh.append(criterio(
+      "Pedidos de alteração abertos", prs.length ? "atencao" : "saudavel",
+      prs.length + " aberto(s)", marca,
+      prs.map(x => "#" + (x.numero ?? "?") + " " + (x.titulo || "")).join("\n")));
+    nogh.append(criterio(
+      "Pendências abertas", "saudavel",
+      (gh.issues_total ?? "não sei") + "", marca, gh.issues_url || ""));
+    const v = gh.vulns || {};
+    nogh.append(criterio(
+      "Alertas de segurança", v.total ? "quebrado" : "saudavel",
+      v.total ? v.total + " aberto(s)" : "nenhum", marca, v.url || ""));
+  }
+
+  /* --- No ar ------------------------------------------------------------ */
+  const noar = coluna("No ar", colunas);
+  if (!vale.github || !gh) {
+    noar.append(nada("Sem a medição do GitHub não dá para comparar o que está "
+                     + "publicado com o que está no repositório.", c.github));
+  } else {
+    const marca = "medido " + haQuanto(c.github);
+    const site = gh.site || {};
+    const dep = gh.deploy || {};
+    noar.append(criterio(
+      "Site respondendo",
+      site.ok === false ? "quebrado" : site.ok === true ? "saudavel" : "sem_dados",
+      site.ok === true ? "responde" : site.ok === false ? "fora do ar" : "não medido",
+      marca, (site.url || "") + "\ncódigo: " + (site.codigo ?? "sem resposta")));
+    noar.append(criterio(
+      "Versão publicada",
+      typeof dep.atras === "number" && dep.atras > 0 ? "atencao"
+        : typeof dep.atras === "number" ? "saudavel" : "sem_dados",
+      typeof dep.atras === "number"
+        ? (dep.atras > 0 ? dep.atras + " commit(s) atrás do GitHub" : "em dia")
+        : "não medido",
+      marca, JSON.stringify(dep, null, 1)));
+  }
+
+  pintarAlertasDoProjeto(p.nome);
+  pintarArquivados(p.nome);
+}
+
+/* O caminho até a sexta tela. Sem esta lista o Alerta existiria e ninguém
+   chegaria nele — que é o mesmo que não existir. */
+function pintarAlertasDoProjeto(projeto) {
+  const ul = $("#projeto-alertas");
+  ul.textContent = "";
+  const meus = (ESTADO.pendencias || [])
+    .filter(p => p.projeto === projeto)
+    .sort((a, b) => (PESO[a.gravidade] ?? 9) - (PESO[b.gravidade] ?? 9));
+
+  if (!meus.length) {
+    ul.append(vazio("Nada pede você neste projeto agora."));
+    return;
+  }
+  for (const p of meus) {
+    const li = document.createElement("li");
+    const txt = document.createElement("div");
+    txt.className = "dizeres";
+    const t = document.createElement("div");
+    t.textContent = p.texto;
+    const c = document.createElement("div");
+    c.className = "carimbo";
+    c.textContent = "visto " + haQuanto(p.visto_em);
+    txt.append(t, c);
+    const b = document.createElement("button");
+    b.className = "botao botao--secundario";
+    b.type = "button";
+    b.textContent = "Abrir";
+    b.addEventListener("click", () => irPara("#/alerta/" + encodeURIComponent(p.id)));
+    li.append(txt, b);
+    ul.append(li);
+  }
+}
+
+function coluna(titulo, onde) {
+  const sec = document.createElement("section");
+  sec.className = "coluna";
+  const h = document.createElement("h2");
+  h.textContent = titulo;
+  sec.append(h);
+  onde.append(sec);
+  return sec;
+}
+
+/* Ausência de agente produz ausência de camada, NUNCA camada vazia. Nunca
+   escrever "nenhum contêiner rodando" quando a verdade é "não perguntei". */
+function nada(porque, carimbo) {
+  const d = document.createElement("div");
+  d.className = "vazio";
+  const p = document.createElement("p");
+  p.textContent = "Não consegui medir. " + porque;
+  const c = document.createElement("p");
+  c.className = "carimbo";
+  c.textContent = carimbo ? "última medição " + haQuanto(carimbo)
+                          : "nunca foi medido";
+  d.append(p, c);
+  return d;
+}
+
+function pintarArquivados(projeto) {
+  const onde = $("#projeto-arquivados");
+  onde.textContent = "";
+  const meus = (ESTADO.arquivadas || [])
+    .filter(a => (a.id || "").split(":").slice(1).join(":") === projeto);
+
+  if (!meus.length) {
+    const d = document.createElement("div");
+    d.className = "vazio";
+    d.textContent = "Nada arquivado. Quando você disser “isto está certo assim” "
+                  + "para um alerta, ele fica guardado aqui, com o motivo e a data.";
+    onde.append(d);
+    return;
+  }
+  const ul = document.createElement("ul");
+  ul.className = "lista";
+  for (const a of meus) {
+    const li = document.createElement("li");
+    const txt = document.createElement("div");
+    txt.className = "dizeres";
+    const t = document.createElement("div");
+    t.textContent = a.motivo;
+    const c = document.createElement("div");
+    c.className = "carimbo";
+    c.textContent = "arquivado " + haQuanto(a.arquivado_em);
+    txt.append(t, c);
+    const b = document.createElement("button");
+    b.className = "botao botao--secundario";
+    b.type = "button";
+    b.textContent = "Desarquivar";
+    b.addEventListener("click", () => desarquivar(a.id));
+    li.append(txt, b);
+    ul.append(li);
+  }
+  onde.append(ul);
+}
+
+/* ================================================== 6. Alerta ============ */
+
+function pintarAlerta(id) {
+  const p = (ESTADO && ESTADO.pendencias || []).find(x => x.id === id);
+  const acoes = $("#alerta-acoes");
+  acoes.textContent = "";
+  if (!p) {
+    $("#alerta-titulo").textContent = "Este alerta não está mais na lista";
+    $("#alerta-texto").textContent =
+      "Ou ele foi resolvido, ou está adiado, ou você o arquivou. A lista do "
+      + "painel mostra o que vale agora.";
+    $("#alerta-carimbo").textContent = "";
+    $("#alerta-detalhe").hidden = true;
+    return;
+  }
+  $("#alerta-titulo").textContent = p.projeto;
+  $("#alerta-texto").textContent = p.texto;
+  $("#alerta-carimbo").textContent =
+    "visto " + haQuanto(p.visto_em)
+    + (p.dias_min ? " · aberto há pelo menos " + p.dias_min + " dia(s)" : "");
+  const det = $("#alerta-detalhe");
+  det.hidden = !p.detalhe;
+  det.textContent = p.detalhe || "";
+
+  /* "Resolver" não é um botão genérico. Desde a etapa 7 o servidor não executa
+     comando nenhum — e um botão que promete resolver e não resolve é pior que
+     botão nenhum. O que aparece aqui é o que o NAVEGADOR sabe fazer sozinho, e
+     ele diz exatamente o que vai acontecer. */
+  const a = p.acao || {};
+  if (a.tipo === "abrir_url" && a.url && enderecoSeguro(a.url)) {
+    const b = document.createElement("a");
+    b.className = "botao";
+    b.href = a.url;
+    b.target = "_blank";
+    b.rel = "noopener noreferrer";
+    b.textContent = a.rotulo || "Abrir";
+    acoes.append(b);
+  } else if (a.caminho) {
+    const b = document.createElement("button");
+    b.className = "botao";
+    b.type = "button";
+    b.textContent = "Copiar o caminho da pasta";
+    b.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(a.caminho); recado("caminho copiado."); }
+      catch { recado("não deu para copiar. O caminho é " + a.caminho, true); }
+    });
+    acoes.append(b);
+  }
+
+  const adiar = document.createElement("button");
+  adiar.className = "botao botao--secundario";
+  adiar.type = "button";
+  adiar.textContent = "Adiar 24 horas";
+  adiar.addEventListener("click", () => silenciar(p.id, 24));
+  acoes.append(adiar);
+
+  const certo = document.createElement("button");
+  certo.className = "botao botao--secundario";
+  certo.type = "button";
+  certo.textContent = "Isto está certo assim";
+  certo.addEventListener("click", () => pedirMotivo(p));
+  acoes.append(certo);
+}
+
+/* ================================================== as escritas ========== */
+
+function escrever(url, corpo) {
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+    body: JSON.stringify(corpo || {})
   });
 }
 
-carregar();
-
-setInterval(carregar, 15000);
-
-/* ------------------------------------------------------- formas de entrar
-   Cadastrar, listar e remover chave de acesso, e gerar os codigos de papel.
-
-   TODA ESCRITA DAQUI LEVA O `X-Token` DA SESSAO. Sem ele o servidor devolve
-   403: cookie sozinho nao basta para rota que escreve, porque o cookie
-   acompanha um pedido forjado de outro site e o token nao.
-
-   O QUE NAO ESTA AQUI, de proposito: renomear chave e ver a marca do
-   fabricante (o AAGUID). O AAGUID so serve de dica visual — a norma proibe
-   usa-lo para decidir acesso — e sem uma tabela de nomes de fabricante ele
-   apareceria como um numero sem sentido para o dono. */
-const pd = $("#portas-dlg");
-
-function pdDizer(texto, ruim) {
-  const p = $("#pd-aviso");
-  p.textContent = texto || "";
-  p.classList.toggle("ruim", !!ruim);
+async function silenciar(id, horas) {
+  const r = await escrever("/api/silenciar", { id, horas });
+  if (!r.ok) { recado("não conseguimos adiar. Tente de novo.", true); return; }
+  recado("adiado por 24 horas.");
+  await carregar();
+  irPara("#/painel");
 }
+
+let ALVO_ARQUIVO = null;
+function pedirMotivo(p) {
+  ALVO_ARQUIVO = p;
+  $("#arq-alvo").textContent = p.projeto + " — " + p.texto;
+  $("#arq-motivo").value = "";
+  $("#dlg-arquivar").showModal();
+}
+
+async function arquivar() {
+  const motivo = $("#arq-motivo").value.trim();
+  if (!motivo) { recado("escreva por que isto está certo assim.", true); return; }
+  const r = await escrever("/api/arquivar", { id: ALVO_ARQUIVO.id, motivo });
+  $("#dlg-arquivar").close();
+  if (!r.ok) {
+    /* "Tente de novo" é conselho errado quando o problema é o texto: tentar de
+       novo dá o mesmo erro. Só o 400 fala pela boca do servidor — é o único
+       que descreve algo que o dono pode corrigir (motivo em branco, motivo
+       longo demais). 401, 403 e 500 continuam na frase genérica: o texto
+       interno deles ("host nao permitido") não ajudaria ninguém. */
+    const dele = r.status === 400
+      ? await r.json().then(j => j && j.erro).catch(() => null)
+      : null;
+    recado(dele || "não conseguimos arquivar. Tente de novo.", true);
+    return;
+  }
+  recado("arquivado. Ele fica em “Arquivados”, com o motivo e a data.");
+  await carregar();
+  irPara("#/projeto/" + encodeURIComponent(ALVO_ARQUIVO.projeto));
+}
+
+async function desarquivar(id) {
+  const r = await escrever("/api/desarquivar", { id });
+  if (!r.ok) { recado("não conseguimos desarquivar. Tente de novo.", true); return; }
+  recado("de volta à lista.");
+  await carregar();
+  navegar();
+}
+
+/* ================================================== 4. Conectar ========== */
+
+function pintarConectar() {
+  const onde = $("#conectar-corpo");
+  onde.textContent = "";
+
+  const cartao = document.createElement("div");
+  cartao.className = "cartao";
+  const h = document.createElement("h2");
+  const passo = document.createElement("p");
+
+  if (COMPUTADORES && COMPUTADORES.length) {
+    h.textContent = "Os projetos vêm sozinhos";
+    passo.textContent =
+      "Você já tem " + COMPUTADORES.length + " computador(es) conectado(s). O "
+      + "agente varre as pastas com Git e reporta o que achou — não há nada "
+      + "para escolher aqui: o que ele mede aparece no painel na medição "
+      + "seguinte.";
+    const b = document.createElement("button");
+    b.className = "botao";
+    b.type = "button";
+    b.textContent = "Ver o painel";
+    b.addEventListener("click", () => irPara("#/painel"));
+    cartao.append(h, passo, b);
+  } else {
+    h.textContent = "Falta conectar um computador";
+    passo.textContent =
+      "Esta tela não abre sem isso: quem lista as pastas com Git é o agente, e "
+      + "hoje nenhum computador está conectado a esta conta.";
+    const b = document.createElement("button");
+    b.className = "botao";
+    b.type = "button";
+    b.textContent = "Conectar um computador";
+    b.addEventListener("click", () => irPara("#/computadores"));
+    cartao.append(h, passo, b);
+  }
+  onde.append(cartao);
+
+  /* O limite honesto, escrito na tela em vez de escondido: escolher a pasta
+     pela tela é da Fatia 2, e prometer o contrário aqui seria a mesma mentira
+     que este produto existe para não contar. */
+  const nota = document.createElement("p");
+  nota.className = "mole";
+  nota.textContent =
+    "Escolher pasta por pasta pela tela, conectar a conta do GitHub e conectar "
+    + "o servidor ficaram para a fatia 2 — as duas últimas guardam segredo de "
+    + "terceiro, e o cofre vem antes da gaveta.";
+  onde.append(nota);
+}
+
+/* ================================================== 5. Computadores ====== */
+
+async function carregarComputadores() {
+  let d;
+  try { d = await (await fetch("/api/maquinas")).json(); }
+  catch { recado("não conseguimos ler a lista de computadores.", true); return; }
+  COMPUTADORES = d.maquinas || [];
+
+  const lista = $("#lista-computadores");
+  lista.textContent = "";
+  $("#computadores-carimbo").textContent = "lido " + haQuanto(new Date().toISOString());
+
+  if (!COMPUTADORES.length) {
+    lista.append(vazio(
+      "Nenhum computador conectado. O DERVS precisa de um agente rodando no seu "
+      + "computador para enxergar contêineres, Git e as portas. Sem ele, só dá "
+      + "para ver o que está no GitHub.",
+      "Gerar o número", null, () => $("#btn-gerar-numero").click()));
+    return;
+  }
+  for (const m of COMPUTADORES) {
+    const li = document.createElement("li");
+    const txt = document.createElement("div");
+    txt.className = "dizeres";
+    const nome = document.createElement("div");
+    nome.className = "nome";
+    // textContent, nunca innerHTML: o nome vem do OUTRO computador, e quem
+    // pareia escolhe o texto.
+    nome.textContent = m.nome || "computador sem nome";
+    const meta = document.createElement("div");
+    meta.className = "carimbo";
+    meta.textContent = (m.visto_em ? "deu notícia " + haQuanto(m.visto_em)
+                                   : "nunca deu notícia")
+                     + " · " + m.projetos + (m.projetos === 1 ? " projeto" : " projetos");
+    txt.append(nome, meta);
+    const b = document.createElement("button");
+    b.className = "botao botao--secundario";
+    b.type = "button";
+    b.textContent = "Remover";
+    b.addEventListener("click", () => confirmar({
+      titulo: "Desconectar “" + (m.nome || "este computador") + "”?",
+      texto: "Ele para de reportar na hora, e só volta com um número novo. As "
+           + "medições que ele já mandou não são apagadas, e os projetos dele "
+           + "continuam no painel — parados no último carimbo.",
+      sim: "Desconectar", nao: "Manter conectado"
+    }, () => removerComputador(m.id)));
+    li.append(txt, b);
+    lista.append(li);
+  }
+}
+
+async function removerComputador(id) {
+  const r = await escrever("/api/maquinas/remover", { id });
+  if (!r.ok) { recado("não conseguimos remover. Tente de novo.", true); return; }
+  recado("removido. Ele não reporta mais.");
+  carregarComputadores();
+}
+
+async function gerarNumero() {
+  const r = await escrever("/api/maquinas/parear");
+  if (!r.ok) { recado("não conseguimos gerar o número agora.", true); return; }
+  const d = await r.json();
+  /* O código só aparece pronto; nunca meio código na tela. */
+  $("#numero-pareamento").textContent = d.codigo;
+  $("#numero-pareamento").classList.remove("vencido");
+  $("#numero-prazo").textContent = "vale por " + d.minutos + " minutos, e para "
+                                 + "um computador só";
+  $("#comando-pareamento").textContent =
+    "python -m agente.enviar --alvo " + location.origin + " --codigo " + d.codigo;
+  $("#pareamento").hidden = false;
+  /* Quando vence, o número fica riscado — não some. Número antigo na tela é
+     número que a pessoa digita e não funciona, sem entender por quê. */
+  clearTimeout(gerarNumero.t);
+  gerarNumero.t = setTimeout(() => {
+    $("#numero-pareamento").classList.add("vencido");
+    $("#numero-prazo").textContent = "Este código venceu. Gere outro.";
+  }, Math.max(1, d.minutos) * 60000);
+}
+
+/* ========================================== Formas de entrar ============= */
+/* Portado da etapa 9 sem mudar a criptografia: só o vocabulário e o visual. */
 
 function pdBytes(texto) {
   const limpo = texto.replace(/-/g, "+").replace(/_/g, "/");
@@ -1273,30 +1452,16 @@ function pdTexto(buffer) {
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function pdEscrever(url, corpo) {
-  return fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Token": TOKEN },
-    body: JSON.stringify(corpo || {})
-  });
-}
-
 function pdQuando(iso) {
   if (!iso) return "nunca usada";
   const d = new Date(iso);
   return isNaN(d) ? "—" : "usada em " + d.toLocaleDateString("pt-BR");
 }
 
-/* Zero e um sao situacoes diferentes, e o aviso tem de dizer a verdade nas
-   duas. A versao anterior era texto fixo e mentia na primeira: com nenhuma
-   chave cadastrada, ela dizia "voce tem so uma forma de entrar".
-
-   E ele nao afirma mais que formatar o PC tranca a conta. Se o navegador
-   guardou a chave num gerenciador que sincroniza, ela sobrevive ao format; se
-   guardou no chip da maquina, nao. O servidor nao tem como saber qual dos dois
-   foi — o unico sinal seria o AAGUID do fabricante, que a norma manda usar so
-   como dica visual e que nao coletamos. Entao o texto fala do que e certo (a
-   perda tranca) sem inventar onde a perda aconteceria. */
+/* Zero e uma chave são situações diferentes, e o aviso tem de dizer a verdade
+   nas duas. E ele não afirma que formatar o computador tranca a conta: o
+   servidor não tem como saber se o navegador guardou a chave num gerenciador
+   que sincroniza ou no chip da máquina. */
 function pdCobrar(d) {
   const p = $("#pd-cobra");
   const nenhuma = d.chaves.length === 0;
@@ -1304,16 +1469,16 @@ function pdCobrar(d) {
   p.textContent = nenhuma
     ? "Você ainda não cadastrou nenhuma chave de acesso. Hoje entra pela porta "
       + "do ambiente local, que não existe no servidor. Cadastre a primeira "
-      + "abaixo, ou gere os códigos de papel."
+      + "abaixo, ou gere os códigos do papel."
     : "Você tem uma forma de entrar só. Se ela se perder, ninguém abre esta "
       + "conta — e não há recuperação por e-mail aqui, de propósito. Cadastre "
-      + "uma segunda (o celular serve) ou gere os códigos de papel abaixo.";
+      + "uma segunda (o celular serve) ou gere os códigos do papel abaixo.";
 }
 
 async function pdCarregar() {
   let d;
   try { d = await (await fetch("/api/chaves")).json(); }
-  catch { pdDizer("não deu para ler a lista.", true); return; }
+  catch { recado("não conseguimos ler a lista de chaves.", true); return; }
 
   pdCobrar(d);
   $("#pd-restantes").textContent = d.restantes;
@@ -1321,38 +1486,45 @@ async function pdCarregar() {
   lista.textContent = "";
   if (!d.chaves.length) {
     const li = document.createElement("li");
-    li.className = "pd-vazia";
+    li.className = "mole";
     li.textContent = "Nenhuma chave cadastrada neste momento.";
     lista.append(li);
     return;
   }
   for (const c of d.chaves) {
     const li = document.createElement("li");
-    const nome = document.createElement("span");
-    nome.className = "pd-nome";
+    const txt = document.createElement("div");
+    txt.className = "dizeres";
+    const nome = document.createElement("div");
+    nome.className = "nome";
     // textContent, nunca innerHTML: o apelido foi digitado por uma pessoa e
-    // volta do banco. Com innerHTML, um apelido com <script> viraria script.
+    // volta do banco.
     nome.textContent = c.apelido || "sem apelido";
-    const quando = document.createElement("span");
-    quando.className = "pd-quando";
+    const quando = document.createElement("div");
+    quando.className = "carimbo";
     quando.textContent = pdQuando(c.usado_em);
+    txt.append(nome, quando);
     const tirar = document.createElement("button");
-    tirar.className = "btn";
+    tirar.className = "botao botao--secundario";
     tirar.type = "button";
     tirar.textContent = "Remover";
-    tirar.addEventListener("click", () => pdRemover(c.id, c.apelido));
-    li.append(nome, quando, tirar);
+    tirar.addEventListener("click", () => confirmar({
+      titulo: "Remover “" + (c.apelido || "esta chave") + "”?",
+      texto: "Este aparelho deixa de abrir a sua conta. Se ele for a sua única "
+           + "forma de entrar, você fica de fora — não há recuperação por "
+           + "e-mail aqui.",
+      sim: "Remover a chave", nao: "Manter a chave"
+    }, () => pdRemover(c.id)));
+    li.append(txt, tirar);
     lista.append(li);
   }
 }
 
-async function pdRemover(id, apelido) {
-  if (!confirm("Remover “" + (apelido || "esta chave") + "”?\n"
-               + "O aparelho deixa de abrir esta conta.")) return;
-  const r = await pdEscrever("/api/chaves/remover", { id });
-  if (!r.ok) { pdDizer("não deu para remover.", true); return; }
+async function pdRemover(id) {
+  const r = await escrever("/api/chaves/remover", { id });
+  if (!r.ok) { recado("não conseguimos remover. Tente de novo.", true); return; }
   const d = await r.json();
-  pdDizer(d.restam === 0
+  recado(d.restam === 0
     ? "removida. Você ficou sem nenhuma chave — cadastre uma agora."
     : "removida.");
   pdCarregar();
@@ -1361,13 +1533,13 @@ async function pdRemover(id, apelido) {
 async function pdCadastrar() {
   const botao = $("#pd-cadastrar");
   if (!window.PublicKeyCredential) {
-    pdDizer("este navegador não tem suporte a chave de acesso.", true);
+    recado("este navegador não tem suporte a chave de acesso.", true);
     return;
   }
   botao.disabled = true;
-  pdDizer("confirme no aparelho…");
+  recado("confirme no aparelho…");
   try {
-    const r = await pdEscrever("/api/chaves/desafio");
+    const r = await escrever("/api/chaves/desafio");
     if (!r.ok) throw new Error("desafio");
     const d = await r.json();
     const cru = {
@@ -1375,16 +1547,16 @@ async function pdCadastrar() {
       rp: { id: d.rp_id, name: "DERVS" },
       user: { id: d.usuario.id, name: d.usuario.nome,
               displayName: d.usuario.mostrar },
-      // -7 e ES256, o unico que o servidor sabe conferir. Anunciar mais seria
-      // aceitar uma chave que depois nao entra.
+      // -7 é ES256, o único que o servidor sabe conferir. Anunciar mais seria
+      // aceitar uma chave que depois não entra.
       pubKeyCredParams: [{ type: "public-key", alg: -7 }],
       excludeCredentials: d.ja_tenho.map(id => ({ type: "public-key", id })),
       authenticatorSelection: {
-        residentKey: "required",       // descobrivel: entra sem digitar usuario
-        userVerification: "required"   // PIN ou digital: e o que faz dois fatores
+        residentKey: "required",       // descobrível: entra sem digitar usuário
+        userVerification: "required"   // PIN ou digital: é o que faz dois fatores
       },
       timeout: 300000,
-      attestation: "none"              // nao pedimos a marca do fabricante
+      attestation: "none"              // não pedimos a marca do fabricante
     };
     const opcoes = PublicKeyCredential.parseCreationOptionsFromJSON
       ? PublicKeyCredential.parseCreationOptionsFromJSON(cru)
@@ -1397,7 +1569,7 @@ async function pdCadastrar() {
 
     const credencial = await navigator.credentials.create({ publicKey: opcoes });
     if (!credencial) throw new Error("cancelado");
-    const g = await pdEscrever("/api/chaves/cadastrar", {
+    const g = await escrever("/api/chaves/cadastrar", {
       cliente: pdTexto(credencial.response.clientDataJSON),
       atestado: pdTexto(credencial.response.attestationObject),
       apelido: $("#pd-apelido").value
@@ -1407,143 +1579,148 @@ async function pdCadastrar() {
       throw new Error(erro.erro || "recusado");
     }
     $("#pd-apelido").value = "";
-    pdDizer("cadastrado. Este aparelho já abre a conta.");
+    recado("cadastrado. Este aparelho já abre a conta.");
     pdCarregar();
   } catch (err) {
     if (err && err.name === "InvalidStateError") {
-      pdDizer("este aparelho já está cadastrado.", true);
+      recado("este aparelho já está cadastrado.", true);
     } else if (err && (err.name === "NotAllowedError" || err.name === "AbortError")) {
-      pdDizer("cancelado.");
+      recado("cancelado.");
     } else {
-      pdDizer(err && err.message ? err.message : "não deu.", true);
+      recado(err && err.message ? err.message : "não deu.", true);
     }
   } finally {
     botao.disabled = false;
   }
 }
 
-async function pdGerar() {
-  if (!confirm("Gerar códigos novos apaga os dez anteriores.\n"
-               + "O papel antigo deixa de valer. Continuar?")) return;
-  const r = await pdEscrever("/api/codigos/gerar");
-  if (!r.ok) { pdDizer("não deu para gerar.", true); return; }
-  const d = await r.json();
-  const ol = $("#pd-codigos");
-  ol.textContent = "";
-  for (const c of d.codigos) {
-    const li = document.createElement("li");
-    li.textContent = c;
-    ol.append(li);
+function pdGerar() {
+  confirmar({
+    titulo: "Gerar dez códigos novos?",
+    texto: "Os dez anteriores são apagados na hora, e o papel que você tem "
+         + "guardado deixa de valer. Os novos aparecem uma vez só.",
+    sim: "Gerar os dez novos", nao: "Manter os que tenho"
+  },
+    async () => {
+      const r = await escrever("/api/codigos/gerar");
+      if (!r.ok) { recado("não conseguimos gerar.", true); return; }
+      const d = await r.json();
+      const ol = $("#pd-codigos");
+      ol.textContent = "";
+      for (const c of d.codigos) {
+        const li = document.createElement("li");
+        li.textContent = c;
+        ol.append(li);
+      }
+      ol.hidden = false;
+      $("#pd-queima").hidden = false;
+      recado("anote agora — eles não aparecem de novo.");
+      pdCarregar();
+    });
+}
+
+/* ================================================== confirmação ========== */
+/* `confirm()` do navegador trava a página inteira e não obedece aos tokens.
+   Este diálogo nomeia o que morre, como manda o desenho. */
+let AO_CONFIRMAR = null;
+function confirmar({ titulo, texto, sim, nao }, aoConfirmar) {
+  $("#conf-titulo").textContent = titulo;
+  $("#conf-texto").textContent = texto;
+  $("#conf-sim").textContent = sim;
+  $("#conf-nao").textContent = nao;
+  AO_CONFIRMAR = aoConfirmar;
+  $("#dlg-confirmar").showModal();
+}
+
+/* ================================================== o tema =============== */
+/* Três estados: claro, escuro e "seguir o sistema" (o padrão). O botão percorre
+   os três nesta ordem e diz em qual está. A escolha vive no navegador. */
+const TEMAS = ["sistema", "light", "dark"];
+const NOME_DO_TEMA = { sistema: "Tema: segue o sistema", light: "Tema: claro",
+                       dark: "Tema: escuro" };
+
+function aplicarTema(t) {
+  if (t === "sistema") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", t);
+  $("#btn-tema").textContent = NOME_DO_TEMA[t];
+  try { localStorage.setItem("dervs-tema", t); } catch {}
+}
+
+function temaGuardado() {
+  try { return localStorage.getItem("dervs-tema") || "sistema"; }
+  catch { return "sistema"; }
+}
+
+/* ================================================== o carregamento ======= */
+
+async function carregar() {
+  try {
+    const r = await fetch("/api/dados");
+    if (!r.ok) throw new Error(r.status);
+    ESTADO = await r.json();
+    $("#aviso-painel").hidden = true;
+    document.querySelectorAll("main > section").forEach(
+      s => s.classList.remove("envelhecido"));
+    return true;
+  } catch {
+    /* A lista anterior CONTINUA na tela, acinzentada, com a faixa em cima.
+       Esvaziar a tela por causa de uma falha de rede é indistinguível de
+       "você não tem projetos" — e é a mentira mais fácil de contar aqui. */
+    const faixa = $("#aviso-painel");
+    faixa.hidden = false;
+    faixa.textContent = ESTADO
+      ? "Não conseguimos atualizar. Mostrando a medição de "
+        + hora(ESTADO.agora) + "."
+      : "Não conseguimos falar com o servidor. Recarregue a página.";
+    if (ESTADO) $("#tela-painel").classList.add("envelhecido");
+    return false;
   }
-  ol.hidden = false;
-  $("#pd-queima").hidden = false;
-  pdDizer("anote agora — eles não aparecem de novo.");
-  pdCarregar();
 }
 
-/* ------------------------------------------------------------- maquinas ---
-   Mesmo par de utilitarios do dialogo de portas: `pdEscrever` ja carrega o
-   token anti-CSRF da sessao, e reaproveita-lo evita uma segunda copia que
-   esqueceria o cabecalho no dia em que alguem mexesse so numa. */
-const maq = $("#maq-dlg");
-
-function maqDizer(texto, ruim) {
-  const p = $("#maq-aviso");
-  p.textContent = texto;
-  p.classList.toggle("ruim", !!ruim);
+async function inicio() {
+  aplicarTema(temaGuardado());
+  await carregar();
+  navegar();
+  /* A tela nunca espera coleta: relê de minuto em minuto e troca o que mudou. */
+  setInterval(async () => { if (await carregar()) navegar(); }, 60000);
 }
 
-function maqQuando(iso) {
-  if (!iso) return "nunca reportou";
-  const d = new Date(iso);
-  if (isNaN(d)) return "—";
-  const min = Math.round((Date.now() - d.getTime()) / 60000);
-  if (min < 2) return "reportou agora";
-  if (min < 60) return "reportou há " + min + " min";
-  const h = Math.round(min / 60);
-  if (h < 48) return "reportou há " + h + " h";
-  return "reportou em " + d.toLocaleDateString("pt-BR");
-}
+/* ---------------------------------------------------------------- ligações */
+window.addEventListener("hashchange", navegar);
 
-async function maqCarregar() {
-  let d;
-  try { d = await (await fetch("/api/maquinas")).json(); }
-  catch { maqDizer("não deu para ler a lista.", true); return; }
-
-  const lista = $("#maq-lista");
-  lista.textContent = "";
-  if (!d.maquinas || !d.maquinas.length) {
-    const li = document.createElement("li");
-    li.className = "pd-vazia";
-    li.textContent = "Nenhuma máquina conectada. Os números da tela vêm da "
-                   + "coleta desta máquina.";
-    lista.append(li);
-    return;
-  }
-  for (const m of d.maquinas) {
-    const li = document.createElement("li");
-    const nome = document.createElement("span");
-    nome.className = "pd-nome";
-    // textContent, nunca innerHTML: o nome vem da OUTRA maquina, e e o campo
-    // mais facil de envenenar em todo este painel — quem pareia escolhe o
-    // texto. Com innerHTML, um nome com <script> viraria script aqui dentro.
-    nome.textContent = m.nome || "máquina sem nome";
-    const quando = document.createElement("span");
-    quando.className = "pd-quando";
-    quando.textContent = maqQuando(m.visto_em) + " · " + m.projetos
-                       + (m.projetos === 1 ? " projeto" : " projetos");
-    const tirar = document.createElement("button");
-    tirar.className = "btn";
-    tirar.type = "button";
-    tirar.textContent = "Remover";
-    tirar.addEventListener("click", () => maqRemover(m.id, m.nome));
-    li.append(nome, quando, tirar);
-    lista.append(li);
-  }
-}
-
-async function maqRemover(id, nome) {
-  if (!confirm("Remover “" + (nome || "esta máquina") + "”?\n"
-               + "Ela para de reportar na hora, e só volta com um número novo.")) return;
-  const r = await pdEscrever("/api/maquinas/remover", { id });
-  if (!r.ok) { maqDizer("não deu para remover.", true); return; }
-  maqDizer("removida. Ela não reporta mais.");
-  maqCarregar();
-}
-
-async function maqGerar() {
-  maqDizer("");
-  const r = await pdEscrever("/api/maquinas/parear");
-  if (!r.ok) { maqDizer("não deu para gerar o número.", true); return; }
-  const d = await r.json();
-  $("#maq-numero").textContent = d.codigo;
-  $("#maq-comando").textContent =
-    "python -m agente.enviar --alvo " + location.origin + " --codigo " + d.codigo;
-  $("#maq-receita").hidden = false;
-  maqDizer("vale por " + d.minutos + " minutos, e para uma máquina só.");
-}
-
-$("#btn-maquinas").addEventListener("click", () => {
-  maqDizer("");
-  // O numero some ao reabrir: numero antigo na tela e numero que o dono digita
-  // e nao funciona, sem entender por que.
-  $("#maq-receita").hidden = true;
-  maq.showModal();
-  maqCarregar();
+$("#btn-tema").addEventListener("click", () => {
+  const i = TEMAS.indexOf(temaGuardado());
+  aplicarTema(TEMAS[(i + 1) % TEMAS.length]);
 });
-$("#maq-fechar").addEventListener("click", () => maq.close());
-$("#maq-gerar").addEventListener("click", maqGerar);
 
-$("#btn-portas").addEventListener("click", () => {
-  pdDizer("");
-  $("#pd-codigos").hidden = true;
-  $("#pd-queima").hidden = true;
-  pd.showModal();
-  pdCarregar();
+$("#btn-sair").addEventListener("click", async () => {
+  try { await fetch("/sair", { method: "POST" }); } catch {}
+  location.reload();
 });
-$("#pd-fechar").addEventListener("click", () => pd.close());
+
+$("#btn-gerar-numero").addEventListener("click", gerarNumero);
+
+$("#btn-copiar-comando").addEventListener("click", async () => {
+  const texto = $("#comando-pareamento").textContent;
+  try { await navigator.clipboard.writeText(texto); recado("comando copiado."); }
+  catch { recado("não deu para copiar. Selecione o texto e copie à mão.", true); }
+});
+
+$("#arq-confirmar").addEventListener("click", arquivar);
+$("#arq-cancelar").addEventListener("click", () => $("#dlg-arquivar").close());
+
+$("#conf-sim").addEventListener("click", () => {
+  $("#dlg-confirmar").close();
+  const f = AO_CONFIRMAR;
+  AO_CONFIRMAR = null;
+  if (f) f();
+});
+$("#conf-nao").addEventListener("click", () => $("#dlg-confirmar").close());
+
 $("#pd-cadastrar").addEventListener("click", pdCadastrar);
 $("#pd-gerar").addEventListener("click", pdGerar);
+
+inicio();
 </script>
 </body>
 </html>

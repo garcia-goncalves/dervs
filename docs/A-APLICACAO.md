@@ -266,12 +266,23 @@ liga e desliga ferramenta do agente é uma superfície de ataque de primeira ord
 
 ## 11. O caminho — o que está pronto, o que falta
 
-**Entregue (etapas 1 a 12 de 17, 988 testes passando):** a fusão dos dois repositórios com
+**Entregue (etapas 1 a 14 de 17, 998 testes passando):** a fusão dos dois repositórios com
 as duas autorias preservadas · a verificação automática escalonada · a amputação de toda
 rota que executava comando · o banco de vários usuários · o login com cortina e entrada
 pelo GitHub · o motor do selo de quatro estados · o agente do computador e o pareamento
 por código de seis dígitos · as pendências do GitHub e o drift · a troca de chave por
-token do aplicativo do GitHub, conferida byte a byte contra o OpenSSL.
+token do aplicativo do GitHub, conferida byte a byte contra o OpenSSL · a paleta e a
+tipografia em tokens, servidas do próprio domínio · **e as telas, em português, com o
+selo de quatro estados ligado ao motor e "isto está certo assim" gravando no banco.**
+
+**Uma contradição achada na etapa 14, que só a mão do dono resolve.** O desenho pede duas
+coisas que não cabem juntas: "10 projetos visíveis sem rolagem em 360×640" e uma linha de
+projeto com *selo · nome · o motivo em uma frase · o carimbo*. Medido no navegador, a
+linha com esse conteúdo ocupa cerca de 90 a 113 px — sete linhas enchem os 640 px, e isso
+sem contar a frase de resumo, a régua de quatro contadores e a ação recomendada, que
+somam mais 350 px. **Chegar a 10 exige tirar o motivo da linha.** A tela foi entregue com
+o motivo, porque é ele que responde "o que houve" sem um clique; a meta de 10 fica
+registrada como não cumprida em vez de silenciosamente abandonada.
 
 **Falta, nesta ordem:**
 
