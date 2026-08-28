@@ -1248,13 +1248,24 @@ def criar_usuario(email: str, senha: str = None, nome: str = "", con=None) -> in
 COLUNAS_USUARIO = ("id", "email", "nome", "criado_em", "desativado_em")
 
 
-def usuario_por_email(email: str, con=None):
+def usuario_por_email(email: str, con=None, *, incluir_desativados=False):
+    """Por padrao SO conta ativa: quem pergunta e caminho de entrada, e conta
+    desativada nao entra.
+
+    `incluir_desativados=True` existe para UM caso, e ele e administrativo:
+    `autenticacao.remover` precisa achar a conta que quer apagar. Sem isso o
+    comando respondia "nao ha conta com este e-mail" para uma conta que existe
+    — mentira com cara de verdade, e a conta desativada ficava impossivel de
+    apagar. NAO use isto em caminho de login.
+    """
     fechar = con is None
     con = con or conectar()
+    filtro = "" if incluir_desativados else " AND desativado_em IS NULL"
     try:
         l = con.execute(
-            "SELECT %s FROM usuario WHERE email = ? AND desativado_em IS NULL"
-            % ", ".join(COLUNAS_USUARIO), (_normalizar_email(email),)).fetchone()
+            "SELECT %s FROM usuario WHERE email = ?%s"
+            % (", ".join(COLUNAS_USUARIO), filtro),
+            (_normalizar_email(email),)).fetchone()
         return dict(l) if l else None
     finally:
         if fechar:

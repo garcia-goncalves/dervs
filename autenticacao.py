@@ -207,23 +207,41 @@ def remover(email: str, con=None) -> int:
     fechar = con is None
     con = con or banco.conectar()
     try:
-        u = banco.usuario_por_email(email, con=con)
+        # `incluir_desativados`: sem ele o comando responderia "nao ha conta
+        # com este e-mail" para uma conta que existe e esta apenas desativada,
+        # e ela ficaria impossivel de apagar — o buraco que este comando veio
+        # fechar, de novo, so que calado.
+        u = banco.usuario_por_email(email, con=con, incluir_desativados=True)
         if u is None:
             raise ValueError("nao ha conta com este e-mail: %s" % email)
-        # Nao ha cadastro pela web. Apagar a ultima conta trancaria o sistema
-        # para sempre, e o conserto seria exatamente o que este comando existe
-        # para nao exigir: mexer no banco do servidor a mao.
-        quantas = con.execute("SELECT COUNT(*) FROM usuario").fetchone()[0]
-        if quantas <= 1:
-            raise ValueError(
-                "esta e a unica conta do sistema; apaga-la trancaria o DERVS "
-                "para sempre. Convide a conta nova ANTES de apagar esta.")
         uid = u["id"]
+        # Nao ha cadastro pela web: se depois desta remocao nao sobrar nenhuma
+        # conta QUE ENTRA, o DERVS fica trancado para sempre e o conserto seria
+        # exatamente o que este comando existe para nao exigir — mexer no banco
+        # do servidor a mao.
+        #
+        # Contar linhas da tabela nao serve: conta desativada nao entra
+        # (`entrar_por_github` a recusa), entao ela nao e saida para ninguem.
+        sobram = con.execute(
+            "SELECT COUNT(*) FROM usuario"
+            " WHERE desativado_em IS NULL AND id <> ?", (uid,)).fetchone()[0]
+        if sobram == 0:
+            raise ValueError(
+                "esta e a unica conta que ainda entra no DERVS; apaga-la "
+                "trancaria o sistema para sempre. Convide a conta nova ANTES "
+                "de apagar esta.")
         for tabela in _TABELAS_SEM_CASCATA:
             con.execute("DELETE FROM %s WHERE usuario_id = ?" % tabela, (uid,))
         con.execute("DELETE FROM usuario WHERE id = ?", (uid,))
         con.commit()
         return uid
+    except Exception:
+        # A remocao sao varios DELETE numa transacao implicita. Sem este
+        # rollback, uma falha no meio deixava os apagados PENDENTES na conexao
+        # — e quando `con` vem de fora, o proximo commit de outra pessoa
+        # gravaria a meia-remocao sem ninguem pedir.
+        con.rollback()
+        raise
     finally:
         if fechar:
             con.close()

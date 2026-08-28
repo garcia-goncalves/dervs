@@ -545,6 +545,28 @@ class ContaDesativada(unittest.TestCase):
         self.assertIsNone(banco.usuario_por_email("dono@teste.local", con=self.con))
         self.assertIsNone(banco.credencial_por_email("dono@teste.local", con=self.con))
 
+    def test_esconder_a_conta_desativada_e_o_PADRAO(self):
+        """`incluir_desativados` nasceu em 28/08/2026 para `autenticacao.remover`
+        achar a conta que vai apagar. O dia em que o padrao dele inverter, o
+        login volta a enxergar conta desativada — e isso e uma porta aberta,
+        nao um bug de listagem. O padrao tem de ser conferido nominalmente."""
+        import inspect
+        p = inspect.signature(banco.usuario_por_email).parameters
+        self.assertIs(p["incluir_desativados"].default, False)
+        self.assertIs(p["incluir_desativados"].kind,
+                      inspect.Parameter.KEYWORD_ONLY,
+                      "so por nome: posicional entraria por engano num "
+                      "caminho de login")
+
+    def test_quem_administra_consegue_ver_a_conta_desativada(self):
+        """A outra metade: se o parametro nao funcionasse, a conta desativada
+        ficaria impossivel de apagar e o comando mentiria dizendo que ela nao
+        existe."""
+        u = banco.usuario_por_email("dono@teste.local", con=self.con,
+                                    incluir_desativados=True)
+        self.assertIsNotNone(u)
+        self.assertIsNotNone(u["desativado_em"])
+
 
 class NadaDeSegredoNaSaida(unittest.TestCase):
 
