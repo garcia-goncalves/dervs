@@ -849,11 +849,22 @@ de outra máquina lá dentro. O pacote `agente/` mede um computador e **manda** 
 resultado para um DERVS remoto.
 
 Conectar é um número de seis dígitos, gerado no botão **Computadores** do painel e
-digitado na outra máquina:
+digitado na outra máquina, **num terminal aberto dentro da pasta do DERVS** — a
+que tem a pasta `agente`:
 
 ```
 python -m agente.enviar --alvo https://SEU-DERVS --codigo 123456
 ```
+
+Rodar de outra pasta responde `No module named 'agente'`. Esse erro é do Python,
+não do número: ele acontece antes de o programa começar, por isso vem em inglês
+e parece grave. Num PowerShell dá para fazer as duas coisas numa linha só:
+`cd C:\caminho\do\dervs; python -m agente.enviar ...`
+
+**Cada DERVS tem o banco dele.** Um número gerado no painel do servidor não vale
+no DERVS da sua própria máquina, e o contrário também não — o segundo recusa, e
+está certo. Confira se o `--alvo` é o mesmo endereço que você abriu no navegador
+para gerar o número.
 
 O roteiro completo — o que aparece quando dá certo, o que fazer em cada erro, e
 como deixar reportando sozinho — está em

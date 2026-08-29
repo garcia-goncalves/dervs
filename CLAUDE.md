@@ -89,6 +89,23 @@ ele pendura, e suíte pendurada é pior que suíte vermelha.
   novo que não estiver lá deixa a verificação vermelha. Acrescente junto.
 - `if __name__ == "__main__"` fica no **fim** do arquivo, sempre. Já houve teste
   que nunca rodou porque essa linha estava no meio.
+- **Teste que sobe servidor declara a chave de teste ANTES de importar `banco`:**
+
+  ```python
+  os.environ.setdefault("DERVS_AMBIENTE", "local")
+  os.environ.setdefault("DERVS_COFRE", "chave-de-teste-que-nao-e-segredo-nenhum-0123456789")
+  ```
+
+  Sem isso ele passa aqui e **fica vermelho só na CI** — `chave_do_cofre()`
+  recusa inventar chave fora do ambiente local, e o `cofre.chave` existe nesta
+  máquina e não no runner. Aconteceu em 29/08/2026 (`45963da`).
+- **Guarda de acoplamento se prova sabotando.** Teste que casa texto com texto
+  (CSS↔JS, doc↔tela) quase sempre tem um caminho em que a asserção é
+  tautológica: verde não distingue "está certo" de "não podia dar errado". Em
+  29/08/2026, dois de cinco casos novos eram incapazes de reprovar —
+  `id="lista-computadores"` já contém a palavra `computadores`, e uma busca de
+  string atravessava aspas. Quebre cada coisa de propósito e exija que o caso
+  correspondente acuse.
 - Teste com data fixa (`AGORA = datetime(...)`) tem de passar `agora_iso` para
   toda função que compara prazo. Sem isso o teste passa hoje e fica vermelho
   sozinho amanhã, sem ninguém tocar em nada.
@@ -119,12 +136,25 @@ ele pendura, e suíte pendurada é pior que suíte vermelha.
   pendencias nomeadas la, **duas foram fechadas** no mesmo dia (o `painel.js`
   aberto e a conta que nao dava para apagar) e **duas continuam abertas — as
   duas dependem so da mao do dono**, nao de codigo.
-- **A Fatia 2 ainda nao comecou.** O pedido do dono em 28/08 a noite ("a fusao
-  das aplicacoes... tudo que um DEV precisa") esta transcrito no §11 da fonte
-  unica. **Cuidado com a palavra "fusao":** a dos REPOSITORIOS esta entregue
-  desde a etapa 1 (o `dervs-hub` vive em `vivo/`); o que ele pede agora e a das
-  CAPACIDADES, reescritas em Python. Isso entra pela esteira, comecando pelo
-  briefing — "tudo que um DEV precisa" e intencao, nao escopo.
+- `docs/superpowers/plans/dervs-fatia-2.md` — **14 das 16 etapas entregues** em
+  28/08/2026 (PR #18). O DERVS deixou de so medir: recebe tarefa, abre copia
+  isolada, trabalha e devolve um ramo. As duas que faltam **nao sao codigo** —
+  a 15 e o portao do dono ("posso instalar o braco na VPS dos 26 containers?"),
+  e junto dela a pergunta que **ninguem respondeu**: rodar a assinatura Max num
+  servidor e aceitavel nos termos da Anthropic? A pesquisa achou a regra que
+  proibe assinatura COM O AGENT SDK, e o DERVS nao usa o SDK — isso nao e a
+  mesma coisa que uma resposta.
+  A verificacao, com o que ela NAO prova, esta em
+  `docs/esteira/dervs-fatia-2/verificacao.md`.
+- **Cuidado com a palavra "fusao"** no §11 da fonte unica: a dos REPOSITORIOS
+  esta entregue desde a etapa 1 (o `dervs-hub` vive em `vivo/`); o que o dono
+  pediu em 28/08 a noite e a das CAPACIDADES, reescritas em Python. Isso entra
+  pela esteira, comecando pelo briefing — "tudo que um DEV precisa" e intencao,
+  nao escopo, **e continua sem comecar**.
+- **O que esta no ar e MAIS VELHO que a `main`.** A ultima publicacao levou a
+  Fatia 2; tudo de 29/08 (a tela de Computadores refeita e as mensagens do
+  agente) esta so no GitHub. Antes de dizer ao dono que a tela mudou, confira
+  se a etiqueta `publicado-*` mais nova cobre o commit em questao.
 - `docs/operacao/` — os roteiros que exigem a mão do dono (GitHub App, entrar,
   conectar computador, **publicar no servidor**).
 
