@@ -234,7 +234,7 @@ Isto é tão parte do produto quanto o que ele faz.
 - **Nunca virar bot de WhatsApp.** A biblioteca disponível é uma sessão não oficial,
   frágil e contra os termos de uso. Descartado do produto, não adiado. Telegram fica.
 
-## 8. As telas — seis, e só seis
+## 8. As telas — oito, e o porquê das duas novas
 
 Direção visual escolhida: **Torre de Controle**. Preto, branco e verde.
 
@@ -242,8 +242,30 @@ Direção visual escolhida: **Torre de Controle**. Preto, branco e verde.
 2. **Painel** — a ação recomendada, a frase de resumo, e um selo por projeto.
 3. **Projeto** — as três colunas, e a prova de cada selo.
 4. **Conectar projeto** — escolher a pasta, a conta do GitHub, o servidor.
-5. **Computadores** — quais estão conectados, quando cada um deu notícia.
+5. **Computadores** — quais estão conectados, quando cada um deu notícia, e
+   **quais estão autorizados a consertar** (Fatia 2).
 6. **Alerta** — o que houve, o que fazer, e "isto está certo assim".
+7. **Trabalho** *(Fatia 2)* — o que o DERVS já consertou, o que está fazendo
+   agora ao vivo, o que espera o clique, e o que mudou em português.
+8. **Consumo** *(Fatia 2)* — quanto o painel trabalhou nos últimos sete dias.
+
+**Eram seis até 29/08/2026, e o documento dizia "seis, e só seis".** As duas
+novas entraram com motivo escrito, e não por acréscimo:
+
+- **Trabalho** não cabia dentro de Projeto nem de Alerta. Alerta responde "o
+  que houve"; Trabalho responde "o que está sendo feito sobre isso, agora". São
+  perguntas diferentes, e enfiar a segunda na primeira faria o Alerta virar
+  duas telas empilhadas.
+- **Consumo** é consequência obrigatória de uma decisão do dono (§12: sem freio
+  de horário, observar sete dias). Sem uma tela que responda "quanto
+  consumimos", "observar" é uma intenção. Ela poderia ser um bloco do Painel —
+  e foi considerada assim —, mas disputaria espaço com a promessa de "eu sei o
+  que houve sem clicar", que a Fatia 1 mediu e ajustou.
+
+**A barra do freio não é uma tela: ela está em TODAS.** Enquanto houver uma
+sessão viva, o botão Parar aparece no topo de qualquer tela. Com o freio de
+horário fora, ele é o freio principal, e freio principal não pode depender de
+a pessoa estar na tela certa.
 
 **A regra dura da cor:** verde é **estado saudável**, nunca cor de marca. Botão, link e
 cabeçalho são quase-preto no tema claro e quase-branco no escuro. Se o verde virar cor de
@@ -432,6 +454,24 @@ Decisões travadas. Mudar qualquer uma exige um motivo novo, escrito.
 - O selo tem **quatro** estados.
 - Arquivamento é permanente, não 24 horas.
 - Publicação nunca é automática: só por botão, depois do sinal do dono.
+- **`publicar` é vermelho para sempre, e não é repintável.** A recusa existe em
+  quatro lugares independentes: `tarefas.NUNCA_VERDE`, `banco.repintar_regra`,
+  a rota `/api/tarefas/cor` e a tela. `test_tarefas_nao_publicam.py` cobra os
+  quatro.
+- **Nenhum diff produzido por uma sessão altera o caminho que publica.** Não
+  basta "nenhuma rota publica": `fila.diff_toca_publicacao` barra qualquer
+  mudança em `.github/workflows/`, `Dockerfile`, `docker-compose.yml`,
+  `infra/`, e qualquer linha nova com `gh workflow`/`workflow_dispatch`.
+- **O servidor continua sem importar `execucao` e sem alcançar `fila`.** Quem
+  executa é o agente, na máquina dele. `test_rotas.py` não foi afrouxado em
+  ponto nenhum na Fatia 2, e se uma etapa parecer exigir isso, ela saiu do
+  trilho.
+- **Parear um computador não dá a ele o direito de rodar código.** A coluna
+  `maquina.executa` nasce `0`; autorizar é um segundo sim, explícito, na tela
+  de Computadores.
+- **O botão Parar nunca afirma que parou antes de o computador confirmar.**
+  Ele diz "pedido de parada enviado", e só troca a frase quando a confirmação
+  chega.
 
 ## 13. Dívidas conhecidas, ainda abertas
 
@@ -467,6 +507,30 @@ Decisões travadas. Mudar qualquer uma exige um motivo novo, escrito.
   rodadas**, não reais, e reserva cota para o trabalho humano. O teto em reais continua no
   código como rede de segurança para o dia em que uma chave de API entrar — não como o
   limite que manda.
+- **O botão Parar tem uma janela de até ~10 segundos, e nenhuma etapa a fecha.**
+  O pedido viaja no próximo aviso do agente (até 5 s), mais o tempo de encerrar
+  a árvore de processos, mais os 5 s que `execucao.parar()` espera pela
+  confirmação. A alternativa — o painel abrir conexão para o agente — contraria
+  "o agente não escuta porta nenhuma", que é linha travada do §12. **Fica
+  assim, e a tela diz a verdade sobre isso.**
+- **Durante a sessão, o gasto continua desconhecido.** Só o evento final traz
+  custo. O contador da tela de Consumo conta o que **terminou**; uma sessão de
+  40 rodadas que trava consumindo cota não aparece em número nenhum enquanto
+  roda — só a duração cresce na tela.
+- **"Uma sessão por vez" é por MÁQUINA, não por conta.** Com dois braços, o
+  painel pode ter duas sessões vivas ao mesmo tempo, e elas não enxergam o
+  gasto uma da outra dentro da própria janela: o teto do dia é conferido antes
+  de cada uma começar, lendo o mesmo banco, mas duas que começam no mesmo
+  minuto passam as duas. No pior caso, o dobro do consumo. Declarado para não
+  ser descoberto na semana de observação.
+- **Retomada de sessão não existe.** Se o agente morrer no meio, a tarefa não
+  volta de onde parou: ela é marcada `falha` por falta de notícia depois de 15
+  minutos. Reconectar a um processo `claude` que sobreviveu ao agente exigiria
+  um segundo banco na máquina dele, e uma segunda fonte de verdade.
+- **`test_servir.py` tem uma intermitência de conexão** (`WinError 10053`,
+  ~1 falha em 4 corridas nesta máquina). Reproduzida no commit anterior à
+  etapa 6, com o trabalho guardado — **não é da Fatia 2**, e não foi
+  investigada.
 - **O teto do fornecedor não é cerca, e isso está medido aqui.** `--max-budget-usd` com teto
   US$ 0,10 terminou em US$ 0,4455 — estouro de 4,5× (`execucao.py:22`). E só o evento final
   traz custo, então durante a sessão o gasto é desconhecido. A única garantia real é matar o
