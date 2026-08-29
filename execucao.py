@@ -65,20 +65,19 @@ from pathlib import Path
 # `banco` so para anotar o gasto no teto do dia. Nao ha ciclo: banco nao importa
 # ninguem daqui.
 import banco
+import tarefas
 
-# Teto por execucao, em dolar. US$ 1 nao daria: medido em 24/08/2026, so LIGAR a
-# sessao custa US$ 0,2256 num turno trivial sem MCP, e US$ 0,4455 herdando os
-# MCPs da maquina. Nao e limite duro (ver medicao 2 no topo) — a tela precisa
-# dizer que o teto e aproximado.
-TETO_USD = 3.0
-
-# Cotacao fixa no codigo, num lugar so (decisao do dono, 24/08/2026). Valor do
-# fechamento de 21/08/2026: R$ 5,1417. Envelhece — atualize quando incomodar.
-USD_BRL = 5.14
-
-# Limite de turnos da sessao filha. Uma CI vermelha simples se resolve em muito
-# menos; o numero existe para o laco que der errado nao rodar a noite inteira.
-MAX_TURNOS = 40
+# MUDARAM DE CASA (Fatia 2, etapa 2): TETO_USD, USD_BRL, MAX_TURNOS e
+# `em_reais` agora moram em `tarefas.py`, que e o unico arquivo que o SERVIDOR
+# tambem pode importar. Os nomes continuam aqui de proposito — sao os MESMOS
+# objetos, nao copias. Uma copia divergiria, e a que diverge e sempre a que
+# ninguem le (licao do `contraste.py`, 27/08/2026).
+#
+# Nao e limite duro (ver medicao 2 no topo) — a tela precisa dizer que o teto
+# e aproximado.
+TETO_USD = tarefas.TETO_USD
+USD_BRL = tarefas.USD_BRL
+MAX_TURNOS = tarefas.MAX_TURNOS
 
 # Lista branca: o que a sessao filha pode fazer sozinha, sem perguntar.
 #
@@ -397,13 +396,9 @@ def custo_do_evento(evento: dict, acumulado: float) -> float:
     return acumulado
 
 
-def em_reais(usd: float) -> str:
-    """0.2256 -> "R$ 1,16". Virgula decimal, duas casas, sempre."""
-    try:
-        valor = float(usd) * USD_BRL
-    except (TypeError, ValueError):
-        valor = 0.0
-    return "R$ " + ("%.2f" % valor).replace(".", ",")
+# Mesma funcao de `tarefas.em_reais`, e nao uma copia dela: o nome daqui
+# aponta para o objeto de la.
+em_reais = tarefas.em_reais
 
 
 def decidir_pedido(execucao_atual, projeto_pedido: str) -> str:
@@ -796,6 +791,11 @@ def _zerado() -> dict:
         "custo_usd": 0.0, "linhas": [], "pr_url": None, "resumo": "",
         "diff": "", "manchete": "", "corpo": "", "copia": "", "ramo": "", "base_sha": "",
         "projeto_caminho": "", "contabilizar": False,
+        # RODADAS (Fatia 2). Com assinatura, o recurso escasso e cota, e cota
+        # se mede em turnos — nao em dolar. `--max-budget-usd` foi medido
+        # estourando 4,5x; o numero de rodadas nao estoura, porque e contado
+        # aqui, evento a evento, e nao prometido pelo fornecedor.
+        "rodadas": 0,
     }
 
 
@@ -1018,6 +1018,10 @@ def _absorver(evento: dict) -> None:
 
     tipo = evento.get("type")
     if tipo == "assistant":
+        # Uma resposta do modelo e UMA rodada. O `result` traz `num_turns`, mas
+        # so no fim: contar aqui e o que permite a tela mostrar o numero
+        # crescendo enquanto a sessao roda.
+        _execucao["rodadas"] = int(_execucao.get("rodadas", 0)) + 1
         for nome, comando in _ferramentas_do_evento(evento):
             _anotar("%s %s" % (nome, comando[:200]) if comando else nome)
     elif tipo == "system" and evento.get("subtype") == "init":
@@ -1030,6 +1034,10 @@ def _absorver(evento: dict) -> None:
         return
 
     _execucao["resumo"] = str(evento.get("result") or "")
+    # O fornecedor tem a contagem oficial. Se ela vier, ela vence a nossa — a
+    # nossa existe para o numero nao ficar em zero durante a sessao inteira.
+    if isinstance(evento.get("num_turns"), int) and evento["num_turns"] > 0:
+        _execucao["rodadas"] = evento["num_turns"]
     _execucao["estado"] = avancar(_execucao.get("estado", "rodando"), evento)
     _anotar("sessão encerrada: %s" % (evento.get("terminal_reason") or "sem motivo"))
 
@@ -1207,6 +1215,8 @@ def estado(desde=0) -> dict:
         "custo_brl": em_reais(_execucao.get("custo_usd", 0.0)),
         "linhas": linhas_desde(log, desde),
         "total_de_linhas": len(log),
+        "rodadas": int(_execucao.get("rodadas", 0)),
+        "ramo": _execucao.get("ramo", ""),
         "pr_url": _execucao.get("pr_url"),
         "resumo": _execucao.get("resumo", ""),
         "diff": _execucao.get("diff", ""),

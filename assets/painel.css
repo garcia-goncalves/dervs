@@ -293,3 +293,194 @@ dialog::backdrop { background: var(--texto); opacity: 0.4; }
 dialog .acoes { margin-top: var(--e4); }
 
 main { padding-bottom: var(--e12); }
+
+/* ==========================================================================
+   FATIA 2 — a barra do freio, a marca de cor, o registro ao vivo e o diff.
+
+   Nenhum arquivo novo em `assets/`: a lista de estáticos nasce de uma leitura
+   da pasta NA SUBIDA, e um `.css` novo só passaria a ser servido depois de
+   reiniciar o servidor — além de precisar entrar em `ESTATICOS_COM_SESSAO`
+   por caminho exato e nos dois testes que cobram os nomes.
+   ========================================================================== */
+
+/* --------------------------------------------------------- a barra do freio
+   Fixa no topo, acima de tudo, em TODA tela. Com o dono tendo decidido não ter
+   freio de horário, este botão é o freio principal — e freio principal não
+   pode depender de a pessoa estar na tela certa. */
+.freio {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--estado-atencao-fraco);
+  border-bottom: 2px solid var(--estado-atencao);
+}
+
+.freio__linha {
+  display: flex;
+  align-items: center;
+  gap: var(--e3);
+  padding: var(--e3) var(--e4);
+  flex-wrap: wrap;
+}
+
+/* O ponto que pulsa. É o único movimento da tela, e ele existe para dizer
+   "isto está vivo AGORA" — o resto do painel mostra medição parada. */
+.freio__ponto {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--estado-atencao);
+  flex: none;
+  animation: freio-pulso 1.6s ease-in-out infinite;
+}
+
+@keyframes freio-pulso {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+
+/* Quem pediu para não ver movimento não vê. */
+@media (prefers-reduced-motion: reduce) {
+  .freio__ponto { animation: none; }
+}
+
+.freio__texto {
+  margin: 0;
+  flex: 1 1 14rem;
+  font-size: var(--fs-metadado);
+  color: var(--texto);
+}
+
+.botao--perigo {
+  background: var(--estado-quebrado);
+  /* O token, e nao `#fff`. A cor mora num lugar so, e o vigia da paleta cobra
+     isso — foi ele que pegou este literal em 29/08/2026. */
+  color: var(--acao-texto);
+  border-color: var(--estado-quebrado);
+}
+
+.botao--perigo:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ------------------------------------------------------------ a marca de cor
+   QUATRO SINAIS, e não um. Cor (o fundo), forma (a borda), glifo (o caractere)
+   e rótulo escrito. Cor sozinha não é informação: ela some no preto e branco,
+   e não existe para quem não distingue verde de vermelho. */
+.marca {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e2);
+  padding: 0.1rem var(--e2);
+  border-radius: var(--r2, 4px);
+  font-size: var(--fs-metadado);
+  white-space: nowrap;
+}
+
+.marca[data-cor="verde"] {
+  background: var(--estado-saudavel-fraco);
+  color: var(--estado-saudavel);
+  border: 1px solid var(--estado-saudavel);
+}
+
+.marca[data-cor="vermelho"] {
+  background: var(--estado-quebrado-fraco);
+  color: var(--estado-quebrado);
+  /* Borda TRACEJADA: a segunda diferença, a que sobrevive à impressão em
+     preto e branco. */
+  border: 1px dashed var(--estado-quebrado);
+}
+
+.marca__glifo { font-family: var(--fonte-mono); }
+
+/* ------------------------------------------------------- o registro ao vivo */
+.registro {
+  margin: 0;
+  padding-left: var(--e5);
+  font-family: var(--fonte-mono);
+  font-size: var(--fs-metadado);
+  line-height: var(--lh-corpo);
+  color: var(--texto-suave);
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+.registro li { margin-bottom: 0.15rem; word-break: break-word; }
+
+/* ------------------------------------------------------------------- o diff
+   Rola dentro da própria caixa. A página nunca rola na horizontal: numa tela
+   de 360 px, um diff largo empurraria o layout inteiro para o lado. */
+.prova { margin-top: var(--e4); }
+
+.prova summary {
+  cursor: pointer;
+  font-size: var(--fs-metadado);
+  color: var(--texto-suave);
+}
+
+.diff {
+  margin-top: var(--e3);
+  padding: var(--e3);
+  background: var(--fundo-elevado);
+  border: 1px solid var(--borda);
+  border-radius: var(--r2, 4px);
+  font-family: var(--fonte-mono);
+  font-size: var(--fs-metadado);
+  line-height: var(--lh-corpo);
+  overflow-x: auto;
+  max-height: 30rem;
+  white-space: pre;
+}
+
+.lista--simples { list-style: disc; padding-left: var(--e5); }
+.lista--simples li { border: 0; padding: 0.15rem 0; }
+
+/* --------------------------------------- a linha de tarefa em tela estreita
+   MEDIDO em 29/08/2026, num quadro de 360x640: a `.marca` com `white-space:
+   nowrap` empurrava o conteúdo para 392px, e a página inteira passava a rolar
+   na horizontal. Rolagem horizontal numa lista é o defeito que faz o dono
+   achar que a tela quebrou.
+
+   A `.linha` da tela Trabalho quebra em duas fileiras: nome em cima, marca e
+   botões embaixo. O `nowrap` da marca FICA — é ele que impede "espera o" numa
+   linha e "clique" na outra, que seria pior. */
+.linha {
+  display: flex;
+  align-items: center;
+  gap: var(--e3);
+  padding: var(--e3) var(--e4);
+  border-bottom: var(--traco) solid var(--borda);
+  flex-wrap: wrap;
+}
+
+.linha:last-child { border-bottom: 0; }
+
+.linha__nome {
+  flex: 1 1 10rem;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--texto);
+  font: inherit;
+  font-weight: var(--peso-medio);
+  cursor: pointer;
+  word-break: break-word;
+}
+
+.linha__nome:hover { text-decoration: underline; }
+
+.linha__motivo {
+  color: var(--texto-suave);
+  font-size: var(--fs-metadado);
+  min-width: 0;
+  word-break: break-word;
+}
+
+@media (max-width: 720px) {
+  /* A marca e os botões vão para a segunda fileira inteiros, em vez de
+     espremerem o nome até ele virar uma coluna de letras. */
+  .linha__nome { flex: 1 1 100%; }
+}

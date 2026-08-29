@@ -317,16 +317,24 @@ class ATelaFalaPortugues(unittest.TestCase):
     def texto_visivel(self):
         """O que o dono ve. Nao e "o arquivo inteiro".
 
-        Duas fontes: o texto entre as marcas do HTML, e as cadeias de texto
-        que o JavaScript escreve na tela. Comentario, nome de rota, nome de
-        classe e chave de dado ficam de fora — `p.selo === "sem_dados"` nao e
-        texto de tela, e reprovar por causa dele treinaria a gente a ignorar
-        este teste.
+        TRES fontes: o texto entre as marcas do HTML, as cadeias de texto do
+        `<script>` embutido, e — desde a Fatia 2 — o `assets/painel.js`.
+
+        A terceira nao e um detalhe. Em 28/08/2026 a CSP de producao expulsou o
+        script de dentro do HTML, e a partir dali este vigia passou a ler um
+        `<script>` que NAO EXISTE MAIS: ele vinha verde por estar olhando para
+        o vazio. Todo texto de tela escrito na Fatia 2 nasceria fora do alcance
+        dele. O `test_6b` e a guarda disso.
+
+        Comentario, nome de rota, nome de classe e chave de dado ficam de fora
+        — `p.selo === "sem_dados"` nao e texto de tela, e reprovar por causa
+        dele treinaria a gente a ignorar este teste.
         """
         bruto = html()
         bruto = re.sub(r"<!--.*?-->", " ", bruto, flags=re.S)
         corpo = re.sub(r"<style>.*?</style>", " ", bruto, flags=re.S)
         script = "\n".join(re.findall(r"<script>(.*?)</script>", corpo, re.S))
+        script += "\n" + PAINEL_JS.read_text(encoding="utf-8")
         marcacao = re.sub(r"<script>.*?</script>", " ", corpo, flags=re.S)
 
         pedacos = []
@@ -359,15 +367,39 @@ class ATelaFalaPortugues(unittest.TestCase):
         deixa de casar transforma este arquivo num teste que aprova qualquer
         coisa."""
         pedacos = self.texto_visivel()
+        # O piso subiu de 60 para 100 na Fatia 2, depois de o vigia passar a
+        # ler o painel.js: medido em 29/08/2026, a extracao acha bem mais que
+        # isso. Um vigia que passa vazio nao vigia nada, e este numero e o que
+        # transforma "a extracao quebrou" em erro em vez de silencio.
         self.assertGreaterEqual(
-            len(pedacos), 60,
-            "so %d pedacos de texto extraidos do index.html — a tela tem muito "
+            len(pedacos), 100,
+            "so %d pedacos de texto extraidos da tela — ela tem muito "
             "mais. A extracao quebrou." % len(pedacos))
         junto = " ".join(pedacos)
         for esperado in ("painel", "Conectar", "projeto"):
             self.assertIn(esperado, junto,
                           "nao achei %r no texto visivel — extracao suspeita."
                           % esperado)
+
+    def test_6d_a_extracao_alcanca_o_painel_js(self):
+        """A guarda especifica do buraco de 28/08/2026.
+
+        Sem esta assercao, alguem que apagasse a leitura do `painel.js` veria
+        o `test_6b` continuar verde (o HTML sozinho ja passa do piso), e o
+        vocabulario da tela inteira voltaria a nao ser conferido por ninguem.
+        """
+        junto = " ".join(self.texto_visivel())
+        do_js = [p for p in PAINEL_JS.read_text(encoding="utf-8").splitlines()
+                 if "textContent" in p and '"' in p]
+        self.assertTrue(do_js, "o painel.js nao escreve texto? extracao suspeita")
+        self.assertIn("assets/painel.js", str(PAINEL_JS).replace("\\", "/"))
+        # MEDIDO em 29/08/2026: com o painel.js sao 103 pedacos e 2990
+        # caracteres; SEM ele, 61 pedacos e 1991 caracteres. O piso de 2500
+        # fica entre os dois de proposito — e o unico numero que distingue
+        # "a extracao le os dois arquivos" de "voltou a ler so o HTML".
+        self.assertGreater(
+            len(junto), 2500,
+            "o texto visivel encolheu — o painel.js saiu da extracao?")
 
     def test_6c_a_busca_pegaria_a_palavra_se_ela_estivesse_la(self):
         """A guarda da guarda: prova que a comparacao reprova mesmo."""
@@ -653,14 +685,20 @@ class ORoteiroChamaAsTelasPeloNomeDelas(unittest.TestCase):
         bloco = re.search(r"<nav.*?</nav>", html(), re.S)
         self.assertIsNotNone(bloco, "o menu sumiu do index.html")
         nomes = re.findall(r'data-tela="[^"]+"\s*>([^<]+)<', bloco.group(0))
-        self.assertEqual(len(nomes), 4, nomes)
+        self.assertEqual(len(nomes), 6, nomes)
         return nomes
 
-    def test_o_menu_tem_os_quatro_nomes_esperados(self):
-        """Se o menu mudar de forma, o teste abaixo passa vazio e nao vigia."""
+    def test_o_menu_tem_os_seis_nomes_esperados(self):
+        """Se o menu mudar de forma, o teste abaixo passa vazio e nao vigia.
+
+        Eram quatro ate a Fatia 2. "Trabalho" e "Consumo" entraram junto com o
+        braco: a primeira e onde o dono ve e aprova o que o DERVS faz, a
+        segunda e o que torna a semana de observacao uma medicao em vez de uma
+        impressao.
+        """
         self.assertEqual(self.menu(),
-                         ["Painel", "Conectar projeto", "Computadores",
-                          "Formas de entrar"])
+                         ["Painel", "Trabalho", "Consumo", "Conectar projeto",
+                          "Computadores", "Formas de entrar"])
 
     def test_nenhum_roteiro_manda_clicar_num_botao_que_nao_existe(self):
         # O par: o nome errado que ja custou uma verificacao, e o certo.

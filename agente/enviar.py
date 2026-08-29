@@ -34,7 +34,8 @@ from pathlib import Path
 # `coletar` mora na raiz do repositorio, um nivel acima deste pacote.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import coletar  # noqa: E402
+import coletar
+import tarefas  # noqa: E402
 
 
 ESPERA = 60          # segundos de paciencia com a rede, por pedido
@@ -224,8 +225,17 @@ def parear(alvo: str, codigo: str, nome: str = "") -> str:
     return token
 
 
-def enviar_uma_vez(alvo: str, medicao=None) -> dict:
-    """Mede e manda. O envio E o sinal de vida — nao ha outro."""
+def enviar_uma_vez(alvo: str, medicao=None, trabalhar=True,
+                   relogio=None) -> dict:
+    """Mede, manda — e, se o painel pedir, TRABALHA.
+
+    O envio E o sinal de vida; nao ha outro. E a resposta do painel e o unico
+    lugar de onde uma tarefa chega: o agente continua sem escutar porta
+    nenhuma. Quem pergunta e ele.
+
+    `trabalhar=False` desliga a execucao e deixa so a medicao — e o que o
+    teste usa, e e o que a maquina do dono usa enquanto ele nao autorizar.
+    """
     token = token_de(alvo)
     if not token:
         raise ErroDoAlvo("esta maquina ainda nao esta pareada com %s. Rode de "
@@ -233,7 +243,7 @@ def enviar_uma_vez(alvo: str, medicao=None) -> dict:
                          "painel." % alvo)
     if medicao is None:
         medicao = coletar.medir()
-    return _falar(alvo, "/agente/relatorio", {
+    resposta = _falar(alvo, "/agente/relatorio", {
         "maquina": nome_desta_maquina(),
         "projetos": medicao["projetos"],
         "infra": medicao["infra"],
@@ -242,6 +252,105 @@ def enviar_uma_vez(alvo: str, medicao=None) -> dict:
         # chega do outro lado com a mesma cara de uma que nao achou nada.
         "avisos": medicao.get("avisos", []),
     }, token=token)
+
+    tarefa = resposta.get("tarefa") if isinstance(resposta, dict) else None
+    if trabalhar and isinstance(tarefa, dict) and tarefa.get("id"):
+        try:
+            resposta["desfecho"] = fazer_a_tarefa(alvo, token, tarefa,
+                                                  medicao=medicao,
+                                                  relogio=relogio)
+        except Exception as e:                  # noqa: BLE001
+            # UMA tarefa que explode nao pode matar o laco do agente. A maquina
+            # tem de continuar reportando: parar de medir por causa de uma
+            # sessao ruim deixaria o painel cego exatamente quando ha problema.
+            resposta["desfecho"] = {"estado": "falha",
+                                    "erro": "%s: %s" % (type(e).__name__, e)}
+    return resposta
+
+
+def caminho_do_projeto(nome: str, medicao=None) -> str:
+    """Onde ESTE projeto vive nesta maquina. "" se ela nao o conhece.
+
+    O painel manda o NOME do projeto, nunca um caminho: um caminho vindo da
+    rede seria o painel dizendo em que pasta desta maquina mexer, e isso e
+    exatamente o que a lista da medicao existe para impedir.
+    """
+    for p in ((medicao or {}).get("projetos") or []):
+        if (p.get("nome") or p.get("projeto") or "") == nome:
+            return p.get("caminho") or ""
+    return ""
+
+
+def fazer_a_tarefa(alvo: str, token: str, tarefa: dict, medicao=None,
+                   relogio=None) -> dict:
+    """Roda a sessao e vai contando. Devolve o desfecho que subiu.
+
+    O PROGRESSO E O FREIO. A cada `tarefas.SEGUNDOS_ENTRE_PROGRESSOS` o agente
+    manda o que apareceu, e a RESPOSTA desse mesmo pedido traz `{"pare": true}`
+    quando o dono clicou. Nao ha conexao aberta do painel para ca, e nao ha
+    porta escutando: o freio viaja no pedido que o agente ja ia fazer.
+
+    A latencia disso e ate 5 s, mais o tempo de matar a arvore de processos,
+    mais os 5 s que `execucao.parar()` espera pela confirmacao. A tela tem de
+    dizer isso — nao ha etapa que torne o botao instantaneo.
+    """
+    from agente import executor as _executor
+
+    braco = _executor.executor_de(tarefa.get("executor") or "claude")
+    if braco is None or not braco.disponivel():
+        desfecho = {"tipo": "desfecho", "id": tarefa.get("id") or "",
+                    "estado": "falha", "ramo": "", "resumo": "", "diff": "",
+                    "pr_url": "", "rodadas": 0, "custo_usd": 0.0,
+                    "erro": "esta maquina nao tem o braco %r instalado"
+                            % (tarefa.get("executor") or "claude")}
+        _falar(alvo, "/agente/resultado", desfecho, token=token)
+        return desfecho
+
+    agora = relogio or time.monotonic
+    # Comeca ATRASADO de proposito: assim a PRIMEIRA volta ja fala com o
+    # painel, em vez de esperar cinco segundos. Sem isso, toda sessao comecava
+    # com cinco segundos de tela em branco — e cinco segundos de nada, logo
+    # depois de o dono clicar, e o que faz uma pessoa clicar de novo.
+    ultimo = [agora() - tarefas.SEGUNDOS_ENTRE_PROGRESSOS]
+    entregues = [0]
+
+    def contar(retrato):
+        """Chamado pelo braco a cada volta. Devolve True para "pare"."""
+        if agora() - ultimo[0] < tarefas.SEGUNDOS_ENTRE_PROGRESSOS:
+            return False
+        ultimo[0] = agora()
+        linhas = []
+        for i, texto in enumerate(retrato.get("linhas") or []):
+            linhas.append([entregues[0] + i + 1, texto])
+        entregues[0] += len(linhas)
+        try:
+            volta = _falar(alvo, "/agente/resultado", {
+                "tipo": "progresso", "id": tarefa.get("id") or "",
+                "frase": retrato.get("frase") or "",
+                "linhas": linhas,
+                "rodadas": retrato.get("rodadas") or 0,
+                "custo_usd": retrato.get("custo_usd") or 0.0,
+            }, token=token)
+        except ErroDoAlvo:
+            # A rede caiu no meio. NAO e motivo para matar a sessao: as linhas
+            # que nao subiram sobem no proximo pedido, e o desfecho ainda vai
+            # chegar. Devolver True aqui faria uma falha de rede parecer, para
+            # o dono, um clique dele no botao Parar.
+            return False
+        return bool(isinstance(volta, dict) and volta.get("pare"))
+
+    caminho = caminho_do_projeto(tarefa.get("projeto") or "", medicao)
+    desfecho = braco.rodar(dict(tarefa, caminho=caminho),
+                           ao_progredir=contar,
+                           gasto_usd=0.0)
+    # O desfecho sobe SEMPRE, inclusive quando a sessao falhou. Sem ele a
+    # tarefa fica `rodando` no painel ate a varredura de 15 minutos, e ate la a
+    # tela mente dizendo que ha trabalho acontecendo.
+    try:
+        _falar(alvo, "/agente/resultado", desfecho, token=token)
+    except ErroDoAlvo:
+        pass
+    return desfecho
 
 
 def main(argv=None) -> int:

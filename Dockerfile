@@ -68,6 +68,10 @@ COPY p256.py          /app/
 COPY passkey.py       /app/
 COPY regras.py        /app/
 COPY servir.py        /app/
+# O semaforo (Fatia 2). Entra porque `banco.py` e `servir.py` o importam, e
+# `test_imagem.py` cobra que todo modulo importado entre — sem ele a imagem
+# morre na subida com ImportError, e a CI nao pega: ela roda testes, nao imagem.
+COPY tarefas.py       /app/
 
 # Os coletores. `servir.py` os chama como processo separado, por caminho, então
 # eles não aparecem como `import` — mas sem eles as três camadas quebram.

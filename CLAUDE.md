@@ -57,6 +57,31 @@ A trava casa por caminho exato: **renomear um dos dois a desliga em silencio.**
 sobe o servidor de verdade para conferir 401 sem sessao e 200 com ela — ler a
 tabela nao basta, as duas ja divergiram aqui.
 
+## As duas travas da Fatia 2
+
+**`tarefas.py` é o único lugar onde mora "esta tarefa pode rodar agora?"** A
+pergunta é feita duas vezes — pelo servidor antes de entregar, pelo agente
+antes de disparar — e as duas respostas vêm do mesmo código. Ele **não importa
+`execucao`, `fila` nem `banco`**, e há um teste que roda num processo novo para
+provar. Se importasse `execucao`, o `Dockerfile` teria de levar `execucao.py`, e
+`test_imagem.PROIBIDOS` reprova.
+
+Os tetos (`TETO_USD`, `USD_BRL`, `TETO_DIARIO_BRL`, `MAX_TURNOS`,
+`MAX_TENTATIVAS`) **mudaram de casa para lá**. `fila.py` e `execucao.py`
+reexportam os mesmos objetos, e um teste cobra a identidade — não há um segundo
+valor no repositório.
+
+**`GET /api/eventos` é a única resposta deste servidor que não é uma string
+inteira.** É um `text/event-stream`. Três coisas quebram em silêncio se
+mexidas: o cabeçalho `X-Accel-Buffering: no` (sem ele o nginx segura a
+resposta), o bloco `location = /api/eventos` do `infra/nginx-dervs.conf` (que
+não pode ter **nenhum** `add_header` — um `add_header` dentro de um `location`
+anula os seis do `server`), e a sonda de um segundo dentro do laço, que é o que
+faz o servidor perceber que a aba fechou e devolver a vaga.
+
+Teste de fluxo **sempre com prazo em toda leitura**: sem prazo ele não falha,
+ele pendura, e suíte pendurada é pior que suíte vermelha.
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em

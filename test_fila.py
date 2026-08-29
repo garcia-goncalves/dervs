@@ -570,5 +570,79 @@ class OBotaoResolverContaParaOTeto(BancoTemporario):
         self.assertAlmostEqual(total, 1.00)
 
 
+class TravaDePublicacao(unittest.TestCase):
+    """Nenhum DIFF, de nenhuma cor, altera o caminho que publica.
+
+    O criterio 4 da Fatia 2 nao se satisfaz com "nenhuma rota publica". A
+    sessao filha escreve codigo; se ela puder acrescentar um gatilho ao
+    `publicar.yml`, ela publica na proxima vez que alguem mexer no repositorio.
+    """
+
+    def test_acrescentar_gatilho_ao_publicar_yml_e_reprovado(self):
+        diff = ("--- a/.github/workflows/publicar.yml\n"
+                "+++ b/.github/workflows/publicar.yml\n"
+                "@@ -1,3 +1,4 @@\n on:\n+  push:\n   workflow_dispatch:\n")
+        self.assertTrue(fila.diff_toca_publicacao(diff))
+
+    def test_o_dockerfile_e_o_compose_sao_caminho_de_publicacao(self):
+        for arquivo in ("Dockerfile", "docker-compose.yml", "infra/nginx.conf"):
+            diff = "--- a/%s\n+++ b/%s\n@@ -1 +1 @@\n-a\n+b\n" % (arquivo, arquivo)
+            self.assertTrue(fila.diff_toca_publicacao(diff), arquivo)
+
+    def test_renomear_workflow_e_reprovado(self):
+        """Renomear tira o arquivo do lugar sem produzir `+++ /dev/null`."""
+        diff = ("diff --git a/.github/workflows/publicar.yml b/publicar.yml\n"
+                "similarity index 100%\n"
+                "rename from .github/workflows/publicar.yml\n"
+                "rename to publicar.yml\n")
+        self.assertTrue(fila.diff_toca_publicacao(diff))
+
+    def test_linha_nova_que_dispara_publicacao_e_reprovada(self):
+        """Nao basta proteger os arquivos: um script novo em qualquer pasta que
+        chame `gh workflow run` publica igual."""
+        for gatilho in ("gh workflow run publicar.yml",
+                        "curl -X POST .../actions/workflows/1/dispatches",
+                        "on: workflow_dispatch"):
+            diff = "--- a/scripts/x.sh\n+++ b/scripts/x.sh\n@@ -1 +1,2 @@\n a\n+%s\n" % gatilho
+            self.assertTrue(fila.diff_toca_publicacao(diff), gatilho)
+
+    def test_mexer_so_no_readme_passa(self):
+        diff = ("--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n"
+                "-titulo\n+Titulo\n")
+        self.assertEqual(fila.diff_toca_publicacao(diff), "")
+
+    def test_infra_dentro_de_outro_nome_nao_e_reprovado(self):
+        """`infra` dentro de `src/infraestrutura.ts` reprovaria trabalho
+        legitimo, e uma trava que reprova trabalho legitimo e desligada."""
+        diff = ("--- a/src/infraestrutura.ts\n+++ b/src/infraestrutura.ts\n"
+                "@@ -1 +1 @@\n-a\n+b\n")
+        self.assertEqual(fila.diff_toca_publicacao(diff), "")
+
+    def test_diff_vazio_nao_e_reprovado(self):
+        """A guarda da guarda. Uma trava que reprova tudo passa em todo teste
+        de reprovacao e trava o produto inteiro."""
+        for vazio in ("", "   ", None):
+            self.assertEqual(fila.diff_toca_publicacao(vazio), "")
+
+    def test_a_trava_vale_para_TODA_regra(self):
+        """Nao ha regra que compre o direito de publicar."""
+        diff = ("--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n"
+                "@@ -1 +1 @@\n-a\n+b\n")
+        for regra in ("env_drift", "memoria_crlf", "dependencia_insegura",
+                      "regra_que_nao_existe", ""):
+            self.assertTrue(fila.reprovar(diff, regra), regra)
+
+    def test_reprovar_cita_a_trava_no_fonte(self):
+        """A guarda da guarda: a trava esta LIGADA, e nao so escrita. Ja
+        aconteceu nesta casa de uma defesa existir e nao estar no caminho."""
+        import inspect
+        self.assertIn("diff_toca_publicacao", inspect.getsource(fila.reprovar))
+
+    def test_um_diff_inofensivo_continua_passando_por_reprovar(self):
+        diff = ("--- a/banco.py\n+++ b/banco.py\n@@ -1 +1 @@\n"
+                "-x = 1\n+x = 2\n")
+        self.assertEqual(fila.reprovar(diff, "memoria_crlf"), "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

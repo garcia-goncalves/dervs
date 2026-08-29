@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import banco
 import execucao
+import tarefas
 
 # Regra -> trilho. Lista BRANCA: regra fora daqui nao chega ao motor.
 #
@@ -33,77 +34,18 @@ REGRAS_MECANICAS = {
 ORDEM = {"alta": 0, "media": 1, "baixa": 2}
 
 
-# O freio da fila desacompanhada. Decisao do dono em 25/08/2026: comecar
-# apertado e afrouxar depois e mais facil que o contrario.
-TETO_DIARIO_BRL = 50.00
-
-
-def hoje_local() -> str:
-    """A data de HOJE para o dono, nao para o servidor.
-
-    O resto do banco carimba em UTC. O teto, nao: em UTC-3, as 21h de terca ja
-    e quarta em UTC, e o teto zeraria tres horas cedo.
-    """
-    return datetime.now().astimezone().strftime("%Y-%m-%d")
-
-
-
-def janela_local_em_utc(dia_local: str):
-    """O dia LOCAL `dia_local` (AAAA-MM-DD) como janela [inicio, fim) em UTC.
-
-    E o que permite somar o gasto do dia do DONO num banco que carimba em UTC.
-    """
-    fuso = datetime.now().astimezone().tzinfo
-    inicio = datetime.strptime(dia_local, "%Y-%m-%d").replace(tzinfo=fuso)
-    fim = inicio + timedelta(days=1)
-    return (inicio.astimezone(timezone.utc).isoformat(timespec="seconds"),
-            fim.astimezone(timezone.utc).isoformat(timespec="seconds"))
-
-
-def dia_local_de(carimbo_utc: str) -> str:
-    """A data LOCAL de um carimbo gravado em UTC. "" se nao der para ler.
-
-    Comparar `terminado_em[:10]` (UTC) com `hoje_local()` era errado: das 21h a
-    meia-noite as duas datas divergem, e o "falha de hoje nao volta hoje"
-    deixava o item voltar no mesmo laco.
-    """
-    if not carimbo_utc:
-        return ""
-    try:
-        return datetime.fromisoformat(carimbo_utc).astimezone().strftime("%Y-%m-%d")
-    except (TypeError, ValueError):
-        return ""
-
-
-def cabe_no_teto(gasto_usd: float) -> bool:
-    """Ha espaco para comecar mais um item hoje? No ponto exato, ja nao ha."""
-    try:
-        gasto_brl = float(gasto_usd) * execucao.USD_BRL
-    except (TypeError, ValueError):
-        gasto_brl = 0.0
-    return gasto_brl < TETO_DIARIO_BRL
-
-
-def quanto_falta(gasto_usd: float) -> float:
-    """Quantos reais ainda cabem hoje. Nunca negativo — a tela nao mostra divida."""
-    try:
-        gasto_brl = float(gasto_usd) * execucao.USD_BRL
-    except (TypeError, ValueError):
-        gasto_brl = 0.0
-    return max(0.0, TETO_DIARIO_BRL - gasto_brl)
-
-
-def teto_da_sessao(gasto_usd) -> float:
-    """Quanto ESTA sessao pode gastar, em dolar. Nunca mais do que sobra hoje.
-
-    Achado do revisor em 25/08/2026: o teto do dia era conferido ANTES do item
-    e a sessao saia sempre com TETO_USD (US$ 3, ~R$ 15,42). Com R$ 49 gastos, a
-    fila via "cabe" e iniciava um item que podia levar o dia a R$ 64 — sem que
-    `cabe_no_teto` jamais tivesse dito que estourou. O teto do dia so vale se o
-    teto da sessao souber quanto falta.
-    """
-    falta_usd = quanto_falta(gasto_usd) / execucao.USD_BRL
-    return max(0.0, min(float(execucao.TETO_USD), falta_usd))
+# MUDARAM DE CASA (Fatia 2, etapa 2) para `tarefas.py`: o teto do dia, as tres
+# contas de fuso e as tres contas de dinheiro. O motivo e concreto: o SERVIDOR
+# precisa recusar ENTREGAR a tarefa quando o teto do dia estourou, e ele nao
+# pode importar `fila` (`test_rotas.AMPUTADOS`). Os nomes continuam aqui, e sao
+# os MESMOS objetos — nao ha um segundo valor no repositorio.
+TETO_DIARIO_BRL = tarefas.TETO_DIARIO_BRL
+hoje_local = tarefas.hoje_local
+janela_local_em_utc = tarefas.janela_local_em_utc
+dia_local_de = tarefas.dia_local_de
+cabe_no_teto = tarefas.cabe_no_teto
+quanto_falta = tarefas.quanto_falta
+teto_da_sessao = tarefas.teto_da_sessao
 
 
 def trilho_de(pendencia: dict) -> str:
@@ -129,9 +71,9 @@ def elegiveis(pendencias: list) -> list:
             copia["trilho"] = trilho
             saida.append(copia)
     return saida
-# Duas tentativas. A terceira nunca consertou nada que a segunda nao tenha
-# consertado — e uma correcao que nao pega vira torneira aberta.
-MAX_TENTATIVAS = 2
+# Duas tentativas, e o numero mora em `tarefas.py` desde a Fatia 2 — o
+# servidor tambem precisa dele para nao entregar tarefa que ja se esgotou.
+MAX_TENTATIVAS = tarefas.MAX_TENTATIVAS
 
 
 def pode_tentar(item: dict, hoje: str) -> bool:
@@ -226,9 +168,88 @@ def env_example_tem_valor(diff: str) -> str:
     return ""
 
 
+# Os caminhos por onde uma publicacao acontece, a partir da RAIZ do repositorio.
+# Casados contra o caminho do cabecalho do diff, nunca por substring solta:
+# `infra` dentro de `src/infraestrutura.ts` reprovaria trabalho legitimo, e uma
+# trava que reprova trabalho legitimo e desligada em duas semanas.
+CAMINHOS_DE_PUBLICACAO = (
+    ".github/workflows/",
+    "Dockerfile",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "infra/",
+)
+
+# O que uma linha NOVA nao pode conter. Nao basta proteger os arquivos: um
+# script novo em qualquer pasta que chame `gh workflow run` publica igual.
+GATILHOS_DE_PUBLICACAO = (
+    "workflow run",
+    "workflow_dispatch",
+    "/dispatches",
+    "gh workflow",
+)
+
+
+def _caminho_do_diff(linha: str) -> str:
+    """"+++ b/infra/x.conf" -> "infra/x.conf". "" para /dev/null."""
+    alvo = linha[4:].strip().split("\t")[0].strip('"')
+    if alvo in ("/dev/null", ""):
+        return ""
+    if alvo[:2] in ("a/", "b/"):
+        alvo = alvo[2:]
+    return alvo
+
+
+def _e_caminho_de_publicacao(caminho: str) -> bool:
+    if not caminho:
+        return False
+    for prefixo in CAMINHOS_DE_PUBLICACAO:
+        if prefixo.endswith("/"):
+            if caminho.startswith(prefixo):
+                return True
+        elif caminho == prefixo:
+            return True
+    return False
+
+
+def diff_toca_publicacao(diff: str) -> str:
+    """O diff alteraria o caminho que publica? Devolve o motivo, ou "".
+
+    O criterio 4 da Fatia 2 nao se satisfaz com "nenhuma rota publica": nenhum
+    DIFF produzido por uma sessao pode alterar o caminho que publica. Vale para
+    TODA regra, verde ou vermelha — nao ha regra que compre esse direito.
+
+    Diff VAZIO nao e reprovado. Parece obvio e nao e: uma trava que reprova
+    tudo passa em todo teste de reprovacao e trava o produto inteiro.
+    """
+    linhas = (diff or "").splitlines()
+    for linha in linhas:
+        if linha.startswith("--- ") or linha.startswith("+++ "):
+            caminho = _caminho_do_diff(linha)
+            if _e_caminho_de_publicacao(caminho):
+                return "mexeria em %s, que e caminho de publicacao" % caminho
+        elif linha.startswith("rename from ") or linha.startswith("rename to "):
+            caminho = linha.split(" ", 2)[-1].strip().strip('"')
+            if _e_caminho_de_publicacao(caminho):
+                return "renomearia %s, que e caminho de publicacao" % caminho
+    for linha in linhas:
+        if not linha.startswith("+") or linha.startswith("+++"):
+            continue
+        seco = linha[1:]
+        for gatilho in GATILHOS_DE_PUBLICACAO:
+            if gatilho in seco:
+                return "a linha nova conteria `%s`, que dispara publicacao" % gatilho
+    return ""
+
+
 def reprovar(diff: str, regra: str) -> str:
     """Aplica as travas de diff que valem para esta regra. "" e aprovado."""
     motivo = diff_mexeu_em_teste(diff)
+    if motivo:
+        return motivo
+    # Para TODA regra, sem excecao e antes da parte especifica: publicar nao e
+    # um caso particular de uma regra, e um limite do produto inteiro.
+    motivo = diff_toca_publicacao(diff)
     if motivo:
         return motivo
     if regra == "env_drift":

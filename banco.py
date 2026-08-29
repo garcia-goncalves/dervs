@@ -23,8 +23,10 @@ import json
 import os
 import secrets
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import tarefas
 
 AQUI = Path(__file__).resolve().parent
 
@@ -175,9 +177,47 @@ CREATE TABLE IF NOT EXISTS fila (
     terminado_em TEXT,
     custo_usd    REAL NOT NULL DEFAULT 0.0,
     pr_url       TEXT,
-    erro         TEXT
+    erro         TEXT,
+    -- Fatia 2: o semaforo. `cor` nasce 'vermelho' AQUI, no esquema, e nao numa
+    -- linha de Python que alguem pode esquecer de chamar. "Toda regra nasce
+    -- vermelha" e propriedade do banco, nao promessa do codigo.
+    cor              TEXT NOT NULL DEFAULT 'vermelho',
+    aprovado_por     INTEGER,
+    aprovado_em      TEXT,
+    maquina_id       INTEGER,
+    ramo             TEXT,
+    executor         TEXT NOT NULL DEFAULT 'claude',
+    rodadas          INTEGER NOT NULL DEFAULT 0,
+    parada_pedida_em TEXT,
+    visto_em         TEXT,
+    frase            TEXT,
+    resumo           TEXT,
+    diff             TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_fila_dia ON fila (terminado_em);
+CREATE INDEX IF NOT EXISTS ix_fila_maquina ON fila (maquina_id, estado);
+
+-- O que a sessao foi dizendo, linha a linha. A numeracao `n` vem do agente
+-- (`execucao.estado` ja devolve `total_de_linhas`), e a chave composta faz
+-- reenvio ser idempotente de graca: o agente pode repetir um lote inteiro
+-- depois de uma falha de rede sem duplicar nada.
+CREATE TABLE IF NOT EXISTS tarefa_linha (
+    tarefa_id TEXT NOT NULL,
+    n         INTEGER NOT NULL,
+    texto     TEXT NOT NULL DEFAULT '',
+    quando    TEXT NOT NULL,
+    PRIMARY KEY (tarefa_id, n)
+);
+
+-- A repintura do dono. Regra AUSENTE daqui e vermelha — a tabela guarda o que
+-- foi repintado, nunca o padrao. Assim, apagar uma linha volta ao seguro em
+-- vez de abrir o caminho.
+CREATE TABLE IF NOT EXISTS cor_da_regra (
+    regra  TEXT PRIMARY KEY,
+    cor    TEXT NOT NULL,
+    por    INTEGER,
+    quando TEXT NOT NULL
+);
 
 -- Gasto que NAO passou pela fila. O botao "Resolver" dispara a mesma sessao,
 -- com o mesmo custo, e nao encostava na tabela `fila` — entao o teto do dia
@@ -282,7 +322,11 @@ CREATE TABLE IF NOT EXISTS maquina (
     token_hash  TEXT NOT NULL UNIQUE,   -- hash do token do agente
     criado_em   TEXT NOT NULL,
     visto_em    TEXT,                   -- ultimo alo do agente; o selo da 10 le daqui
-    revogada_em TEXT
+    revogada_em TEXT,
+    -- Fatia 2: a maquina so RECEBE tarefa se alguem ligou isto. Padrao 0, e
+    -- isso e a lei 3 do repositorio — falha fechada. Parear um computador nao
+    -- da a ele o direito de rodar codigo; e um segundo sim, explicito.
+    executa     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_maquina_dono ON maquina (usuario_id);
 
@@ -427,12 +471,74 @@ def migrar(con: sqlite3.Connection) -> None:
     _migrar_pendencia_estado(con)
     _migrar_credencial(con)
     _migrar_medida(con)
+    _migrar_fila_semaforo(con)
 
 
 # As tabelas que apontam para `usuario`. A migracao confere so estas: varrer o
 # banco inteiro faria um orfao antigo, de outra tabela, travar toda subida.
 FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento",
                      "chave_de_acesso", "codigo_recuperacao")
+
+
+# Fatia 2. Nome da coluna -> o pedaco de DDL do `ALTER TABLE`. A ordem e a do
+# esquema, e o valor padrao de `cor` e o coracao do semaforo: uma linha antiga,
+# que nasceu antes de existir semaforo, acorda VERMELHA.
+_COLUNAS_SEMAFORO = (
+    ("cor",              "TEXT NOT NULL DEFAULT 'vermelho'"),
+    ("aprovado_por",     "INTEGER"),
+    ("aprovado_em",      "TEXT"),
+    ("maquina_id",       "INTEGER"),
+    ("ramo",             "TEXT"),
+    ("executor",         "TEXT NOT NULL DEFAULT 'claude'"),
+    ("rodadas",          "INTEGER NOT NULL DEFAULT 0"),
+    ("parada_pedida_em", "TEXT"),
+    ("visto_em",         "TEXT"),
+    ("frase",            "TEXT"),
+    ("resumo",           "TEXT"),
+    ("diff",             "TEXT"),
+)
+
+
+def _migrar_fila_semaforo(con: sqlite3.Connection) -> None:
+    """A `fila` e a `maquina` ganham as colunas da Fatia 2.
+
+    `ALTER TABLE ... ADD COLUMN` nao reescreve linha nenhuma: o SQLite guarda o
+    padrao no cabecalho da tabela e as linhas antigas passam a le-lo. Por isso
+    esta migracao roda contra o hub.db de producao sem tocar em dado — o que
+    ela NAO pode e rodar duas vezes, e por isso a checagem por `table_info`.
+
+    Nunca `executescript` aqui: ele da COMMIT implicito e desmontaria o
+    `BEGIN IMMEDIATE`, deixando duas subidas simultaneas migrarem juntas.
+    Licao paga em 26/08/2026.
+    """
+    forma = list(con.execute("PRAGMA table_info(fila)"))
+    if not forma:
+        return                                   # banco novo: o ESQUEMA ja faz certo
+    tem_fila = {l[1] for l in forma}
+    tem_maq = {l[1] for l in con.execute("PRAGMA table_info(maquina)")}
+    faltam_fila = [c for c in _COLUNAS_SEMAFORO if c[0] not in tem_fila]
+    falta_maq = bool(tem_maq) and "executa" not in tem_maq
+    if not faltam_fila and not falta_maq:
+        return
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        # RELIDO DENTRO DA TRANSACAO. A leitura la em cima aconteceu antes do
+        # lock; dois processos subindo juntos leriam os dois "preciso migrar" e
+        # o segundo morreria com "duplicate column name".
+        tem_fila = {l[1] for l in con.execute("PRAGMA table_info(fila)")}
+        tem_maq = {l[1] for l in con.execute("PRAGMA table_info(maquina)")}
+        for nome, ddl in _COLUNAS_SEMAFORO:
+            if nome not in tem_fila:
+                con.execute("ALTER TABLE fila ADD COLUMN %s %s" % (nome, ddl))
+        if tem_maq and "executa" not in tem_maq:
+            con.execute("ALTER TABLE maquina ADD COLUMN"
+                        " executa INTEGER NOT NULL DEFAULT 0")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        _religar_fk(con)
 
 
 def _orfaos(con: sqlite3.Connection) -> int:
@@ -1054,7 +1160,20 @@ def silenciar(pid: str, ate_iso: str, con=None, usuario_id: int = DONO_LOCAL) ->
             con.close()
 COLUNAS_FILA = ("projeto", "regra", "gravidade", "risco", "trilho", "estado",
                 "tentativas", "iniciado_em", "terminado_em", "custo_usd",
-                "pr_url", "erro")
+                "pr_url", "erro",
+                # Fatia 2
+                "cor", "aprovado_por", "aprovado_em", "maquina_id", "ramo",
+                "executor", "rodadas", "parada_pedida_em", "visto_em",
+                "frase", "resumo", "diff")
+
+# Os estados por onde uma tarefa passa. `aguardando_aprovacao` entrou na
+# Fatia 2 e mora ENTRE `esperando` e `rodando`: e onde a tarefa vermelha para,
+# esperando o clique do dono. Sem esse estado, "vermelha" seria so uma coluna
+# que ninguem olha.
+ESTADOS_FILA = ("esperando", "aguardando_aprovacao", "rodando", "ok", "falha")
+
+VERMELHO = "vermelho"
+VERDE = "verde"
 
 
 def enfileirar(pendencias: list, con=None) -> int:
@@ -1108,6 +1227,457 @@ def marcar_fila(id_: str, con=None, **campos) -> None:
     finally:
         if fechar:
             con.close()
+
+
+
+
+# ---------------------------------------------------------------------------
+# Fatia 2 — a tarefa vira linha de banco.
+#
+# Ate aqui a execucao vivia num dicionario em memoria (`execucao._execucao`):
+# um recurso por maquina, sem historico, sem retomada. Com dois bracos isso
+# nao fecha. O que segue e o minimo para a tarefa sobreviver a um reinicio.
+# ---------------------------------------------------------------------------
+
+# Os estados em que uma tarefa ainda pode ser pega por um agente.
+_A_PEGAR = ("esperando", "aguardando_aprovacao")
+
+
+def tarefa_para_maquina(maquina_id: int, con=None):
+    """A proxima tarefa que ESTA maquina poderia pegar, ou `None`.
+
+    So LE. Quem decide se ela pode rodar e `tarefas.pode_rodar`, e quem a
+    reserva e `entregar_tarefa` — separar as tres coisas e o que permite ao
+    servidor recusar sem deixar rastro no banco.
+
+    Maquina sem `executa`, revogada, ou inexistente devolve `None`. Falha
+    fechada: a duvida nunca vira tarefa entregue.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        m = con.execute(
+            "SELECT id, executa FROM maquina"
+            " WHERE id = ? AND revogada_em IS NULL", (maquina_id,)).fetchone()
+        if not m or not int(m["executa"] or 0):
+            return None
+        marcas = ",".join("?" * len(_A_PEGAR))
+        l = con.execute(
+            "SELECT * FROM fila"
+            " WHERE estado IN (%s)"
+            "   AND trilho <> ''"
+            "   AND parada_pedida_em IS NULL"
+            "   AND (maquina_id IS NULL OR maquina_id = ?)"
+            " ORDER BY (aprovado_em IS NULL), criado_em"
+            " LIMIT 1" % marcas,
+            list(_A_PEGAR) + [maquina_id]).fetchone()
+        return dict(l) if l else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def entregar_tarefa(tarefa_id: str, maquina_id: int, agora_iso: str = "",
+                    con=None) -> bool:
+    """Reserva a tarefa para esta maquina. `True` se ESTA chamada a pegou.
+
+    O `WHERE` repete a condicao inteira de proposito: e um UPDATE condicional,
+    e e ele — nao o `if` do Python la em cima — que garante que dois agentes
+    perguntando no mesmo segundo nao levem a mesma tarefa. `rowcount` diz quem
+    ganhou.
+    """
+    fechar = con is None
+    con = con or conectar()
+    quando = agora_iso or agora()
+    try:
+        marcas = ",".join("?" * len(_A_PEGAR))
+        cur = con.execute(
+            "UPDATE fila SET estado = 'rodando', maquina_id = ?,"
+            "   iniciado_em = COALESCE(iniciado_em, ?), visto_em = ?,"
+            "   tentativas = tentativas + 1"
+            " WHERE id = ? AND estado IN (%s)"
+            "   AND parada_pedida_em IS NULL"
+            "   AND (maquina_id IS NULL OR maquina_id = ?)" % marcas,
+            [maquina_id, quando, quando, tarefa_id] + list(_A_PEGAR)
+            + [maquina_id])
+        con.commit()
+        return cur.rowcount == 1
+    finally:
+        if fechar:
+            con.close()
+
+
+def registrar_progresso(tarefa_id: str, maquina_id: int, frase: str = "",
+                        linhas=None, rodadas=None, custo_usd=None,
+                        agora_iso: str = "", con=None) -> bool:
+    """Guarda o que a sessao esta dizendo. Devolve `True` se pediram parada.
+
+    O booleano de volta e o freio: e por ele que o botao Parar chega ao agente,
+    na RESPOSTA do proprio pedido de progresso. Sem conexao nova.
+
+    `linhas` e uma lista de `(n, texto)`. `INSERT OR IGNORE` com chave composta
+    faz o reenvio de um lote inteiro ser inofensivo — o agente pode repetir
+    depois de uma falha de rede sem duplicar nada na tela.
+    """
+    fechar = con is None
+    con = con or conectar()
+    quando = agora_iso or agora()
+    try:
+        alvo = con.execute(
+            "SELECT id, parada_pedida_em FROM fila"
+            " WHERE id = ? AND maquina_id = ?",
+            (tarefa_id, maquina_id)).fetchone()
+        if not alvo:
+            return False
+        campos = ["visto_em = ?"]
+        valores = [quando]
+        if frase:
+            campos.append("frase = ?")
+            valores.append(frase)
+        if rodadas is not None:
+            campos.append("rodadas = ?")
+            valores.append(int(rodadas))
+        if custo_usd is not None:
+            campos.append("custo_usd = ?")
+            valores.append(float(custo_usd))
+        con.execute("UPDATE fila SET %s WHERE id = ?" % ", ".join(campos),
+                    valores + [tarefa_id])
+        for par in (linhas or []):
+            try:
+                n, texto = int(par[0]), str(par[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            con.execute(
+                "INSERT OR IGNORE INTO tarefa_linha (tarefa_id, n, texto, quando)"
+                " VALUES (?,?,?,?)", (tarefa_id, n, texto, quando))
+        con.commit()
+        return bool(alvo["parada_pedida_em"])
+    finally:
+        if fechar:
+            con.close()
+
+
+def registrar_desfecho(tarefa_id: str, maquina_id: int, estado: str,
+                       ramo: str = "", resumo: str = "", diff: str = "",
+                       pr_url: str = "", rodadas=None, custo_usd=None,
+                       erro: str = "", agora_iso: str = "", con=None) -> bool:
+    """O fim da sessao. `True` se a tarefa era mesmo desta maquina."""
+    if estado not in ("ok", "falha"):
+        return False
+    fechar = con is None
+    con = con or conectar()
+    quando = agora_iso or agora()
+    try:
+        cur = con.execute(
+            "UPDATE fila SET estado = ?, terminado_em = ?, visto_em = ?,"
+            "   ramo = ?, resumo = ?, diff = ?, pr_url = ?, erro = ?,"
+            "   rodadas = COALESCE(?, rodadas),"
+            "   custo_usd = COALESCE(?, custo_usd)"
+            " WHERE id = ? AND maquina_id = ?",
+            (estado, quando, quando, ramo or None, resumo or None,
+             diff or None, pr_url or None, erro or None,
+             None if rodadas is None else int(rodadas),
+             None if custo_usd is None else float(custo_usd),
+             tarefa_id, maquina_id))
+        con.commit()
+        return cur.rowcount == 1
+    finally:
+        if fechar:
+            con.close()
+
+
+def aprovar_tarefa(tarefa_id: str, usuario_id: int, agora_iso: str = "",
+                   con=None) -> bool:
+    """O clique do dono numa tarefa vermelha. `True` se ESTE clique aprovou.
+
+    Aprovar duas vezes devolve `False` na segunda — nao e erro, e a resposta
+    honesta: nada mudou. E tarefa que ja terminou nao se aprova.
+    """
+    fechar = con is None
+    con = con or conectar()
+    quando = agora_iso or agora()
+    try:
+        cur = con.execute(
+            "UPDATE fila SET aprovado_por = ?, aprovado_em = ?,"
+            "   estado = 'esperando'"
+            " WHERE id = ? AND aprovado_em IS NULL"
+            "   AND estado IN ('esperando', 'aguardando_aprovacao')",
+            (usuario_id, quando, tarefa_id))
+        con.commit()
+        return cur.rowcount == 1
+    finally:
+        if fechar:
+            con.close()
+
+
+def pedir_parada(tarefa_id: str, agora_iso: str = "", con=None) -> bool:
+    """Marca o pedido de parada. `True` se havia o que parar.
+
+    Isto NAO para nada sozinho: so escreve o pedido. Quem para e o agente,
+    quando ler a resposta do proximo progresso — ate 5 segundos depois, mais o
+    tempo de matar a arvore de processos. A tela tem de dizer isso.
+    """
+    fechar = con is None
+    con = con or conectar()
+    quando = agora_iso or agora()
+    try:
+        cur = con.execute(
+            "UPDATE fila SET parada_pedida_em = ?"
+            " WHERE id = ? AND parada_pedida_em IS NULL"
+            "   AND estado IN ('esperando', 'aguardando_aprovacao', 'rodando')",
+            (quando, tarefa_id))
+        con.commit()
+        return cur.rowcount == 1
+    finally:
+        if fechar:
+            con.close()
+
+
+def repintar_regra(regra: str, cor: str, por: int = None, agora_iso: str = "",
+                   con=None) -> bool:
+    """O dono pinta uma regra de verde ou de vermelho. `True` se pintou.
+
+    A recusa de `tarefas.NUNCA_VERDE` e conferida AQUI TAMBEM, e nao so na
+    rota. Duas travas para a mesma coisa e de proposito: a rota e o caminho
+    esperado, e esta e a que sobra se alguem inventar um segundo caminho.
+    """
+    nome = (regra or "").strip()
+    if not tarefas.pode_repintar(nome, cor):
+        return False
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute(
+            "INSERT INTO cor_da_regra (regra, cor, por, quando)"
+            " VALUES (?,?,?,?)"
+            " ON CONFLICT(regra) DO UPDATE SET cor = excluded.cor,"
+            "   por = excluded.por, quando = excluded.quando",
+            (nome, cor, por, agora_iso or agora()))
+        con.commit()
+        return True
+    finally:
+        if fechar:
+            con.close()
+
+
+def cores_das_regras(con=None) -> dict:
+    """{regra: cor} do que foi REPINTADO. O que nao esta aqui e vermelho.
+
+    Uma cor invalida que tenha entrado no banco por outro caminho e descartada
+    na leitura: preferimos perder a repintura a devolver algo que
+    `tarefas.cor_da_regra` interpretaria como aberto.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        fora = {}
+        for l in con.execute("SELECT regra, cor FROM cor_da_regra"):
+            if l["cor"] in tarefas.CORES:
+                fora[l["regra"]] = l["cor"]
+        return fora
+    finally:
+        if fechar:
+            con.close()
+
+
+def linhas_da_tarefa(tarefa_id: str, desde: int = 0, limite: int = 500,
+                     con=None) -> list:
+    """As linhas da sessao a partir de `desde` (exclusivo), em ordem.
+
+    O `limite` existe porque isto alimenta o fluxo ao vivo, que le de segundo
+    em segundo: sem teto, uma sessao de mil linhas mandaria mil linhas a cada
+    volta para quem acabou de abrir a tela.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        linhas = con.execute(
+            "SELECT n, texto, quando FROM tarefa_linha"
+            " WHERE tarefa_id = ? AND n > ? ORDER BY n LIMIT ?",
+            (tarefa_id, int(desde or 0), int(limite))).fetchall()
+        return [dict(l) for l in linhas]
+    finally:
+        if fechar:
+            con.close()
+
+
+def tarefas_sem_noticia(limite_min: int, agora_iso: str = "", con=None) -> list:
+    """As tarefas `rodando` que pararam de dar noticia. So LE.
+
+    `agora_iso` e obrigatorio na pratica: teste com data fixa que nao o passa
+    passa hoje e fica vermelho sozinho amanha, sem ninguem tocar em nada.
+    """
+    agora_dt = agora_iso or agora()
+    try:
+        corte = (datetime.fromisoformat(agora_dt)
+                 - timedelta(minutes=int(limite_min))).isoformat(timespec="seconds")
+    except (TypeError, ValueError):
+        return []
+    fechar = con is None
+    con = con or conectar()
+    try:
+        linhas = con.execute(
+            "SELECT * FROM fila"
+            " WHERE estado = 'rodando'"
+            "   AND COALESCE(visto_em, iniciado_em, criado_em) < ?"
+            " ORDER BY criado_em", (corte,)).fetchall()
+        return [dict(l) for l in linhas]
+    finally:
+        if fechar:
+            con.close()
+
+
+def tarefas_do_painel(limite: int = 50, con=None) -> list:
+    """O que a tela mostra: as tarefas mais recentes, novas primeiro.
+
+    Sem o `diff` cru — ele pode ter dezenas de milhares de caracteres e a lista
+    e carregada a cada abertura de tela. Quem quer o diff pede a tarefa.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        linhas = con.execute(
+            "SELECT id, projeto, regra, gravidade, trilho, estado, cor,"
+            "       tentativas, criado_em, iniciado_em, terminado_em,"
+            "       custo_usd, rodadas, ramo, resumo, frase, visto_em,"
+            "       aprovado_em, parada_pedida_em, maquina_id, executor, erro"
+            "  FROM fila ORDER BY criado_em DESC LIMIT ?",
+            (int(limite),)).fetchall()
+        return [dict(l) for l in linhas]
+    finally:
+        if fechar:
+            con.close()
+
+
+def tarefa(tarefa_id: str, con=None):
+    """Uma tarefa inteira, com o diff. `None` se nao existe."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute("SELECT * FROM fila WHERE id = ?",
+                        (tarefa_id,)).fetchone()
+        return dict(l) if l else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def ligar_execucao(maquina_id: int, usuario_id: int, ligado: bool,
+                   con=None) -> bool:
+    """Autoriza (ou desautoriza) esta maquina a executar tarefas.
+
+    O `usuario_id` no `WHERE` nao e enfeite: sem ele, uma conta ligaria a
+    execucao na maquina da outra.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        cur = con.execute(
+            "UPDATE maquina SET executa = ?"
+            " WHERE id = ? AND usuario_id = ? AND revogada_em IS NULL",
+            (1 if ligado else 0, maquina_id, usuario_id))
+        con.commit()
+        return cur.rowcount == 1
+    finally:
+        if fechar:
+            con.close()
+
+
+# Quantos dias a tela mostra por padrao. Sete porque foi o prazo que o dono
+# deu a si mesmo em 28/08/2026 para observar antes de decidir sobre freio de
+# horario. O numero e daqui, e nao da rota, para a tela e o teste nao
+# discordarem sobre o que e "esta semana".
+DIAS_DE_CONSUMO = 7
+
+
+def consumo(desde_iso: str = "", ate_iso: str = "", dias: int = DIAS_DE_CONSUMO,
+            agora_iso: str = "", con=None) -> dict:
+    """Quanto o painel trabalhou na janela. Por dia LOCAL, projeto e regra.
+
+    O recurso escasso e COTA, nao dinheiro: com assinatura, o que acaba sao
+    sessoes e rodadas. O custo em reais entra como referencia, rotulado como
+    tal, e nunca como o numero principal (§13 da fonte unica).
+
+    Semana sem nenhuma sessao devolve ZEROS mais o carimbo — e nao um corpo
+    vazio. "Nao sei" e "zero" sao estados diferentes, e o carimbo e o que
+    permite a tela distinguir os dois.
+
+    A agregacao e por DIA LOCAL, e nao por UTC. Em UTC-3, as 21h de terca ja e
+    quarta em UTC: agrupar pelo carimbo cru jogaria as noites do dono para o
+    dia seguinte, e o grafico mentiria em toda madrugada.
+    """
+    agora_dt = agora_iso or agora()
+    if not ate_iso:
+        ate_iso = agora_dt
+    if not desde_iso:
+        try:
+            base = datetime.fromisoformat(ate_iso)
+        except (TypeError, ValueError):
+            base = datetime.now(timezone.utc)
+        desde_iso = (base - timedelta(days=int(dias))).isoformat(
+            timespec="seconds")
+
+    fechar = con is None
+    con = con or conectar()
+    try:
+        linhas = con.execute(
+            "SELECT projeto, regra, estado, iniciado_em, terminado_em,"
+            "       custo_usd, rodadas, criado_em"
+            "  FROM fila"
+            " WHERE COALESCE(terminado_em, iniciado_em, criado_em) >= ?"
+            "   AND COALESCE(terminado_em, iniciado_em, criado_em) < ?",
+            (desde_iso, ate_iso)).fetchall()
+    finally:
+        if fechar:
+            con.close()
+
+    por_dia, por_projeto, por_regra = {}, {}, {}
+    total = _balde()
+    for l in linhas:
+        carimbo = l["terminado_em"] or l["iniciado_em"] or l["criado_em"]
+        dia = tarefas.dia_local_de(carimbo) or "sem data"
+        for balde in (por_dia.setdefault(dia, _balde()),
+                      por_projeto.setdefault(l["projeto"] or "(sem projeto)",
+                                             _balde()),
+                      por_regra.setdefault(l["regra"] or "(sem regra)",
+                                           _balde()),
+                      total):
+            _somar(balde, l)
+
+    return {
+        "desde": desde_iso, "ate": ate_iso, "dias": dias,
+        "por_dia": [dict(dia=d, **por_dia[d]) for d in sorted(por_dia)],
+        "por_projeto": [dict(projeto=p, **por_projeto[p])
+                        for p in sorted(por_projeto)],
+        "por_regra": [dict(regra=r, **por_regra[r]) for r in sorted(por_regra)],
+        "total": total,
+        # O CARIMBO. Sem ele, uma tela de zeros e indistinguivel de uma tela
+        # que nao conseguiu medir — e zerar o que nao deu para reler apaga um
+        # problema real.
+        "medido_em": agora_dt,
+    }
+
+
+def _balde() -> dict:
+    return {"sessoes": 0, "rodadas": 0, "segundos": 0, "custo_usd": 0.0,
+            "ok": 0, "falhas": 0}
+
+
+def _somar(balde: dict, l) -> None:
+    balde["sessoes"] += 1
+    balde["rodadas"] += int(l["rodadas"] or 0)
+    balde["custo_usd"] += float(l["custo_usd"] or 0.0)
+    if l["estado"] == "ok":
+        balde["ok"] += 1
+    elif l["estado"] == "falha":
+        balde["falhas"] += 1
+    if l["iniciado_em"] and l["terminado_em"]:
+        try:
+            balde["segundos"] += int(
+                (datetime.fromisoformat(l["terminado_em"])
+                 - datetime.fromisoformat(l["iniciado_em"])).total_seconds())
+        except (TypeError, ValueError):
+            pass
 
 
 def gasto_entre(inicio_iso: str, fim_iso: str, con=None) -> float:
@@ -1571,7 +2141,7 @@ def maquinas_do_usuario(usuario_id: int, con=None) -> list:
     con = con or conectar()
     try:
         return [dict(l) for l in con.execute(
-            "SELECT m.id, m.nome, m.criado_em, m.visto_em,"
+            "SELECT m.id, m.nome, m.criado_em, m.visto_em, m.executa,"
             "       (SELECT COUNT(*) FROM projeto_conectado p"
             "         WHERE p.maquina_id = m.id AND p.arquivado_em IS NULL)"
             "       AS projetos"

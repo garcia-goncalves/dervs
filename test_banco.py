@@ -35,7 +35,8 @@ from pathlib import Path
 os.environ.setdefault("DERVS_COFRE",
                       "chave-de-teste-que-nao-e-segredo-nenhum-0123456789")
 
-import banco  # noqa: E402
+import banco    # noqa: E402
+import tarefas  # noqa: E402
 
 
 def iso(dt) -> str:
@@ -122,7 +123,7 @@ class Esquema(unittest.TestCase):
             "SELECT name FROM sqlite_master WHERE type='table' "
             "AND name NOT LIKE 'sqlite_%'"))
 
-    def test_as_dezesseis_tabelas_existem(self):
+    def test_as_dezoito_tabelas_existem(self):
         """A lista e escrita a mao de proposito: tabela nova reprova a suite.
 
         Nao e cerimonia. Uma tabela que aparece sem ninguem notar e uma tabela
@@ -130,10 +131,11 @@ class Esquema(unittest.TestCase):
         decisao sobre o que acontece quando a conta e apagada.
         """
         self.assertEqual(self.tabelas(), [
-            "chave_de_acesso", "codigo_recuperacao", "credencial", "fila",
-            "gasto", "historico", "instalacao", "maquina", "medida",
-            "pareamento", "pendencia_arquivada", "pendencia_estado",
-            "pendencia_vida", "projeto_conectado", "sessao", "usuario"])
+            "chave_de_acesso", "codigo_recuperacao", "cor_da_regra",
+            "credencial", "fila", "gasto", "historico", "instalacao",
+            "maquina", "medida", "pareamento", "pendencia_arquivada",
+            "pendencia_estado", "pendencia_vida", "projeto_conectado",
+            "sessao", "tarefa_linha", "usuario"])
 
     def test_as_seis_tabelas_antigas_nao_perderam_coluna(self):
         """A etapa 8 acrescenta. So `pendencia_estado` muda, e so ganhando dono."""
@@ -1543,6 +1545,442 @@ class OndeMoraOBanco(unittest.TestCase):
         pedido de gravar em Path(""). Vale o padrao."""
         os.environ["DERVS_BANCO"] = "   "
         self.assertEqual(banco._caminho_do_banco(), banco.AQUI / "hub.db")
+
+
+# ---------------------------------------------------------------------------
+# Fatia 2, etapa 1 — o semaforo, o historico e os dois bracos.
+# ---------------------------------------------------------------------------
+
+# O esquema da `fila` e da `maquina` como eram ANTES da Fatia 2. Existe para
+# provar que o hub.db que roda em producao hoje sobe sem perder linha.
+ESQUEMA_ANTES_DA_FATIA_2 = """
+CREATE TABLE fila (
+    id           TEXT PRIMARY KEY,
+    projeto      TEXT NOT NULL DEFAULT '',
+    regra        TEXT NOT NULL DEFAULT '',
+    gravidade    TEXT NOT NULL DEFAULT 'media',
+    risco        REAL NOT NULL DEFAULT 0,
+    trilho       TEXT NOT NULL DEFAULT '',
+    estado       TEXT NOT NULL DEFAULT 'esperando',
+    tentativas   INTEGER NOT NULL DEFAULT 0,
+    criado_em    TEXT NOT NULL,
+    iniciado_em  TEXT,
+    terminado_em TEXT,
+    custo_usd    REAL NOT NULL DEFAULT 0.0,
+    pr_url       TEXT,
+    erro         TEXT);
+CREATE TABLE usuario (
+    id INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id <> 0),
+    email TEXT NOT NULL UNIQUE CHECK (length(trim(email)) > 0),
+    nome TEXT NOT NULL DEFAULT '',
+    criado_em TEXT NOT NULL);
+CREATE TABLE maquina (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id  INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    nome        TEXT NOT NULL DEFAULT '',
+    token_hash  TEXT NOT NULL UNIQUE,
+    criado_em   TEXT NOT NULL,
+    visto_em    TEXT,
+    revogada_em TEXT);
+"""
+
+
+class MigracaoDoSemaforo(unittest.TestCase):
+    """Um hub.db de producao, do esquema de ontem, abre no de hoje.
+
+    Nao e teoria: o hub.db que roda em `dervs.com.br` desde 28/08/2026 esta
+    exatamente nesse esquema. Uma coluna esquecida aqui vira migracao em cima
+    de dado real, com o site no ar.
+    """
+
+    def setUp(self):
+        self.pasta = tempfile.mkdtemp()
+        self.caminho = os.path.join(self.pasta, "velho.db")
+        velho = sqlite3.connect(self.caminho)
+        velho.executescript(ESQUEMA_ANTES_DA_FATIA_2)
+        velho.execute(
+            "INSERT INTO fila (id, projeto, regra, criado_em, estado)"
+            " VALUES ('d:1', 'dervs', 'env_drift', ?, 'esperando')",
+            (daqui(),))
+        velho.execute("INSERT INTO usuario (id, email, criado_em)"
+                      " VALUES (7, 'a@teste.local', ?)", (daqui(),))
+        velho.execute(
+            "INSERT INTO maquina (id, usuario_id, nome, token_hash, criado_em)"
+            " VALUES (3, 7, 'laptop', 'hash-de-mentira', ?)", (daqui(),))
+        velho.commit()
+        velho.close()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.pasta, ignore_errors=True)
+
+    def test_migrar_duas_vezes_nao_quebra_e_a_linha_antiga_sobrevive(self):
+        """`migrar()` roda em TODA conexao. A segunda vez tem de ser inofensiva."""
+        con = banco.conectar(self.caminho)
+        con.close()
+        con = banco.conectar(self.caminho)          # segunda subida
+        try:
+            colunas = {l[1] for l in con.execute("PRAGMA table_info(fila)")}
+            for esperada in ("cor", "aprovado_por", "aprovado_em", "maquina_id",
+                             "ramo", "executor", "rodadas", "parada_pedida_em",
+                             "visto_em", "frase", "resumo", "diff"):
+                self.assertIn(esperada, colunas)
+            l = con.execute("SELECT * FROM fila WHERE id = 'd:1'").fetchone()
+            self.assertIsNotNone(l, "a linha antiga sumiu na migracao")
+            self.assertEqual(l["projeto"], "dervs")
+        finally:
+            con.close()
+
+    def test_a_linha_antiga_acorda_vermelha(self):
+        """O coracao do semaforo. Uma tarefa que nasceu antes de existir cor
+        NAO pode acordar verde: seria uma sessao autorizada por acidente."""
+        con = banco.conectar(self.caminho)
+        try:
+            l = con.execute("SELECT cor FROM fila WHERE id = 'd:1'").fetchone()
+            self.assertEqual(l["cor"], "vermelho")
+        finally:
+            con.close()
+
+    def test_a_maquina_antiga_acorda_sem_poder_executar(self):
+        """Parear um computador nunca deu a ele o direito de rodar codigo. As
+        maquinas que ja existem nao ganham esse direito na migracao."""
+        con = banco.conectar(self.caminho)
+        try:
+            l = con.execute("SELECT executa FROM maquina WHERE id = 3").fetchone()
+            self.assertEqual(l["executa"], 0)
+        finally:
+            con.close()
+
+    def test_migrar_nao_usa_executescript(self):
+        """`executescript` da COMMIT implicito e desmontaria o BEGIN IMMEDIATE,
+        deixando duas subidas simultaneas migrarem juntas. Licao de 26/08/2026,
+        e por isso ela e cobrada no fonte, nao so no comportamento."""
+        import inspect
+        fonte = inspect.getsource(banco.migrar)
+        fonte += inspect.getsource(banco._migrar_fila_semaforo)
+        # A CHAMADA, nao a palavra: o comentario que explica por que ela e
+        # proibida contem a palavra, e barrar o comentario faria a gente
+        # apagar a explicacao para o teste passar.
+        self.assertNotIn(".executescript(", fonte)
+
+
+class TarefaNoBanco(unittest.TestCase):
+    """A tarefa deixa de ser um dicionario em memoria."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.con.execute("INSERT INTO usuario (id, email, criado_em)"
+                         " VALUES (7, 'a@teste.local', ?)", (daqui(),))
+        self.con.execute(
+            "INSERT INTO maquina (id, usuario_id, nome, token_hash, criado_em)"
+            " VALUES (3, 7, 'laptop', 'h1', ?)", (daqui(),))
+        self.con.execute(
+            "INSERT INTO maquina (id, usuario_id, nome, token_hash, criado_em)"
+            " VALUES (4, 7, 'vps', 'h2', ?)", (daqui(),))
+        self.con.execute(
+            "INSERT INTO fila (id, projeto, regra, trilho, criado_em)"
+            " VALUES ('d:1', 'dervs', 'env_drift', 'claude', ?)", (daqui(),))
+        self.con.commit()
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_maquina_sem_executa_nao_recebe_tarefa(self):
+        """A lei 3: falha fechada. O padrao da coluna e 0, e o padrao manda."""
+        self.assertIsNone(banco.tarefa_para_maquina(3, con=self.con))
+
+    def test_maquina_com_executa_recebe(self):
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        t = banco.tarefa_para_maquina(3, con=self.con)
+        self.assertIsNotNone(t)
+        self.assertEqual(t["id"], "d:1")
+
+    def test_ligar_execucao_da_maquina_de_outra_conta_e_recusado(self):
+        """Sem o dono no WHERE, uma conta ligaria a execucao na maquina da outra."""
+        self.con.execute("INSERT INTO usuario (id, email, criado_em)"
+                         " VALUES (8, 'b@teste.local', ?)", (daqui(),))
+        self.assertFalse(banco.ligar_execucao(3, 8, True, con=self.con))
+        self.assertIsNone(banco.tarefa_para_maquina(3, con=self.con))
+
+    def test_maquina_revogada_nao_recebe_mesmo_com_executa(self):
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        self.con.execute("UPDATE maquina SET revogada_em = ? WHERE id = 3",
+                         (daqui(),))
+        self.assertIsNone(banco.tarefa_para_maquina(3, con=self.con))
+
+    def test_so_uma_maquina_leva_a_tarefa(self):
+        """Dois agentes perguntando no mesmo segundo. O UPDATE condicional e
+        quem decide, nao um `if` em Python."""
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        banco.ligar_execucao(4, 7, True, con=self.con)
+        primeiro = banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
+        segundo = banco.entregar_tarefa("d:1", 4, daqui(), con=self.con)
+        self.assertTrue(primeiro)
+        self.assertFalse(segundo)
+        self.assertIsNone(banco.tarefa_para_maquina(4, con=self.con))
+
+    def test_entregar_conta_a_tentativa(self):
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
+        self.assertEqual(banco.tarefa("d:1", con=self.con)["tentativas"], 1)
+
+    def test_progresso_guarda_linha_e_reenvio_nao_duplica(self):
+        """A chave composta faz o reenvio de um lote ser inofensivo. Sem isso,
+        uma falha de rede duplicaria a sessao inteira na tela do dono."""
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
+        lote = [(1, "abrindo a copia"), (2, "rodando os testes")]
+        banco.registrar_progresso("d:1", 3, frase="trabalhando", linhas=lote,
+                                  rodadas=2, agora_iso=daqui(), con=self.con)
+        banco.registrar_progresso("d:1", 3, linhas=lote, agora_iso=daqui(),
+                                  con=self.con)
+        linhas = banco.linhas_da_tarefa("d:1", con=self.con)
+        self.assertEqual([l["n"] for l in linhas], [1, 2])
+
+    def test_linhas_da_tarefa_desde_devolve_so_as_novas(self):
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
+        banco.registrar_progresso("d:1", 3, linhas=[(1, "a"), (2, "b"), (3, "c")],
+                                  agora_iso=daqui(), con=self.con)
+        novas = banco.linhas_da_tarefa("d:1", desde=2, con=self.con)
+        self.assertEqual([l["n"] for l in novas], [3])
+
+    def test_progresso_de_outra_maquina_nao_escreve(self):
+        """O token da maquina 4 nao pode empurrar linha na tarefa da 3."""
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
+        self.assertFalse(banco.registrar_progresso(
+            "d:1", 4, linhas=[(1, "invasao")], agora_iso=daqui(), con=self.con))
+        self.assertEqual(banco.linhas_da_tarefa("d:1", con=self.con), [])
+
+    def test_pedir_parada_volta_no_proximo_progresso(self):
+        """E assim que o botao Parar chega ao agente: na resposta do pedido que
+        ele ja ia fazer. Sem conexao nova, sem porta aberta."""
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
+        self.assertFalse(banco.registrar_progresso("d:1", 3, agora_iso=daqui(),
+                                                   con=self.con))
+        self.assertTrue(banco.pedir_parada("d:1", daqui(), con=self.con))
+        self.assertTrue(banco.registrar_progresso("d:1", 3, agora_iso=daqui(),
+                                                  con=self.con))
+
+    def test_pedir_parada_duas_vezes_diz_a_verdade(self):
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
+        self.assertTrue(banco.pedir_parada("d:1", daqui(), con=self.con))
+        self.assertFalse(banco.pedir_parada("d:1", daqui(), con=self.con))
+
+    def test_desfecho_grava_ramo_resumo_e_diff(self):
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
+        self.assertTrue(banco.registrar_desfecho(
+            "d:1", 3, "ok", ramo="hub/env-drift-1", resumo="trocou o exemplo",
+            diff="--- a/x\n+++ b/x\n", rodadas=4, custo_usd=0.42,
+            agora_iso=daqui(), con=self.con))
+        t = banco.tarefa("d:1", con=self.con)
+        self.assertEqual(t["estado"], "ok")
+        self.assertEqual(t["ramo"], "hub/env-drift-1")
+        self.assertEqual(t["rodadas"], 4)
+
+    def test_desfecho_com_estado_inventado_e_recusado(self):
+        """Caminho de escrita nao aceita estado que a tela nao sabe desenhar."""
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
+        self.assertFalse(banco.registrar_desfecho("d:1", 3, "quase",
+                                                  agora_iso=daqui(),
+                                                  con=self.con))
+
+    def test_aprovar_uma_vez_muda_e_a_segunda_diz_que_nao_mudou(self):
+        self.assertTrue(banco.aprovar_tarefa("d:1", 7, daqui(), con=self.con))
+        self.assertFalse(banco.aprovar_tarefa("d:1", 7, daqui(), con=self.con))
+        t = banco.tarefa("d:1", con=self.con)
+        self.assertEqual(t["aprovado_por"], 7)
+        self.assertTrue(t["aprovado_em"])
+
+    def test_tarefa_aprovada_vem_antes_da_que_espera(self):
+        """A tarefa que o dono ja olhou tem preferencia sobre a que ele nao viu."""
+        self.con.execute(
+            "INSERT INTO fila (id, projeto, regra, trilho, criado_em)"
+            " VALUES ('d:2', 'dervs', 'memoria_crlf', 'mecanico', ?)",
+            (daqui(minutes=-10),))
+        self.con.commit()
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        banco.aprovar_tarefa("d:1", 7, daqui(), con=self.con)
+        self.assertEqual(banco.tarefa_para_maquina(3, con=self.con)["id"], "d:1")
+
+    def test_tarefas_sem_noticia_usa_a_hora_que_recebe(self):
+        """Teste com data fixa que nao passa `agora_iso` passa hoje e fica
+        vermelho sozinho amanha, sem ninguem tocar em nada."""
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
+        self.assertEqual(banco.tarefas_sem_noticia(15, daqui(minutes=5),
+                                                   con=self.con), [])
+        mudas = banco.tarefas_sem_noticia(15, daqui(minutes=20), con=self.con)
+        self.assertEqual([t["id"] for t in mudas], ["d:1"])
+
+    def test_tarefas_do_painel_nao_carrega_o_diff(self):
+        """A lista e lida a cada abertura de tela; o diff tem dezenas de
+        milhares de caracteres. Quem quer o diff pede a tarefa."""
+        self.assertNotIn("diff", banco.tarefas_do_painel(con=self.con)[0])
+        self.assertIn("diff", banco.tarefa("d:1", con=self.con))
+
+
+class CorDaRegra(unittest.TestCase):
+    """A repintura do dono, e o que nunca se repinta."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_regra_ausente_e_vermelha(self):
+        """A tabela guarda o que foi repintado, nunca o padrao. Apagar a linha
+        volta ao seguro em vez de abrir o caminho."""
+        self.assertEqual(banco.cores_das_regras(con=self.con), {})
+
+    def test_repintar_de_verde_e_depois_de_vermelho(self):
+        self.assertTrue(banco.repintar_regra("env_drift", "verde", 7, daqui(),
+                                             con=self.con))
+        self.assertEqual(banco.cores_das_regras(con=self.con),
+                         {"env_drift": "verde"})
+        self.assertTrue(banco.repintar_regra("env_drift", "vermelho", 7,
+                                             daqui(), con=self.con))
+        self.assertEqual(banco.cores_das_regras(con=self.con),
+                         {"env_drift": "vermelho"})
+
+    def test_publicar_nunca_fica_verde_nem_pelo_banco(self):
+        """Duas travas para a mesma coisa, de proposito: a rota e o caminho
+        esperado, e esta e a que sobra se alguem inventar um segundo caminho."""
+        self.assertFalse(banco.repintar_regra("publicar", "verde", 7, daqui(),
+                                              con=self.con))
+        self.assertEqual(banco.cores_das_regras(con=self.con), {})
+
+    def test_publicar_pode_ser_pintada_de_vermelho(self):
+        """Fechar nunca precisa de licenca."""
+        self.assertTrue(banco.repintar_regra("publicar", "vermelho", 7, daqui(),
+                                             con=self.con))
+
+    def test_cor_inventada_e_recusada(self):
+        for lixo in ("azul", "", "VERDE", None):
+            self.assertFalse(banco.repintar_regra("env_drift", lixo, 7,
+                                                  daqui(), con=self.con))
+
+    def test_cor_torta_no_banco_e_descartada_na_leitura(self):
+        """Preferimos perder a repintura a devolver algo que
+        `tarefas.cor_da_regra` interpretaria como aberto."""
+        self.con.execute("INSERT INTO cor_da_regra (regra, cor, quando)"
+                         " VALUES ('env_drift', 'azul', ?)", (daqui(),))
+        self.con.commit()
+        self.assertEqual(banco.cores_das_regras(con=self.con), {})
+
+
+class Consumo(unittest.TestCase):
+    """Quanto o painel trabalhou. Por dia LOCAL, nao por UTC."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+
+    def tearDown(self):
+        self.con.close()
+
+    def gravar(self, id_, projeto, regra, estado, inicio, fim, rodadas=1,
+               custo=0.5):
+        self.con.execute(
+            "INSERT INTO fila (id, projeto, regra, trilho, estado, criado_em,"
+            "  iniciado_em, terminado_em, rodadas, custo_usd)"
+            " VALUES (?,?,?,'claude',?,?,?,?,?,?)",
+            (id_, projeto, regra, estado, inicio, inicio, fim, rodadas, custo))
+        self.con.commit()
+
+    def test_semana_sem_nenhuma_sessao_devolve_zeros_E_o_carimbo(self):
+        """"Nao sei" e "zero" sao estados diferentes. Uma tela de zeros sem
+        carimbo e indistinguivel de uma tela que nao conseguiu medir."""
+        fora = banco.consumo(agora_iso=daqui(), con=self.con)
+        self.assertEqual(fora["total"]["sessoes"], 0)
+        self.assertEqual(fora["total"]["rodadas"], 0)
+        self.assertEqual(fora["por_dia"], [])
+        self.assertTrue(fora["medido_em"])
+        self.assertEqual(fora["dias"], banco.DIAS_DE_CONSUMO)
+
+    def test_a_agregacao_separa_por_dia_LOCAL_e_nao_por_utc(self):
+        """Em UTC-3, as 21h de terca ja e quarta em UTC. Agrupar pelo carimbo
+        cru jogaria as noites do dono para o dia seguinte."""
+        # Tres carimbos, cada um no INICIO de um dia local diferente. Usar a
+        # propria conta de janela garante que o teste vale em qualquer fuso.
+        dias = []
+        for d in ("2026-08-24", "2026-08-25", "2026-08-26"):
+            inicio, _fim = tarefas.janela_local_em_utc(d)
+            dias.append((d, inicio))
+        for i, (d, carimbo) in enumerate(dias):
+            self.gravar("d:%d" % i, "dervs", "env_drift", "ok", carimbo,
+                        carimbo)
+        fora = banco.consumo(desde_iso=dias[0][1],
+                             ate_iso=daqui(days=10), agora_iso=daqui(days=10),
+                             con=self.con)
+        self.assertEqual([l["dia"] for l in fora["por_dia"]],
+                         ["2026-08-24", "2026-08-25", "2026-08-26"])
+        self.assertEqual(fora["total"]["sessoes"], 3)
+
+    def test_separa_por_projeto_e_por_regra(self):
+        quando = daqui()
+        self.gravar("d:1", "dervs", "env_drift", "ok", quando, quando)
+        self.gravar("d:2", "dervs", "memoria_crlf", "falha", quando, quando)
+        self.gravar("d:3", "outro", "env_drift", "ok", quando, quando)
+        fora = banco.consumo(desde_iso=daqui(days=-1), ate_iso=daqui(days=1),
+                             agora_iso=daqui(), con=self.con)
+        self.assertEqual({l["projeto"]: l["sessoes"] for l in fora["por_projeto"]},
+                         {"dervs": 2, "outro": 1})
+        self.assertEqual({l["regra"]: l["sessoes"] for l in fora["por_regra"]},
+                         {"env_drift": 2, "memoria_crlf": 1})
+        self.assertEqual(fora["total"]["ok"], 2)
+        self.assertEqual(fora["total"]["falhas"], 1)
+
+    def test_conta_rodadas_e_duracao(self):
+        """O numero que manda e sessoes e rodadas: com assinatura, o recurso
+        escasso e cota, nao dinheiro."""
+        inicio = daqui()
+        fim = daqui(minutes=7)
+        self.gravar("d:1", "dervs", "env_drift", "ok", inicio, fim, rodadas=9)
+        fora = banco.consumo(desde_iso=daqui(days=-1), ate_iso=daqui(days=1),
+                             agora_iso=daqui(), con=self.con)
+        self.assertEqual(fora["total"]["rodadas"], 9)
+        self.assertEqual(fora["total"]["segundos"], 7 * 60)
+
+    def test_sessao_sem_fim_nao_estraga_a_duracao(self):
+        """Tarefa ainda rodando entra na contagem de sessoes, mas nao inventa
+        duracao — durante a sessao o gasto continua desconhecido."""
+        self.con.execute(
+            "INSERT INTO fila (id, projeto, regra, trilho, estado, criado_em,"
+            "  iniciado_em, rodadas) VALUES"
+            " ('d:9','dervs','env_drift','claude','rodando',?,?,3)",
+            (daqui(), daqui()))
+        self.con.commit()
+        fora = banco.consumo(desde_iso=daqui(days=-1), ate_iso=daqui(days=1),
+                             agora_iso=daqui(), con=self.con)
+        self.assertEqual(fora["total"]["sessoes"], 1)
+        self.assertEqual(fora["total"]["segundos"], 0)
+        self.assertEqual(fora["total"]["ok"], 0)
+        self.assertEqual(fora["total"]["falhas"], 0)
+
+    def test_a_janela_exclui_o_que_esta_fora(self):
+        velho = daqui(days=-30)
+        self.gravar("d:velho", "dervs", "env_drift", "ok", velho, velho)
+        self.gravar("d:novo", "dervs", "env_drift", "ok", daqui(), daqui())
+        fora = banco.consumo(dias=7, ate_iso=daqui(days=1),
+                             agora_iso=daqui(), con=self.con)
+        self.assertEqual(fora["total"]["sessoes"], 1)
+
+    def test_carimbo_torto_nao_derruba_a_conta(self):
+        self.con.execute(
+            "INSERT INTO fila (id, projeto, regra, trilho, estado, criado_em,"
+            "  iniciado_em, terminado_em) VALUES"
+            " ('d:torto','dervs','env_drift','claude','ok',?,'ontem','hoje')",
+            (daqui(),))
+        self.con.commit()
+        fora = banco.consumo(desde_iso=daqui(days=-1), ate_iso=daqui(days=1),
+                             agora_iso=daqui(), con=self.con)
+        self.assertEqual(fora["total"]["segundos"], 0)
 
 
 if __name__ == "__main__":

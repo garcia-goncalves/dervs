@@ -859,6 +859,18 @@ O roteiro completo — o que aparece quando dá certo, o que fazer em cada erro,
 como deixar reportando sozinho — está em
 [`docs/operacao/conectar-uma-maquina.md`](docs/operacao/conectar-uma-maquina.md).
 
+### Conectado não é autorizado (Fatia 2)
+
+**Parear um computador nunca deu a ele o direito de rodar código.** A coluna
+`maquina.executa` nasce `0`, e ligar é um segundo sim, explícito, no botão
+**Deixar consertar aqui** da tela **Computadores**. Enquanto ele estiver
+desligado, o agente daquela máquina continua medindo e reportando — e a
+resposta que ele recebe do painel vem sempre com `"tarefa": null`.
+
+O roteiro de ponta a ponta — autorizar, decidir o que anda sozinho, o que
+aparece na tela, e a verdade sobre o botão Parar — está em
+[`docs/operacao/segundo-braco.md`](docs/operacao/segundo-braco.md).
+
 ### Quatro decisões que valem ser ditas
 
 **O agente não escuta porta nenhuma.** Só sai conexão dele. Um agente que
