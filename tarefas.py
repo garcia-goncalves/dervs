@@ -263,10 +263,15 @@ def pode_rodar(tarefa: dict, gasto_usd=0.0, agora_iso: str = "",
     regra = (t.get("regra") or "").strip()
     if not regra:
         return (False, "a tarefa nao diz de que regra veio")
+    # ANTES da aprovacao, e nao depois. Escrito assim porque o contrario ja
+    # esteve aqui e era um buraco: com a checagem dentro do `if`, uma tarefa
+    # `publicar` que tivesse `aprovado_em` passava — o clique do dono numa
+    # tarefa aprovava a PUBLICACAO. O clique aprova UMA tarefa; ele nunca
+    # levanta o NUNCA_VERDE. Achado pelo vigia irmao em 29/08/2026.
+    if regra in NUNCA_VERDE:
+        return (False, "a regra \"%s\" nunca anda sozinha" % regra)
     cor = cor_da_regra(regra, repinturas)
     if cor != VERDE and not (t.get("aprovado_em") or "").strip():
-        if regra in NUNCA_VERDE:
-            return (False, "a regra \"%s\" nunca anda sozinha" % regra)
         return (False, "esta tarefa esta vermelha e espera o seu clique")
 
     if int(t.get("tentativas") or 0) >= MAX_TENTATIVAS:

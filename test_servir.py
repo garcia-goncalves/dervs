@@ -1639,5 +1639,44 @@ class AsTarefasNoServidorDeVerdade(BaseServidorDeVerdade):
         self.assertIn("noticia", t["erro"])
 
 
+class OConsumoDaSemana(BaseServidorDeVerdade):
+    """A rota que torna a semana de observacao uma medicao."""
+
+    def test_o_consumo_exige_sessao(self):
+        self.assertEqual(self.pedir("/api/consumo").status, 401)
+
+    def test_com_sessao_devolve_a_forma_completa(self):
+        corpo = json.loads(self.pedir("/api/consumo",
+                                      cookies=self.com_sessao()).corpo)
+        for chave in ("por_dia", "por_projeto", "por_regra", "total",
+                      "medido_em", "dias", "custo_em_reais"):
+            self.assertIn(chave, corpo)
+        self.assertEqual(corpo["dias"], banco.DIAS_DE_CONSUMO)
+
+    def test_semana_vazia_devolve_zeros_e_o_carimbo_e_nao_um_corpo_vazio(self):
+        corpo = json.loads(self.pedir("/api/consumo",
+                                      cookies=self.com_sessao()).corpo)
+        self.assertEqual(corpo["total"]["sessoes"], 0)
+        self.assertTrue(corpo["medido_em"])
+
+    def test_o_dinheiro_vem_rotulado_como_referencia(self):
+        """Com assinatura, o recurso escasso e cota. Chamar o custo em dolar de
+        "quanto o painel consumiu" seria o numero errado com cara de certo."""
+        corpo = json.loads(self.pedir("/api/consumo",
+                                      cookies=self.com_sessao()).corpo)
+        self.assertEqual(corpo["o_que_e_escasso"], "sessoes e rodadas")
+        self.assertTrue(corpo["custo_em_reais"].startswith("R$ "))
+
+    def test_uma_janela_absurda_e_aparada(self):
+        """Sem teto, uma janela de dez anos pedida pela barra de endereco vira
+        varredura completa da fila a cada recarga."""
+        corpo = json.loads(self.pedir("/api/consumo?dias=99999",
+                                      cookies=self.com_sessao()).corpo)
+        self.assertEqual(corpo["dias"], 90)
+        corpo = json.loads(self.pedir("/api/consumo?dias=abacaxi",
+                                      cookies=self.com_sessao()).corpo)
+        self.assertEqual(corpo["dias"], banco.DIAS_DE_CONSUMO)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)

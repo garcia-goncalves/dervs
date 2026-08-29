@@ -674,5 +674,261 @@ class OAgenteNaoEscutaPorta(unittest.TestCase):
         self.assertNotIn('"--token"', texto)
 
 
+class OAgenteTrabalha(unittest.TestCase):
+    """O fio inteiro, com o painel dublado.
+
+    Nada aqui fala com rede nem roda o `claude`: `_falar` e trocado por uma
+    funcao que anota o que foi pedido e devolve o que o teste mandar. O que
+    esta em jogo e o COMPORTAMENTO do agente — o que ele manda, quando manda, e
+    o que ele faz com a resposta.
+    """
+
+    def setUp(self):
+        from agente import enviar as e
+        self.e = e
+        self.pedidos = []
+        self.respostas = {}
+        self._falar_antigo = e._falar
+
+        def falar_de_mentira(alvo, caminho, corpo, token=""):
+            self.pedidos.append((caminho, corpo, token))
+            resposta = self.respostas.get(caminho, {"ok": True})
+            if callable(resposta):
+                return resposta(corpo)
+            return dict(resposta)
+
+        e._falar = falar_de_mentira
+        self.addCleanup(setattr, e, "_falar", self._falar_antigo)
+
+        self._token_antigo = e.token_de
+        e.token_de = lambda alvo: "token-de-mentira"
+        self.addCleanup(setattr, e, "token_de", self._token_antigo)
+
+    MEDICAO = {"projetos": [{"nome": "alvo", "caminho": "/tmp/alvo"}],
+               "infra": {}, "avisos": []}
+
+    def tarefa(self, **kw):
+        base = {"id": "d:1", "projeto": "alvo", "regra": "env_drift",
+                "trilho": "claude", "executor": "claude", "cor": "verde",
+                "detalhe": "trocar x", "teto_usd": 3.0, "rodadas": 0}
+        base.update(kw)
+        return base
+
+    def com_braco(self, funcao, disponivel=True):
+        """Troca o braco por um duble que roda `funcao(tarefa, ao_progredir)`."""
+        from agente import executor as ex
+
+        class Duble(ex.Executor):
+            nome = "claude"
+
+            def disponivel(_self):
+                return disponivel
+
+            def rodar(_self, tarefa, teto_usd=None, ao_progredir=None,
+                      gasto_usd=0.0, repinturas=None, maquina=None):
+                return funcao(tarefa, ao_progredir)
+
+        antigo = ex.EXECUTORES["claude"]
+        ex.EXECUTORES["claude"] = Duble
+        self.addCleanup(lambda: ex.EXECUTORES.__setitem__("claude", antigo))
+
+    def caminhos(self):
+        return [c for c, _corpo, _t in self.pedidos]
+
+    # ------------------------------------------------------------ o fio
+
+    def test_resposta_sem_tarefa_nao_dispara_nada(self):
+        self.respostas["/agente/relatorio"] = {"ok": True, "tarefa": None}
+        self.com_braco(lambda *_a: self.fail("o braco nao devia rodar"))
+        self.e.enviar_uma_vez("https://dervs.com.br", medicao=self.MEDICAO)
+        self.assertEqual(self.caminhos(), ["/agente/relatorio"])
+
+    def test_resposta_com_tarefa_dispara_o_braco_UMA_vez(self):
+        self.respostas["/agente/relatorio"] = {"ok": True,
+                                               "tarefa": self.tarefa()}
+        vezes = []
+
+        def rodar(tarefa, _ao_progredir):
+            vezes.append(tarefa["id"])
+            return {"tipo": "desfecho", "id": tarefa["id"], "estado": "ok",
+                    "ramo": "hub/x-1", "resumo": "pronto", "diff": "",
+                    "pr_url": "", "rodadas": 3, "custo_usd": 0.4, "erro": ""}
+
+        self.com_braco(rodar)
+        self.e.enviar_uma_vez("https://dervs.com.br", medicao=self.MEDICAO)
+        self.assertEqual(vezes, ["d:1"])
+
+    def test_o_desfecho_sobe_sempre_inclusive_na_falha(self):
+        """Sem o desfecho, a tarefa fica `rodando` no painel ate a varredura de
+        15 minutos — e ate la a tela mente dizendo que ha trabalho acontecendo.
+        """
+        self.respostas["/agente/relatorio"] = {"ok": True,
+                                               "tarefa": self.tarefa()}
+        self.com_braco(lambda t, _p: {"tipo": "desfecho", "id": t["id"],
+                                      "estado": "falha", "erro": "deu ruim"})
+        self.e.enviar_uma_vez("https://dervs.com.br", medicao=self.MEDICAO)
+        self.assertIn("/agente/resultado", self.caminhos())
+        ultimo = self.pedidos[-1][1]
+        self.assertEqual(ultimo["estado"], "falha")
+
+    def test_o_progresso_e_enviado_MAIS_DE_UMA_VEZ_numa_sessao_longa(self):
+        """Duble de relogio: o tempo anda de dez em dez segundos, entao cada
+        volta passa do intervalo de cinco. Sem isto, o teste dependeria de o
+        computador ser lento."""
+        self.respostas["/agente/relatorio"] = {"ok": True,
+                                               "tarefa": self.tarefa()}
+        batidas = iter([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100])
+        relogio = lambda: next(batidas, 999)   # noqa: E731
+
+        def rodar(t, ao_progredir):
+            for i in range(4):
+                ao_progredir({"linhas": ["linha %d" % i], "frase": "indo",
+                              "rodadas": i, "custo_usd": 0.1,
+                              "total_de_linhas": i + 1})
+            return {"tipo": "desfecho", "id": t["id"], "estado": "ok"}
+
+        self.com_braco(rodar)
+        self.e.enviar_uma_vez("https://dervs.com.br", medicao=self.MEDICAO,
+                              relogio=relogio)
+        progressos = [c for c, corpo, _t in self.pedidos
+                      if corpo.get("tipo") == "progresso"]
+        self.assertGreater(len(progressos), 1,
+                           "o progresso foi enviado uma vez so")
+
+    def test_o_progresso_respeita_o_intervalo_e_nao_inunda_o_painel(self):
+        """O balcao do painel tem teto. Falar mais que o combinado leva 429, e
+        a tela congela sem explicacao."""
+        self.respostas["/agente/relatorio"] = {"ok": True,
+                                               "tarefa": self.tarefa()}
+        parado = lambda: 0.0                   # noqa: E731 — o tempo nao anda
+
+        def rodar(t, ao_progredir):
+            for _ in range(20):
+                ao_progredir({"linhas": ["x"], "frase": "", "rodadas": 1,
+                              "custo_usd": 0.0, "total_de_linhas": 1})
+            return {"tipo": "desfecho", "id": t["id"], "estado": "ok"}
+
+        self.com_braco(rodar)
+        self.e.enviar_uma_vez("https://dervs.com.br", medicao=self.MEDICAO,
+                              relogio=parado)
+        progressos = [c for c, corpo, _t in self.pedidos
+                      if corpo.get("tipo") == "progresso"]
+        self.assertLessEqual(len(progressos), 1)
+
+    def test_a_resposta_pare_chega_ao_braco(self):
+        """O botao Parar nao tem fio proprio: ele volta na resposta do pedido
+        que o agente ja ia fazer."""
+        self.respostas["/agente/relatorio"] = {"ok": True,
+                                               "tarefa": self.tarefa()}
+        self.respostas["/agente/resultado"] = {"ok": True, "pare": True}
+        vistos = []
+
+        def rodar(t, ao_progredir):
+            vistos.append(ao_progredir({"linhas": ["x"], "frase": "",
+                                        "rodadas": 1, "custo_usd": 0.0,
+                                        "total_de_linhas": 1}))
+            return {"tipo": "desfecho", "id": t["id"], "estado": "falha"}
+
+        self.com_braco(rodar)
+        self.e.enviar_uma_vez("https://dervs.com.br", medicao=self.MEDICAO,
+                              relogio=iter(range(0, 10000, 100)).__next__)
+        self.assertEqual(vistos, [True])
+
+    def test_falha_de_rede_no_progresso_NAO_interrompe_a_sessao(self):
+        """Devolver "pare" por causa de um cabo de rede faria uma falha de rede
+        parecer, para o dono, um clique dele no botao Parar."""
+        self.respostas["/agente/relatorio"] = {"ok": True,
+                                               "tarefa": self.tarefa()}
+
+        def explode(_corpo):
+            raise self.e.ErroDoAlvo("a rede caiu")
+
+        self.respostas["/agente/resultado"] = explode
+        vistos = []
+
+        def rodar(t, ao_progredir):
+            vistos.append(ao_progredir({"linhas": ["x"], "frase": "",
+                                        "rodadas": 1, "custo_usd": 0.0,
+                                        "total_de_linhas": 1}))
+            return {"tipo": "desfecho", "id": t["id"], "estado": "ok"}
+
+        self.com_braco(rodar)
+        self.e.enviar_uma_vez("https://dervs.com.br", medicao=self.MEDICAO,
+                              relogio=iter(range(0, 10000, 100)).__next__)
+        self.assertEqual(vistos, [False])
+
+    def test_uma_tarefa_que_explode_nao_mata_o_laco_do_agente(self):
+        """Parar de medir por causa de uma sessao ruim deixaria o painel cego
+        exatamente quando ha problema."""
+        self.respostas["/agente/relatorio"] = {"ok": True,
+                                               "tarefa": self.tarefa()}
+
+        def rodar(_t, _p):
+            raise RuntimeError("o braco quebrou")
+
+        self.com_braco(rodar)
+        fora = self.e.enviar_uma_vez("https://dervs.com.br",
+                                     medicao=self.MEDICAO)
+        self.assertEqual(fora["desfecho"]["estado"], "falha")
+        self.assertIn("RuntimeError", fora["desfecho"]["erro"])
+
+    def test_braco_que_esta_maquina_nao_tem_vira_desfecho_de_falha(self):
+        self.respostas["/agente/relatorio"] = {
+            "ok": True, "tarefa": self.tarefa(executor="codex")}
+        fora = self.e.enviar_uma_vez("https://dervs.com.br",
+                                     medicao=self.MEDICAO)
+        self.assertEqual(fora["desfecho"]["estado"], "falha")
+        self.assertIn("codex", fora["desfecho"]["erro"])
+        self.assertIn("/agente/resultado", self.caminhos())
+
+    def test_trabalhar_desligado_so_mede(self):
+        """A maquina que o dono ainda nao autorizou continua reportando — e nao
+        executa nada."""
+        self.respostas["/agente/relatorio"] = {"ok": True,
+                                               "tarefa": self.tarefa()}
+        self.com_braco(lambda *_a: self.fail("o braco nao devia rodar"))
+        self.e.enviar_uma_vez("https://dervs.com.br", medicao=self.MEDICAO,
+                              trabalhar=False)
+        self.assertEqual(self.caminhos(), ["/agente/relatorio"])
+
+    def test_o_caminho_do_projeto_sai_da_MEDICAO_e_nao_da_rede(self):
+        """Um caminho vindo do painel seria a rede dizendo em que pasta desta
+        maquina mexer."""
+        self.assertEqual(
+            self.e.caminho_do_projeto("alvo", self.MEDICAO), "/tmp/alvo")
+        self.assertEqual(
+            self.e.caminho_do_projeto("nao-existe", self.MEDICAO), "")
+
+    def test_o_painel_nao_consegue_apontar_para_uma_pasta_qualquer(self):
+        """Mesmo que a tarefa venha com `caminho`, quem manda e a medicao."""
+        self.respostas["/agente/relatorio"] = {
+            "ok": True,
+            "tarefa": self.tarefa(caminho="C:/Windows/System32")}
+        vistos = []
+        self.com_braco(lambda t, _p: vistos.append(t.get("caminho"))
+                       or {"tipo": "desfecho", "id": t["id"], "estado": "ok"})
+        self.e.enviar_uma_vez("https://dervs.com.br", medicao=self.MEDICAO)
+        self.assertEqual(vistos, ["/tmp/alvo"])
+
+    def test_o_token_continua_indo_so_em_cabecalho(self):
+        self.respostas["/agente/relatorio"] = {"ok": True,
+                                               "tarefa": self.tarefa()}
+        self.com_braco(lambda t, _p: {"tipo": "desfecho", "id": t["id"],
+                                      "estado": "ok"})
+        self.e.enviar_uma_vez("https://dervs.com.br", medicao=self.MEDICAO)
+        for caminho, corpo, token in self.pedidos:
+            self.assertEqual(token, "token-de-mentira", caminho)
+            self.assertNotIn("token", corpo, caminho)
+
+    def test_a_latencia_do_parar_esta_declarada_e_e_de_cinco_segundos(self):
+        """O botao NAO e instantaneo, e nenhuma etapa o torna. O numero mora em
+        `tarefas.py`, num lugar so, e a tela le dali."""
+        import tarefas as t
+        self.assertEqual(t.SEGUNDOS_ENTRE_PROGRESSOS, 5)
+        import inspect
+        self.assertIn("SEGUNDOS_ENTRE_PROGRESSOS",
+                      inspect.getsource(self.e.fazer_a_tarefa))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

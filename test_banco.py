@@ -35,7 +35,8 @@ from pathlib import Path
 os.environ.setdefault("DERVS_COFRE",
                       "chave-de-teste-que-nao-e-segredo-nenhum-0123456789")
 
-import banco  # noqa: E402
+import banco    # noqa: E402
+import tarefas  # noqa: E402
 
 
 def iso(dt) -> str:
@@ -1872,6 +1873,114 @@ class CorDaRegra(unittest.TestCase):
                          " VALUES ('env_drift', 'azul', ?)", (daqui(),))
         self.con.commit()
         self.assertEqual(banco.cores_das_regras(con=self.con), {})
+
+
+class Consumo(unittest.TestCase):
+    """Quanto o painel trabalhou. Por dia LOCAL, nao por UTC."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+
+    def tearDown(self):
+        self.con.close()
+
+    def gravar(self, id_, projeto, regra, estado, inicio, fim, rodadas=1,
+               custo=0.5):
+        self.con.execute(
+            "INSERT INTO fila (id, projeto, regra, trilho, estado, criado_em,"
+            "  iniciado_em, terminado_em, rodadas, custo_usd)"
+            " VALUES (?,?,?,'claude',?,?,?,?,?,?)",
+            (id_, projeto, regra, estado, inicio, inicio, fim, rodadas, custo))
+        self.con.commit()
+
+    def test_semana_sem_nenhuma_sessao_devolve_zeros_E_o_carimbo(self):
+        """"Nao sei" e "zero" sao estados diferentes. Uma tela de zeros sem
+        carimbo e indistinguivel de uma tela que nao conseguiu medir."""
+        fora = banco.consumo(agora_iso=daqui(), con=self.con)
+        self.assertEqual(fora["total"]["sessoes"], 0)
+        self.assertEqual(fora["total"]["rodadas"], 0)
+        self.assertEqual(fora["por_dia"], [])
+        self.assertTrue(fora["medido_em"])
+        self.assertEqual(fora["dias"], banco.DIAS_DE_CONSUMO)
+
+    def test_a_agregacao_separa_por_dia_LOCAL_e_nao_por_utc(self):
+        """Em UTC-3, as 21h de terca ja e quarta em UTC. Agrupar pelo carimbo
+        cru jogaria as noites do dono para o dia seguinte."""
+        # Tres carimbos, cada um no INICIO de um dia local diferente. Usar a
+        # propria conta de janela garante que o teste vale em qualquer fuso.
+        dias = []
+        for d in ("2026-08-24", "2026-08-25", "2026-08-26"):
+            inicio, _fim = tarefas.janela_local_em_utc(d)
+            dias.append((d, inicio))
+        for i, (d, carimbo) in enumerate(dias):
+            self.gravar("d:%d" % i, "dervs", "env_drift", "ok", carimbo,
+                        carimbo)
+        fora = banco.consumo(desde_iso=dias[0][1],
+                             ate_iso=daqui(days=10), agora_iso=daqui(days=10),
+                             con=self.con)
+        self.assertEqual([l["dia"] for l in fora["por_dia"]],
+                         ["2026-08-24", "2026-08-25", "2026-08-26"])
+        self.assertEqual(fora["total"]["sessoes"], 3)
+
+    def test_separa_por_projeto_e_por_regra(self):
+        quando = daqui()
+        self.gravar("d:1", "dervs", "env_drift", "ok", quando, quando)
+        self.gravar("d:2", "dervs", "memoria_crlf", "falha", quando, quando)
+        self.gravar("d:3", "outro", "env_drift", "ok", quando, quando)
+        fora = banco.consumo(desde_iso=daqui(days=-1), ate_iso=daqui(days=1),
+                             agora_iso=daqui(), con=self.con)
+        self.assertEqual({l["projeto"]: l["sessoes"] for l in fora["por_projeto"]},
+                         {"dervs": 2, "outro": 1})
+        self.assertEqual({l["regra"]: l["sessoes"] for l in fora["por_regra"]},
+                         {"env_drift": 2, "memoria_crlf": 1})
+        self.assertEqual(fora["total"]["ok"], 2)
+        self.assertEqual(fora["total"]["falhas"], 1)
+
+    def test_conta_rodadas_e_duracao(self):
+        """O numero que manda e sessoes e rodadas: com assinatura, o recurso
+        escasso e cota, nao dinheiro."""
+        inicio = daqui()
+        fim = daqui(minutes=7)
+        self.gravar("d:1", "dervs", "env_drift", "ok", inicio, fim, rodadas=9)
+        fora = banco.consumo(desde_iso=daqui(days=-1), ate_iso=daqui(days=1),
+                             agora_iso=daqui(), con=self.con)
+        self.assertEqual(fora["total"]["rodadas"], 9)
+        self.assertEqual(fora["total"]["segundos"], 7 * 60)
+
+    def test_sessao_sem_fim_nao_estraga_a_duracao(self):
+        """Tarefa ainda rodando entra na contagem de sessoes, mas nao inventa
+        duracao — durante a sessao o gasto continua desconhecido."""
+        self.con.execute(
+            "INSERT INTO fila (id, projeto, regra, trilho, estado, criado_em,"
+            "  iniciado_em, rodadas) VALUES"
+            " ('d:9','dervs','env_drift','claude','rodando',?,?,3)",
+            (daqui(), daqui()))
+        self.con.commit()
+        fora = banco.consumo(desde_iso=daqui(days=-1), ate_iso=daqui(days=1),
+                             agora_iso=daqui(), con=self.con)
+        self.assertEqual(fora["total"]["sessoes"], 1)
+        self.assertEqual(fora["total"]["segundos"], 0)
+        self.assertEqual(fora["total"]["ok"], 0)
+        self.assertEqual(fora["total"]["falhas"], 0)
+
+    def test_a_janela_exclui_o_que_esta_fora(self):
+        velho = daqui(days=-30)
+        self.gravar("d:velho", "dervs", "env_drift", "ok", velho, velho)
+        self.gravar("d:novo", "dervs", "env_drift", "ok", daqui(), daqui())
+        fora = banco.consumo(dias=7, ate_iso=daqui(days=1),
+                             agora_iso=daqui(), con=self.con)
+        self.assertEqual(fora["total"]["sessoes"], 1)
+
+    def test_carimbo_torto_nao_derruba_a_conta(self):
+        self.con.execute(
+            "INSERT INTO fila (id, projeto, regra, trilho, estado, criado_em,"
+            "  iniciado_em, terminado_em) VALUES"
+            " ('d:torto','dervs','env_drift','claude','ok',?,'ontem','hoje')",
+            (daqui(),))
+        self.con.commit()
+        fora = banco.consumo(desde_iso=daqui(days=-1), ate_iso=daqui(days=1),
+                             agora_iso=daqui(), con=self.con)
+        self.assertEqual(fora["total"]["segundos"], 0)
 
 
 if __name__ == "__main__":

@@ -1583,6 +1583,103 @@ def ligar_execucao(maquina_id: int, usuario_id: int, ligado: bool,
             con.close()
 
 
+# Quantos dias a tela mostra por padrao. Sete porque foi o prazo que o dono
+# deu a si mesmo em 28/08/2026 para observar antes de decidir sobre freio de
+# horario. O numero e daqui, e nao da rota, para a tela e o teste nao
+# discordarem sobre o que e "esta semana".
+DIAS_DE_CONSUMO = 7
+
+
+def consumo(desde_iso: str = "", ate_iso: str = "", dias: int = DIAS_DE_CONSUMO,
+            agora_iso: str = "", con=None) -> dict:
+    """Quanto o painel trabalhou na janela. Por dia LOCAL, projeto e regra.
+
+    O recurso escasso e COTA, nao dinheiro: com assinatura, o que acaba sao
+    sessoes e rodadas. O custo em reais entra como referencia, rotulado como
+    tal, e nunca como o numero principal (§13 da fonte unica).
+
+    Semana sem nenhuma sessao devolve ZEROS mais o carimbo — e nao um corpo
+    vazio. "Nao sei" e "zero" sao estados diferentes, e o carimbo e o que
+    permite a tela distinguir os dois.
+
+    A agregacao e por DIA LOCAL, e nao por UTC. Em UTC-3, as 21h de terca ja e
+    quarta em UTC: agrupar pelo carimbo cru jogaria as noites do dono para o
+    dia seguinte, e o grafico mentiria em toda madrugada.
+    """
+    agora_dt = agora_iso or agora()
+    if not ate_iso:
+        ate_iso = agora_dt
+    if not desde_iso:
+        try:
+            base = datetime.fromisoformat(ate_iso)
+        except (TypeError, ValueError):
+            base = datetime.now(timezone.utc)
+        desde_iso = (base - timedelta(days=int(dias))).isoformat(
+            timespec="seconds")
+
+    fechar = con is None
+    con = con or conectar()
+    try:
+        linhas = con.execute(
+            "SELECT projeto, regra, estado, iniciado_em, terminado_em,"
+            "       custo_usd, rodadas, criado_em"
+            "  FROM fila"
+            " WHERE COALESCE(terminado_em, iniciado_em, criado_em) >= ?"
+            "   AND COALESCE(terminado_em, iniciado_em, criado_em) < ?",
+            (desde_iso, ate_iso)).fetchall()
+    finally:
+        if fechar:
+            con.close()
+
+    por_dia, por_projeto, por_regra = {}, {}, {}
+    total = _balde()
+    for l in linhas:
+        carimbo = l["terminado_em"] or l["iniciado_em"] or l["criado_em"]
+        dia = tarefas.dia_local_de(carimbo) or "sem data"
+        for balde in (por_dia.setdefault(dia, _balde()),
+                      por_projeto.setdefault(l["projeto"] or "(sem projeto)",
+                                             _balde()),
+                      por_regra.setdefault(l["regra"] or "(sem regra)",
+                                           _balde()),
+                      total):
+            _somar(balde, l)
+
+    return {
+        "desde": desde_iso, "ate": ate_iso, "dias": dias,
+        "por_dia": [dict(dia=d, **por_dia[d]) for d in sorted(por_dia)],
+        "por_projeto": [dict(projeto=p, **por_projeto[p])
+                        for p in sorted(por_projeto)],
+        "por_regra": [dict(regra=r, **por_regra[r]) for r in sorted(por_regra)],
+        "total": total,
+        # O CARIMBO. Sem ele, uma tela de zeros e indistinguivel de uma tela
+        # que nao conseguiu medir — e zerar o que nao deu para reler apaga um
+        # problema real.
+        "medido_em": agora_dt,
+    }
+
+
+def _balde() -> dict:
+    return {"sessoes": 0, "rodadas": 0, "segundos": 0, "custo_usd": 0.0,
+            "ok": 0, "falhas": 0}
+
+
+def _somar(balde: dict, l) -> None:
+    balde["sessoes"] += 1
+    balde["rodadas"] += int(l["rodadas"] or 0)
+    balde["custo_usd"] += float(l["custo_usd"] or 0.0)
+    if l["estado"] == "ok":
+        balde["ok"] += 1
+    elif l["estado"] == "falha":
+        balde["falhas"] += 1
+    if l["iniciado_em"] and l["terminado_em"]:
+        try:
+            balde["segundos"] += int(
+                (datetime.fromisoformat(l["terminado_em"])
+                 - datetime.fromisoformat(l["iniciado_em"])).total_seconds())
+        except (TypeError, ValueError):
+            pass
+
+
 def gasto_entre(inicio_iso: str, fim_iso: str, con=None) -> float:
     """Soma o custo dos itens terminados na JANELA [inicio, fim) — ambos em UTC.
 

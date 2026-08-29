@@ -1639,6 +1639,33 @@ class Hub(SimpleHTTPRequestHandler):
         self.wfile.write(pedaco.encode("utf-8"))
         self.wfile.flush()
 
+    def _consumo(self):
+        """Quanto o painel consumiu na janela. Sete dias por padrao.
+
+        O dono decidiu, em 28/08/2026, nao ter freio de horario e observar sete
+        dias antes de limitar. Sem contador, "observar" e uma intencao — esta
+        rota e o que torna a decisao dele executavel.
+        """
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        consulta = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        try:
+            dias = int((consulta.get("dias") or [""])[0])
+        except (TypeError, ValueError):
+            dias = banco.DIAS_DE_CONSUMO
+        # Teto de 90 dias: a leitura varre a `fila` inteira, e uma janela de
+        # dez anos pedida pela barra de endereco seria uma varredura completa a
+        # cada recarga.
+        dias = max(1, min(dias, 90))
+        fora = banco.consumo(dias=dias)
+        # O custo em reais vem JUNTO e ROTULADO. Com assinatura, o recurso
+        # escasso e cota; o dinheiro e referencia, e a tela precisa do texto
+        # pronto para nao inventar a conversao dela.
+        fora["custo_em_reais"] = tarefas.em_reais(fora["total"]["custo_usd"])
+        fora["o_que_e_escasso"] = "sessoes e rodadas"
+        return self._json(200, fora)
+
     def _tarefa_aprovar(self):
         """O clique do dono numa tarefa vermelha."""
         corpo, sessao = self._guarda_de_escrita()
@@ -1963,6 +1990,7 @@ ROTAS = {
     "/agente/resultado":        Rota("POST", Hub._resultado,       "maquina"),
     "/api/tarefas":             Rota("GET",  Hub._tarefas,         "dado"),
     "/api/eventos":             Rota("GET",  Hub._eventos,         "dado"),
+    "/api/consumo":             Rota("GET",  Hub._consumo,         "dado"),
     "/api/tarefas/aprovar":     Rota("POST", Hub._tarefa_aprovar,  "dado"),
     "/api/tarefas/parar":       Rota("POST", Hub._tarefa_parar,    "dado"),
     "/api/tarefas/cor":         Rota("POST", Hub._tarefa_cor,      "dado"),

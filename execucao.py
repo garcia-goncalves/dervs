@@ -791,6 +791,11 @@ def _zerado() -> dict:
         "custo_usd": 0.0, "linhas": [], "pr_url": None, "resumo": "",
         "diff": "", "manchete": "", "corpo": "", "copia": "", "ramo": "", "base_sha": "",
         "projeto_caminho": "", "contabilizar": False,
+        # RODADAS (Fatia 2). Com assinatura, o recurso escasso e cota, e cota
+        # se mede em turnos — nao em dolar. `--max-budget-usd` foi medido
+        # estourando 4,5x; o numero de rodadas nao estoura, porque e contado
+        # aqui, evento a evento, e nao prometido pelo fornecedor.
+        "rodadas": 0,
     }
 
 
@@ -1013,6 +1018,10 @@ def _absorver(evento: dict) -> None:
 
     tipo = evento.get("type")
     if tipo == "assistant":
+        # Uma resposta do modelo e UMA rodada. O `result` traz `num_turns`, mas
+        # so no fim: contar aqui e o que permite a tela mostrar o numero
+        # crescendo enquanto a sessao roda.
+        _execucao["rodadas"] = int(_execucao.get("rodadas", 0)) + 1
         for nome, comando in _ferramentas_do_evento(evento):
             _anotar("%s %s" % (nome, comando[:200]) if comando else nome)
     elif tipo == "system" and evento.get("subtype") == "init":
@@ -1025,6 +1034,10 @@ def _absorver(evento: dict) -> None:
         return
 
     _execucao["resumo"] = str(evento.get("result") or "")
+    # O fornecedor tem a contagem oficial. Se ela vier, ela vence a nossa — a
+    # nossa existe para o numero nao ficar em zero durante a sessao inteira.
+    if isinstance(evento.get("num_turns"), int) and evento["num_turns"] > 0:
+        _execucao["rodadas"] = evento["num_turns"]
     _execucao["estado"] = avancar(_execucao.get("estado", "rodando"), evento)
     _anotar("sessão encerrada: %s" % (evento.get("terminal_reason") or "sem motivo"))
 
@@ -1202,6 +1215,8 @@ def estado(desde=0) -> dict:
         "custo_brl": em_reais(_execucao.get("custo_usd", 0.0)),
         "linhas": linhas_desde(log, desde),
         "total_de_linhas": len(log),
+        "rodadas": int(_execucao.get("rodadas", 0)),
+        "ramo": _execucao.get("ramo", ""),
         "pr_url": _execucao.get("pr_url"),
         "resumo": _execucao.get("resumo", ""),
         "diff": _execucao.get("diff", ""),

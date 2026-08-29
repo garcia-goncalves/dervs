@@ -61,7 +61,7 @@ jobs:
           exit $erro
 
       - name: Compila
-        run: python -m py_compile banco.py github_app.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py tarefas.py agente/__init__.py agente/enviar.py
+        run: python -m py_compile banco.py github_app.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py tarefas.py agente/__init__.py agente/enviar.py agente/executor.py
 
       # Os testes abaixo sao listados A MAO, um passo cada, porque cada nome na
       # tela do GitHub diz o que quebrou sem ninguem abrir o log. O preco disso
@@ -75,6 +75,17 @@ jobs:
           done
           if [ "$faltou" = "0" ]; then echo "Todos os test_*.py estao na CI."; fi
           exit $faltou
+
+      # A tomada dos bracos. O binario `claude` NUNCA e chamado aqui: um script
+      # de mentira cospe o mesmo `stream-json`. Chamar o de verdade gastaria
+      # cota da assinatura do dono a cada corrida, e a CI nao tem login nenhum.
+      - name: A tomada dos braços
+        run: python test_executor.py
+
+      # O vigia irmao do test_rotas: aquele varre as ROTAS, este varre as
+      # TAREFAS. Nenhuma tarefa, de nenhuma cor, altera o caminho que publica.
+      - name: Nenhuma tarefa publica
+        run: python test_tarefas_nao_publicam.py
 
       # O fluxo ao vivo: o servidor de verdade empurrando, com PRAZO em toda
       # leitura (teste de fluxo sem prazo nao falha, PENDURA), mais o bloco do
