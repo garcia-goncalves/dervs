@@ -41,6 +41,7 @@ variável em `.env`), monta um relatório e **manda** para o endereço do DERVS.
 
    | O que aparece | O que houve | O que fazer |
    |---|---|---|
+   | `No module named 'agente'` | o terminal está em outra pasta — este é o único erro que **não** vem em português, porque quem responde é o Python, antes de o programa começar | `cd` para a pasta do DERVS e repetir |
    | `o codigo de seis digitos nao serve` | passou dos dez minutos, ou já foi usado | gerar outro no painel |
    | `o alvo recusou por excesso de tentativas` | cinco erros seguidos daquele endereço | esperar quinze minutos |
    | `nao consegui falar com …` | endereço errado, ou sem internet | conferir o endereço |
