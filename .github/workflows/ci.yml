@@ -184,6 +184,18 @@ jobs:
       - name: Agente e pareamento
         run: python test_agente.py
 
+      # O comando que a TELA entrega, rodado de verdade. O passo acima prova a
+      # rota falando HTTP na mao; este cola a linha que `painel.js` monta e a
+      # executa como processo novo. Entre uma coisa e outra cabem a opcao que
+      # so um dos lados conhece, o pacote que o Python nao acha, e o programa
+      # que falha devolvendo zero. Em 29/08/2026 o dono colou a linha e levou
+      # `No module named 'agente'`: a rota estava perfeita.
+      #
+      # Na CI isto e rapido: `coletar.RAIZ` aponta para uma pasta que so
+      # existe na maquina do dono, e sem ela a medicao mede quase nada.
+      - name: Conectar um computador, de ponta a ponta
+        run: python test_conectar_ponta_a_ponta.py
+
       # ETAPA 15 — os oito itens verificaveis do design.md viram verificacao.
       # Cor literal solta num componente, token de estado pintando um botao,
       # "loading" numa tela: nada disso quebra nada, nada disso aparece numa
