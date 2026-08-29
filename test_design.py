@@ -685,14 +685,20 @@ class ORoteiroChamaAsTelasPeloNomeDelas(unittest.TestCase):
         bloco = re.search(r"<nav.*?</nav>", html(), re.S)
         self.assertIsNotNone(bloco, "o menu sumiu do index.html")
         nomes = re.findall(r'data-tela="[^"]+"\s*>([^<]+)<', bloco.group(0))
-        self.assertEqual(len(nomes), 4, nomes)
+        self.assertEqual(len(nomes), 6, nomes)
         return nomes
 
-    def test_o_menu_tem_os_quatro_nomes_esperados(self):
-        """Se o menu mudar de forma, o teste abaixo passa vazio e nao vigia."""
+    def test_o_menu_tem_os_seis_nomes_esperados(self):
+        """Se o menu mudar de forma, o teste abaixo passa vazio e nao vigia.
+
+        Eram quatro ate a Fatia 2. "Trabalho" e "Consumo" entraram junto com o
+        braco: a primeira e onde o dono ve e aprova o que o DERVS faz, a
+        segunda e o que torna a semana de observacao uma medicao em vez de uma
+        impressao.
+        """
         self.assertEqual(self.menu(),
-                         ["Painel", "Conectar projeto", "Computadores",
-                          "Formas de entrar"])
+                         ["Painel", "Trabalho", "Consumo", "Conectar projeto",
+                          "Computadores", "Formas de entrar"])
 
     def test_nenhum_roteiro_manda_clicar_num_botao_que_nao_existe(self):
         # O par: o nome errado que ja custou uma verificacao, e o certo.

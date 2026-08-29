@@ -310,7 +310,7 @@ def frases_do_diff(diff: str) -> list:
     """
     texto = diff or ""
     if not texto.strip():
-        return ["Nada mudou: a sessao terminou sem tocar em nenhum arquivo."]
+        return ["Nada mudou: a sessão terminou sem tocar em nenhum arquivo."]
 
     arquivos = []
     atual = None
@@ -331,7 +331,7 @@ def frases_do_diff(diff: str) -> list:
             atual["menos"] += 1
 
     if not arquivos:
-        return ["Nada mudou: a sessao terminou sem tocar em nenhum arquivo."]
+        return ["Nada mudou: a sessão terminou sem tocar em nenhum arquivo."]
 
     frases = []
     for a in arquivos:

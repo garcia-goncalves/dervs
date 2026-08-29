@@ -62,6 +62,8 @@ __FAIXA__
     </a>
     <nav class="mapa" aria-label="Telas">
       <a href="#/painel" data-tela="painel">Painel</a>
+      <a href="#/trabalho" data-tela="trabalho">Trabalho</a>
+      <a href="#/consumo" data-tela="consumo">Consumo</a>
       <a href="#/conectar" data-tela="conectar">Conectar projeto</a>
       <a href="#/computadores" data-tela="computadores">Computadores</a>
       <a href="#/entrada" data-tela="entrada">Formas de entrar</a>
@@ -108,6 +110,31 @@ __FAIXA__
     <span class="selo__rotulo">sem dados</span>
   </span>
 </template>
+
+<!-- =========================================================================
+     A BARRA DO FREIO.
+
+     Ela aparece em TODA tela enquanto houver uma sessão viva, e não só na
+     tela do trabalho. O dono decidiu não ter freio de horário; com essa
+     decisão, este botão deixa de ser conveniência e passa a ser o freio
+     principal. Um freio que só existe numa tela não é o freio principal.
+
+     E ele diz a verdade sobre si mesmo: o pedido viaja no próximo aviso do
+     computador que está trabalhando — até cinco segundos —, mais o tempo de
+     encerrar os programas. A frase só muda para "parada confirmada" quando o
+     computador confirma. Dizer que parou antes disso seria o número errado
+     com cara de certo.
+     ========================================================================= -->
+<div class="freio" id="freio" hidden>
+  <div class="limite freio__linha">
+    <span class="freio__ponto" aria-hidden="true"></span>
+    <p class="freio__texto" id="freio-texto" aria-live="polite">
+      Uma tarefa está em andamento.
+    </p>
+    <a class="botao botao--secundario" id="freio-ver" href="#/trabalho">Ver</a>
+    <button class="botao botao--perigo" type="button" id="freio-parar">Parar</button>
+  </div>
+</div>
 
 <main id="conteudo" class="limite">
 
@@ -211,6 +238,91 @@ __FAIXA__
     <h2>Conectados</h2>
     <ul class="lista" id="lista-computadores"></ul>
     <p class="carimbo" id="computadores-carimbo"></p>
+  </section>
+
+  <!-- ================================================== 6. Trabalho ===== -->
+  <section id="tela-trabalho" hidden>
+    <h1>Trabalho</h1>
+    <p class="mole">
+      O que o DERVS já consertou, o que está fazendo agora, e o que espera o
+      seu clique.
+    </p>
+    <p class="faixa" id="aviso-trabalho" hidden></p>
+
+    <!-- O detalhe de UMA tarefa. Aparece quando você abre uma da lista. -->
+    <div id="tarefa-detalhe" hidden>
+      <button class="botao botao--secundario" type="button" id="tarefa-voltar">
+        Voltar para a lista
+      </button>
+      <div class="cartao" style="margin-top: var(--e4)">
+        <p class="etiqueta" id="tarefa-onde"></p>
+        <h2 id="tarefa-titulo"></h2>
+        <div id="tarefa-selo"></div>
+        <p class="mole" id="tarefa-frase"></p>
+        <p class="carimbo" id="tarefa-numeros"></p>
+      </div>
+
+      <!-- O que a sessão foi dizendo, ao vivo. -->
+      <div class="cartao" style="margin-top: var(--e4)">
+        <h2>O que está acontecendo</h2>
+        <ol class="registro" id="tarefa-linhas" aria-live="polite"></ol>
+        <p class="carimbo" id="tarefa-vivo"></p>
+      </div>
+
+      <!-- O diff, em duas camadas: português em cima, prova embaixo. -->
+      <div class="cartao" id="tarefa-mudancas" style="margin-top: var(--e4)" hidden>
+        <h2>O que mudou</h2>
+        <p class="mole" id="tarefa-ramo"></p>
+        <ul class="lista lista--simples" id="tarefa-frases"></ul>
+        <details class="prova">
+          <summary>Ver a mudança linha a linha</summary>
+          <pre class="diff" id="tarefa-diff"></pre>
+        </details>
+      </div>
+    </div>
+
+    <!-- A lista. -->
+    <div id="tarefa-lista-caixa">
+      <h2>Tarefas</h2>
+      <ul class="lista" id="lista-tarefas"></ul>
+      <p class="carimbo" id="tarefas-carimbo"></p>
+
+      <div class="cartao" style="margin-top: var(--e6)">
+        <h2>O que pode andar sozinho</h2>
+        <p class="mole">
+          Verde anda sozinho e avisa depois. Vermelho para e espera o seu
+          clique. Toda regra nasce vermelha.
+        </p>
+        <ul class="lista" id="lista-cores"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================== 7. Consumo ====== -->
+  <section id="tela-consumo" hidden>
+    <h1>Consumo</h1>
+    <p class="mole">
+      Quanto o DERVS trabalhou nos últimos sete dias. O que acaba é a cota da
+      assinatura, e ela se mede em sessões e rodadas — o valor em reais está
+      aqui só como referência.
+    </p>
+    <p class="faixa" id="aviso-consumo" hidden></p>
+
+    <div class="cartao" style="margin-bottom: var(--e6)">
+      <p class="etiqueta">Na semana</p>
+      <p class="numerao" id="consumo-sessoes">—</p>
+      <p class="mole" id="consumo-resumo"></p>
+      <p class="carimbo" id="consumo-carimbo"></p>
+    </div>
+
+    <h2>Por dia</h2>
+    <ul class="lista" id="consumo-dias"></ul>
+
+    <h2>Por projeto</h2>
+    <ul class="lista" id="consumo-projetos"></ul>
+
+    <h2>Por regra</h2>
+    <ul class="lista" id="consumo-regras"></ul>
   </section>
 
   <!-- ========================================== Formas de entrar ======== -->

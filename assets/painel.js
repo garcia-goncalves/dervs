@@ -128,6 +128,8 @@ function navegar() {
   switch (tela) {
     case "projeto":      mostrar("projeto"); pintarProjeto(alvo); break;
     case "alerta":       mostrar("alerta"); pintarAlerta(alvo); break;
+    case "trabalho":     mostrar("trabalho"); pintarTrabalho(alvo); break;
+    case "consumo":      mostrar("consumo"); pintarConsumo(); break;
     case "conectar":     mostrar("conectar"); pintarConectar(); break;
     case "computadores": mostrar("computadores"); carregarComputadores(); break;
     case "entrada":      mostrar("entrada"); pdCarregar(); break;
@@ -780,6 +782,15 @@ function pintarConectar() {
 
 /* ================================================== 5. Computadores ====== */
 
+async function autorizarComputador(id, ligado) {
+  const r = await escrever("/api/maquinas/autorizar", { id, ligado });
+  if (!r.ok) { recado("não deu para mudar esse computador.", true); return; }
+  recado(ligado
+    ? "pronto. Esse computador pode consertar sozinho o que estiver verde."
+    : "pronto. Esse computador volta a só medir.");
+  await carregarComputadores();
+}
+
 async function carregarComputadores() {
   let d;
   try { d = await (await fetch("/api/maquinas")).json(); }
@@ -814,6 +825,33 @@ async function carregarComputadores() {
                                    : "nunca deu notícia")
                      + " · " + m.projetos + (m.projetos === 1 ? " projeto" : " projetos");
     txt.append(nome, meta);
+
+    /* A AUTORIZACAO PARA TRABALHAR, e ela e separada de estar conectado.
+       Parear um computador nunca deu a ele o direito de rodar codigo; a coluna
+       do banco nasce desligada, e este e o segundo sim, explicito. */
+    const trabalha = document.createElement("div");
+    trabalha.className = "carimbo";
+    trabalha.textContent = m.executa
+      ? "Pode consertar sozinho neste computador."
+      : "Só mede. Não roda nada neste computador.";
+    txt.append(trabalha);
+
+    const aut = document.createElement("button");
+    aut.className = "botao botao--secundario";
+    aut.type = "button";
+    aut.textContent = m.executa ? "Deixar só medindo" : "Deixar consertar aqui";
+    aut.addEventListener("click", () => {
+      if (m.executa) { autorizarComputador(m.id, false); return; }
+      confirmar({
+        titulo: "Deixar o DERVS consertar em “" + (m.nome || "este computador") + "”?",
+        texto: "Ele vai abrir uma cópia isolada do projeto, trabalhar nela e "
+             + "devolver um ramo com as mudanças. Nada é enviado ao GitHub, e "
+             + "nada é publicado. Tarefas vermelhas continuam esperando o seu "
+             + "clique; só as verdes andam sozinhas.",
+        sim: "Pode consertar", nao: "Deixar só medindo"
+      }, () => autorizarComputador(m.id, true));
+    });
+
     const b = document.createElement("button");
     b.className = "botao botao--secundario";
     b.type = "button";
@@ -825,7 +863,7 @@ async function carregarComputadores() {
            + "continuam no painel — parados no último carimbo.",
       sim: "Desconectar", nao: "Manter conectado"
     }, () => removerComputador(m.id)));
-    li.append(txt, b);
+    li.append(txt, aut, b);
     lista.append(li);
   }
 }
@@ -1047,6 +1085,418 @@ function pdGerar() {
 /* `confirm()` do navegador trava a página inteira e não obedece aos tokens.
    Este diálogo nomeia o que morre, como manda o desenho. */
 let AO_CONFIRMAR = null;
+/* ================================================== 6. Trabalho ==========
+   O semáforo, o ao vivo, o freio e o diff em português.
+
+   Três decisões que não são detalhe:
+
+   1. NUNCA AFIRMAR QUE PAROU antes de o computador confirmar. O pedido viaja
+      no próximo aviso dele (até cinco segundos), e `parar()` devolve falso
+      quando não confirmou a morte do programa. Escrever "parado" antes disso
+      é exatamente o número errado com cara de certo.
+
+   2. O FLUXO AO VIVO CAI DE PÉ. Se a conexão do ao vivo morrer, o relógio de
+      um minuto volta sozinho. A tela nunca fica muda.
+
+   3. COR NUNCA SOZINHA. A cor da regra aparece com os quatro sinais que o
+      desenho exige do selo — cor, forma, glifo e rótulo escrito. Cor sozinha
+      não é informação para quem não distingue cores.
+   ========================================================================= */
+
+let TAREFAS = null;         // último /api/tarefas
+let TAREFA_ABERTA = null;   // o id da tarefa aberta, ou null
+let FLUXO = null;           // o EventSource, quando ligado
+let PARADA_PEDIDA = new Set();
+
+const CORES = {
+  verde:    { rotulo: "anda sozinho", glifo: "▶", frase:
+              "Esta regra anda sozinha e avisa depois." },
+  vermelho: { rotulo: "espera o clique", glifo: "■", frase:
+              "Esta regra para e espera você aprovar." }
+};
+
+const ANDAMENTO = {
+  esperando:            "na fila",
+  aguardando_aprovacao: "esperando o seu clique",
+  rodando:              "trabalhando agora",
+  ok:                   "pronto",
+  falha:                "não deu certo"
+};
+
+/* A tarefa viva, se houver. É o que decide a barra do freio. */
+function tarefaViva() {
+  for (const t of (TAREFAS?.tarefas || [])) {
+    if (t.estado === "rodando") return t;
+  }
+  return null;
+}
+
+function pintarFreio() {
+  const viva = tarefaViva();
+  const barra = $("#freio");
+  if (!viva) { barra.hidden = true; return; }
+  barra.hidden = false;
+  const parando = PARADA_PEDIDA.has(viva.id) || viva.parada_pedida_em;
+  $("#freio-texto").textContent = parando
+    ? "Pedido de parada enviado. Esperando o computador confirmar — "
+      + "isso leva alguns segundos."
+    : (viva.frase || "Trabalhando em " + viva.projeto + ".");
+  $("#freio-ver").href = "#/trabalho/" + encodeURIComponent(viva.id);
+  $("#freio-parar").disabled = !!parando;
+}
+
+async function carregarTarefas() {
+  try {
+    const r = await fetch("/api/tarefas");
+    if (!r.ok) throw new Error(String(r.status));
+    TAREFAS = await r.json();
+    $("#aviso-trabalho").hidden = true;
+    return true;
+  } catch {
+    /* A lista anterior CONTINUA na tela. Esvaziar por causa de uma falha de
+       rede é indistinguível de "não há tarefa nenhuma". */
+    const faixa = $("#aviso-trabalho");
+    faixa.hidden = false;
+    faixa.textContent = TAREFAS
+      ? "Não conseguimos atualizar. Mostrando o que veio às "
+        + hora(TAREFAS.medido_em) + "."
+      : "Não conseguimos falar com o servidor. Recarregue a página.";
+    return false;
+  }
+}
+
+async function pintarTrabalho(alvo) {
+  await carregarTarefas();
+  pintarFreio();
+  if (alvo) { abrirTarefa(alvo); return; }
+  TAREFA_ABERTA = null;
+  fecharFluxo();
+  $("#tarefa-detalhe").hidden = true;
+  $("#tarefa-lista-caixa").hidden = false;
+
+  const lista = $("#lista-tarefas");
+  lista.textContent = "";
+  const tarefas = TAREFAS?.tarefas || [];
+  if (!tarefas.length) {
+    lista.append(vazio(
+      "Nada por aqui ainda. Quando o DERVS encontrar algo que sabe consertar, "
+      + "a tarefa aparece aqui — vermelha, esperando o seu clique.",
+      "Ver o painel", "#/painel"));
+  }
+  for (const t of tarefas) lista.append(linhaDeTarefa(t));
+  $("#tarefas-carimbo").textContent = TAREFAS
+    ? "Lido às " + hora(TAREFAS.medido_em) + "."
+    : "Ainda não consegui ler.";
+
+  pintarCores();
+}
+
+function linhaDeTarefa(t) {
+  const li = document.createElement("li");
+  li.className = "linha";
+
+  const abrir = document.createElement("button");
+  abrir.type = "button";
+  abrir.className = "linha__nome";
+  abrir.textContent = t.projeto + " — " + t.regra;
+  abrir.addEventListener("click",
+    () => irPara("#/trabalho/" + encodeURIComponent(t.id)));
+  li.append(abrir);
+
+  const estado = document.createElement("span");
+  estado.className = "linha__motivo";
+  estado.textContent = ANDAMENTO[t.estado] || t.estado;
+  li.append(estado);
+
+  li.append(marcaDeCor(t.cor));
+
+  if (t.estado === "aguardando_aprovacao" || (t.cor === "vermelho"
+      && t.estado === "esperando" && !t.aprovado_em)) {
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "botao";
+    ok.textContent = "Pode fazer";
+    ok.addEventListener("click", () => aprovarTarefa(t.id));
+    li.append(ok);
+  }
+
+  const quando = document.createElement("span");
+  quando.className = "carimbo";
+  quando.textContent = haQuanto(t.terminado_em || t.iniciado_em || t.criado_em);
+  li.append(quando);
+  return li;
+}
+
+/* Cor, forma, glifo e rótulo — os quatro juntos, sempre. */
+function marcaDeCor(cor) {
+  const c = CORES[cor] ? cor : "vermelho";
+  const el = document.createElement("span");
+  el.className = "marca";
+  el.dataset.cor = c;
+  const glifo = document.createElement("span");
+  glifo.className = "marca__glifo";
+  glifo.setAttribute("aria-hidden", "true");
+  glifo.textContent = CORES[c].glifo;
+  const rotulo = document.createElement("span");
+  rotulo.className = "marca__rotulo";
+  rotulo.textContent = CORES[c].rotulo;
+  el.append(glifo, rotulo);
+  return el;
+}
+
+function pintarCores() {
+  const lista = $("#lista-cores");
+  lista.textContent = "";
+  const cores = TAREFAS?.cores || {};
+  const nunca = new Set(TAREFAS?.nunca_verde || []);
+  const regras = new Set([...Object.keys(cores), ...nunca,
+                          ...(TAREFAS?.tarefas || []).map(t => t.regra)]);
+  if (!regras.size) {
+    lista.append(vazio("Nenhuma regra conhecida ainda.", "", ""));
+    return;
+  }
+  for (const regra of [...regras].sort()) {
+    const li = document.createElement("li");
+    li.className = "linha";
+    const nome = document.createElement("span");
+    nome.className = "linha__nome";
+    nome.textContent = regra;
+    li.append(nome, marcaDeCor(cores[regra] === "verde" ? "verde" : "vermelho"));
+
+    if (nunca.has(regra)) {
+      const trava = document.createElement("span");
+      trava.className = "linha__motivo";
+      trava.textContent = "nunca anda sozinha, e isso não se muda";
+      li.append(trava);
+    } else {
+      const verde = cores[regra] === "verde";
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "botao botao--secundario";
+      b.textContent = verde ? "Fazer esperar meu clique" : "Deixar andar sozinho";
+      b.addEventListener("click",
+        () => repintar(regra, verde ? "vermelho" : "verde"));
+      li.append(b);
+    }
+    lista.append(li);
+  }
+}
+
+async function repintar(regra, cor) {
+  const r = await escrever("/api/tarefas/cor", { regra, cor });
+  if (!r.ok) {
+    let motivo = "não deu para mudar.";
+    try { motivo = (await r.json()).erro || motivo; } catch {}
+    recado(motivo, true);
+    return;
+  }
+  recado(cor === "verde"
+    ? "a regra " + regra + " passa a andar sozinha."
+    : "a regra " + regra + " passa a esperar o seu clique.");
+  await carregarTarefas();
+  pintarCores();
+}
+
+async function aprovarTarefa(id) {
+  const r = await escrever("/api/tarefas/aprovar", { id });
+  if (!r.ok) { recado("essa tarefa já não espera aprovação.", true); return; }
+  recado("aprovado. O computador pega a tarefa no próximo aviso dele.");
+  await carregarTarefas();
+  navegar();
+}
+
+async function pararTarefa(id) {
+  /* NUNCA dizemos "parou" aqui. Dizemos que o pedido saiu. */
+  const r = await escrever("/api/tarefas/parar", { id });
+  if (!r.ok) { recado("essa tarefa já não está em andamento.", true); return; }
+  PARADA_PEDIDA.add(id);
+  pintarFreio();
+  recado("pedido de parada enviado. O computador confirma em alguns segundos.");
+}
+
+/* ------------------------------------------------------- uma tarefa só */
+
+async function abrirTarefa(id) {
+  TAREFA_ABERTA = id;
+  $("#tarefa-lista-caixa").hidden = true;
+  $("#tarefa-detalhe").hidden = false;
+  $("#tarefa-linhas").textContent = "";
+  await recarregarTarefa();
+  ligarFluxo(id);
+}
+
+async function recarregarTarefa() {
+  if (!TAREFA_ABERTA) return;
+  let t = null;
+  try {
+    const r = await fetch("/api/tarefas?id=" + encodeURIComponent(TAREFA_ABERTA));
+    if (r.ok) t = (await r.json()).tarefa;
+  } catch {}
+  if (!t) {
+    $("#tarefa-titulo").textContent = "Não encontrei essa tarefa.";
+    $("#tarefa-frase").textContent =
+      "Ela pode ter sido apagada, ou o endereço está errado.";
+    return;
+  }
+  $("#tarefa-onde").textContent = t.projeto;
+  $("#tarefa-titulo").textContent = t.regra;
+  $("#tarefa-selo").textContent = "";
+  $("#tarefa-selo").append(marcaDeCor(t.cor));
+  $("#tarefa-frase").textContent =
+    (ANDAMENTO[t.estado] || t.estado)
+    + (t.frase ? " — " + t.frase : "")
+    + (t.erro ? " — " + t.erro : "");
+  $("#tarefa-numeros").textContent = numerosDaTarefa(t);
+
+  const linhas = $("#tarefa-linhas");
+  linhas.textContent = "";
+  ULTIMA_LINHA = 0;
+
+  /* SO quando terminou. Enquanto a sessao roda, ainda nao ha diff — e mostrar
+     "nada mudou" para uma tarefa em andamento e dizer que ela terminou sem
+     fazer nada. Foi o que a tela fez em 29/08/2026, e e a lei 2 sendo
+     quebrada pela tela em vez de pelo numero. */
+  const terminou = t.estado === "ok" || t.estado === "falha";
+  if (terminou) {
+    $("#tarefa-mudancas").hidden = false;
+    $("#tarefa-ramo").textContent = t.ramo
+      ? "As mudanças estão no ramo " + t.ramo
+        + ", e não no seu código principal."
+      : "A sessão terminou sem criar um ramo.";
+    const ul = $("#tarefa-frases");
+    ul.textContent = "";
+    for (const frase of (t.frases_do_diff || [])) {
+      const li = document.createElement("li");
+      li.textContent = frase;
+      ul.append(li);
+    }
+    $("#tarefa-diff").textContent = t.diff || "";
+  } else {
+    $("#tarefa-mudancas").hidden = true;
+  }
+}
+
+function numerosDaTarefa(t) {
+  const partes = [];
+  partes.push((t.rodadas || 0) + (t.rodadas === 1 ? " rodada" : " rodadas"));
+  if (t.iniciado_em) partes.push("começou " + haQuanto(t.iniciado_em));
+  if (t.terminado_em) partes.push("terminou " + haQuanto(t.terminado_em));
+  if (t.tentativas) partes.push(t.tentativas
+    + (t.tentativas === 1 ? " tentativa" : " tentativas"));
+  return partes.join(" · ");
+}
+
+/* ---------------------------------------------------------------- ao vivo */
+
+let ULTIMA_LINHA = 0;
+
+function fecharFluxo() {
+  if (FLUXO) { FLUXO.close(); FLUXO = null; }
+}
+
+function ligarFluxo(id) {
+  fecharFluxo();
+  if (!("EventSource" in window)) return;   /* o relógio de 1 min continua */
+  FLUXO = new EventSource("/api/eventos?id=" + encodeURIComponent(id)
+                          + "&desde=" + ULTIMA_LINHA);
+  FLUXO.addEventListener("linha", ev => {
+    let d; try { d = JSON.parse(ev.data); } catch { return; }
+    ULTIMA_LINHA = Math.max(ULTIMA_LINHA, d.n || 0);
+    const li = document.createElement("li");
+    li.textContent = d.texto;
+    $("#tarefa-linhas").append(li);
+    $("#tarefa-vivo").textContent = "Ao vivo. Última notícia " + hora(d.quando) + ".";
+  });
+  FLUXO.addEventListener("estado", ev => {
+    let d; try { d = JSON.parse(ev.data); } catch { return; }
+    if (d.parada_pedida) PARADA_PEDIDA.add(d.id);
+    $("#tarefa-frase").textContent =
+      (ANDAMENTO[d.estado] || d.estado) + (d.frase ? " — " + d.frase : "");
+    if (d.estado === "ok" || d.estado === "falha") {
+      fecharFluxo();
+      recarregarTarefa();
+      carregarTarefas().then(pintarFreio);
+    }
+  });
+  FLUXO.addEventListener("fim", () => {
+    /* O servidor encerra a conexão de tempos em tempos de propósito. Religar é
+       o comportamento certo, e não um erro a mostrar. */
+    fecharFluxo();
+    if (TAREFA_ABERTA === id) setTimeout(() => ligarFluxo(id), 500);
+  });
+  FLUXO.onerror = () => {
+    /* Caiu. O relógio de um minuto continua rodando por baixo, então a tela
+       não fica muda — ela só deixa de ser instantânea. */
+    $("#tarefa-vivo").textContent =
+      "A ligação ao vivo caiu. A tela continua atualizando a cada minuto.";
+  };
+}
+
+/* ================================================== 7. Consumo ========== */
+
+async function pintarConsumo() {
+  let c = null;
+  try {
+    const r = await fetch("/api/consumo");
+    if (r.ok) c = await r.json();
+  } catch {}
+  const faixa = $("#aviso-consumo");
+  if (!c) {
+    faixa.hidden = false;
+    faixa.textContent = "Não consegui medir o consumo agora.";
+    $("#consumo-sessoes").textContent = "—";
+    $("#consumo-resumo").textContent = "";
+    $("#consumo-carimbo").textContent = "";
+    return;
+  }
+  faixa.hidden = true;
+  const t = c.total || {};
+  $("#consumo-sessoes").textContent = String(t.sessoes || 0);
+  $("#consumo-resumo").textContent = t.sessoes
+    ? (t.sessoes === 1 ? "sessão" : "sessões") + " em " + c.dias + " dias · "
+      + (t.rodadas || 0) + " rodadas · "
+      + t.ok + (t.ok === 1 ? " deu certo, " : " deram certo, ")
+      + t.falhas + " não · " + c.custo_em_reais + " de referência"
+    : "Nenhuma sessão nesta janela. Isso é zero de verdade, e não falta de "
+      + "medição — a leitura foi feita.";
+  $("#consumo-carimbo").textContent = "Medido às " + hora(c.medido_em) + ".";
+
+  encherLista("#consumo-dias", c.por_dia, l => l.dia);
+  encherLista("#consumo-projetos", c.por_projeto, l => l.projeto);
+  encherLista("#consumo-regras", c.por_regra, l => l.regra);
+}
+
+function encherLista(onde, linhas, nomeDe) {
+  const ul = $(onde);
+  ul.textContent = "";
+  if (!linhas || !linhas.length) {
+    ul.append(vazio("Nada nesta janela.", "", ""));
+    return;
+  }
+  for (const l of linhas) {
+    const li = document.createElement("li");
+    li.className = "linha";
+    const nome = document.createElement("span");
+    nome.className = "linha__nome";
+    nome.textContent = nomeDe(l);
+    const numeros = document.createElement("span");
+    numeros.className = "linha__motivo";
+    numeros.textContent = l.sessoes + (l.sessoes === 1 ? " sessão" : " sessões")
+      + " · " + l.rodadas + " rodadas · " + duracao(l.segundos);
+    li.append(nome, numeros);
+    ul.append(li);
+  }
+}
+
+function duracao(segundos) {
+  const s = Number(segundos) || 0;
+  if (s < 60) return s + (s === 1 ? " segundo" : " segundos");
+  const m = Math.round(s / 60);
+  if (m < 60) return m + (m === 1 ? " minuto" : " minutos");
+  const h = Math.round(m / 6) / 10;
+  return String(h).replace(".", ",") + " horas";
+}
+
 function confirmar({ titulo, texto, sim, nao }, aoConfirmar) {
   $("#conf-titulo").textContent = titulo;
   $("#conf-texto").textContent = texto;
@@ -1104,9 +1554,21 @@ async function carregar() {
 async function inicio() {
   aplicarTema(temaGuardado());
   await carregar();
+  await carregarTarefas();
+  pintarFreio();
   navegar();
-  /* A tela nunca espera coleta: relê de minuto em minuto e troca o que mudou. */
-  setInterval(async () => { if (await carregar()) navegar(); }, 60000);
+  /* O relógio de um minuto CONTINUA, e não é redundância com o ao vivo: o ao
+     vivo mostra UMA tarefa em detalhe, e este mantém o resto da tela — e a
+     barra do freio — em dia mesmo quando o fluxo não está ligado ou caiu. */
+  setInterval(async () => {
+    if (await carregar()) navegar();
+    if (await carregarTarefas()) pintarFreio();
+  }, 60000);
+  /* A barra do freio olha mais de perto: ela é o freio principal, e uma barra
+     que demora um minuto para aparecer não freia nada. */
+  setInterval(async () => {
+    if (await carregarTarefas()) pintarFreio();
+  }, 5000);
 }
 
 /* ---------------------------------------------------------------- ligações */
@@ -1123,6 +1585,13 @@ $("#btn-sair").addEventListener("click", async () => {
 });
 
 $("#btn-gerar-numero").addEventListener("click", gerarNumero);
+
+$("#freio-parar").addEventListener("click", () => {
+  const viva = tarefaViva();
+  if (viva) pararTarefa(viva.id);
+});
+
+$("#tarefa-voltar").addEventListener("click", () => irPara("#/trabalho"));
 
 $("#btn-copiar-comando").addEventListener("click", async () => {
   const texto = $("#comando-pareamento").textContent;

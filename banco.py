@@ -2141,7 +2141,7 @@ def maquinas_do_usuario(usuario_id: int, con=None) -> list:
     con = con or conectar()
     try:
         return [dict(l) for l in con.execute(
-            "SELECT m.id, m.nome, m.criado_em, m.visto_em,"
+            "SELECT m.id, m.nome, m.criado_em, m.visto_em, m.executa,"
             "       (SELECT COUNT(*) FROM projeto_conectado p"
             "         WHERE p.maquina_id = m.id AND p.arquivado_em IS NULL)"
             "       AS projetos"
