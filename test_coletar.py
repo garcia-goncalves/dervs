@@ -504,6 +504,49 @@ class UrlSegura(unittest.TestCase):
         self.assertTrue(coletar_github.url_segura(
             "https://este-dominio-nao-existe-mesmo-987654.invalid"))
 
+    def test_recusa_a_faixa_cgnat(self):
+        """100.64.0.0/10 (RFC 6598) e rede de operadora, NAO e internet publica.
+
+        O `ipaddress` da biblioteca padrao devolve is_private=False para essa
+        faixa, por decisao de desenho do CPython (python/cpython#119812) — e o
+        mesmo buraco ja virou SSRF real em outro projeto (bentoml#5644). Como
+        `_ip_privado` era so a soma dos atributos do modulo, 100.64.5.5 saia
+        daqui igualzinho a 8.8.8.8.
+
+        Achado em 29/08/2026 pela lente de pesquisa da esteira das tres portas,
+        e conferido rodando o filtro: nao e teoria, o endereco passava.
+
+        Importa porque a Porta 3 vai alimentar esta peneira com URL DIGITADA
+        pelo usuario. E importa antes disso: e uma faixa que alcanca a rede
+        interna de operadora e de nuvem, e ja estava aberta em producao.
+        """
+        for dentro in ("100.64.0.0", "100.64.5.5", "100.127.255.255"):
+            self.assertTrue(coletar_github._ip_privado(dentro), dentro)
+            self.assertFalse(coletar_github.url_segura("http://%s/" % dentro),
+                             dentro)
+
+    def test_recusa_a_faixa_cgnat_tambem_mapeada_em_ipv6(self):
+        """`::ffff:100.64.5.5` e o MESMO endereco escrito de outro jeito.
+
+        Fechar so a forma decimal deixaria a porta encostada: basta escrever o
+        endereco na forma mapeada para atravessar. Vale a mesma logica que o
+        modulo ja aplica sozinho a `::ffff:10.0.0.1`.
+        """
+        self.assertTrue(coletar_github._ip_privado("::ffff:100.64.5.5"))
+        self.assertFalse(coletar_github.url_segura("http://[::ffff:100.64.5.5]/"))
+
+    def test_nao_confisca_o_vizinho_da_faixa_cgnat(self):
+        """A guarda tem de ACUSAR quando quebrada, e so quando quebrada.
+
+        100.63.255.255 e 100.128.0.1 sao os enderecos publicos imediatamente
+        antes e depois do /10. Um `100.` generico, ou uma mascara larga demais,
+        passaria nos dois testes de cima e reprovaria aqui — que e exatamente o
+        erro que este caso existe para pegar.
+        """
+        for fora in ("100.63.255.255", "100.128.0.1"):
+            self.assertFalse(coletar_github._ip_privado(fora), fora)
+            self.assertTrue(coletar_github.url_segura("http://%s/" % fora), fora)
+
 
 class HostPublico(unittest.TestCase):
     def test_nome_que_nao_resolve_nao_e_publico(self):

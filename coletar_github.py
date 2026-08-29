@@ -76,14 +76,34 @@ NOMES_DE_DEPLOY = ("deploy", "publicar", "publish", "release")
 NOMES_LOCAIS = ("localhost", "localhost.localdomain")
 
 
+# A faixa que o `ipaddress` NAO cobre, e que precisamos cobrir a mao.
+#
+# 100.64.0.0/10 e o espaco de NAT de operadora (CGNAT, RFC 6598): endereco que
+# nao e da internet publica, mas tambem nao e "privado" para o modulo — o
+# CPython devolve is_private=False ali por decisao de desenho, registrada em
+# python/cpython#119812. Nao e sutileza academica: o mesmo buraco ja virou SSRF
+# de verdade em outro projeto (bentoml#5644).
+#
+# Achado em 29/08/2026, conferido rodando o filtro nesta maquina: 100.64.5.5
+# saia daqui com o mesmo veredito de 8.8.8.8. Estava aberto em producao.
+CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
 def _ip_privado(texto: str):
     """True/False se `texto` e um IP interno; None se nao e IP nenhum."""
     try:
         ip = ipaddress.ip_address(texto)
     except ValueError:
         return None
+    # `::ffff:100.64.5.5` e o mesmo endereco escrito de outro jeito. O modulo ja
+    # desembrulha sozinho para is_private (por isso `::ffff:10.0.0.1` sempre
+    # passou), mas a nossa checagem a mao precisa desembrulhar tambem — senao
+    # fechariamos a porta da frente e deixariamos a de tras encostada.
+    if getattr(ip, "ipv4_mapped", None) is not None:
+        ip = ip.ipv4_mapped
     return (ip.is_private or ip.is_loopback or ip.is_link_local
-            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+            or ip in CGNAT)
 
 
 def url_segura(url: str) -> bool:
