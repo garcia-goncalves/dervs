@@ -194,12 +194,22 @@ def _falar(alvo: str, caminho: str, corpo: dict, token: str = "") -> dict:
 def _explicar(caminho: str, codigo: int) -> str:
     """O erro em portugues, porque quem le isto e o dono da maquina."""
     if codigo == 429:
+        # Hifen, e nao travessao: esta frase e IMPRESSA no console do Windows,
+        # onde `—` sai como `?`. Achado em 29/08/2026, e ja estava assim.
         return ("o alvo recusou por excesso de tentativas. Espere quinze "
-                "minutos — e gere um codigo novo no painel.")
+                "minutos, e gere um codigo novo no painel.")
     if codigo == 401 and caminho.endswith("/parear"):
-        return ("o codigo de seis digitos nao serve: ou foi digitado errado, "
-                "ou ja passou dos dez minutos, ou ja foi usado por outra "
-                "maquina. Gere outro no painel.")
+        # O QUARTO MOTIVO E O QUE MAIS ENGANA, e faltava. Quem tem dois DERVS
+        # — o do servidor e o da propria maquina — gera o numero num painel e
+        # cola no outro. Bancos separados, entao o segundo recusa, corretamente.
+        # A frase antiga listava tres causas e nenhuma era essa: o dono leu como
+        # defeito do produto. Aconteceu em 29/08/2026.
+        return ("o codigo de seis digitos nao serve. Quatro motivos possiveis: "
+                "foi digitado errado; ja passou dos dez minutos; ja foi usado "
+                "por outra maquina; ou o numero saiu do painel de outro DERVS. "
+                "Cada DERVS tem o banco dele, e o numero so vale no painel onde "
+                "nasceu. Confira se o --alvo e o mesmo endereco que voce abriu "
+                "no navegador, e gere outro numero la.")
     if codigo in (401, 403):
         return ("esta maquina nao esta mais autorizada. Se ela foi removida no "
                 "painel, pareie de novo com um codigo novo.")

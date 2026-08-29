@@ -715,6 +715,127 @@ class ORoteiroChamaAsTelasPeloNomeDelas(unittest.TestCase):
                         % (doc.name, errado, certo))
 
 
+class ATelaDeComputadoresCasaDosDoisLados(unittest.TestCase):
+    """O CSS desta tela pende de classes que o JAVASCRIPT inventa em tempo de
+    execucao. Renomear um dos lados nao quebra nada: a regra simplesmente para
+    de casar, e a tela volta ao que era em 29/08/2026 -- coluna de texto
+    espremida a 111px e a permissao de rodar codigo escrita no mesmo cinza
+    mudo do horario. VERDE, e errada.
+
+    E o mesmo modo de falha que o CLAUDE.md ja registra para a permissao por
+    caminho exato de `painel.css`: "renomear um dos dois a desliga em
+    silencio". La um teste cobra os dois nomes; aqui nao havia nenhum, porque
+    a tela nunca teve teste.
+    """
+
+    def marcacao(self):
+        return HTML.read_text(encoding="utf-8")
+
+    def script(self):
+        return PAINEL_JS.read_text(encoding="utf-8")
+
+    def folha(self):
+        return sem_comentarios_css(PAINEL_CSS.read_text(encoding="utf-8"))
+
+    def classes_do_script(self):
+        """Os nomes que aparecem DENTRO de uma string do `painel.js`.
+
+        Cada literal e lido inteiro e separado dos outros. A primeira versao
+        buscava `"[^"]*\\bnome\\b[^"]*"` no arquivo cru e ATRAVESSAVA aspas:
+        casava da aspa que FECHA um literal ate a que ABRE o proximo, varrendo
+        o codigo entre os dois. Com isso `trabalha.dataset.permissao = ...`,
+        que nao e string nenhuma, satisfazia a busca -- e o teste aprovava um
+        `className` renomeado. Pego pela sabotagem em 29/08/2026.
+
+        `[^"\\\\\\n]` proibe a quebra de linha de proposito: e ela que impede
+        um literal de emendar no seguinte.
+        """
+        nomes = set()
+        for literal in re.findall(r'"(?:[^"\\\n]|\\.)*"', self.script()):
+            # O token vai ate o fim do identificador, MAIUSCULA INCLUSIVE.
+            # Com `[a-z][a-z-]*` a leitura parava na primeira maiuscula, e
+            # `"permissaoX"` continuava entregando a palavra `permissao`: um
+            # `className` renomeado passava batido. Segunda sabotagem do mesmo
+            # caso, no mesmo dia -- a primeira correcao nao tinha bastado.
+            nomes.update(re.findall(r"[A-Za-z][A-Za-z0-9_-]*", literal))
+        return nomes
+
+    def test_a_lista_carrega_a_classe_que_o_css_procura(self):
+        """Sem `computadores` no `ul`, TODAS as regras abaixo viram letra
+        morta de uma vez -- e este e o unico ponto onde isso acontece.
+
+        Le o ATRIBUTO `class`, e nao a marca inteira: `id="lista-computadores"`
+        ja contem a palavra, entao procura-la no `<ul ...>` cru aprovava a
+        marca sem classe nenhuma. Era um teste que so podia passar.
+        """
+        m = re.search(r'<ul([^>]*)id="lista-computadores"([^>]*)>',
+                      self.marcacao())
+        self.assertIsNotNone(m, "o `ul#lista-computadores` sumiu do index.html")
+        atributos = m.group(1) + m.group(2)
+        classe = re.search(r'class="([^"]*)"', atributos)
+        self.assertIsNotNone(classe, "o `ul` ficou sem atributo `class`")
+        self.assertIn("computadores", classe.group(1).split(),
+                      "o `ul` perdeu a classe `computadores`; o CSS da tela "
+                      "inteira deixa de casar sem erro nenhum. class=%r"
+                      % classe.group(1))
+
+    def test_toda_classe_que_o_css_estiliza_e_produzida_pelo_script(self):
+        """O elo que ninguem ve quebrar. Cada classe usada num seletor de
+        `.computadores` exige o mesmo nome saindo do JS."""
+        alvos = set()
+        for seletor, _ in re.findall(r"([^{}]+)\{([^{}]*)\}", self.folha()):
+            if ".computadores" not in seletor:
+                continue
+            alvos.update(c for c in re.findall(r"\.([a-z][a-z-]*)", seletor)
+                         if c != "computadores")
+        self.assertGreaterEqual(len(alvos), 4, "o teste parou de achar regra; "
+                                "sem isto ele aprova qualquer coisa")
+        nomes = self.classes_do_script()
+        for classe in sorted(alvos):
+            with self.subTest(classe=classe):
+                self.assertIn(
+                    classe, nomes,
+                    "o CSS estiliza `.computadores ... .%s`, e `painel.js` nao "
+                    "escreve essa classe em string nenhuma." % classe)
+
+    def test_os_dois_estados_da_permissao_existem_dos_dois_lados(self):
+        """`[data-permissao="mede"]` e o que tira a caixa do estado seguro. Se
+        o JS passar a escrever outra palavra, os dois estados ficam iguais e a
+        tela para de responder a pergunta que ela existe para responder:
+        QUAIS destas maquinas podem rodar codigo?"""
+        no_css = set(re.findall(r'\[data-permissao="([a-z]+)"\]', self.folha()))
+        no_js = set(re.findall(r'permissao\s*=\s*[^;]*?"([a-z]+)"[^;]*?"([a-z]+)"',
+                               self.script()))
+        no_js = set(sum(no_js, ()))
+        self.assertTrue(no_css, "sumiu o seletor de estado da permissao")
+        self.assertTrue(no_css <= no_js,
+                        "o CSS pinta %s e o JS escreve %s" % (no_css, no_js))
+
+    def test_o_estado_seguro_nao_usa_borda_fraca_como_unico_contorno(self):
+        """Regra 3 da cor: onde o contorno E o sinal, ele passa de 3:1. Um
+        `--borda` (1,39:1) ali promete uma caixa que o olho nao acha -- pior
+        que caixa nenhuma. A tentacao de escrever isso e real: foi o primeiro
+        rascunho desta mesma regra, em 29/08/2026."""
+        bloco = re.search(r'\.computadores\s+\.permissao\[data-permissao='
+                          r'"mede"\]\s*\{([^}]*)\}', self.folha())
+        self.assertIsNotNone(bloco, "o estado seguro da permissao sumiu do CSS")
+        self.assertNotIn("var(--borda)", bloco.group(1),
+                         "contorno de 1,39:1 como unico sinal da caixa; use "
+                         "`transparent` (sem caixa) ou `--borda-forte`.")
+
+    def test_o_botao_de_remover_recua_no_texto_e_nao_no_contorno(self):
+        """A hierarquia se faz no texto. Enfraquecer o CONTORNO resolveria a
+        aparencia e criaria um alvo de toque que ninguem acha -- trocar um
+        defeito de design por um de acessibilidade nao e conserto."""
+        bloco = re.search(r'\.computadores\s+\.acoes\s+\.botao--remover\s*\{'
+                          r'([^}]*)\}', self.folha())
+        self.assertIsNotNone(bloco, "o freio visual do `Remover` sumiu")
+        self.assertIn("color:", bloco.group(1))
+        self.assertNotIn("border-color", bloco.group(1),
+                         "o contorno do `Remover` tem de continuar igual ao do "
+                         "outro botao: e ele que diz onde o clique vale.")
+
+
 if __name__ == "__main__":
     # `exit=False` sozinho devolvia 0 mesmo com caso reprovado: em 28/08/2026
     # este arquivo imprimiu FAILED (failures=4) e a CI seguiu verde. O codigo

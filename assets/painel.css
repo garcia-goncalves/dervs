@@ -247,6 +247,104 @@ nav.mapa a[aria-current="page"] {
   white-space: pre;
 }
 
+/* ------------------------------------------------ a linha de um computador
+   MEDIDO em 29/08/2026, num quadro de 360x640 com o CSS de verdade: sem
+   `flex-wrap`, a coluna de texto era espremida a 111px — treze letras — e a
+   linha inchava para 165px de altura, com "deu notícia há 7 horas · 17
+   projetos" quebrado em três pedaços. Os dois botões ficavam com 189px dos
+   356 disponíveis: mais espaço para o que se clica uma vez por mês do que
+   para o que se lê toda vez que a tela abre.
+
+   Não havia rolagem horizontal — essa hipótese foi medida e caiu. O defeito
+   era o esmagamento, e ele não aparece em teste nenhum: a tela "funciona".
+
+   O padrão é o mesmo já provado em `.projetos`, e de propósito: a linha
+   quebra em duas fileiras, dizeres em cima, botões embaixo. */
+.computadores > li { flex-wrap: wrap; align-items: flex-start; }
+.computadores .dizeres { flex: 1; min-width: min(100%, 220px); }
+.computadores .nome {
+  font-size: var(--fs-destaque);
+  font-weight: var(--peso-medio);
+  line-height: var(--lh-apertada);
+  /* Nome de máquina não tem espaço: `notebook-do-escritorio` estourava a
+     coluna em vez de quebrar. Ele vem do OUTRO computador — quem pareia
+     escolhe o texto, e pode ser longo sem querer ou de propósito. */
+  word-break: break-word;
+}
+
+/* Os botões viajam JUNTOS para a segunda fileira. Soltos, o `flex-wrap`
+   descia só o último e deixava "Remover" órfão embaixo de "Deixar só
+   medindo" — o que dá à ação destrutiva a posição de maior destaque da
+   linha, exatamente ao contrário do que se quer. */
+.computadores .acoes {
+  display: flex;
+  gap: var(--e3);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* A AUTORIZAÇÃO PARA RODAR CÓDIGO é o fato mais consequente desta linha, e
+   ela saía em `.carimbo`: o mesmo cinza mudo do horário da última notícia.
+   Hierarquia invertida — o dado mais importante com o menor peso visual.
+
+   Não usa `--estado-*`: a regra 1 da cor reserva esses cinco tokens ao selo
+   de saúde de um projeto, e permissão de máquina não é saúde de projeto.
+   A distinção é por CONTORNO e PESO, não por cor — o que também a mantém
+   legível para quem não distingue cores. */
+.computadores .permissao {
+  display: inline-block;
+  margin-top: var(--e2);
+  padding: 0.1rem var(--e2);
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+  font-size: var(--fs-etiqueta);
+  font-weight: var(--peso-forte);
+  letter-spacing: var(--rastreio-etiqueta);
+  text-transform: uppercase;
+  color: var(--texto);
+}
+
+/* "Só mede" é o padrão seguro, e padrão seguro não pede destaque: perde a
+   caixa e fica só o rótulo. Quem varre a lista procurando o que pode rodar
+   código acha pela CAIXA, sem ler palavra por palavra.
+
+   O contorno some em vez de enfraquecer: `--borda` mede 1,39:1, e a regra 3
+   da cor exige `--borda-forte` (3:1) onde o contorno é o único sinal de onde
+   a peça começa. Contorno quase invisível é pior que contorno nenhum — ele
+   promete uma caixa e não a entrega. */
+.computadores .permissao[data-permissao="mede"] {
+  border-color: transparent;
+  padding-left: 0;
+  padding-right: 0;
+  color: var(--texto-suave);
+  font-weight: var(--peso-medio);
+}
+
+/* "Remover" DESCONECTA a máquina, e saía com o mesmo peso visual de "Deixar
+   só medindo", que é um interruptor reversível. Dois botões idênticos lado a
+   lado, um deles com consequência muito maior: a diferença estava só no
+   texto, e texto é o que menos se lê numa lista.
+
+   Não vira `.botao--perigo`: vermelho em toda linha de uma lista é alarme que
+   se aprende a ignorar, e aí o vermelho do freio "Parar" perde a força. O
+   caminho é o inverso — a ação destrutiva fica MAIS quieta que a comum, e
+   quem a procura ainda a encontra. A janela de confirmação continua onde
+   estava; isto é a camada antes dela.
+
+   Escopo local de propósito: `.botao--secundario` é primitiva do sistema
+   aprovado, e não se muda daqui.
+
+   O CONTORNO NÃO ENFRAQUECE, só o texto. A borda é o único sinal de onde o
+   botão começa e onde termina de valer o clique: `--borda-forte` (3:1) é
+   obrigatória ali pela regra 3 da cor. Rebaixar o contorno teria trocado um
+   problema de hierarquia por um de alvo de toque. */
+.computadores .acoes .botao--remover {
+  color: var(--texto-suave);
+}
+.computadores .acoes .botao--remover:hover {
+  color: var(--texto);
+}
+
 .pilha { display: flex; flex-direction: column; gap: var(--e4); }
 .acoes { display: flex; gap: var(--e2); flex-wrap: wrap; margin-top: var(--e3); }
 .acoes .botao { min-height: 44px; }

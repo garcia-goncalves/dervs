@@ -828,12 +828,15 @@ async function carregarComputadores() {
 
     /* A AUTORIZACAO PARA TRABALHAR, e ela e separada de estar conectado.
        Parear um computador nunca deu a ele o direito de rodar codigo; a coluna
-       do banco nasce desligada, e este e o segundo sim, explicito. */
+       do banco nasce desligada, e este e o segundo sim, explicito.
+
+       Etiqueta, e nao `.carimbo`: em 29/08/2026 este era o fato mais grave da
+       linha escrito no mesmo cinza mudo do horario. Quem varre a lista atras
+       de "quais podem rodar codigo" tinha de LER cada linha inteira. */
     const trabalha = document.createElement("div");
-    trabalha.className = "carimbo";
-    trabalha.textContent = m.executa
-      ? "Pode consertar sozinho neste computador."
-      : "Só mede. Não roda nada neste computador.";
+    trabalha.className = "permissao";
+    trabalha.dataset.permissao = m.executa ? "executa" : "mede";
+    trabalha.textContent = m.executa ? "Pode consertar aqui" : "Só mede";
     txt.append(trabalha);
 
     const aut = document.createElement("button");
@@ -853,7 +856,8 @@ async function carregarComputadores() {
     });
 
     const b = document.createElement("button");
-    b.className = "botao botao--secundario";
+    /* `botao--remover` e so o freio visual: ver o porque em painel.css. */
+    b.className = "botao botao--secundario botao--remover";
     b.type = "button";
     b.textContent = "Remover";
     b.addEventListener("click", () => confirmar({
@@ -863,7 +867,11 @@ async function carregarComputadores() {
            + "continuam no painel — parados no último carimbo.",
       sim: "Desconectar", nao: "Manter conectado"
     }, () => removerComputador(m.id)));
-    li.append(txt, aut, b);
+    /* Os dois botoes num invólucro so: ver `.computadores .acoes` no CSS. */
+    const acoes = document.createElement("div");
+    acoes.className = "acoes";
+    acoes.append(aut, b);
+    li.append(txt, acoes);
     lista.append(li);
   }
 }

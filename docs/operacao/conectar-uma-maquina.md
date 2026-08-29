@@ -42,11 +42,18 @@ variável em `.env`), monta um relatório e **manda** para o endereço do DERVS.
    | O que aparece | O que houve | O que fazer |
    |---|---|---|
    | `No module named 'agente'` | o terminal está em outra pasta — este é o único erro que **não** vem em português, porque quem responde é o Python, antes de o programa começar | `cd` para a pasta do DERVS e repetir |
-   | `o codigo de seis digitos nao serve` | passou dos dez minutos, ou já foi usado | gerar outro no painel |
+   | `o codigo de seis digitos nao serve` | digitado errado, passou dos dez minutos, já foi usado — **ou o número saiu do painel de outro DERVS** | gerar outro **no painel do mesmo endereço que está no `--alvo`** |
    | `o alvo recusou por excesso de tentativas` | cinco erros seguidos daquele endereço | esperar quinze minutos |
    | `nao consegui falar com …` | endereço errado, ou sem internet | conferir o endereço |
    | `recusei falar com … por http://` | o endereço veio sem o **s** de `https` | trocar para `https://` |
    | `relatorios demais` | mais de 60 envios em quinze minutos daquela máquina | usar `--intervalo` de 60 s ou mais |
+
+   **Dois DERVS, dois bancos.** Se você tem o do servidor e o da sua própria
+   máquina, cada um guarda os códigos dele. Um número gerado em
+   `https://dervs.com.br` **não** vale em `http://localhost:4777`, e o
+   contrário também não — o segundo responde que o número não serve, e está
+   certo. Confira sempre se o endereço do `--alvo` é o mesmo que você abriu no
+   navegador para gerar o número.
 
    **O `https://` não é frescura.** O token da máquina viaja num cabeçalho do
    pedido. Por `http://` ele vai legível para qualquer um que esteja no caminho

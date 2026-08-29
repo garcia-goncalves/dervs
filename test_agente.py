@@ -930,5 +930,68 @@ class OAgenteTrabalha(unittest.TestCase):
                       inspect.getsource(self.e.fazer_a_tarefa))
 
 
+class OCodigoRecusadoDizOsQuatroMotivos(unittest.TestCase):
+    """Quem tem DOIS DERVS erra o quarto motivo, e a frase nao o citava.
+
+    Em 29/08/2026 o dono pareou no servidor e tentou o MESMO numero no DERVS
+    da propria maquina. Os dois tem banco separado, entao o segundo respondeu
+    401 — comportamento certo. Mas a frase listava tres motivos ("digitado
+    errado, venceu, ja foi usado") e nenhum deles era o dele; ele leu como
+    defeito do produto. Uma mensagem de erro que nao contem a causa real
+    manda a pessoa depurar a hipotese errada.
+    """
+
+    def test_a_frase_do_401_cita_o_outro_dervs(self):
+        frase = enviar._explicar("/agente/parear", 401)
+        self.assertIn("outro DERVS", frase)
+
+    def test_a_frase_do_401_continua_com_os_tres_motivos_antigos(self):
+        """O motivo novo ENTRA; nenhum sai. Trocar uma causa por outra so
+        move o problema de lugar."""
+        frase = enviar._explicar("/agente/parear", 401).lower()
+        for pedaco in ("digitado errado", "dez minutos", "outra maquina"):
+            self.assertIn(pedaco, frase)
+
+    def test_toda_frase_impressa_pelo_agente_e_ascii(self):
+        """O console do Windows troca o que nao e ASCII por `?`.
+
+        A frase do agente nao aparece numa pagina: ela e IMPRESSA no PowerShell
+        do dono. Um travessao no meio dela vira `?` e a frase fica com cara de
+        corrompida justamente no momento em que a pessoa ja esta perdida.
+
+        O teste cobra as frases DEVOLVIDAS, e nao o arquivo: comentario e
+        docstring podem ter travessao a vontade, porque ninguem os imprime.
+        Medir o arquivo inteiro reprovaria onze comentarios legitimos e a
+        proxima pessoa desligaria o teste.
+
+        Achado em 29/08/2026: a frase do 429 ja saia com `?` desde que foi
+        escrita, e ninguem tinha visto porque so aparece com o alvo recusando.
+        """
+        frases = [enviar._explicar(caminho, codigo)
+                  for caminho in ("/agente/parear", "/agente/relatorio")
+                  for codigo in (401, 403, 404, 429, 500)]
+        for ruim in ("", "dervs.com.br", "ftp://x", "http://dervs.com.br",
+                     "https://x#y", "http://[::1"):
+            try:
+                enviar.conferir_alvo(ruim)
+            except enviar.ErroDoAlvo as e:
+                frases.append(str(e))
+
+        self.assertGreaterEqual(len(frases), 15, "o teste parou de coletar "
+                                "frases; sem isto ele aprova qualquer coisa")
+        for frase in frases:
+            fora = sorted({c for c in frase if ord(c) > 127})
+            self.assertEqual(fora, [], "caractere que o console do Windows nao "
+                             "mostra (%r) na frase: %r" % (fora, frase))
+
+    def test_o_401_fora_do_pareamento_nao_fala_de_codigo(self):
+        """Guarda: se o `if` do caminho quebrar, esta frase vaza para o 401 de
+        maquina revogada, e o dono vai gerar codigo para um problema que codigo
+        nenhum resolve."""
+        frase = enviar._explicar("/agente/relatorio", 401)
+        self.assertNotIn("outro DERVS", frase)
+        self.assertIn("nao esta mais autorizada", frase)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

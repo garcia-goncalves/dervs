@@ -44,15 +44,17 @@ um segundo sim, e ele é dado assim:
 
 1. Abra <https://dervs.com.br>.
 2. Clique em **Computadores**, no menu de cima.
-3. Ache o computador na lista. Embaixo do nome dele vai estar escrito
-   *"Só mede. Não roda nada neste computador."*
+3. Ache o computador na lista. Embaixo do nome dele há uma etiqueta em letras
+   maiúsculas com contorno: ela diz **SÓ MEDE** enquanto ele não pode rodar
+   nada.
 4. Clique em **Deixar consertar aqui**.
 5. Vai aparecer uma janela explicando o que ele passa a poder fazer. Leia, e
    clique em **Pode consertar**.
 
-**O que aparece se der certo:** a frase embaixo do nome muda para *"Pode
-consertar sozinho neste computador."*, e o botão passa a dizer **Deixar só
-medindo**.
+**O que aparece se der certo:** a etiqueta muda para **PODE CONSERTAR AQUI**,
+com o contorno mais forte e o texto mais escuro, e o botão passa a dizer
+**Deixar só medindo**. As duas etiquetas se distinguem por contorno e peso, e
+não por cor — quem não separa cores enxerga a diferença igual.
 
 **Se der errado:** aparece um aviso vermelho dizendo *"não deu para mudar esse
 computador"*. Isso quase sempre é a sessão vencida — recarregue a página, entre
