@@ -43,6 +43,19 @@ from pathlib import Path
 AQUI = Path(__file__).resolve().parent
 sys.path.insert(0, str(AQUI))
 
+# ANTES de importar `banco`, e nao depois: `chave_do_cofre()` RECUSA inventar
+# chave fora do ambiente local, e com razao -- fabricar uma no servidor porque
+# a variavel foi esquecida invalidaria todo segundo fator ja guardado, calada.
+#
+# Faltou aqui e a CI ficou vermelha em `45963da` com quatro erros, enquanto
+# nesta maquina os seis casos passavam: o `cofre.chave` local ja existe, o do
+# runner nao. Verde no laptop nao e verde na CI, e este arquivo e a prova.
+# Nao e segredo: e dado de teste, e o varredor deixa passar por ter `-` no
+# lugar de um valor com cara de token.
+os.environ.setdefault("DERVS_AMBIENTE", "local")
+os.environ.setdefault("DERVS_COFRE",
+                      "chave-de-teste-que-nao-e-segredo-nenhum-0123456789")
+
 import banco     # noqa: E402
 import cortina   # noqa: E402
 import servir    # noqa: E402
