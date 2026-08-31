@@ -170,7 +170,10 @@ jobs:
   # -------------------------------------------------------------------------
   publicar:
     needs: imagem
-    runs-on: ubuntu-latest
+    # Roda DENTRO do OVH, no runner proprio: minuto de Actions so e faturado em
+    # maquina do GitHub. A construcao da imagem continua em `ubuntu-latest` de
+    # proposito — `docker build` aqui disputaria CPU e disco com o site no ar.
+    runs-on: [self-hosted, ovh]
     environment: producao
     # `packages: read` no JOB, e não no topo do arquivo. O pacote no GHCR nasce
     # privado (herda a visibilidade do repositório), e sem esta linha o
