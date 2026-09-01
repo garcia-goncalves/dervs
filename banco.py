@@ -386,6 +386,36 @@ CREATE TABLE IF NOT EXISTS endereco_producao (
 );
 CREATE INDEX IF NOT EXISTS ix_endereco_dono ON endereco_producao (usuario_id);
 
+-- A instalacao do GitHub App DAQUELA conta. NAO confundir com a tabela
+-- `instalacao` acima: aquela e a impressao digital da combinacao da cortina,
+-- tem `CHECK (id = 1)` e nada tem a ver com o GitHub.
+--
+-- Ate aqui o `installation_id` era a variavel de ambiente
+-- `DERVS_GITHUB_INSTALLATION_ID` — UMA instalacao para o processo inteiro, ou
+-- seja, para todas as contas. Esta tabela e o que desfaz isso: o numero passa a
+-- ter dono, e o `UNIQUE (usuario_id)` e o que impede uma conta acumular duas
+-- instalacoes e ninguem saber qual delas vale.
+--
+-- NAO HA SEGREDO AQUI. O `installation_id` e um numero publico — ele aparece na
+-- propria URL de instalacao, e `docs/operacao/token-do-coletor.md` ja o trata
+-- assim. O que E segredo (a chave privada do App) continua fora do banco, no
+-- ambiente. Se um dia entrar segredo nesta tabela, ele passa por
+-- `cifrar`/`decifrar` com contexto — nao antes.
+--
+-- `installation_id` e TEXT com CHECK de nao-vazio: "sem instalacao" e a
+-- AUSENCIA da linha, e nao uma linha com string vazia. Ver o mesmo motivo em
+-- `endereco_producao`.
+CREATE TABLE IF NOT EXISTS instalacao_github (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id      INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    installation_id TEXT NOT NULL CHECK (length(trim(installation_id)) > 0),
+    criado_em       TEXT NOT NULL,
+    atualizado_em   TEXT NOT NULL,
+    UNIQUE (usuario_id)
+);
+CREATE INDEX IF NOT EXISTS ix_instalacao_github_dono
+    ON instalacao_github (usuario_id);
+
 -- O irmao definitivo do "esconder por 24 h". MOTIVO E DATA SAO OBRIGATORIOS:
 -- arquivamento permanente sem rastro e pior que o silencio temporario que ele
 -- substitui — ninguem consegue depois responder "por que isso sumiu?".
@@ -501,13 +531,14 @@ def migrar(con: sqlite3.Connection) -> None:
     _migrar_medida(con)
     _migrar_fila_semaforo(con)
     _migrar_endereco_producao(con)
+    _migrar_instalacao_github(con)
 
 
 # As tabelas que apontam para `usuario`. A migracao confere so estas: varrer o
 # banco inteiro faria um orfao antigo, de outra tabela, travar toda subida.
 FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento",
                      "chave_de_acesso", "codigo_recuperacao",
-                     "endereco_producao")
+                     "endereco_producao", "instalacao_github")
 
 
 # Fatia 2. Nome da coluna -> o pedaco de DDL do `ALTER TABLE`. A ordem e a do
@@ -916,6 +947,65 @@ def _migrar_endereco_producao(con: sqlite3.Connection) -> None:
         con.execute(_CREATE_ENDERECO_PRODUCAO)
         con.execute("CREATE INDEX IF NOT EXISTS ix_endereco_dono"
                     " ON endereco_producao (usuario_id)")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        _religar_fk(con)
+
+
+# O mesmo arranjo de `_CREATE_ENDERECO_PRODUCAO`: duas copias do mesmo CREATE de
+# proposito — a do ESQUEMA e a documentacao do banco de hoje, esta e a
+# ferramenta da migracao. Se uma mudar, a outra muda junto, e ha teste que cobra
+# as duas terem a mesma forma.
+_CREATE_INSTALACAO_GITHUB = """CREATE TABLE IF NOT EXISTS instalacao_github (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id      INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    installation_id TEXT NOT NULL CHECK (length(trim(installation_id)) > 0),
+    criado_em       TEXT NOT NULL,
+    atualizado_em   TEXT NOT NULL,
+    UNIQUE (usuario_id))"""
+
+
+def _migrar_instalacao_github(con: sqlite3.Connection) -> None:
+    """A tabela da instalacao do GitHub nasce aqui, e nao so no ESQUEMA.
+
+    Mesmo motivo de `_migrar_endereco_producao`: a tabela aponta para `usuario`,
+    e o `ESQUEMA` roda DEPOIS de toda a migracao. Criar aqui, no fim, deixa a
+    tabela existir para o `_orfaos` da proxima reconstrucao de `usuario` — que e
+    o motivo de ela estar em `FILHAS_DE_USUARIO`.
+
+    Ela nasce VAZIA, e isso e uma decisao, nao um esquecimento: o
+    `installation_id` de hoje mora na variavel de ambiente
+    `DERVS_GITHUB_INSTALLATION_ID`, que e do processo e nao de ninguem.
+    Escolher uma conta para herda-lo seria o banco inventando um dono — e dono
+    inventado em caminho de autorizacao e o IDOR de amanha. Cada conta reconecta.
+
+    Nunca `executescript` aqui: ele da COMMIT implicito e desmontaria o
+    `BEGIN IMMEDIATE`, deixando duas subidas simultaneas migrarem juntas.
+    Licao paga em 26/08/2026.
+    """
+    presentes = {l[0] for l in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if "usuario" not in presentes:
+        return                        # banco novo: o ESQUEMA ja faz certo
+    if "instalacao_github" in presentes:
+        return                        # ja migrado
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        # RELIDO DENTRO DA TRANSACAO — ver o comentario gemeo em
+        # `_migrar_endereco_producao`: a leitura la em cima aconteceu antes do
+        # lock, e duas subidas simultaneas leriam as duas "preciso migrar".
+        ja = con.execute("SELECT 1 FROM sqlite_master"
+                         " WHERE type='table' AND name='instalacao_github'"
+                         ).fetchone()
+        if ja:
+            con.rollback()
+            return
+        con.execute(_CREATE_INSTALACAO_GITHUB)
+        con.execute("CREATE INDEX IF NOT EXISTS ix_instalacao_github_dono"
+                    " ON instalacao_github (usuario_id)")
         con.commit()
     except Exception:
         con.rollback()
@@ -2461,6 +2551,99 @@ def guardar_endereco_de_producao(usuario_id: int, projeto: str, url,
                 " ON CONFLICT(usuario_id, projeto) DO UPDATE SET"
                 " url=excluded.url, atualizado_em=excluded.atualizado_em",
                 (usuario_id, projeto, limpa, quando, quando))
+        if fechar:                    # ver `gravar`: nao quebre a transacao alheia
+            con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def instalacao_do_github(usuario_id: int, con=None):
+    """O `installation_id` DAQUELA conta, ou `None` se ela nao conectou.
+
+    `usuario_id` e POSICIONAL E OBRIGATORIO, e nao um argumento com padrao —
+    mesmo motivo de `endereco_de_producao`: um padrao aqui seria o caminho
+    pronto para uma rota esquecer de passar o dono e agir com a instalacao de
+    outra pessoa. Sem dono nao ha leitura.
+
+    Devolve TEXT, e nao int: e um identificador, nao um numero de contar. Quem
+    precisar dele numa URL ja o quer em texto.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute("SELECT installation_id FROM instalacao_github"
+                        " WHERE usuario_id = ?", (usuario_id,)).fetchone()
+        return l["installation_id"] if l else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def instalacoes_do_github(con=None) -> dict:
+    """{usuario_id: installation_id} de TODAS as contas — o que o coletor le.
+
+    Esta e a unica leitura sem dono deste conjunto, e e de proposito: quem
+    coleta roda por conta propria, sem sessao, e precisa saber em nome de quem
+    falar com o GitHub. Toda outra leitura passa por `instalacao_do_github`.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return {l["usuario_id"]: l["installation_id"] for l in con.execute(
+            "SELECT usuario_id, installation_id FROM instalacao_github"
+            " ORDER BY usuario_id")}
+    finally:
+        if fechar:
+            con.close()
+
+
+def guardar_instalacao_do_github(usuario_id: int, installation_id, con=None) -> None:
+    """Grava ou troca a instalacao daquela conta. Vazio aqui e ERRO, nao apagar.
+
+    A diferenca para `guardar_endereco_de_producao`, que apaga com string
+    vazia: la o vazio vem de um campo de formulario que o dono limpou; aqui o
+    valor vem do GitHub, e um vazio significa que o fluxo de instalar quebrou.
+    Gravar silencio nesse caso seria uma conta "conectada" a lugar nenhum.
+    Desconectar tem funcao propria, e um `DELETE` explicito.
+    """
+    limpa = str(installation_id or "").strip()
+    if not limpa:
+        raise ValueError("instalacao vazia nao e permitida:"
+                         " para desconectar use desconectar_do_github")
+    fechar = con is None
+    con = con or conectar()
+    try:
+        quando = agora()
+        # O `criado_em` NAO entra no `DO UPDATE`: reinstalar o App nao reescreve
+        # a data em que aquela conta conectou pela primeira vez.
+        con.execute(
+            "INSERT INTO instalacao_github"
+            " (usuario_id, installation_id, criado_em, atualizado_em)"
+            " VALUES (?,?,?,?)"
+            " ON CONFLICT(usuario_id) DO UPDATE SET"
+            " installation_id=excluded.installation_id,"
+            " atualizado_em=excluded.atualizado_em",
+            (usuario_id, limpa, quando, quando))
+        if fechar:                    # ver `gravar`: nao quebre a transacao alheia
+            con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def desconectar_do_github(usuario_id: int, con=None) -> None:
+    """Apaga a instalacao DAQUELA conta — e so a dela.
+
+    O `usuario_id` no `WHERE` e a peca inteira desta funcao: sem ele um clique
+    em "desconectar" derrubaria o GitHub de todo mundo. Inofensiva quando nao ha
+    linha: desconectar duas vezes nao e erro.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("DELETE FROM instalacao_github WHERE usuario_id = ?",
+                    (usuario_id,))
         if fechar:                    # ver `gravar`: nao quebre a transacao alheia
             con.commit()
     finally:

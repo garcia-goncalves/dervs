@@ -492,6 +492,69 @@ main { padding-bottom: var(--e12); }
 
 .marca__glifo { font-family: var(--fonte-mono); }
 
+/* O TERCEIRO ESTADO, e ele é de primeira classe. "Não deu para conferir" não é
+   um "não conectado" mais claro: é a diferença entre não ter e não ter olhado.
+   Borda PONTILHADA — a terceira forma, distinta da sólida do verde e da
+   tracejada do vermelho, e ela sobrevive à impressão em preto e branco. */
+.marca[data-cor="neutro"] {
+  background: var(--fundo-fraco, transparent);
+  color: var(--texto-suave);
+  border: 1px dotted var(--borda);
+}
+
+/* ------------------------------------------------------------- as três portas
+   Cada porta é um cartão com o título e a marca de estado na mesma linha. A
+   marca vai à direita e nunca quebra: estado que desce para a linha de baixo
+   deixa de ser lido junto com o nome da porta. */
+.porta__cabeca {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--e2);
+  flex-wrap: wrap;
+}
+
+.porta__cabeca > h2 { margin: 0; }
+
+/* Em 360px de largura os dois botões da porta 1 ocupam a linha inteira, um
+   embaixo do outro, em vez de espremer. O `.acoes` já quebra linha; o que
+   falta é o botão não encolher abaixo do alvo de toque. */
+@media (max-width: 30rem) {
+  .porta .acoes { flex-direction: column; align-items: stretch; }
+}
+
+/* -------------------------------------------------- a espera da máquina nova
+   Ela vive dentro do cartão da porta e dentro do bloco de pareamento, e não
+   pode competir com o conteúdo: é um estado passageiro. */
+.espera:empty { display: none; }
+
+.espera {
+  margin-top: var(--e3);
+  padding-top: var(--e3);
+  border-top: var(--traco) solid var(--borda);
+}
+
+.espera__linha {
+  display: flex;
+  align-items: center;
+  gap: var(--e2);
+  flex-wrap: wrap;
+  margin: 0;
+}
+
+.espera__linha > span { flex: 1; min-width: min(100%, 200px); }
+
+/* O ponto que pisca é emprestado da barra do freio, e lá ele vive dentro de um
+   `.freio__linha` que já o segura. Solto aqui ele herdava o `flex: 1` da regra
+   acima e virava uma barra laranja de 400px atravessando o cartão — conferido
+   clicando, não lendo. */
+.espera__linha > .freio__ponto,
+.espera__linha > .marca { flex: none; min-width: 0; }
+
+.espera .carimbo { margin-top: var(--e1); }
+
+
+
 /* ------------------------------------------------------- o registro ao vivo */
 .registro {
   margin: 0;

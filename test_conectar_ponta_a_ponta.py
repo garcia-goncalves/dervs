@@ -68,6 +68,56 @@ PAINEL_JS = AQUI / "assets" / "painel.js"
 PRAZO = 180
 
 
+# O espaco reservado que a tela mostra, e o UNICO pedaco que quem cola precisa
+# trocar. O painel nao pode saber onde o repositorio esta na maquina de quem le
+# (ver o comentario em `painel.js`); aqui o teste sabe, porque ele E a maquina.
+LUGAR_DO_DERVS = "<CAMINHO DO DERVS>"
+
+
+def _de_literal_js(bruto: str) -> str:
+    """Desfaz o escape de uma string literal de JavaScript.
+
+    A linha do painel deixou de ser texto simples: ela carrega aspas e barras
+    invertidas (`\"<CAMINHO...>\\agente\\enviar.py\"`). Ler o `.js` sem
+    desfazer o escape entregaria um caminho com barra dupla, que no Windows
+    ate funciona por acidente -- e o acidente e o que este teste existe para
+    nao depender.
+    """
+    saida, i = [], 0
+    while i < len(bruto):
+        c = bruto[i]
+        if c == "\\" and i + 1 < len(bruto):
+            saida.append(bruto[i + 1])
+            i += 2
+        else:
+            saida.append(c)
+            i += 1
+    return "".join(saida)
+
+
+def _partir(linha: str) -> list[str]:
+    """Quebra a linha em argumentos respeitando as aspas.
+
+    `str.split()` quebrava no espaco, e o caminho do DERVS pode ter espaco --
+    `C:\\Program Files` e o caso obvio. `shlex` nao serve: em modo POSIX ele
+    come as barras invertidas do caminho do Windows, e fora dele deixa as
+    aspas presas ao argumento.
+    """
+    argumentos, atual, aberto = [], [], False
+    for c in linha:
+        if c == '"':
+            aberto = not aberto
+        elif c.isspace() and not aberto:
+            if atual:
+                argumentos.append("".join(atual))
+                atual = []
+        else:
+            atual.append(c)
+    if atual:
+        argumentos.append("".join(atual))
+    return argumentos
+
+
 def comando_do_painel(alvo: str, codigo: str) -> list[str]:
     """A linha EXATA que a tela monta, lida de `painel.js`.
 
@@ -75,16 +125,27 @@ def comando_do_painel(alvo: str, codigo: str) -> list[str]:
     comando, e as duas divergiriam no dia em que alguem trocasse uma opcao --
     o teste continuaria verde provando a copia, que e o modo de falha que o
     `contraste.py` deste repositorio ja teve uma vez.
+
+    A UNICA coisa que este teste acrescenta a linha da tela e trocar o espaco
+    reservado pelo caminho real deste repositorio. E isso e o proprio contrato
+    da etapa A4: a linha roda de qualquer pasta, mas nao e copiar-e-colar sem
+    editar -- e a tela diz isso com todas as letras.
     """
     fonte = PAINEL_JS.read_text(encoding="utf-8")
-    m = re.search(r'"(python -m [^"]*?)"\s*\+\s*location\.origin\s*\+\s*'
-                  r'"([^"]*?)"\s*\+\s*d\.codigo', fonte)
+    m = re.search(r'"((?:[^"\\]|\\.)*)"\s*\+\s*location\.origin\s*\+\s*'
+                  r'"((?:[^"\\]|\\.)*)"\s*\+\s*d\.codigo', fonte)
     if m is None:
         raise AssertionError(
             "nao achei a linha do pareamento em painel.js. Se ela mudou de "
             "forma, este teste tem de acompanhar -- e nunca ser apagado.")
-    linha = m.group(1) + alvo + m.group(2) + codigo
-    return linha.split()
+    linha = (_de_literal_js(m.group(1)) + alvo
+             + _de_literal_js(m.group(2)) + codigo)
+    if LUGAR_DO_DERVS not in linha:
+        raise AssertionError(
+            "a linha do painel perdeu o espaco reservado %r. Se o painel passou "
+            "a inventar um caminho, ele esta mentindo: ele nao pode saber onde "
+            "o repositorio esta na maquina de quem le." % LUGAR_DO_DERVS)
+    return _partir(linha.replace(LUGAR_DO_DERVS, str(AQUI)))
 
 
 class OComandoQueOPainelEntrega(unittest.TestCase):
@@ -184,12 +245,25 @@ class OComandoQueOPainelEntrega(unittest.TestCase):
     def test_a_linha_do_painel_e_a_que_o_agente_aceita(self):
         """As duas pontas nao se falam: uma esta num `.js`, a outra num
         `argparse`. Uma opcao renomeada de um lado so aparece quando alguem
-        cola o comando -- ou aqui."""
+        cola o comando -- ou aqui.
+
+        A FORMA MUDOU NA ETAPA A4, e a mudanca e o ponto: era `python -m` mais
+        o nome do modulo, que so acha o pacote de dentro da pasta do DERVS.
+        Agora e o CAMINHO do arquivo, que o Python resolve de onde quer que a
+        pessoa esteja.
+        """
         argv = comando_do_painel("https://exemplo.invalido", "123456")
-        self.assertEqual(argv[:3], ["python", "-m", "agente.enviar"])
+        self.assertEqual("python", argv[0])
+        self.assertNotIn("-m", argv, "o `-m` so funciona de dentro da pasta")
+        alvo = Path(argv[1])
+        self.assertEqual("enviar.py", alvo.name)
+        self.assertEqual("agente", alvo.parent.name)
+        self.assertTrue(alvo.is_absolute(),
+                        "caminho relativo volta a depender da pasta atual")
+        self.assertTrue(alvo.is_file(), "%s nao existe" % alvo)
         self.assertIn("--alvo", argv)
         self.assertIn("--codigo", argv)
-        r = self.rodar(argv[:3] + ["--help"])
+        r = self.rodar(argv[:2] + ["--help"])
         self.assertEqual(r.returncode, 0, r.stderr)
         for opcao in [a for a in argv if a.startswith("--")]:
             with self.subTest(opcao=opcao):
@@ -267,25 +341,39 @@ class OComandoQueOPainelEntrega(unittest.TestCase):
                          "a frase saiu com caractere que o console do Windows "
                          "nao mostra: " + repr(junto))
 
-    def test_rodar_de_fora_da_pasta_e_o_erro_do_python_e_nao_do_numero(self):
-        """A confusao de 29/08/2026, fixada. Rodando de outra pasta o Python
-        responde ANTES de o programa existir, e a frase e em ingles: quem le
-        acha que o numero de seis digitos quebrou. O roteiro em
-        `docs/operacao/conectar-uma-maquina.md` cita esta mensagem; se ela
-        mudar, o roteiro passa a mentir."""
+    def test_rodar_de_fora_da_pasta_agora_FUNCIONA(self):
+        """O caso que inverteu de sinal na etapa A4, e a inversao e a prova.
+
+        Ate 29/08/2026 este mesmo teste EXIGIA a falha: rodando de outra pasta,
+        o Python respondia `No module named` antes de o programa existir, em
+        ingles, e o dono levou essa mensagem tres vezes achando que o numero de
+        seis digitos tinha quebrado. Agora a linha carrega o caminho do arquivo
+        e roda de onde a pessoa estiver -- e este caso cobra exatamente isso,
+        da MESMA pasta de fora.
+
+        Codigo de saida zero sozinho nao basta: um programa que erra e devolve
+        zero passaria. Por isso a frase de sucesso E a maquina aparecendo na
+        lista sao conferidas junto.
+        """
         cookies, codigo = self.numero_do_painel()
         ambiente = dict(os.environ)
         ambiente["HOME"] = self.casa.name
         ambiente["USERPROFILE"] = self.casa.name
+        ambiente["DERVS_AGENTE_ARQUIVO"] = str(
+            Path(self.casa.name) / "agente-de-fora.json")
         ambiente.pop("PYTHONPATH", None)
         argv = comando_do_painel(self.alvo, codigo)
         r = subprocess.run([sys.executable] + argv[1:], cwd=self.casa.name,
                            capture_output=True, text=True, timeout=PRAZO,
                            env=ambiente)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("No module named 'agente'", r.stderr, r.stderr)
-        # E o numero continua valendo: o erro foi do lugar, nao do codigo.
-        self.assertEqual(self.rodar(argv).returncode, 0)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("pareado com", r.stdout, r.stdout + r.stderr)
+        self.assertNotIn("No module named", r.stderr)
+        # E a maquina apareceu de verdade na conta de quem gerou o numero.
+        st, corpo = self.pedir("/api/maquinas", cookies=cookies)
+        self.assertEqual(st, 200, corpo)
+        self.assertTrue(json.loads(corpo)["maquinas"],
+                        "o comando devolveu zero e nenhuma maquina apareceu")
 
 
 if __name__ == "__main__":

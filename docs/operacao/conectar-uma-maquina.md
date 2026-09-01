@@ -1,6 +1,8 @@
 # Conectar uma máquina ao DERVS
 
-*Escrito em 27/08/2026, na etapa 11 da fatia 1.*
+*Escrito em 27/08/2026, na etapa 11 da fatia 1. Reescrito em 29/08/2026,
+na etapa A4 de “Conectar em três portas”: o conectador entrou, e a linha
+de comando deixou de exigir que o terminal estivesse na pasta do DERVS.*
 
 O DERVS mostra o estado dos seus projetos. Até aqui ele só sabia dos projetos da
 máquina **onde ele mesmo roda**. O agente muda isso: qualquer computador seu pode
@@ -20,15 +22,67 @@ variável em `.env`), monta um relatório e **manda** para o endereço do DERVS.
 - **Não manda o valor de segredo nenhum.** Do `.env` sai só o *nome* da
   variável — a leitura para no sinal de igual.
 
-## Conectar, passo a passo
+## Dois caminhos, e eles valem o mesmo
+
+Desde 29/08/2026 a tela **Conectar projeto** oferece dois jeitos de conectar
+uma máquina, lado a lado. Nenhum dos dois é o plano B do outro:
+
+- **O conectador** — um arquivo que você baixa e abre com dois cliques. Ele
+  abre a janela do sistema para você escolher a pasta dos projetos, conecta
+  sozinho e deixa a máquina reportando a cada login. **Não pede terminal
+  nenhum**, e é o caminho recomendado para o seu computador de trabalho.
+- **A linha de comando** — uma linha para colar no terminal. É o caminho para
+  um servidor sem tela, e para quem prefere terminal.
+
+O conectador é um arquivo `.py`, e isso é escolha: a tela azul de proteção do
+Windows (o SmartScreen) vigia por extensão, e `.py` não está na lista dela.
+O que **pode** aparecer é o aviso de "arquivo baixado da internet", e o Windows
+vai abri-lo com o programa que estiver associado a `.py` na sua máquina.
+
+## O conectador, passo a passo
+
+1. No painel, vá em **Conectar projeto** e clique em **Baixar o conectador**.
+   O arquivo já vem com o seu número de seis dígitos dentro — ele vale dez
+   minutos.
+2. Abra o arquivo baixado (dois cliques).
+3. Escolha a pasta onde ficam os seus projetos na janela que abrir.
+4. Pronto. Ele mostra na tela o que fez, e a máquina aparece no painel.
+
+**Se a janela de escolher pasta não abrir**, ele pergunta o caminho pelo
+teclado e segue — alguns Pythons do Windows vêm sem a peça que desenha janelas,
+e ela não é instalável. Digite o caminho e aperte Enter.
+
+**Se você fechar sem escolher pasta**, nada acontece na sua máquina: nenhum
+token gravado, nenhuma tarefa criada. Ele diz isso e sai.
+
+**Se ele disser que não achou o DERVS nesta máquina**, o pareamento valeu, mas
+o relato contínuo não foi agendado — ele precisa dos arquivos do DERVS ali.
+Clone o repositório e rode o conectador de novo.
+
+**Fora do Windows** ele conecta e grava a pasta, mas **não agenda nada** — o
+agendador que ele usa é o do Windows. Ele diz isso e mostra a linha para você
+deixar rodando.
+
+## A linha de comando, passo a passo
 
 1. No painel, clique em **Computadores** e depois em **Gerar o número**.
    Aparece um número de seis dígitos e a linha pronta para copiar.
-2. Na outra máquina, abra o terminal na pasta do DERVS e cole a linha:
+2. Na outra máquina, abra o terminal **em qualquer pasta** e cole a linha,
+   trocando `<CAMINHO DO DERVS>` pela pasta onde o DERVS está:
 
    ```
-   python -m agente.enviar --alvo https://SEU-DERVS --codigo 123456
+   python "<CAMINHO DO DERVS>\agente\enviar.py" --alvo https://SEU-DERVS --codigo 123456
    ```
+
+   **`<CAMINHO DO DERVS>` é o único pedaço que você troca.** O painel não tem
+   como saber onde o repositório está na sua máquina, e inventar um caminho
+   seria ele mentindo. Quem não quer trocar nada usa o conectador.
+
+   **Não importa mais de que pasta você roda.** Até 29/08/2026 a linha só
+   funcionava de dentro da pasta do DERVS, e de qualquer outra o Python
+   respondia `No module named` — em inglês, antes de o programa começar, o que
+   fazia parecer que o número de seis dígitos tinha quebrado. A linha agora
+   carrega o caminho do arquivo, e o programa se acha sozinho.
 
    **Se der certo**, ela imprime duas linhas:
 
@@ -41,7 +95,6 @@ variável em `.env`), monta um relatório e **manda** para o endereço do DERVS.
 
    | O que aparece | O que houve | O que fazer |
    |---|---|---|
-   | `No module named 'agente'` | o terminal está em outra pasta — este é o único erro que **não** vem em português, porque quem responde é o Python, antes de o programa começar | `cd` para a pasta do DERVS e repetir |
    | `o codigo de seis digitos nao serve` | digitado errado, passou dos dez minutos, já foi usado — **ou o número saiu do painel de outro DERVS** | gerar outro **no painel do mesmo endereço que está no `--alvo`** |
    | `o alvo recusou por excesso de tentativas` | cinco erros seguidos daquele endereço | esperar quinze minutos |
    | `nao consegui falar com …` | endereço errado, ou sem internet | conferir o endereço |
@@ -66,8 +119,11 @@ variável em `.env`), monta um relatório e **manda** para o endereço do DERVS.
 
 ## Deixar reportando sozinho
 
+O conectador já faz isso: ele registra uma tarefa que roda a cada login do
+Windows. Se você conectou pela linha de comando, ou quer outro intervalo:
+
 ```
-python -m agente.enviar --alvo https://SEU-DERVS --intervalo 600
+python "<CAMINHO DO DERVS>\agente\enviar.py" --alvo https://SEU-DERVS --intervalo 600
 ```
 
 Ele mede e manda de dez em dez minutos, e não morre se a internet cair — volta
