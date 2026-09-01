@@ -82,6 +82,41 @@ faz o servidor perceber que a aba fechou e devolver a vaga.
 Teste de fluxo **sempre com prazo em toda leitura**: sem prazo ele não falha,
 ele pendura, e suíte pendurada é pior que suíte vermelha.
 
+## As três portas (01/09/2026) — o que não se afrouxa
+
+**A peneira anti-SSRF é reusada, nunca copiada.** `coletar_github.url_segura`,
+`enderecos_publicos`, `host_publico` e `mede_site` são chamadas **qualificadas** a
+partir de `servir.py`, e nunca `from coletar_github import`: `test_rotas.EXECUTA`
+guarda a palavra `coletar`, e `servir.coletar` existe como função de módulo. Uma
+segunda cópia dessa peneira já matou o *drift* em silêncio com 926 testes verdes.
+
+**O IP é FIXADO entre a peneira e a conexão.** `mede_site` resolve o nome **uma
+vez** e conecta naquele endereço, com `Host` e SNI no nome original. Antes eram
+três resoluções, e só a última decidia o destino: um nome com TTL zero
+alternando entre um IP público e `172.17.0.x` passava pela peneira e conectava
+dentro da rede — e a VPS tem 26 contêineres sem outra porta de entrada. Um nome
+que resolva para **qualquer** endereço interno é recusado inteiro.
+
+**Provar que a instalação do GitHub existe não é provar que ela é sua.** O
+`installation_id` é público e sequencial. `_instalacao_e_dele` confere o
+`account.id` contra o id do GitHub amarrado àquela conta, e a tabela tem
+`UNIQUE (installation_id)`. As duas travas são independentes de propósito.
+
+**Todo código de seis dígitos ocupa uma vaga num espaço COMPARTILHADO.**
+`codigo_hash` é chave primária global; sem `limpar_pareamentos_vencidos` e sem o
+teto de criação por origem (balcão `codigos`), quem gerasse códigos em laço
+trancava o dono junto. Vale para as duas rotas que criam código.
+
+**O conectador não importa nada deste repositório, e o servidor não importa o
+conectador.** Ele é **lido** do disco e injetado; importar arrastaria `tkinter`
+para dentro da imagem. Por ser lido e não importado, ele é invisível para o
+teste que cobra os módulos — o nome entra à mão no `Dockerfile` e em
+`test_imagem`.
+
+**A linha que a tela entrega carrega `<CAMINHO DO DERVS>`, e isso é de
+propósito.** O painel não pode saber onde o repositório está na máquina de quem
+lê. `test_conectar_ponta_a_ponta` reprova se o espaço reservado sumir.
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em
@@ -146,6 +181,12 @@ ele pendura, e suíte pendurada é pior que suíte vermelha.
   mesma coisa que uma resposta.
   A verificacao, com o que ela NAO prova, esta em
   `docs/esteira/dervs-fatia-2/verificacao.md`.
+- `docs/superpowers/plans/dervs-conectar-tres-portas.md` — as 15 etapas de
+  "Conectar em tres portas", **todas entregues** em 01/09/2026. A verificacao,
+  com os doze itens que os comandos NAO provam, esta em
+  `docs/esteira/conectar-tres-portas/verificacao.md`. **Duas revisoes
+  (seguranca e Python) acharam cinco buracos reais, todos corrigidos ali
+  mesmo** — o pior deles era a peneira medir um endereco e conectar em outro.
 - **Cuidado com a palavra "fusao"** no §11 da fonte unica: a dos REPOSITORIOS
   esta entregue desde a etapa 1 (o `dervs-hub` vive em `vivo/`); o que o dono
   pediu em 28/08 a noite e a das CAPACIDADES, reescritas em Python. Isso entra
