@@ -1926,5 +1926,63 @@ class OColetorTrocaAChavePorToken(unittest.TestCase):
         self.assertEqual(vistos, ["Bearer ghs-mentira"])
 
 
+class OEnderecoDoBancoVenceOArquivo(unittest.TestCase):
+    """Etapa B2. Duas fontes para o mesmo dado, e uma ordem so.
+
+    O `casos.json` e arquivo versionado, escrito a mao e igual para todo mundo.
+    O banco e a escolha que AQUELA conta fez pela tela. Se o arquivo vencesse,
+    a tela aceitaria a digitacao e nao mudaria nada — calada, que e a pior
+    forma de nao funcionar.
+
+    A AUSENCIA DOS DOIS continua sendo SILENCIO, e nao "fora do ar": projeto
+    sem endereco declarado nao tem site para estar fora do ar, e inventar um
+    veredito ali seria a lei 2 quebrada.
+    """
+
+    def monta(self, do_arquivo, do_banco):
+        """A mesma expressao que o coletor usa, com as duas fontes na mao."""
+        local = {"url_prod": do_arquivo} if do_arquivo else {}
+        enderecos = {"projeto": do_banco} if do_banco else {}
+        return enderecos.get("projeto") or local.get("url_prod") or ""
+
+    def test_com_os_dois_o_banco_vence(self):
+        self.assertEqual("https://do-banco.com.br",
+                         self.monta("https://do-arquivo.com.br",
+                                    "https://do-banco.com.br"))
+
+    def test_so_o_arquivo_continua_valendo(self):
+        self.assertEqual("https://do-arquivo.com.br",
+                         self.monta("https://do-arquivo.com.br", ""))
+
+    def test_so_o_banco_vale(self):
+        self.assertEqual("https://do-banco.com.br",
+                         self.monta("", "https://do-banco.com.br"))
+
+    def test_sem_nenhum_dos_dois_e_silencio(self):
+        self.assertEqual("", self.monta("", ""),
+                         "endereco ausente nao pode virar medicao nenhuma")
+
+    def test_a_expressao_do_coletor_e_ESTA(self):
+        """A guarda contra a copia: se o coletor mudar a ordem, este caso vira
+        decoracao. Ele le a linha do arquivo, e nao a reescreve aqui."""
+        fonte = (Path(coletar.__file__).parent / "coletar_github.py").read_text(
+            encoding="utf-8")
+        self.assertIn(
+            'url_prod = enderecos.get(nome) or local.get("url_prod") or ""',
+            fonte,
+            "a ordem das duas fontes mudou em coletar_github.py e este teste "
+            "deixou de provar o que diz")
+
+    def test_a_regra_de_deploy_enxerga_o_endereco_da_tela(self):
+        """`caso["url_prod"]` passa a carregar o endereco gravado. Sem isto,
+        digitar o endereco na tela nao fazia a regua cobrar publicacao."""
+        fonte = Path(coletar.__file__).read_text(encoding="utf-8")
+        self.assertIn("caso = dict(caso, url_prod=enderecos_gravados[repo.name])",
+                      fonte)
+        # E a leitura do banco nao pode derrubar a medicao inteira.
+        self.assertIn("enderecos_gravados = {}", fonte,
+                      "a leitura do banco tem de falhar fechada, em vazio")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

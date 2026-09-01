@@ -659,6 +659,11 @@ CRITERIOS = [
 
     # So cobra publicacao de quem publica: tem endereco de producao declarado,
     # ou ja tem o workflow. Projeto de gaveta nao deve 2 pontos a ninguem.
+    #
+    # "DECLARADO" passou a incluir o endereco que a tela gravou (etapa B2), e
+    # nao so o do `casos.json`. Sem isto, digitar o endereco na tela nao fazia
+    # a regra enxergar nada, e a pessoa via o painel ignorar o que ela acabara
+    # de dizer — calado, que e a pior forma.
     ("deploy", "Workflow de deploy", 2,
      lambda c: tem_deploy(c["repo"]),
      lambda c: bool(c["caso"].get("url_prod")) or tem_deploy(c["repo"])),
@@ -988,6 +993,19 @@ def medir() -> dict:
     portas = portas_escutando()
     abertos = abertos_no_editor()
 
+    # Os enderecos que a tela gravou (etapa B2), lidos UMA vez. Falha fechada:
+    # banco sem a tabela, ou sem conta local, cai em vazio e o `casos.json`
+    # continua valendo — nunca um erro no meio da medicao.
+    try:
+        con_end = banco.conectar()
+        try:
+            enderecos_gravados = banco.enderecos_de_producao(
+                banco.conta_local(con_end), con=con_end)
+        finally:
+            con_end.close()
+    except Exception:                      # noqa: BLE001 — medir vale mais
+        enderecos_gravados = {}
+
     projetos = []
     for repo in pastas_de_projeto():
         g = coleta_git(repo)
@@ -995,6 +1013,12 @@ def medir() -> dict:
         # O caso vem ANTES da nota: e ele que diz se o projeto tem contêiner e
         # se publica, e sem isso a regua volta a cobrar de todos a mesma coisa.
         caso = casos.get(repo.name, {})
+        # O endereco gravado pela tela entra no `caso` ANTES das regras, e
+        # vence o do arquivo — a mesma ordem de `coletar_github`. Duas ordens
+        # diferentes para o mesmo dado sao duas verdades, e a que diverge e
+        # sempre a que ninguem le.
+        if enderecos_gravados.get(repo.name):
+            caso = dict(caso, url_prod=enderecos_gravados[repo.name])
         pr = coleta_prontidao(repo, g, arq, caso)
 
         alvos = [t.lower() for t in caso.get("containers", [])]

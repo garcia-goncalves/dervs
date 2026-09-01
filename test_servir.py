@@ -1758,5 +1758,215 @@ class OConectadorNoServidorDeVerdade(BaseServidorDeVerdade):
         self.assertNotIn("conectador", getattr(servir, "__dict__", {}))
 
 
+class OEnderecoDoServidorNoServidorDeVerdade(BaseServidorDeVerdade):
+    """A porta 3: o painel passa a BUSCAR uma URL que o usuario digitou.
+
+    E a superficie classica de pedir ao servidor que bata em endereco interno,
+    entao cada faixa e provada UMA A UMA. Nada aqui bate na internet: a peneira
+    recusa antes, e o unico caso que chegaria a rede usa um duble de
+    `mede_site`.
+    """
+
+    GUARDAR = "/api/enderecos/guardar"
+    LER = "/api/enderecos"
+
+    def setUp(self):
+        super().setUp()
+        # `mede_site` bate na rede de verdade. A CI nao tem internet garantida,
+        # e um teste que depende dela falha por motivo errado — e teste que
+        # falha por motivo errado e desligado em duas semanas.
+        self._medir = servir.coletar_github.mede_site
+        servir.coletar_github.mede_site = lambda url: {
+            "url": url, "ok": True, "codigo": 200, "erro": "", "ms": 12,
+            "tentativas": 1}
+        self.addCleanup(setattr, servir.coletar_github, "mede_site", self._medir)
+        # `host_publico` faz DNS DE VERDADE. Aqui ele so pode dizer sim: os
+        # casos que provam a recusa por resolucao trocam este duble sozinhos, e
+        # os vinte enderecos internos sao barrados por `url_segura`, que e pura
+        # e nao toca na rede.
+        self._resolver = servir.coletar_github.host_publico
+        servir.coletar_github.host_publico = lambda h: True
+        self.addCleanup(setattr, servir.coletar_github, "host_publico",
+                        self._resolver)
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM endereco_producao")
+            con.commit()
+        finally:
+            con.close()
+
+    def guardar(self, projeto, url, cookies=None, token=None, com_origem=True):
+        if cookies is None:
+            cookies, token = self.sessao_e_token()
+        cab = {} if token is None else {"X-Token": token}
+        return self.pedir(self.GUARDAR, "POST", {"projeto": projeto, "url": url},
+                          cookies=cookies, com_origem=com_origem, cabecalhos=cab)
+
+    # ------------------------------------------------------------ as travas
+    def test_sem_sessao_nao_grava_e_nao_le(self):
+        self.assertEqual(401, self.pedir(self.GUARDAR, "POST",
+                                         {"projeto": "x", "url": "https://a.com"}).status)
+        self.assertEqual(401, self.pedir(self.LER).status)
+
+    def test_com_sessao_e_sem_anti_csrf_e_recusado(self):
+        cookies = self.com_sessao()
+        r = self.pedir(self.GUARDAR, "POST", {"projeto": "x", "url": "https://a.com"},
+                       cookies=cookies)
+        self.assertEqual(403, r.status)
+
+    def test_sem_origem_e_recusado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("x", "https://exemplo.com.br", cookies, token,
+                         com_origem=False)
+        self.assertEqual(403, r.status)
+
+    # ---------------------------------------------------- a peneira, faixa a faixa
+    #
+    # Cada uma destas ja foi um SSRF de verdade em algum projeto. A faixa CGNAT
+    # (100.64/10) esteve aberta NESTE repositorio ate 29/08/2026, com a suite
+    # inteira verde: ela nao e um caso a mais, e o caso que prova que a lista
+    # sem teste envelhece.
+    INTERNOS = [
+        "http://localhost/",
+        "http://localhost:8080/",
+        "http://127.0.0.1/",
+        "http://127.1.2.3/",
+        "http://10.0.0.5/",
+        "http://172.16.9.9/",
+        "http://172.31.255.254/",
+        "http://192.168.1.10/",
+        "http://169.254.169.254/",          # o metadado da nuvem
+        "http://[::1]/",
+        "http://100.64.5.5/",               # CGNAT
+        "http://100.127.255.254/",          # CGNAT, a outra ponta
+        "http://[::ffff:10.0.0.1]/",        # IPv4 mapeado em IPv6
+        "http://[::ffff:100.64.5.5]/",      # CGNAT mapeado
+        "http://0.0.0.0/",
+        "http://meu-pc.local/",
+        "http://algo.localhost/",
+        "ftp://exemplo.com.br/",            # nem http nem https
+        "file:///etc/passwd",
+        "https://",                         # sem host nenhum
+    ]
+
+    def test_cada_faixa_interna_e_recusada_uma_a_uma(self):
+        cookies, token = self.sessao_e_token()
+        for url in self.INTERNOS:
+            with self.subTest(url=url):
+                r = self.guardar("projeto-x", url, cookies, token)
+                self.assertEqual(400, r.status, url)
+                self.assertIn("rede privada", r.corpo)
+                # E NADA foi gravado: recusar depois de gravar e gravar.
+                corpo = self.pedir(self.LER, cookies=cookies).corpo
+                self.assertEqual({}, json.loads(corpo)["enderecos"], url)
+
+    def test_a_peneira_usada_e_a_do_coletor_e_nao_uma_copia(self):
+        """Uma segunda copia dessa peneira ja matou o drift em silencio, com
+        926 testes verdes. Este caso amarra a identidade: sabotar a do coletor
+        tem de derrubar a rota."""
+        import coletar_github
+        self.assertIs(servir.coletar_github, coletar_github)
+        antes = coletar_github.url_segura
+        coletar_github.url_segura = lambda u: False
+        self.addCleanup(setattr, coletar_github, "url_segura", antes)
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("projeto-x", "https://exemplo.com.br", cookies, token)
+        self.assertEqual(400, r.status,
+                         "a rota nao esta usando a peneira do coletor")
+
+    def test_nome_que_resolve_para_dentro_e_recusado(self):
+        """`url_segura` nao faz DNS de proposito. Quem resolve e `host_publico`,
+        e um nome publico apontando para 127.0.0.1 e o SSRF classico."""
+        import coletar_github
+        antes = coletar_github.host_publico
+        coletar_github.host_publico = lambda h: False
+        self.addCleanup(setattr, coletar_github, "host_publico", antes)
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("projeto-x", "https://parece-publico.com.br", cookies, token)
+        self.assertEqual(400, r.status)
+        corpo = self.pedir(self.LER, cookies=cookies).corpo
+        self.assertEqual({}, json.loads(corpo)["enderecos"])
+
+    def test_o_redirecionamento_nunca_e_seguido(self):
+        """A defesa mais forte possivel contra o pulo de publico para interno:
+        nao seguir nenhum. A prova e estrutural — o abridor de `mede_site` monta
+        `_SemRedirecionar`, e ela devolve None."""
+        import coletar_github
+        self.assertIsNone(
+            coletar_github._SemRedirecionar().redirect_request(
+                None, None, 302, "", {}, "http://10.0.0.1/"))
+
+    # ------------------------------------------------------- o caminho feliz
+    def test_endereco_publico_e_gravado_e_medido(self):
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("loja", "https://exemplo.com.br", cookies, token)
+        self.assertEqual(200, r.status, r.corpo)
+        d = json.loads(r.corpo)
+        self.assertTrue(d["guardado"])
+        self.assertIs(True, d["ok"])
+        self.assertTrue(d["medido_em"], "todo numero medido leva carimbo")
+        corpo = self.pedir(self.LER, cookies=cookies).corpo
+        self.assertEqual({"loja": "https://exemplo.com.br"},
+                         json.loads(corpo)["enderecos"])
+
+    def test_nao_deu_para_medir_NAO_e_fora_do_ar(self):
+        """A invariante do proprio `mede_site`: `ok` como None e o quarto
+        estado, e apagar essa diferenca e o defeito que este painel existe para
+        nao ter."""
+        servir.coletar_github.mede_site = lambda url: {
+            "url": url, "ok": None, "codigo": 0, "erro": "nao_resolveu",
+            "ms": 0, "tentativas": 0}
+        cookies, token = self.sessao_e_token()
+        d = json.loads(self.guardar("loja", "https://exemplo.com.br",
+                                    cookies, token).corpo)
+        self.assertIsNone(d["ok"])
+        self.assertIsNot(False, d["ok"], "None nao pode virar False no caminho")
+        self.assertTrue(d["guardado"], "nao medir nao desfaz a gravacao")
+
+    def test_apagar_o_endereco_nao_bate_em_lugar_nenhum(self):
+        def explodir(url):
+            raise AssertionError("apagar nao pode medir nada")
+
+        cookies, token = self.sessao_e_token()
+        self.guardar("loja", "https://exemplo.com.br", cookies, token)
+        servir.coletar_github.mede_site = explodir
+        r = self.guardar("loja", "", cookies, token)
+        self.assertEqual(200, r.status, r.corpo)
+        corpo = self.pedir(self.LER, cookies=cookies).corpo
+        self.assertEqual({}, json.loads(corpo)["enderecos"])
+
+    def test_projeto_vazio_e_recusado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("   ", "https://exemplo.com.br", cookies, token)
+        self.assertEqual(400, r.status)
+
+    def test_o_endereco_de_outra_conta_nao_e_legivel(self):
+        cookies, token = self.sessao_e_token()
+        self.guardar("loja", "https://minha.com.br", cookies, token)
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("vizinho@teste.local", con=con)
+            banco.guardar_endereco_de_producao(outro, "loja",
+                                               "https://do-vizinho.com.br", con=con)
+        finally:
+            con.close()
+        corpo = self.pedir(self.LER, cookies=cookies).corpo
+        self.assertEqual({"loja": "https://minha.com.br"},
+                         json.loads(corpo)["enderecos"],
+                         "o endereco do vizinho vazou para esta sessao")
+
+    def test_o_teto_por_origem_tem_balcao_PROPRIO(self):
+        """Misturar balcoes tranca a maquina legitima, e isso ja aconteceu duas
+        vezes nesta casa. Gastar o teto do endereco nao pode fechar a cortina."""
+        cookies, token = self.sessao_e_token()
+        for _ in range(servir.Hub.TETO_DE_ENDERECOS + 2):
+            self.guardar("loja", "https://exemplo.com.br", cookies, token)
+        r = self.guardar("loja", "https://exemplo.com.br", cookies, token)
+        self.assertEqual(429, r.status, "o teto do endereco nao segurou")
+        # E a cortina continua de pe para quem chega.
+        self.assertEqual(204, self.pedir("/entrada", "POST",
+                                 {"combinacao": self.combinacao}).status)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)

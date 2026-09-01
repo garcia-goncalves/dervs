@@ -74,6 +74,16 @@ from pathlib import Path
 
 import autenticacao
 import banco
+# A PENEIRA ANTI-SSRF E REUSADA, NAO REESCRITA. `url_segura`,
+# `host_publico`, `_ip_privado` e `mede_site` sao funcoes de modulo, sem
+# estado. Quando essa peneira foi escrita, uma segunda copia dela matou o
+# drift EM SILENCIO com 926 testes verdes; e a faixa CGNAT que faltava
+# nela esteve aberta em producao. Uma copia aqui repetiria os dois erros.
+#
+# SEMPRE QUALIFICADO (`coletar_github.url_segura`), nunca
+# `from coletar_github import ...`: `test_rotas.EXECUTA` guarda a palavra
+# `coletar`, e `servir.coletar` existe como funcao de modulo aqui.
+import coletar_github
 import cortina
 import tarefas
 import memoria
@@ -1327,6 +1337,84 @@ class Hub(SimpleHTTPRequestHandler):
             linhas.append(linha)
         return "\n".join(linhas) + "\n"
 
+    # ------------------------------------------- o endereco do servidor (B2)
+    #
+    # AQUI O PAINEL PASSA A BUSCAR UMA URL QUE O USUARIO DIGITOU. E a superficie
+    # classica de pedir ao servidor que bata em endereco interno, e a defesa nao
+    # e escrita aqui: e a mesma de `coletar_github`, chamada de fora.
+    #
+    # O TETO TEM BALCAO PROPRIO. `mede_site` bloqueia a thread do pedido por ate
+    # 8 segundos por tentativa; sem teto, um punhado de pedidos prende o
+    # servidor inteiro. E o balcao NAO e emprestado de outra coisa: misturar
+    # balcoes tranca a maquina legitima, e isso ja aconteceu duas vezes nesta
+    # casa.
+    TETO_DE_ENDERECOS = 20
+
+    def _enderecos(self):
+        """O que esta gravado, so da conta de quem pergunta."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        return self._json(200, {"enderecos": banco.enderecos_de_producao(
+            sessao["usuario_id"])})
+
+    def _endereco_guardar(self):
+        """Grava o endereco de producao de um projeto, e mede se ele responde."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        if not self._csrf_ok(sessao):
+            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+        corpo = self._corpo_json(teto=4096) or {}
+        projeto = self._texto_do_corpo(corpo, "projeto", teto=120).strip()
+        url = self._texto_do_corpo(corpo, "url", teto=2048).strip()
+        if not projeto:
+            return self._json(400, {"erro": "diga de qual projeto e o endereco"})
+
+        # Apagar nao gasta o balcao nem bate em lugar nenhum.
+        if not url:
+            banco.guardar_endereco_de_producao(sessao["usuario_id"], projeto, None)
+            return self._json(200, {"projeto": projeto, "url": "",
+                                    "ok": None, "guardado": False})
+
+        # A PENEIRA, ANTES DE QUALQUER COISA. `url_segura` e checagem de forma,
+        # sem rede; `host_publico` resolve o nome e recusa o que aponta para
+        # dentro. As duas juntas cobrem `localhost`, 127/8, 10/8, 172.16/12,
+        # 192.168/16, 169.254/16, o loopback IPv6, a faixa CGNAT 100.64/10 e o
+        # IPv4 mapeado em IPv6 — e `mede_site` nunca segue redirecionamento,
+        # que e como o endereco publico viraria um interno no meio do caminho.
+        if not coletar_github.url_segura(url):
+            return self._json(400, {"erro": self.ENDERECO_RECUSADO})
+        if not coletar_github.host_publico(urllib.parse.urlsplit(url).hostname):
+            return self._json(400, {"erro": self.ENDERECO_RECUSADO})
+
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="endereco",
+                                           teto=self.TETO_DE_ENDERECOS):
+            return self._json(429, self.RECUSA)
+
+        banco.guardar_endereco_de_producao(sessao["usuario_id"], projeto, url)
+        # `mede_site` devolve `ok` como None para NAO DEU PARA MEDIR, e isso nao
+        # e fora do ar — a invariante esta escrita no docstring dela. Os tres
+        # estados viajam separados para a tela nao poder confundi-los.
+        medida = coletar_github.mede_site(url)
+        return self._json(200, {"projeto": projeto, "url": url, "guardado": True,
+                                "ok": medida.get("ok"),
+                                "codigo": medida.get("codigo"),
+                                "erro": medida.get("erro"),
+                                "medido_em": banco.agora()})
+
+    # A frase que a tela mostra quando a peneira barra. ELA E NOSSA, e nao
+    # repassada da excecao: `URLError` carrega a URL, e mensagem de erro que
+    # ecoa o que o chamador escreveu e por onde um endereco interno vazaria de
+    # volta. Recusar endereco interno e comportamento CERTO, e a tela diz por
+    # que em vez de parecer defeito.
+    ENDERECO_RECUSADO = ("esse endereco aponta para dentro de uma rede privada, "
+                         "ou nao e um endereco http(s) publico. O DERVS so mede "
+                         "endereco que qualquer um alcanca pela internet.")
+
     def _maquina_remover(self):
         sessao = self._sessao()
         if sessao is None:
@@ -2070,6 +2158,12 @@ ROTAS = {
     # seria distribuir credencial. `POST` porque ele CRIA esse codigo — ver o
     # comentario em cima de `_conectador`.
     "/api/conectador":          Rota("POST", Hub._conectador,       "dado"),
+
+    # A porta 3 (fatia B). As duas sao `dado`: endereco de producao e dado da
+    # conta que o gravou, e `_enderecos` le SO o da sessao — o IDOR ja foi
+    # consertado duas vezes neste repositorio.
+    "/api/enderecos":           Rota("GET",  Hub._enderecos,        "dado"),
+    "/api/enderecos/guardar":   Rota("POST", Hub._endereco_guardar, "dado"),
 
     # As tarefas (Fatia 2). `/agente/resultado` e a UNICA de acesso `maquina`
     # aqui: e por ela que o agente conta o que esta acontecendo, e e na

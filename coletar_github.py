@@ -826,6 +826,23 @@ def main():
         # giro de um banco novo o `criar_usuario` de dentro commitava a
         # transacao do coletor pela metade.
         dono = banco.conta_local(con)
+        # OS ENDERECOS GRAVADOS PELA TELA (etapa B2). Uma leitura so, fora do
+        # laco: sao poucas linhas e a conexao ja esta aberta.
+        #
+        # DE QUEM SAO: da conta que este coletor atende, e nao "de todo mundo".
+        # Com varias contas isto e divida nomeada no plano — o coletor roda num
+        # processo so, e escolher a conta por rodada e outra etapa. Hoje ele
+        # atende a conta local, que e a mesma cujos projetos ele mede.
+        #
+        # FALHA FECHADA, em vazio: banco velho sem a tabela, ou qualquer outro
+        # tropeco, nao pode derrubar a coleta inteira. Sem endereco gravado o
+        # `casos.json` continua valendo, que e o comportamento de antes desta
+        # etapa — perder a medicao toda por causa de um campo opcional seria
+        # trocar um dado a menos por nenhum dado.
+        try:
+            enderecos = banco.enderecos_de_producao(dono, con=con)
+        except Exception:                  # noqa: BLE001 — medir vale mais
+            enderecos = {}
         for alias, nome in por_alias.items():
             no = dados.get(alias)
             if not no:
@@ -878,9 +895,18 @@ def main():
             local = ((tudo.get(nome) or {}).get("local") or {}).get("dados") or {}
             antes_gh = ((tudo.get(nome) or {}).get("github") or {}).get("dados") or {}
 
-            # O SITE: so para quem declarou endereco no casos.json. Projeto sem
-            # endereco nao tem site para estar fora do ar.
-            url_prod = local.get("url_prod") or ""
+            # O SITE: so para quem declarou endereco. Projeto sem endereco nao
+            # tem site para estar fora do ar.
+            #
+            # O BANCO VENCE O `casos.json`, e a ordem importa: o `casos.json` e
+            # arquivo versionado, escrito a mao e igual para todo mundo; o
+            # banco e a escolha que ESTA conta fez pela tela. Quem digitou um
+            # endereco na tela espera que ele valha — se o arquivo vencesse, a
+            # tela aceitaria a digitacao e nao mudaria nada, calada.
+            #
+            # O `casos.json` NAO some: ele continua sendo a fonte dos campos
+            # narrativos e do endereco de quem nunca abriu a tela.
+            url_prod = enderecos.get(nome) or local.get("url_prod") or ""
             if url_prod:
                 site = mede_site(url_prod)
                 if site.get("ok") is None:

@@ -138,7 +138,7 @@ function navegar() {
        fica reservado para a pergunta que falhou, e nao para a que nunca foi
        feita. As duas coisas se parecem na tela e nao sao a mesma. */
     case "conectar":     mostrar("conectar"); pintarConectar();
-                         olharOsComputadores(); break;
+                         olharOsComputadores(); olharOsEnderecos(); break;
     case "computadores": mostrar("computadores"); carregarComputadores(); break;
     case "entrada":      mostrar("entrada"); pdCarregar(); break;
     default:             mostrar("painel"); pintarPainel(); break;
@@ -869,6 +869,16 @@ async function baixarConectador() {
    `visto_em`: parear sem relatório deixa uma linha na tabela que nunca deu
    notícia, e chamar isso de conectado é o painel mentindo. */
 
+/* Os enderecos de producao gravados por esta conta, e o carimbo de quando
+   foram lidos. Vazio NAO e a mesma coisa que "nao li": por isso o carimbo mora
+   ao lado, e a porta 3 se pinta de "nao deu para conferir" enquanto ele nao
+   existe. */
+let ENDERECOS = null;
+let ENDERECOS_LIDO_EM = "";
+/* O resultado da ultima medicao feita pela tela, por projeto. Ele NAO vem da
+   leitura: `/api/enderecos` diz o que esta gravado, e nao se responde. */
+let MEDIDAS = {};
+
 const ESPERA = {
   t: null,           /* o relógio da sondagem */
   ate: 0,            /* quando o número vence, em ms */
@@ -1031,6 +1041,42 @@ function pintarEspera({ estado, maquina }) {
    aberta. `carregarComputadores()` nao serve aqui: ela pinta a lista e o
    carimbo daquela outra tela, e chama-la daqui escreveria numa tela que
    ninguem esta vendo. */
+async function olharOsEnderecos() {
+  try {
+    const r = await fetch("/api/enderecos");
+    if (!r.ok) throw new Error("recusado");
+    const d = await r.json();
+    ENDERECOS = d.enderecos || {};
+    ENDERECOS_LIDO_EM = new Date().toISOString();
+  } catch {
+    return;                 /* sem carimbo: a porta 3 dirá que não olhou */
+  }
+  if (rota().tela === "conectar") pintarConectar();
+}
+
+async function guardarEndereco(projeto, url) {
+  const r = await escrever("/api/enderecos/guardar", { projeto, url });
+  let d = {};
+  try { d = await r.json(); } catch { d = {}; }
+  if (!r.ok) {
+    /* A RECUSA DA PENEIRA NÃO É UM DEFEITO, e a tela não a pinta como um:
+       endereço interno recusado é o comportamento certo, e a frase que o
+       servidor manda já explica por quê, em português. */
+    recado(d.erro || "não conseguimos guardar esse endereço.", true);
+    return;
+  }
+  if (!url) {
+    delete MEDIDAS[projeto];
+    recado("endereço apagado. Esse projeto volta a não ter site medido.");
+  } else {
+    MEDIDAS[projeto] = { ok: d.ok, codigo: d.codigo, erro: d.erro,
+                         medido_em: d.medido_em };
+    recado("endereço guardado.");
+  }
+  await olharOsEnderecos();
+  if (rota().tela === "conectar") pintarConectar();
+}
+
 async function olharOsComputadores() {
   try {
     const r = await fetch("/api/maquinas");
@@ -1100,20 +1146,110 @@ function pintarConectar() {
         + "terceiro, e o cofre vem antes da gaveta."
   }));
 
-  /* PORTA 3 — o servidor. Mesmo desenho, mesma honestidade. */
-  onde.append(porta({
+  /* PORTA 3 — o servidor (etapa B3). */
+  const leuEnd = !!ENDERECOS_LIDO_EM;
+  const quantos = leuEnd ? Object.keys(ENDERECOS).length : 0;
+  const cartao3 = porta({
     titulo: "O seu servidor",
-    estado: "desconectado",
-    resumo: "Com o endereço do seu site aqui, a coluna No ar deixa de sair de "
-          + "um arquivo escrito à mão e passa a sair de uma medição de "
-          + "verdade.",
-    caminhos: [{ rotulo: "Informar o endereço", desligado: true,
-                 porque: "ainda não construído" }],
+    estado: !leuEnd ? "sem_dados" : (quantos ? "conectado" : "desconectado"),
+    resumo: !leuEnd
+      ? "Não consegui ler os endereços desta conta. Isso não quer dizer que "
+        + "nenhum está gravado — quer dizer que não olhei."
+      : (quantos
+         ? "Há " + quantos + " projeto(s) com endereço gravado. A coluna No ar "
+           + "deles sai de uma medição de verdade, e não de um arquivo escrito "
+           + "à mão."
+         : "Sem endereço gravado, a coluna No ar sai de um arquivo escrito à "
+           + "mão. Com ele, o DERVS bate no seu site e conta o que respondeu."),
+    carimbo: leuEnd ? "endereços lidos " + haQuanto(ENDERECOS_LIDO_EM) : "",
     nota: "Nunca pedimos chave de acesso ao servidor, e não vamos pedir: o "
-        + "endereço público basta para conferir se ele responde."
-  }));
+        + "endereço público basta para conferir se ele responde. Endereço de "
+        + "rede interna é recusado de propósito — o painel roda num servidor, "
+        + "e um endereço interno faria dele uma ferramenta de varredura."
+  });
+  if (leuEnd) cartao3.append(formularioDeEndereco());
+  onde.append(cartao3);
 
   reencontrarEspera();
+}
+
+/* O campo de endereço, mais a lista do que já está gravado. Um formulário de
+   verdade: quem digita e aperta Enter espera que funcione, e um `<div>` com
+   botão não dá isso ao teclado nem ao leitor de tela. */
+function formularioDeEndereco() {
+  const caixa = document.createElement("div");
+  caixa.className = "enderecos";
+
+  for (const [projeto, url] of Object.entries(ENDERECOS || {})) {
+    const li = document.createElement("div");
+    li.className = "endereco";
+
+    const dizeres = document.createElement("div");
+    dizeres.className = "endereco__dizeres";
+    const nome = document.createElement("strong");
+    nome.textContent = projeto;
+    const link = document.createElement("span");
+    link.className = "endereco__url";
+    link.textContent = url;
+    dizeres.append(nome, link);
+
+    /* OS TRÊS ESTADOS, e o terceiro é de primeira classe: no ar · fora do ar ·
+       NÃO DEU PARA CONFERIR. `ok` como `null` é o quarto estado do selo, e
+       pintá-lo de "fora do ar" apagaria a diferença entre um site caído e uma
+       medição que não aconteceu. */
+    const m = MEDIDAS[projeto];
+    if (m) {
+      dizeres.append(marcaDaPorta(m.ok === true ? "conectado"
+                                : m.ok === false ? "desconectado" : "sem_dados"));
+      const c = document.createElement("p");
+      c.className = "carimbo";
+      c.textContent = m.ok === null || m.ok === undefined
+        ? "não deu para medir (" + (m.erro || "sem motivo") + ") · "
+          + haQuanto(m.medido_em)
+        : "respondeu " + m.codigo + " · medido " + haQuanto(m.medido_em);
+      dizeres.append(c);
+    }
+
+    const tirar = document.createElement("button");
+    tirar.className = "botao botao--secundario";
+    tirar.type = "button";
+    tirar.textContent = "Apagar";
+    tirar.addEventListener("click", () => guardarEndereco(projeto, ""));
+    const acoes = document.createElement("div");
+    acoes.className = "acoes";
+    acoes.append(tirar);
+
+    li.append(dizeres, acoes);
+    caixa.append(li);
+  }
+
+  const form = document.createElement("form");
+  form.className = "endereco endereco--novo";
+  const projeto = document.createElement("input");
+  projeto.type = "text";
+  projeto.required = true;
+  projeto.placeholder = "nome do projeto";
+  projeto.setAttribute("aria-label", "Nome do projeto");
+  const url = document.createElement("input");
+  url.type = "url";
+  url.required = true;
+  url.placeholder = "https://o-seu-site.com.br";
+  url.setAttribute("aria-label", "Endereço público do site");
+  const salvar = document.createElement("button");
+  salvar.className = "botao";
+  salvar.type = "submit";
+  salvar.textContent = "Guardar o endereço";
+  form.addEventListener("submit", ev => {
+    ev.preventDefault();
+    guardarEndereco(projeto.value.trim(), url.value.trim());
+    projeto.value = url.value = "";
+  });
+  const acoes = document.createElement("div");
+  acoes.className = "acoes";
+  acoes.append(salvar);
+  form.append(projeto, url, acoes);
+  caixa.append(form);
+  return caixa;
 }
 
 /* ================================================== 5. Computadores ====== */
