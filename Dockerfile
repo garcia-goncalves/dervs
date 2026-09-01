@@ -107,6 +107,17 @@ COPY painel-projetos.svg   /app/
 COPY painel-projetos.png   /app/
 COPY painel-projetos.ico   /app/
 
+# O CONECTADOR (etapa A3), e ele e o unico arquivo desta lista que entra por um
+# motivo diferente de todos os outros. `servir.py` NAO o importa: ele o LE do
+# disco e injeta o codigo de pareamento. Por isso ele e invisivel para
+# `test_imagem.test_todo_modulo_importado_entra_na_imagem` — a rota responderia
+# 200 no localhost e quebraria em producao, que e exatamente o modo de falha da
+# etapa 16 da Fatia 1. `test_imagem.test_as_paginas_e_os_assets_entram` cobra
+# este nome.
+#
+# Importar o conectador aqui dentro continua PROIBIDO: ele carrega `tkinter`.
+COPY conectador.py         /app/
+
 # A pasta de assets da etapa 13: folha de estilo, marca, glifos dos selos e as
 # duas famílias tipográficas. `servir.py` monta a lista de estáticos permitidos
 # LENDO ESTA PASTA na subida — sem ela a lista nasce vazia, a página carrega sem

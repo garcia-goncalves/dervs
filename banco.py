@@ -358,6 +358,34 @@ CREATE TABLE IF NOT EXISTS projeto_conectado (
     UNIQUE (maquina_id, projeto)
 );
 
+-- O endereco de producao de cada projeto — a "porta 3" (fatia B, 01/09/2026).
+--
+-- POR QUE TEM DONO, e nao e uma coluna solta por projeto: o endereco sai do
+-- `casos.json`, que e um arquivo unico da maquina, e vira dado de conta. Duas
+-- pessoas podem ter um projeto com o MESMO nome e servidores diferentes, e
+-- quem le o endereco de um projeto e a conta que o gravou. Coluna sem dono
+-- aqui seria IDOR por desenho de esquema — o mesmo defeito ja consertado duas
+-- vezes neste repositorio (etapas 8 e 11), e nao se repete.
+--
+-- NAO HA SEGREDO AQUI. E uma URL publica, a mesma que qualquer visitante
+-- digita no navegador. Chave SSH, senha de servidor e token de deploy NAO
+-- entram nesta tabela, agora nem nunca: o DERVS mede o site de fora, nao
+-- entra nele.
+--
+-- `url` e NOT NULL com CHECK de nao-vazio: "sem endereco" e a AUSENCIA da
+-- linha, e nao uma linha com string vazia. Dois jeitos de dizer a mesma coisa
+-- dao dois caminhos de leitura, e um deles sempre e esquecido.
+CREATE TABLE IF NOT EXISTS endereco_producao (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id    INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    projeto       TEXT NOT NULL CHECK (length(trim(projeto)) > 0),
+    url           TEXT NOT NULL CHECK (length(trim(url)) > 0),
+    criado_em     TEXT NOT NULL,
+    atualizado_em TEXT NOT NULL,
+    UNIQUE (usuario_id, projeto)
+);
+CREATE INDEX IF NOT EXISTS ix_endereco_dono ON endereco_producao (usuario_id);
+
 -- O irmao definitivo do "esconder por 24 h". MOTIVO E DATA SAO OBRIGATORIOS:
 -- arquivamento permanente sem rastro e pior que o silencio temporario que ele
 -- substitui — ninguem consegue depois responder "por que isso sumiu?".
@@ -472,12 +500,14 @@ def migrar(con: sqlite3.Connection) -> None:
     _migrar_credencial(con)
     _migrar_medida(con)
     _migrar_fila_semaforo(con)
+    _migrar_endereco_producao(con)
 
 
 # As tabelas que apontam para `usuario`. A migracao confere so estas: varrer o
 # banco inteiro faria um orfao antigo, de outra tabela, travar toda subida.
 FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento",
-                     "chave_de_acesso", "codigo_recuperacao")
+                     "chave_de_acesso", "codigo_recuperacao",
+                     "endereco_producao")
 
 
 # Fatia 2. Nome da coluna -> o pedaco de DDL do `ALTER TABLE`. A ordem e a do
@@ -825,6 +855,67 @@ def _migrar_credencial(con: sqlite3.Connection) -> None:
         if piorou > 0:
             raise sqlite3.IntegrityError(
                 "a migracao criaria %d referencia orfa; nada foi gravado" % piorou)
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        _religar_fk(con)
+
+
+# Duas copias do mesmo CREATE, de proposito — o mesmo arranjo de
+# `_CREATE_CREDENCIAL`: a do ESQUEMA e a documentacao do banco de hoje, esta e
+# a ferramenta da migracao. Se uma mudar, a outra muda junto, e ha teste que
+# cobra as duas terem a mesma forma.
+_CREATE_ENDERECO_PRODUCAO = """CREATE TABLE IF NOT EXISTS endereco_producao (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id    INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    projeto       TEXT NOT NULL CHECK (length(trim(projeto)) > 0),
+    url           TEXT NOT NULL CHECK (length(trim(url)) > 0),
+    criado_em     TEXT NOT NULL,
+    atualizado_em TEXT NOT NULL,
+    UNIQUE (usuario_id, projeto))"""
+
+
+def _migrar_endereco_producao(con: sqlite3.Connection) -> None:
+    """A tabela do endereco de producao nasce aqui, e nao so no ESQUEMA.
+
+    POR QUE NA MIGRACAO, se o `ESQUEMA` roda logo depois e tem
+    `CREATE TABLE IF NOT EXISTS`: porque a tabela aponta para `usuario`, e o
+    `ESQUEMA` roda DEPOIS de toda a migracao. Criar aqui, no fim, deixa a
+    tabela existir para o `_orfaos` da proxima reconstrucao de `usuario` — que
+    e o motivo de ela estar em `FILHAS_DE_USUARIO`. O dia em que houver uma
+    migracao nova que mexa nesta tabela, o lugar dela ja esta feito.
+    E vazia, entao nao ha dado antigo a converter: um hub.db de producao passa
+    por aqui sem uma linha ser tocada.
+
+    Nunca `executescript` aqui: ele da COMMIT implicito e desmontaria o
+    `BEGIN IMMEDIATE`, deixando duas subidas simultaneas migrarem juntas.
+    Licao paga em 26/08/2026.
+    """
+    presentes = {l[0] for l in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if "usuario" not in presentes:
+        return                        # banco novo: o ESQUEMA ja faz certo
+    if "endereco_producao" in presentes:
+        return                        # ja migrado
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        # RELIDO DENTRO DA TRANSACAO. A leitura la em cima aconteceu antes do
+        # lock; dois processos subindo juntos leriam os dois "preciso migrar", e
+        # sem o `IF NOT EXISTS` do CREATE o segundo morreria dentro de
+        # `conectar()` — que roda em toda requisicao, entao o processo nem
+        # subiria. O `IF NOT EXISTS` sozinho ja bastaria; a releitura e o que
+        # deixa a intencao no lugar certo se um dia o CREATE virar ALTER.
+        ja = con.execute("SELECT 1 FROM sqlite_master"
+                         " WHERE type='table' AND name='endereco_producao'"
+                         ).fetchone()
+        if ja:
+            con.rollback()
+            return
+        con.execute(_CREATE_ENDERECO_PRODUCAO)
+        con.execute("CREATE INDEX IF NOT EXISTS ix_endereco_dono"
+                    " ON endereco_producao (usuario_id)")
         con.commit()
     except Exception:
         con.rollback()
@@ -2297,6 +2388,79 @@ def arquivar_projeto(maquina_id: int, projeto: str, con=None) -> None:
         con.execute("UPDATE projeto_conectado SET arquivado_em = ?"
                     " WHERE maquina_id = ? AND projeto = ?",
                     (agora(), maquina_id, projeto))
+        if fechar:                    # ver `gravar`: nao quebre a transacao alheia
+            con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def endereco_de_producao(usuario_id: int, projeto: str, con=None):
+    """A URL de producao daquele projeto DAQUELA conta, ou `None`.
+
+    `usuario_id` e POSICIONAL E OBRIGATORIO, e nao um argumento com padrao. Um
+    padrao aqui seria o caminho pronto para uma rota esquecer de passar o dono e
+    ler o endereco de outra pessoa — que e o IDOR ja consertado duas vezes neste
+    repositorio. Sem dono nao ha leitura: e por isso que a assinatura nao
+    permite chamar sem ele.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute("SELECT url FROM endereco_producao"
+                        " WHERE usuario_id = ? AND projeto = ?",
+                        (usuario_id, projeto)).fetchone()
+        return l["url"] if l else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def enderecos_de_producao(usuario_id: int, con=None) -> dict:
+    """{projeto: url} de UMA conta. E o que o coletor consome de uma vez so."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return {l["projeto"]: l["url"] for l in con.execute(
+            "SELECT projeto, url FROM endereco_producao"
+            " WHERE usuario_id = ? ORDER BY projeto", (usuario_id,))}
+    finally:
+        if fechar:
+            con.close()
+
+
+def guardar_endereco_de_producao(usuario_id: int, projeto: str, url,
+                                 con=None) -> None:
+    """Grava, troca ou APAGA o endereco de um projeto daquela conta.
+
+    `url` vazia ou `None` apaga a linha, e nao grava string vazia: "sem
+    endereco" tem um jeito so de ser dito neste banco — a ausencia da linha.
+    Dois jeitos dariam dois caminhos de leitura, e um deles sempre e esquecido.
+
+    NAO confere a URL. A peneira anti-SSRF mora em `coletar_github.url_segura`,
+    e quem chama e que a aplica antes de chegar aqui: o banco nao alcanca a
+    rede, e duplicar a peneira aqui criaria duas verdades que divergem em
+    silencio — foi exatamente assim que um SSRF real passou.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        limpa = (url or "").strip()
+        if not limpa:
+            con.execute("DELETE FROM endereco_producao"
+                        " WHERE usuario_id = ? AND projeto = ?",
+                        (usuario_id, projeto))
+        else:
+            quando = agora()
+            # O `criado_em` NAO entra no `DO UPDATE`: trocar o endereco nao
+            # reescreve a data em que a conta declarou aquele projeto.
+            con.execute(
+                "INSERT INTO endereco_producao"
+                " (usuario_id, projeto, url, criado_em, atualizado_em)"
+                " VALUES (?,?,?,?,?)"
+                " ON CONFLICT(usuario_id, projeto) DO UPDATE SET"
+                " url=excluded.url, atualizado_em=excluded.atualizado_em",
+                (usuario_id, projeto, limpa, quando, quando))
         if fechar:                    # ver `gravar`: nao quebre a transacao alheia
             con.commit()
     finally:

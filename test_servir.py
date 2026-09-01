@@ -1678,5 +1678,85 @@ class OConsumoDaSemana(BaseServidorDeVerdade):
         self.assertEqual(corpo["dias"], banco.DIAS_DE_CONSUMO)
 
 
+class OConectadorNoServidorDeVerdade(BaseServidorDeVerdade):
+    """A rota que entrega o `conectador.py` com o codigo dentro (etapa A3).
+
+    Ler a tabela de rotas nao basta e ja nao bastou aqui: a classificacao e a
+    trava real ja divergiram neste repositorio. Estes casos saem pelo soquete.
+    """
+
+    CAMINHO = "/api/conectador"
+
+    def test_sem_sessao_nao_sai_nada(self):
+        r = self.pedir(self.CAMINHO, "POST", {})
+        self.assertEqual(401, r.status)
+        self.assertNotIn("DERVS:CODIGO", r.corpo)
+        self.assertNotIn("schtasks", r.corpo)
+
+    def test_com_sessao_e_sem_anti_csrf_e_recusado(self):
+        """Um POST que CRIA codigo, acionavel de outro site, queima codigos."""
+        r = self.pedir(self.CAMINHO, "POST", {}, cookies=self.com_sessao())
+        self.assertEqual(403, r.status)
+
+    def test_com_sessao_e_sem_origem_e_recusado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.pedir(self.CAMINHO, "POST", {}, cookies=cookies,
+                       com_origem=False, cabecalhos={"X-Token": token})
+        self.assertEqual(403, r.status)
+
+    def _baixar(self):
+        cookies, token = self.sessao_e_token()
+        return self.pedir(self.CAMINHO, "POST", {}, cookies=cookies,
+                          cabecalhos={"X-Token": token})
+
+    def test_com_sessao_sai_o_arquivo_com_codigo_e_endereco(self):
+        r = self._baixar()
+        self.assertEqual(200, r.status)
+        achado = re.search(r'^CODIGO = "(\d{6})"', r.corpo, re.M)
+        self.assertIsNotNone(achado, "o codigo de seis digitos nao foi injetado")
+        alvo = re.search(r'^ALVO = "([^"]+)"', r.corpo, re.M)
+        self.assertIsNotNone(alvo, "o endereco do painel nao foi injetado")
+        self.assertEqual("http://127.0.0.1:%d" % self.porta, alvo.group(1))
+
+    def test_o_que_sai_e_python_valido(self):
+        """Injecao que quebra o arquivo entrega um erro de sintaxe ao dono."""
+        import ast
+        ast.parse(self._baixar().corpo)
+
+    def test_o_navegador_nao_renderiza_o_arquivo(self):
+        r = self._baixar()
+        tipo = (r.cabecalhos.get("Content-Type") or "").lower()
+        self.assertNotIn("text/html", tipo)
+        self.assertIn("attachment", (r.cabecalhos.get("Content-Disposition") or ""))
+
+    def test_o_codigo_foi_aberto_PARA_QUEM_PEDIU(self):
+        """Um codigo aberto na conta errada poe a maquina de um no painel do outro."""
+        r = self._baixar()
+        codigo = re.search(r'^CODIGO = "(\d{6})"', r.corpo, re.M).group(1)
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("outra@teste.local", con=con)
+            linhas = con.execute(
+                "SELECT usuario_id FROM pareamento WHERE usado_em IS NULL"
+            ).fetchall()
+        finally:
+            con.close()
+        donos = {l[0] for l in linhas}
+        self.assertIn(self.uid, donos)
+        self.assertNotIn(outro, donos)
+        # E o codigo vale de verdade: quem o digita vira maquina DESTA conta.
+        self.assertTrue(banco.usar_pareamento(codigo, "pc-de-teste"))
+
+    def test_dois_pedidos_dao_codigos_diferentes(self):
+        um = re.search(r'^CODIGO = "(\d{6})"', self._baixar().corpo, re.M).group(1)
+        dois = re.search(r'^CODIGO = "(\d{6})"', self._baixar().corpo, re.M).group(1)
+        self.assertNotEqual(um, dois)
+
+    def test_o_servidor_nao_ganhou_atributo_conectador(self):
+        """Importar o conectador arrastaria `tkinter` para dentro do servidor."""
+        self.assertFalse(hasattr(servir, "conectador"))
+        self.assertNotIn("conectador", getattr(servir, "__dict__", {}))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)

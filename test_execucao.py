@@ -452,8 +452,18 @@ class OndeMoraACopia(unittest.TestCase):
     """
 
     def test_a_base_fica_fora_da_raiz_dos_projetos(self):
+        """Fora de TODAS as raizes, e nao so da primeira.
+
+        Ate a etapa A1 havia uma raiz so, escrita no codigo-fonte. Agora sao
+        varias, vindas do ambiente ou do arquivo do agente — e a copia de
+        trabalho dentro de qualquer uma delas viraria projeto medido, com o
+        painel contando o mesmo repositorio duas vezes.
+        """
         import coletar
-        self.assertFalse(str(execucao.BASE_COPIAS).startswith(str(coletar.RAIZ)))
+        base = str(execucao.BASE_COPIAS).lower()
+        for raiz in coletar.RAIZES:
+            with self.subTest(raiz=str(raiz)):
+                self.assertFalse(base.startswith(str(raiz).lower()))
 
     def test_caminho_junta_base_projeto_e_id(self):
         caminho = execucao.caminho_da_copia("/tmp/base", "medconsultoria-crm", "a1b2c3d4")

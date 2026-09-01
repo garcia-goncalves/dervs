@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import tempfile
+import textwrap
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -123,7 +124,7 @@ class Esquema(unittest.TestCase):
             "SELECT name FROM sqlite_master WHERE type='table' "
             "AND name NOT LIKE 'sqlite_%'"))
 
-    def test_as_dezoito_tabelas_existem(self):
+    def test_as_dezenove_tabelas_existem(self):
         """A lista e escrita a mao de proposito: tabela nova reprova a suite.
 
         Nao e cerimonia. Uma tabela que aparece sem ninguem notar e uma tabela
@@ -132,7 +133,8 @@ class Esquema(unittest.TestCase):
         """
         self.assertEqual(self.tabelas(), [
             "chave_de_acesso", "codigo_recuperacao", "cor_da_regra",
-            "credencial", "fila", "gasto", "historico", "instalacao",
+            "credencial", "endereco_producao", "fila", "gasto",
+            "historico", "instalacao",
             "maquina", "medida", "pareamento", "pendencia_arquivada",
             "pendencia_estado", "pendencia_vida", "projeto_conectado",
             "sessao", "tarefa_linha", "usuario"])
@@ -1981,6 +1983,243 @@ class Consumo(unittest.TestCase):
         fora = banco.consumo(desde_iso=daqui(days=-1), ate_iso=daqui(days=1),
                              agora_iso=daqui(), con=self.con)
         self.assertEqual(fora["total"]["segundos"], 0)
+
+
+class EnderecoDeProducaoNoBancoVelho(unittest.TestCase):
+    """Um hub.db do dia 26/08 abre com a tabela nova e sem perder linha."""
+
+    def setUp(self):
+        self.pasta = tempfile.TemporaryDirectory()
+        self.caminho = Path(self.pasta.name) / "velho.db"
+        velho = sqlite3.connect(self.caminho)
+        velho.executescript(ESQUEMA_VELHO)
+        velho.execute("INSERT INTO medida VALUES"
+                      " ('dervs','local','2026-08-26T10:00:00+00:00','{}')")
+        velho.commit()
+        velho.close()
+
+    def tearDown(self):
+        self.pasta.cleanup()
+
+    def test_a_tabela_nova_existe_depois_de_migrar(self):
+        con = banco.conectar(self.caminho)
+        try:
+            presentes = {l[0] for l in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertIn("endereco_producao", presentes)
+            colunas = {l[1] for l in con.execute(
+                "PRAGMA table_info(endereco_producao)")}
+            self.assertIn("usuario_id", colunas)
+        finally:
+            con.close()
+
+    def test_a_linha_antiga_sobrevive(self):
+        con = banco.conectar(self.caminho)
+        try:
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM medida").fetchone()[0], 1)
+        finally:
+            con.close()
+
+    def test_o_projeto_antigo_acorda_sem_endereco(self):
+        """O padrao de quem nunca declarou nada e a AUSENCIA de endereco —
+        `None`, e nao string vazia. Inventar um endereco para linha antiga seria
+        o painel mentindo sobre um servidor que ninguem informou."""
+        con = banco.conectar(self.caminho)
+        try:
+            uid = banco.criar_usuario("dono@teste.local", "teste1234", con=con)
+            self.assertIsNone(banco.endereco_de_producao(uid, "dervs", con=con))
+        finally:
+            con.close()
+
+    def test_abrir_duas_vezes_nao_quebra(self):
+        """A migracao roda em toda conexao: tem de ser inofensiva na segunda."""
+        banco.conectar(self.caminho).close()
+        con = banco.conectar(self.caminho)
+        try:
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM medida").fetchone()[0], 1)
+        finally:
+            con.close()
+
+    def test_o_banco_que_ja_tem_usuario_e_nao_tem_a_tabela_migra(self):
+        """O caminho de verdade da migracao — o `BEGIN IMMEDIATE`.
+
+        Sem este caso, o `ESQUEMA` criaria a tabela sozinho e a funcao de
+        migracao podia estar vazia sem ninguem notar: o teste ficaria verde por
+        nao poder dar errado."""
+        con = banco.conectar(self.caminho)
+        uid = banco.criar_usuario("dono@teste.local", "teste1234", con=con)
+        con.execute("DROP TABLE endereco_producao")
+        con.commit()
+        con.close()
+
+        con = sqlite3.connect(self.caminho)
+        con.row_factory = sqlite3.Row
+        try:
+            banco._migrar_endereco_producao(con)       # so a migracao, sem ESQUEMA
+            presentes = {l[0] for l in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertIn("endereco_producao", presentes)
+            self.assertFalse(con.in_transaction,
+                             "a conexao nao pode sair daqui com transacao aberta:"
+                             " `PRAGMA foreign_keys` seria NO-OP silencioso")
+            con.execute("INSERT INTO endereco_producao"
+                        " (usuario_id, projeto, url, criado_em, atualizado_em)"
+                        " VALUES (?,?,?,?,?)",
+                        (uid, "dervs", "https://dervs.com.br", daqui(), daqui()))
+            con.commit()
+            self.assertEqual(con.execute(
+                "SELECT url FROM endereco_producao").fetchone()["url"],
+                "https://dervs.com.br")
+        finally:
+            con.close()
+
+    def test_a_migracao_nao_usa_executescript(self):
+        """`executescript` da COMMIT implicito e desmonta o `BEGIN IMMEDIATE`:
+        duas subidas simultaneas migrariam juntas. A prova le a FONTE, porque
+        rodar a migracao nao distingue as duas formas quando nada concorre.
+
+        A busca e por ARVORE, e nao por texto: a propria docstring da funcao
+        contem a palavra `executescript` (ela avisa para nao usar), e um
+        `assertNotIn` no texto reprovaria a funcao correta — ou, pior, seria
+        contornado apagando o aviso."""
+        import ast
+        import inspect
+        fonte = inspect.getsource(banco._migrar_endereco_producao)
+        arvore = ast.parse(textwrap.dedent(fonte))
+        chamadas = [n.func.attr for n in ast.walk(arvore)
+                    if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute)]
+        self.assertNotIn("executescript", chamadas)
+        self.assertIn("execute", chamadas)
+        self.assertIn("BEGIN IMMEDIATE", fonte)
+        self.assertIn("_religar_fk", fonte)
+        # E ela precisa estar LIGADA: funcao perfeita que ninguem chama e
+        # migracao que nunca roda.
+        self.assertIn("_migrar_endereco_producao", inspect.getsource(banco.migrar))
+
+
+class EnderecoDeProducaoTemDono(unittest.TestCase):
+    """A porta 3 e dado de conta, nao configuracao da maquina."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.a = banco.criar_usuario("a@teste.local", "teste1234", con=self.con)
+        self.b = banco.criar_usuario("b@teste.local", "teste1234", con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_grava_e_le_de_volta(self):
+        banco.guardar_endereco_de_producao(self.a, "dervs", "https://dervs.com.br",
+                                           con=self.con)
+        self.assertEqual(banco.endereco_de_producao(self.a, "dervs", con=self.con),
+                         "https://dervs.com.br")
+
+    def test_duas_contas_o_mesmo_projeto_e_uma_nao_le_a_da_outra(self):
+        """O criterio do briefing ao pe da letra. Nome de projeto e escolha de
+        quem o criou: dois donos podem ter um `dervs` cada, em servidores
+        diferentes."""
+        banco.guardar_endereco_de_producao(self.a, "dervs", "https://a.example.com",
+                                           con=self.con)
+        banco.guardar_endereco_de_producao(self.b, "dervs", "https://b.example.com",
+                                           con=self.con)
+        self.assertEqual(banco.endereco_de_producao(self.a, "dervs", con=self.con),
+                         "https://a.example.com")
+        self.assertEqual(banco.endereco_de_producao(self.b, "dervs", con=self.con),
+                         "https://b.example.com")
+
+    def test_o_mapa_de_uma_conta_nao_traz_o_da_outra(self):
+        banco.guardar_endereco_de_producao(self.a, "dervs", "https://a.example.com",
+                                           con=self.con)
+        banco.guardar_endereco_de_producao(self.b, "dervs", "https://b.example.com",
+                                           con=self.con)
+        banco.guardar_endereco_de_producao(self.b, "outro", "https://b2.example.com",
+                                           con=self.con)
+        self.assertEqual(banco.enderecos_de_producao(self.a, con=self.con),
+                         {"dervs": "https://a.example.com"})
+        self.assertEqual(banco.enderecos_de_producao(self.b, con=self.con),
+                         {"dervs": "https://b.example.com",
+                          "outro": "https://b2.example.com"})
+
+    def test_quem_nao_gravou_nada_le_none_e_mapa_vazio(self):
+        self.assertIsNone(banco.endereco_de_producao(self.a, "dervs", con=self.con))
+        self.assertEqual(banco.enderecos_de_producao(self.a, con=self.con), {})
+
+    def test_o_dono_e_obrigatorio_e_posicional(self):
+        """Assinatura com padrao para `usuario_id` e o caminho pronto para uma
+        rota esquecer o dono e ler o endereco alheio."""
+        import inspect
+        for f in (banco.endereco_de_producao, banco.enderecos_de_producao,
+                  banco.guardar_endereco_de_producao):
+            p = inspect.signature(f).parameters["usuario_id"]
+            self.assertIs(p.default, inspect.Parameter.empty,
+                          "%s tem padrao para usuario_id" % f.__name__)
+            self.assertIs(p.kind, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+
+    def test_url_vazia_ou_none_apaga_o_endereco(self):
+        for apagador in ("", "   ", None):
+            banco.guardar_endereco_de_producao(self.a, "dervs",
+                                               "https://a.example.com", con=self.con)
+            banco.guardar_endereco_de_producao(self.a, "dervs", apagador,
+                                               con=self.con)
+            self.assertIsNone(banco.endereco_de_producao(self.a, "dervs",
+                                                         con=self.con))
+            self.assertEqual(self.con.execute(
+                "SELECT COUNT(*) FROM endereco_producao").fetchone()[0], 0,
+                "apagar tem de tirar a LINHA, e nao gravar string vazia")
+
+    def test_regravar_troca_a_url_sem_duplicar_nem_perder_o_criado_em(self):
+        banco.guardar_endereco_de_producao(self.a, "dervs", "https://velho.example.com",
+                                           con=self.con)
+        antes = self.con.execute("SELECT criado_em FROM endereco_producao"
+                                 " WHERE usuario_id = ?", (self.a,)).fetchone()[0]
+        banco.guardar_endereco_de_producao(self.a, "dervs", "https://novo.example.com",
+                                           con=self.con)
+        linhas = list(self.con.execute("SELECT * FROM endereco_producao"
+                                       " WHERE usuario_id = ?", (self.a,)))
+        self.assertEqual(len(linhas), 1)
+        self.assertEqual(linhas[0]["url"], "https://novo.example.com")
+        self.assertEqual(linhas[0]["criado_em"], antes)
+
+    def test_apagar_a_conta_apaga_o_endereco_dela_e_so_o_dela(self):
+        """`ON DELETE CASCADE` so vale com `PRAGMA foreign_keys=ON` ligado NESTA
+        conexao — e e por isso que `_religar_fk` existe."""
+        banco.guardar_endereco_de_producao(self.a, "dervs", "https://a.example.com",
+                                           con=self.con)
+        banco.guardar_endereco_de_producao(self.b, "dervs", "https://b.example.com",
+                                           con=self.con)
+        self.con.execute("DELETE FROM usuario WHERE id = ?", (self.a,))
+        self.con.commit()
+        self.assertEqual(self.con.execute(
+            "SELECT COUNT(*) FROM endereco_producao").fetchone()[0], 1)
+        self.assertEqual(banco.endereco_de_producao(self.b, "dervs", con=self.con),
+                         "https://b.example.com")
+
+    def test_a_tabela_recusa_projeto_e_url_em_branco(self):
+        """O CHECK vive no banco, e nao so no Python: hoje ha um escritor, e
+        daqui a uma etapa ha tres."""
+        for projeto, url in (("  ", "https://a.example.com"), ("dervs", "   ")):
+            with self.assertRaises(sqlite3.IntegrityError):
+                self.con.execute(
+                    "INSERT INTO endereco_producao"
+                    " (usuario_id, projeto, url, criado_em, atualizado_em)"
+                    " VALUES (?,?,?,?,?)",
+                    (self.a, projeto, url, daqui(), daqui()))
+            self.con.rollback()
+
+    def test_o_esquema_e_a_migracao_criam_a_mesma_tabela(self):
+        """Duas copias do mesmo CREATE. Se uma mudar sozinha, um hub.db velho e
+        um novo ficam com formas diferentes — e isso nao aparece em uso."""
+        do_esquema = {(l[1], l[2], l[3]) for l in
+                      self.con.execute("PRAGMA table_info(endereco_producao)")}
+        outra = sqlite3.connect(":memory:")
+        outra.execute(banco._CREATE_ENDERECO_PRODUCAO)
+        da_migracao = {(l[1], l[2], l[3]) for l in
+                       outra.execute("PRAGMA table_info(endereco_producao)")}
+        outra.close()
+        self.assertEqual(do_esquema, da_migracao)
 
 
 if __name__ == "__main__":

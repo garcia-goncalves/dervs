@@ -130,10 +130,33 @@ class OQueAImagemPrecisa(unittest.TestCase):
         """
         copia = copiados()
         for arquivo in ("index.html", "index-cortina.html", "portas.html",
-                        "casos.json", "robots.txt", "assets"):
+                        "casos.json", "robots.txt", "assets", "conectador.py"):
             self.assertIn(arquivo, copia,
                           "%s e servido em producao e nao esta na imagem"
                           % arquivo)
+
+    def test_o_conectador_entra_LIDO_e_nunca_importado(self):
+        """O caso que a pergunta "falta alguma coisa?" nao pega sozinha.
+
+        `servir.py` LE o `conectador.py` do disco e injeta o codigo de
+        pareamento; ele nao o importa. Entao o arquivo e invisivel para
+        `test_todo_modulo_importado_entra_na_imagem`, e uma rota que responde
+        200 aqui quebraria em producao — o modo de falha exato da etapa 16.
+
+        A outra metade importa igual: importar o conectador arrastaria
+        `tkinter` para dentro do servidor, e `tkinter` nao esta na imagem.
+        """
+        self.assertIn("conectador.py", copiados())
+        self.assertNotIn("conectador", modulos_de_runtime(),
+                         "servir.py passou a IMPORTAR o conectador; isso traz "
+                         "tkinter para dentro do servidor")
+        fonte = (AQUI / "servir.py").read_text(encoding="utf-8")
+        arvore = ast.parse(fonte)
+        for no in ast.walk(arvore):
+            if isinstance(no, ast.Import):
+                self.assertNotIn("conectador", [a.name for a in no.names])
+            elif isinstance(no, ast.ImportFrom):
+                self.assertNotEqual("conectador", no.module)
 
 
 class OQueAImagemNaoPodeLevar(unittest.TestCase):

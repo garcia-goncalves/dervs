@@ -1237,6 +1237,96 @@ class Hub(SimpleHTTPRequestHandler):
                                     "minutos": self.MINUTOS_DO_CODIGO})
         return self._json(503, {"erro": "tente de novo em um minuto"})
 
+    # O conectador que a tela entrega, com o codigo ja dentro (etapa A3).
+    #
+    # POR QUE `POST`, E NAO UM `GET` QUE SERIA MAIS FACIL DE BAIXAR: este
+    # pedido CRIA ESTADO — o codigo de pareamento nasce aqui, como em
+    # `_maquina_parear`. Um `GET` que cria estado e acionavel de outro site com
+    # o cookie da sessao junto: o atacante nao le a resposta, mas queima os
+    # codigos do dono um a um. Com `POST` valem as mesmas duas guardas de toda
+    # escrita (`Origin` na lista mais o `X-Token` da sessao), e a tela
+    # transforma a resposta em arquivo por `Blob` mais `<a download>`.
+    #
+    # O ARQUIVO NAO MORA EM `assets/`, e nao pode morar: `ESTATICOS_OK` nasce de
+    # um rglob filtrado por extensao onde `.py` esta de fora justamente para que
+    # nenhum codigo-fonte vire estatico publico, e tudo em `assets/` menos
+    # `painel.js` e `painel.css` e servido ANTES da cortina.
+    #
+    # E `servir.py` NAO IMPORTA `conectador`: ele e LIDO do disco. Importar
+    # arrastaria `tkinter` para dentro do servidor e para dentro de
+    # `test_imagem.modulos_de_runtime()`. Por isso mesmo o `Dockerfile` copia o
+    # arquivo por nome, e `test_imagem.py` cobra esse nome na lista — a rota
+    # responderia 200 aqui e 500 em producao, que e o modo de falha da etapa 16.
+    CONECTADOR = AQUI / "conectador.py"
+
+    def _conectador(self):
+        """Entrega o `conectador.py` com o codigo de pareamento injetado."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        if not self._csrf_ok(sessao):
+            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+        try:
+            fonte = self.CONECTADOR.read_text(encoding="utf-8")
+        except OSError:
+            # Falha fechada: sem o arquivo nao ha meio codigo nem meio download.
+            return self._json(503, {"erro": "o conectador nao esta nesta copia"})
+        # O MESMO laco de cinco tentativas de `_maquina_parear`, e pelo mesmo
+        # motivo: colisao silenciada punha a maquina de um dentro da conta do
+        # outro.
+        codigo = ""
+        for _ in range(5):
+            tentativa = banco.novo_codigo(6)
+            try:
+                banco.abrir_pareamento(sessao["usuario_id"], tentativa,
+                                       banco.prazo(self.MINUTOS_DO_CODIGO * 60))
+            except sqlite3.IntegrityError:
+                continue
+            codigo = tentativa
+            break
+        if not codigo:
+            return self._json(503, {"erro": "tente de novo em um minuto"})
+        corpo = self._injetar(fonte, codigo, self._endereco_do_painel()).encode("utf-8")
+        self.send_response(200)
+        # NAO e `text/html`: o navegador nao pode renderizar isto, e o
+        # `Content-Disposition` e a segunda tranca para o caso de alguem abrir
+        # a rota fora da tela.
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Disposition",
+                         'attachment; filename="conectar-dervs.py"')
+        self.send_header("Content-Length", str(len(corpo)))
+        self.end_headers()
+        self.wfile.write(corpo)
+
+    def _endereco_do_painel(self) -> str:
+        """O endereco que o conectador vai chamar de volta.
+
+        Sai do `Origin`, que ja foi conferido contra `ORIGENS_OK` uma linha
+        acima. Montar da mao a partir do `Host` deixaria o cabecalho do pedido
+        escolher para onde o token e mandado.
+        """
+        return (self.headers.get("Origin") or "").rstrip("/")
+
+    @staticmethod
+    def _injetar(fonte: str, codigo: str, alvo: str) -> str:
+        """Troca as duas linhas marcadas no fonte do conectador.
+
+        As marcas (`# DERVS:CODIGO` e `# DERVS:ALVO`) sao conferidas por
+        `test_conectador.py`. `json.dumps` monta o literal Python: os dois
+        valores sao nossos, mas escapa-los aqui e o que impede que um dia um
+        deles carregue uma aspa e quebre o arquivo na maquina do dono.
+        """
+        linhas = []
+        for linha in fonte.splitlines():
+            if linha.endswith("# DERVS:CODIGO"):
+                linha = "CODIGO = %s   # DERVS:CODIGO" % json.dumps(codigo)
+            elif linha.endswith("# DERVS:ALVO"):
+                linha = "ALVO = %s   # DERVS:ALVO" % json.dumps(alvo)
+            linhas.append(linha)
+        return "\n".join(linhas) + "\n"
+
     def _maquina_remover(self):
         sessao = self._sessao()
         if sessao is None:
@@ -1975,6 +2065,11 @@ ROTAS = {
     "/agente/parear":           Rota("POST", Hub._parear,          "aberta"),
     "/agente/relatorio":        Rota("POST", Hub._relatorio,       "maquina"),
     "/api/maquinas/autorizar":  Rota("POST", Hub._maquina_autorizar, "dado"),
+    # O conectador baixado pela tela. `dado`, e a decisao e explicita: o
+    # arquivo sai com um codigo de pareamento dentro, entao servi-lo sem sessao
+    # seria distribuir credencial. `POST` porque ele CRIA esse codigo — ver o
+    # comentario em cima de `_conectador`.
+    "/api/conectador":          Rota("POST", Hub._conectador,       "dado"),
 
     # As tarefas (Fatia 2). `/agente/resultado` e a UNICA de acesso `maquina`
     # aqui: e por ela que o agente conta o que esta acontecendo, e e na

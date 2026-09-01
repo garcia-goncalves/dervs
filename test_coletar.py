@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import tempfile
 import time
 import unittest
@@ -91,11 +93,162 @@ class PastasDeProjeto(unittest.TestCase):
         porque source/repos existe NESTA maquina. A CI pegou: no servidor do
         GitHub essa pasta nao existe. Teste que depende da maquina nao e teste.
         """
-        original = coletar.RAIZ
-        coletar.RAIZ = Path(r"C:\pasta\que\nao\existe")
-        self.addCleanup(setattr, coletar, "RAIZ", original)
+        self.trocar_raizes([Path(r"C:\pasta\que\nao\existe")])
         nomes = {p.name for p in coletar.pastas_de_projeto()}
         self.assertEqual(nomes, {coletar.AQUI.name})
+
+    def trocar_raizes(self, raizes):
+        """Troca `coletar.RAIZES` so pelo tempo deste teste."""
+        original = coletar.RAIZES
+        coletar.RAIZES = list(raizes)
+        self.addCleanup(setattr, coletar, "RAIZES", original)
+
+    def raiz_com_projeto(self, nome):
+        """Uma raiz de mentira em tempfile, com um projeto dentro."""
+        raiz = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, raiz, True)
+        (raiz / nome).mkdir()
+        return raiz
+
+    def test_varre_todas_as_raizes(self):
+        """Duas raizes, um projeto em cada: os DOIS aparecem."""
+        a = self.raiz_com_projeto("projeto-a")
+        b = self.raiz_com_projeto("projeto-b")
+        self.trocar_raizes([a, b])
+        nomes = {p.name for p in coletar.pastas_de_projeto()}
+        self.assertIn("projeto-a", nomes)
+        self.assertIn("projeto-b", nomes)
+
+    def test_raiz_repetida_mede_uma_vez(self):
+        """A mesma pasta duas vezes na lista nao pode dobrar a contagem."""
+        a = self.raiz_com_projeto("projeto-a")
+        self.trocar_raizes([a, a])
+        achados = [p for p in coletar.pastas_de_projeto() if p.name == "projeto-a"]
+        self.assertEqual(len(achados), 1)
+
+
+class RaizesConfiguradas(unittest.TestCase):
+    """A ordem de decisao: ambiente, arquivo do agente, ultimo recurso."""
+
+    def setUp(self):
+        self.pasta = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.pasta, True)
+        self.arquivo = self.pasta / "agente.json"
+        self.ambiente("DERVS_AGENTE_ARQUIVO", str(self.arquivo))
+        self.ambiente(coletar.VAR_RAIZES, None)
+
+    def ambiente(self, nome, valor):
+        antes = os.environ.get(nome)
+        self.addCleanup(lambda: os.environ.__setitem__(nome, antes)
+                        if antes is not None else os.environ.pop(nome, None))
+        if valor is None:
+            os.environ.pop(nome, None)
+        else:
+            os.environ[nome] = valor
+
+    def escrever(self, texto):
+        self.arquivo.write_text(texto, encoding="utf-8")
+
+    def test_o_ambiente_vence_o_arquivo(self):
+        self.escrever(json.dumps({"raizes": [str(self.pasta / "do-arquivo")]}))
+        self.ambiente(coletar.VAR_RAIZES,
+                      os.pathsep.join([str(self.pasta / "do-ambiente")]))
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [self.pasta / "do-ambiente"])
+
+    def test_o_ambiente_aceita_varias_separadas_por_pathsep(self):
+        self.ambiente(coletar.VAR_RAIZES,
+                      os.pathsep.join([str(self.pasta / "uma"), str(self.pasta / "outra")]))
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [self.pasta / "uma", self.pasta / "outra"])
+
+    def test_le_a_chave_do_arquivo_do_agente(self):
+        self.escrever(json.dumps({"raizes": [str(self.pasta / "do-arquivo")]}))
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [self.pasta / "do-arquivo"])
+
+    def test_arquivo_sem_a_chave_cai_no_ultimo_recurso(self):
+        """O arquivo existe e tem o token, mas ninguem escolheu raiz ainda."""
+        self.escrever(json.dumps({"http://x": {"token": "abc"}}))
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [coletar.raiz_de_ultimo_recurso()])
+
+    def test_json_torto_cai_no_ultimo_recurso_sem_levantar(self):
+        self.escrever("{isto nao e json")
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [coletar.raiz_de_ultimo_recurso()])
+
+    def test_arquivo_ausente_cai_no_ultimo_recurso(self):
+        self.assertFalse(self.arquivo.exists())
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [coletar.raiz_de_ultimo_recurso()])
+
+    def test_o_ultimo_recurso_sai_de_home(self):
+        """Derivado de Path.home(), nunca escrito na mao."""
+        self.assertEqual(coletar.raiz_de_ultimo_recurso(),
+                         Path.home() / "source" / "repos")
+
+    def test_escrever_raizes_nao_apaga_o_token(self):
+        """O token mora no MESMO arquivo. Gravar a raiz nao pode desconectar."""
+        self.escrever(json.dumps({"http://x": {"token": "segredinho"}}))
+        coletar.escrever_raizes([self.pasta / "escolhida"])
+        de_volta = json.loads(self.arquivo.read_text(encoding="utf-8"))
+        self.assertEqual(de_volta["http://x"]["token"], "segredinho")
+        self.assertEqual(de_volta["raizes"], [str(self.pasta / "escolhida")])
+
+    def test_escrever_raizes_e_relido_por_raizes_configuradas(self):
+        coletar.escrever_raizes([self.pasta / "escolhida"])
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [self.pasta / "escolhida"])
+
+
+class AvisosDasRaizes(unittest.TestCase):
+    """Lei nº 2: raiz nao medida tem de aparecer NOMEADA."""
+
+    def test_nomeia_cada_raiz_que_nao_existe(self):
+        sumida_a = Path(tempfile.gettempdir()) / "dervs-raiz-que-nao-existe-a"
+        sumida_b = Path(tempfile.gettempdir()) / "dervs-raiz-que-nao-existe-b"
+        existente = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, existente, True)
+        avisos = coletar.avisos_das_raizes([sumida_a, existente, sumida_b])
+        self.assertEqual(len(avisos), 2)
+        self.assertIn(str(sumida_a), avisos[0])
+        self.assertIn(str(sumida_b), avisos[1])
+        for aviso in avisos:
+            self.assertIn("nenhum projeto pendente", aviso)
+            self.assertNotIn(str(existente), aviso)
+
+    def test_raiz_vazia_nao_e_raiz_ausente(self):
+        """Raiz que existe e esta vazia responde 'nenhum projeto' de verdade."""
+        vazia = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, vazia, True)
+        self.assertEqual(coletar.avisos_das_raizes([vazia]), [])
+
+
+class SemCaminhoDestaMaquina(unittest.TestCase):
+    """`coletar.py` nao pode trazer o caminho de UM computador no codigo-fonte.
+
+    Ate 01/09/2026 ele trazia, e por isso o agente media zero projeto em
+    qualquer outra maquina.
+    """
+
+    PADRAO = re.compile(r"[A-Za-z]:[\\/]{1,2}Users", re.IGNORECASE)
+
+    def test_o_padrao_pega_o_caminho_antigo(self):
+        """SABOTAGEM: sem isto o caso abaixo pode estar verde por nao poder
+        reprovar. O padrao e aplicado ao caminho que existia de verdade em
+        coletar.py:47 ate 01/09/2026, e TEM de casar."""
+        antigo = "RAIZ = Path(r\"C:" + chr(92) + "Users" + chr(92) + "Desktop" \
+            + chr(92) + "source" + chr(92) + "repos\")"
+        self.assertTrue(self.PADRAO.search(antigo), antigo)
+        self.assertTrue(self.PADRAO.search("caminho c:/users/alguem"))
+        self.assertFalse(self.PADRAO.search("Path.home() / 'source' / 'repos'"))
+
+    def test_coletar_nao_tem_caminho_de_usuario(self):
+        fonte = (Path(coletar.__file__).read_text(encoding="utf-8"))
+        achado = self.PADRAO.search(fonte)
+        self.assertIsNone(achado, "caminho desta maquina em coletar.py: %s"
+                          % (achado.group(0) if achado else ""))
 
 
 class NomeDaMarca(unittest.TestCase):
