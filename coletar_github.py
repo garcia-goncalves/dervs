@@ -34,6 +34,7 @@ excecao. Como os tres valores nascem, onde moram e como se trocam:
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import re
@@ -130,14 +131,74 @@ def url_segura(url: str) -> bool:
     return _ip_privado(h) is not True
 
 
+# Quanto esperamos o resolvedor de nomes. `getaddrinfo` NAO aceita prazo, e o
+# padrao do sistema passa de 20 segundos: uma thread presa ali por pedido e o
+# jeito mais barato de derrubar um `ThreadingHTTPServer`. O prazo global do
+# `socket` e o unico ponto onde da para impor um, e ele e restaurado no fim.
+PRAZO_DO_DNS = 5
+
+
+def enderecos_publicos(host: str) -> list:
+    """Os IPs do nome, SE todos forem publicos. Lista vazia quando nao.
+
+    FALHA FECHADA POR CONJUNTO, e nao por amostra: se QUALQUER resolucao do
+    nome apontar para dentro, o nome inteiro e recusado. Aceitar "algum e
+    publico" seria aceitar o nome que devolve um publico e um privado, e deixar
+    a sorte escolher.
+    """
+    antes = socket.getdefaulttimeout()
+    try:
+        socket.setdefaulttimeout(PRAZO_DO_DNS)
+        enderecos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, OSError, UnicodeError, ValueError):
+        return []
+    finally:
+        socket.setdefaulttimeout(antes)
+    ips = [sa[0] for _, _, _, _, sa in enderecos]
+    if not ips or any(_ip_privado(ip) for ip in ips):
+        return []
+    return ips
+
+
 def host_publico(host: str) -> bool:
     """O nome resolve, e resolve para fora? Nome que nao resolve vira silencio."""
-    try:
-        enderecos = socket.getaddrinfo(host, None)
-    except (socket.gaierror, UnicodeError, ValueError):
-        return False
-    return bool(enderecos) and not any(
-        _ip_privado(sa[0]) for _, _, _, _, sa in enderecos)
+    return bool(enderecos_publicos(host))
+
+
+class _Fixado(http.client.HTTPSConnection):
+    """Conecta no IP QUE JA FOI CONFERIDO, falando o nome original.
+
+    ESTE E O CONSERTO DO REBINDING, e ele nao tem outro jeito: entre `resolver e
+    aprovar` e `conectar`, toda resolucao nova e uma chance de o outro lado
+    trocar a resposta. `HTTPSConnection` usa `self.host` para as DUAS coisas —
+    o endereco do soquete e o nome do certificado —, entao separar as duas
+    exige reescrever `connect()`. Sao seis linhas, e sao as unicas.
+
+    O `Host:` e o SNI continuam sendo o NOME: um site com varios dominios no
+    mesmo IP precisa deles para saber de quem e a pagina, e o certificado e
+    conferido contra o nome, nao contra o numero.
+    """
+
+    def __init__(self, nome, ip, porta, timeout):
+        super().__init__(nome, porta, timeout=timeout)
+        self._ip = ip
+
+    def connect(self):
+        self.sock = socket.create_connection((self._ip, self.port), self.timeout)
+        if self._context is not None:
+            self.sock = self._context.wrap_socket(self.sock,
+                                                  server_hostname=self.host)
+
+
+class _FixadoSemTLS(http.client.HTTPConnection):
+    """O mesmo, sem TLS. `http://` continua valendo para site sem certificado."""
+
+    def __init__(self, nome, ip, porta, timeout):
+        super().__init__(nome, porta, timeout=timeout)
+        self._ip = ip
+
+    def connect(self):
+        self.sock = socket.create_connection((self._ip, self.port), self.timeout)
 
 
 class _SemRedirecionar(urllib.request.HTTPRedirectHandler):
@@ -151,20 +212,52 @@ class _SemRedirecionar(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _uma_batida(url: str) -> dict:
-    """Uma tentativa. codigo=0 e erro preenchido significam 'nem respondeu'."""
+def _uma_batida(url: str, ip: str = "") -> dict:
+    """Uma tentativa. codigo=0 e erro preenchido significam 'nem respondeu'.
+
+    Com `ip`, conecta NAQUELE endereco — o que ja passou pela peneira — em vez
+    de resolver o nome de novo. Sem ele, o comportamento antigo; e ninguem
+    chama sem ele a partir de `mede_site`.
+
+    NAO SEGUE REDIRECIONAMENTO, e a diferenca aqui e que agora isso e por
+    construcao: `http.client` nao segue nenhum sozinho. O 3xx volta como
+    codigo, que ja e prova de que o servidor respondeu.
+    """
     r = {"codigo": 0, "erro": "", "ms": 0}
-    pedido = urllib.request.Request(url, method="GET",
-                                    headers={"User-Agent": AGENTE})
-    abridor = urllib.request.build_opener(_SemRedirecionar)
     inicio = time.time()
+    if not ip:
+        pedido = urllib.request.Request(url, method="GET",
+                                        headers={"User-Agent": AGENTE})
+        abridor = urllib.request.build_opener(_SemRedirecionar)
+        try:
+            with abridor.open(pedido, timeout=TETO_SITE) as resp:
+                r["codigo"] = resp.status
+        except urllib.error.HTTPError as e:
+            r["codigo"] = e.code            # 3xx/4xx/5xx chegam aqui
+        except Exception as e:              # noqa: BLE001 — timeout, DNS, TLS, socket
+            r["erro"] = type(e).__name__
+        r["ms"] = int((time.time() - inicio) * 1000)
+        return r
+
+    u = urlsplit(url)
+    porta = u.port or (443 if u.scheme == "https" else 80)
+    molde = _Fixado if u.scheme == "https" else _FixadoSemTLS
+    con = None
     try:
-        with abridor.open(pedido, timeout=TETO_SITE) as resp:
-            r["codigo"] = resp.status
-    except urllib.error.HTTPError as e:
-        r["codigo"] = e.code                # 3xx/4xx/5xx chegam aqui
-    except Exception as e:                  # noqa: BLE001 — timeout, DNS, TLS, socket
+        con = molde(u.hostname, ip, porta, TETO_SITE)
+        con.request("GET", (u.path or "/") + (("?" + u.query) if u.query else ""),
+                    headers={"User-Agent": AGENTE, "Host": u.hostname})
+        r["codigo"] = con.getresponse().status
+    except Exception as e:                  # noqa: BLE001 — timeout, TLS, socket
+        # O NOME DA EXCECAO, nunca a mensagem: a mensagem carrega a URL, e URL
+        # carrega o que o chamador pos nela.
         r["erro"] = type(e).__name__
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
     r["ms"] = int((time.time() - inicio) * 1000)
     return r
 
@@ -186,14 +279,22 @@ def mede_site(url: str) -> dict:
             "tentativas": 0}
     if not MEDIR_SITE or not url_segura(url):
         return fora
-    if not host_publico(urlsplit(url).hostname):
+    # RESOLVE UMA VEZ SO, e as tentativas usam ESTE endereco.
+    #
+    # Antes eram tres resolucoes — aqui, dentro do `mede_site` e dentro do
+    # `urlopen` — e so a ultima decidia para onde o pacote ia. Um nome com TTL
+    # zero, alternando entre um IP publico e 172.17.0.x, passava pela peneira e
+    # conectava dentro da rede: a VPS tem 26 conteineres sem outra porta de
+    # entrada. Achado pela revisao de seguranca de 01/09/2026.
+    ips = enderecos_publicos(urlsplit(url).hostname)
+    if not ips:
         # Nome que nao resolve, ou que resolve para dentro da rede. Nao da para
         # medir — e "nao da para medir" NAO e "esta fora do ar" (invariante 2).
         fora["erro"] = "nao_resolveu"
         return fora
 
     for tentativa in range(1, TENTATIVAS_SITE + 1):
-        r = _uma_batida(url)
+        r = _uma_batida(url, ips[0])
         fora.update(r, tentativas=tentativa)
         vivo = bool(r["codigo"]) and r["codigo"] < 500
         if vivo:
@@ -343,10 +444,32 @@ def _app():
         ident = (os.environ.get(VAR_APP_ID) or "").strip()
         instalacao = (os.environ.get(VAR_INSTALACAO) or "").strip()
         chave = os.environ.get(VAR_CHAVE_DO_APP) or ""
+        # A INSTALACAO PODE VIR DO BANCO (etapa C2), mas o AMBIENTE VENCE, e a
+        # precedencia documentada no topo deste arquivo continua valendo inteira:
+        # quem definiu a variavel esta depurando, e quer que ela valha.
+        #
+        # DIVIDA NOMEADA, e ela esta escrita no plano: este coletor roda num
+        # processo so, e com varias contas nao ha resposta para "a instalacao de
+        # quem?". Hoje ele pega a da conta local, que e a mesma cujos projetos
+        # ele mede. Com duas pessoas isso nao doi; com dez, doi.
+        if not instalacao:
+            instalacao = _instalacao_do_banco()
         if not (ident and instalacao and chave.strip()):
             return None
         _APP_GUARDADO = github_app.Coletor(ident, instalacao, chave)
     return _APP_GUARDADO
+
+
+def _instalacao_do_banco() -> str:
+    """A instalacao da conta local, ou "". FALHA FECHADA: nunca levanta."""
+    try:
+        con = banco.conectar()
+        try:
+            return banco.instalacao_do_github(banco.conta_local(con), con=con) or ""
+        finally:
+            con.close()
+    except Exception:                      # noqa: BLE001 — sem app e um estado
+        return ""
 
 
 def _token() -> str:

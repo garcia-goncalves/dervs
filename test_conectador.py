@@ -216,7 +216,7 @@ class FecharSemEscolherNaoDeixaLixo(unittest.TestCase):
         antes_in, sys.stdin = sys.stdin, io.StringIO("")
         sys.stdout = saida
         try:
-            codigo = conectador.main([])
+            codigo = conectador.main()
         finally:
             sys.stdout, sys.stdin = antes_out, antes_in
 
@@ -249,7 +249,7 @@ class FecharSemEscolherNaoDeixaLixo(unittest.TestCase):
         antes_in, sys.stdin = sys.stdin, io.StringIO("")
         sys.stdout = saida
         try:
-            codigo = conectador.main([])
+            codigo = conectador.main()
         finally:
             sys.stdout, sys.stdin = antes_out, antes_in
 
@@ -300,8 +300,15 @@ class OComandoDaTarefaAgendada(unittest.TestCase):
 
     def test_a_barra_final_do_alvo_nao_entra_no_comando(self):
         tr = conectador.comando_da_tarefa("/x/enviar.py", "https://dervs.com.br/")
-        self.assertIn("--alvo https://dervs.com.br ", tr + " ")
-        self.assertNotIn("dervs.com.br/ ", tr + " ")
+        self.assertIn('--alvo "https://dervs.com.br"', tr)
+        self.assertNotIn('dervs.com.br/"', tr)
+
+    def test_o_alvo_TAMBEM_vai_entre_aspas(self):
+        """Um endereco com espaco quebrava a tarefa em silencio: o agendador
+        cortava no espaco e o agente recebia meio endereco. Apontado pela
+        revisao de seguranca de 01/09/2026."""
+        tr = conectador.comando_da_tarefa("/x/enviar.py", "https://um site/")
+        self.assertIn('--alvo "https://um site"', tr)
 
     def test_agendar_nunca_usa_shell(self):
         vistos = {}

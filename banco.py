@@ -405,13 +405,20 @@ CREATE INDEX IF NOT EXISTS ix_endereco_dono ON endereco_producao (usuario_id);
 -- `installation_id` e TEXT com CHECK de nao-vazio: "sem instalacao" e a
 -- AUSENCIA da linha, e nao uma linha com string vazia. Ver o mesmo motivo em
 -- `endereco_producao`.
+-- UMA INSTALACAO PERTENCE A UMA CONTA SO, e este `UNIQUE` e a segunda tranca
+-- da posse. O `installation_id` e PUBLICO e sequencial, e perguntar ao GitHub
+-- so prova que ele EXISTE — para qualquer numero deste App, inclusive o de
+-- outra pessoa. Sem esta linha, duas contas gravavam o mesmo numero e a segunda
+-- ficava amarrada a instalacao da primeira. Achado pelas duas revisoes de
+-- 01/09/2026; a primeira tranca e a conferencia do dono em `servir.py`.
 CREATE TABLE IF NOT EXISTS instalacao_github (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     usuario_id      INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
     installation_id TEXT NOT NULL CHECK (length(trim(installation_id)) > 0),
     criado_em       TEXT NOT NULL,
     atualizado_em   TEXT NOT NULL,
-    UNIQUE (usuario_id)
+    UNIQUE (usuario_id),
+    UNIQUE (installation_id)
 );
 CREATE INDEX IF NOT EXISTS ix_instalacao_github_dono
     ON instalacao_github (usuario_id);
@@ -965,7 +972,8 @@ _CREATE_INSTALACAO_GITHUB = """CREATE TABLE IF NOT EXISTS instalacao_github (
     installation_id TEXT NOT NULL CHECK (length(trim(installation_id)) > 0),
     criado_em       TEXT NOT NULL,
     atualizado_em   TEXT NOT NULL,
-    UNIQUE (usuario_id))"""
+    UNIQUE (usuario_id),
+    UNIQUE (installation_id))"""
 
 
 def _migrar_instalacao_github(con: sqlite3.Connection) -> None:
@@ -2224,6 +2232,34 @@ def abrir_pareamento(usuario_id: int, codigo: str, expira_em: str, con=None) -> 
             con.close()
 
 
+def limpar_pareamentos_vencidos(con=None) -> int:
+    """Apaga os codigos que ja venceram. Devolve quantos sairam.
+
+    POR QUE ISTO PRECISOU EXISTIR: `codigo_hash` e PRIMARY KEY GLOBAL, e ate
+    aqui nenhuma linha era apagada nunca. Seis digitos sao um milhao de vagas
+    para TODAS as contas juntas; quem gerasse codigos em laco enchia o espaco, e
+    o laco de cinco tentativas de todo mundo — inclusive o do dono — passava a
+    colidir e devolver "tente de novo em um minuto", para sempre.
+
+    E o "teto compartilhado tranca o dono" pela terceira vez nesta casa, agora
+    pelo ESPACO em vez do contador. Achado pela revisao de seguranca de
+    01/09/2026.
+
+    Codigo vencido nao serve para nada: `usar_pareamento` ja o recusa pela data.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        cursor = con.execute("DELETE FROM pareamento WHERE expira_em < ?",
+                             (agora(),))
+        if fechar:
+            con.commit()
+        return cursor.rowcount or 0
+    finally:
+        if fechar:
+            con.close()
+
+
 def usar_pareamento(codigo: str, nome_maquina: str = "", agora_iso: str = "", con=None):
     """Casa uma maquina com a conta e devolve o token do agente — UMA vez so.
 
@@ -2617,6 +2653,22 @@ def guardar_instalacao_do_github(usuario_id: int, installation_id, con=None) -> 
         quando = agora()
         # O `criado_em` NAO entra no `DO UPDATE`: reinstalar o App nao reescreve
         # a data em que aquela conta conectou pela primeira vez.
+        # O NUMERO JA E DE OUTRA CONTA? Recusa, e diz. `ON CONFLICT(usuario_id)`
+        # so cobre a colisao pelo dono; a colisao pelo NUMERO cai no `UNIQUE`
+        # novo e viraria um `IntegrityError` cru no meio de um caminho de
+        # autenticacao. Conferir antes deixa a recusa legivel para quem chamou.
+        dono = con.execute("SELECT usuario_id FROM instalacao_github"
+                           " WHERE installation_id = ?", (limpa,)).fetchone()
+        if dono is not None and dono["usuario_id"] != usuario_id:
+            raise ValueError("essa instalacao ja pertence a outra conta")
+        # O NUMERO JA E DE OUTRA CONTA? Recusa, e diz. `ON CONFLICT(usuario_id)`
+        # so cobre a colisao pelo dono; a colisao pelo NUMERO cai no `UNIQUE`
+        # novo e viraria um `IntegrityError` cru no meio de um caminho de
+        # autenticacao. Conferir antes deixa a recusa legivel para quem chamou.
+        dono = con.execute("SELECT usuario_id FROM instalacao_github"
+                           " WHERE installation_id = ?", (limpa,)).fetchone()
+        if dono is not None and dono["usuario_id"] != usuario_id:
+            raise ValueError("essa instalacao ja pertence a outra conta")
         con.execute(
             "INSERT INTO instalacao_github"
             " (usuario_id, installation_id, criado_em, atualizado_em)"

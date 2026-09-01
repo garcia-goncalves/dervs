@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import tempfile
 import time
 import unittest
@@ -768,13 +769,21 @@ class MedeSite(unittest.TestCase):
 
         srv = http.server.HTTPServer(("127.0.0.1", 0), Mao)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
-        antes = (coletar_github.url_segura, coletar_github.host_publico)
+        # `enderecos_publicos` entrou na lista de dubles em 01/09/2026: desde a
+        # correcao do rebinding e ELA quem decide para onde a batida vai, e nao
+        # mais `host_publico`. Sem troca-la aqui, `mede_site` recusava o proprio
+        # servidor de mentira em 127.0.0.1 e os quatro casos abaixo passavam a
+        # medir "nao deu para conferir" em vez do codigo devolvido.
+        antes = (coletar_github.url_segura, coletar_github.host_publico,
+                 coletar_github.enderecos_publicos)
         coletar_github.url_segura = lambda u: True
         coletar_github.host_publico = lambda h: True
+        coletar_github.enderecos_publicos = lambda h: ["127.0.0.1"]
         try:
             return coletar_github.mede_site("http://127.0.0.1:%d/" % srv.server_port)
         finally:
-            coletar_github.url_segura, coletar_github.host_publico = antes
+            (coletar_github.url_segura, coletar_github.host_publico,
+             coletar_github.enderecos_publicos) = antes
             srv.shutdown()
 
     def test_200_e_site_no_ar(self):
@@ -1962,26 +1971,248 @@ class OEnderecoDoBancoVenceOArquivo(unittest.TestCase):
         self.assertEqual("", self.monta("", ""),
                          "endereco ausente nao pode virar medicao nenhuma")
 
-    def test_a_expressao_do_coletor_e_ESTA(self):
-        """A guarda contra a copia: se o coletor mudar a ordem, este caso vira
-        decoracao. Ele le a linha do arquivo, e nao a reescreve aqui."""
-        fonte = (Path(coletar.__file__).parent / "coletar_github.py").read_text(
-            encoding="utf-8")
-        self.assertIn(
-            'url_prod = enderecos.get(nome) or local.get("url_prod") or ""',
-            fonte,
-            "a ordem das duas fontes mudou em coletar_github.py e este teste "
-            "deixou de provar o que diz")
-
     def test_a_regra_de_deploy_enxerga_o_endereco_da_tela(self):
-        """`caso["url_prod"]` passa a carregar o endereco gravado. Sem isto,
-        digitar o endereco na tela nao fazia a regua cobrar publicacao."""
-        fonte = Path(coletar.__file__).read_text(encoding="utf-8")
-        self.assertIn("caso = dict(caso, url_prod=enderecos_gravados[repo.name])",
-                      fonte)
-        # E a leitura do banco nao pode derrubar a medicao inteira.
-        self.assertIn("enderecos_gravados = {}", fonte,
-                      "a leitura do banco tem de falhar fechada, em vazio")
+        """A regra de deploy, CHAMADA, com e sem endereco.
+
+        `caso["url_prod"]` passa a carregar o endereco gravado pela tela. Sem
+        isto, digitar o endereco nao fazia a regua cobrar publicacao — e a
+        pessoa via o painel ignorar, calado, o que ela acabara de dizer.
+        """
+        regra = next(r for r in coletar.CRITERIOS if r[0] == "deploy")
+        cobra = regra[4]
+        sem = {"repo": Path(tempfile.gettempdir()) / "nao-existe-mesmo",
+               "caso": {}}
+        self.assertFalse(cobra(sem), "projeto de gaveta nao deve 2 pontos")
+        com = dict(sem, caso={"url_prod": "https://do-banco.exemplo"})
+        self.assertTrue(cobra(com),
+                        "com endereco declarado, a publicacao passa a ser cobrada")
+
+
+class OColetorLEOEnderecoDoBancoDeVerdade(unittest.TestCase):
+    """A prova que os guardas de TEXTO nao davam.
+
+    Os dois primeiros casais desta etapa casavam a linha do fonte, e a linha
+    continuava la depois de qualquer sabotagem que a contornasse: trocar o corpo
+    da leitura por `enderecos = {}` desligava a etapa inteira e a suite ficava
+    VERDE. Achado pela revisao de Python de 01/09/2026, que sabotou e provou.
+
+    Aqui o coletor RODA, com o banco e a rede de mentira, e o que se confere e
+    qual endereco chegou em `mede_site`.
+    """
+
+    def _rodar(self, url_no_banco, url_no_arquivo):
+        import banco
+        medidos = []
+        enderecos = {"projeto": url_no_banco} if url_no_banco else {}
+        local = {"git": {"remoto_slug": "dono/repo"}}
+        if url_no_arquivo:
+            local["url_prod"] = url_no_arquivo
+        for alvo, nome, valor in (
+                (banco, "ler_tudo", lambda **k: {"projeto": {
+                    "local": {"dados": local}}}),
+                (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
+                (banco, "conta_local", lambda *a, **k: 1),
+                (banco, "enderecos_de_producao", lambda uid, con=None: enderecos),
+                (banco, "gravar", lambda *a, **k: None),
+                (coletar_github, "mede_deploy", lambda *a, **k: {}),
+                (coletar_github, "mede_site",
+                 lambda u: medidos.append(u) or {"url": u, "ok": True,
+                                                 "codigo": 200, "erro": "",
+                                                 "ms": 1, "tentativas": 1}),
+                (coletar_github, "_gh_graphql", lambda q: (
+                    {"r0": {"nameWithOwner": "dono/repo",
+                            "url": "https://github.com/dono/repo",
+                            "defaultBranchRef": {"name": "main", "target": {}}}},
+                    None))):
+            self.addCleanup(setattr, alvo, nome, getattr(alvo, nome))
+            setattr(alvo, nome, valor)
+        coletar_github.main()
+        return medidos
+
+    def test_com_os_dois_o_coletor_mede_o_do_BANCO(self):
+        self.assertEqual(["https://do-banco.exemplo"],
+                         self._rodar("https://do-banco.exemplo",
+                                     "https://do-arquivo.exemplo"))
+
+    def test_so_com_o_arquivo_ele_continua_valendo(self):
+        self.assertEqual(["https://do-arquivo.exemplo"],
+                         self._rodar("", "https://do-arquivo.exemplo"))
+
+    def test_so_com_o_banco_ele_vale(self):
+        self.assertEqual(["https://do-banco.exemplo"],
+                         self._rodar("https://do-banco.exemplo", ""))
+
+    def test_sem_nenhum_dos_dois_nao_mede_NADA(self):
+        """Projeto sem endereco declarado nao tem site para estar fora do ar.
+        Medir alguma coisa aqui seria inventar um veredito."""
+        self.assertEqual([], self._rodar("", ""))
+
+    def _medir_com(self, do_banco, do_arquivo):
+        """`coletar.medir()` rodando de verdade sobre uma raiz de mentira.
+
+        SO ASSIM se prova a linha que junta o endereco ao `caso`. O teste que
+        chamava a regra de deploy direto, com um `caso` montado a mao, deixava
+        passar `if False and enderecos_gravados...` — a sabotagem exata que a
+        revisao de Python usou.
+        """
+        import banco
+        casa = tempfile.TemporaryDirectory()
+        self.addCleanup(casa.cleanup)
+        projeto = Path(casa.name) / "projeto-x"
+        projeto.mkdir()
+        (projeto / "README.md").write_text("# x", encoding="utf-8")
+
+        enderecos = {"projeto-x": do_banco} if do_banco else {}
+        arquivo_casos = Path(casa.name) / "casos.json"
+        arquivo_casos.write_text(
+            json.dumps({"projeto-x": {"url_prod": do_arquivo}} if do_arquivo else {}),
+            encoding="utf-8")
+        for alvo, nome, valor in (
+                (coletar, "CASOS", arquivo_casos),
+                (coletar, "pastas_de_projeto", lambda: [projeto]),
+                (coletar, "coleta_docker", lambda: []),
+                (coletar, "portas_escutando", lambda: set()),
+                (coletar, "abertos_no_editor", lambda: set()),
+                (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
+                (banco, "conta_local", lambda *a, **k: 1),
+                (banco, "enderecos_de_producao", lambda uid, con=None: enderecos)):
+            self.addCleanup(setattr, alvo, nome, getattr(alvo, nome))
+            setattr(alvo, nome, valor)
+        return coletar.medir()["projetos"][0]
+
+    def test_medir_poe_o_endereco_do_BANCO_no_projeto(self):
+        p = self._medir_com("https://do-banco.exemplo", "https://do-arquivo.exemplo")
+        self.assertEqual("https://do-banco.exemplo", p["url_prod"])
+
+    def test_medir_sem_endereco_no_banco_usa_o_do_arquivo(self):
+        p = self._medir_com("", "https://do-arquivo.exemplo")
+        self.assertEqual("https://do-arquivo.exemplo", p["url_prod"])
+
+    def test_o_endereco_da_tela_faz_a_regua_COBRAR_publicacao(self):
+        """A outra ponta da mesma linha: sem isto, digitar o endereco na tela
+        nao mudava nada na nota, e o painel ignorava, calado, o que a pessoa
+        acabara de dizer."""
+        sem = self._medir_com("", "")
+        com = self._medir_com("https://do-banco.exemplo", "")
+        de = lambda p: next(i for i in p["prontidao"]["itens"]
+                            if i["chave"] == "deploy")
+        self.assertFalse(de(sem)["aplica"],
+                         "projeto de gaveta nao deve 2 pontos a ninguem")
+        self.assertTrue(de(com)["aplica"],
+                        "com endereco gravado, a publicacao passa a ser cobrada")
+
+
+class OIpEFIXADOEntreAPeneiraEAConexao(unittest.TestCase):
+    """O achado bloqueante da revisao de seguranca de 01/09/2026.
+
+    Ate ali `host_publico` resolvia o nome e aprovava; depois `mede_site`
+    resolvia de novo, e o `urlopen` uma terceira vez. SO A ULTIMA decidia para
+    onde o pacote ia. Um nome com TTL zero, alternando entre um IP publico e
+    172.17.0.x, passava pela peneira e conectava dentro da rede — e a VPS deste
+    projeto tem 26 conteineres sem nenhuma outra porta de entrada.
+
+    Nenhum caso aqui bate na rede: o que se prova e PARA ONDE o soquete e
+    aberto, e isso se le no `create_connection`.
+    """
+
+    def setUp(self):
+        self.abertos = []
+
+        class SoqueteDeMentira:
+            def close(self_):
+                pass
+
+            def settimeout(self_, *a):
+                pass
+
+            def sendall(self_, *a):
+                pass
+
+            def makefile(self_, *a, **k):
+                import io
+                return io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+
+        def falso(endereco, timeout=None, *a, **k):
+            self.abertos.append(endereco)
+            return SoqueteDeMentira()
+
+        self.antes = coletar_github.socket.create_connection
+        coletar_github.socket.create_connection = falso
+        self.addCleanup(setattr, coletar_github.socket, "create_connection",
+                        self.antes)
+
+    def test_a_conexao_vai_para_o_IP_CONFERIDO_e_nao_para_o_nome(self):
+        """Se o soquete abrisse pelo nome, o resolvedor decidiria de novo."""
+        coletar_github._uma_batida("http://exemplo.com.br/x", "203.0.113.7")
+        self.assertEqual([("203.0.113.7", 80)], self.abertos)
+
+    def test_o_Host_e_o_SNI_continuam_sendo_o_NOME(self):
+        """Fixar o IP nao pode quebrar site com varios dominios no mesmo IP,
+        nem a conferencia do certificado — que e contra o nome."""
+        con = coletar_github._Fixado("exemplo.com.br", "203.0.113.7", 443, 8)
+        self.assertEqual("exemplo.com.br", con.host)
+        self.assertEqual("203.0.113.7", con._ip)
+        self.assertEqual(443, con.port)
+
+    def test_o_https_fixado_confere_certificado(self):
+        """Contexto padrao do `http.client` = verificacao ligada. Desligar isso
+        para "funcionar" transformaria a medicao num teatro."""
+        con = coletar_github._Fixado("exemplo.com.br", "203.0.113.7", 443, 8)
+        self.assertIsNotNone(con._context)
+        self.assertTrue(con._context.check_hostname)
+        self.assertEqual(ssl.CERT_REQUIRED, con._context.verify_mode)
+
+    def test_mede_site_resolve_UMA_vez(self):
+        """Cada resolucao a mais e uma chance de o outro lado trocar a resposta."""
+        vezes = []
+
+        def resolver(host):
+            vezes.append(host)
+            return ["203.0.113.7"]
+
+        antes = coletar_github.enderecos_publicos
+        coletar_github.enderecos_publicos = resolver
+        self.addCleanup(setattr, coletar_github, "enderecos_publicos", antes)
+        coletar_github.mede_site("http://exemplo.com.br/")
+        self.assertEqual(1, len(vezes), "resolveu %d vezes" % len(vezes))
+        self.assertTrue(self.abertos, "nem chegou a conectar")
+        for endereco in self.abertos:
+            self.assertEqual("203.0.113.7", endereco[0])
+
+    def test_nome_com_UMA_resposta_interna_e_recusado_INTEIRO(self):
+        """Falha fechada por CONJUNTO, e nao por amostra: aceitar "algum e
+        publico" e deixar a sorte escolher qual sera usado."""
+        antes = coletar_github.socket.getaddrinfo
+        coletar_github.socket.getaddrinfo = lambda *a, **k: [
+            (2, 1, 6, "", ("8.8.8.8", 0)),
+            (2, 1, 6, "", ("172.17.0.5", 0)),
+        ]
+        self.addCleanup(setattr, coletar_github.socket, "getaddrinfo", antes)
+        self.assertEqual([], coletar_github.enderecos_publicos("meio-a-meio.tld"))
+        self.assertFalse(coletar_github.host_publico("meio-a-meio.tld"))
+        d = coletar_github.mede_site("http://meio-a-meio.tld/")
+        self.assertIsNone(d["ok"], "nao medir NAO e estar fora do ar")
+        self.assertEqual("nao_resolveu", d["erro"])
+        self.assertEqual([], self.abertos, "conectou mesmo com a peneira barrando")
+
+    def test_a_resolucao_tem_PRAZO(self):
+        """`getaddrinfo` nao aceita prazo, e o padrao do sistema passa de 20 s.
+        Uma thread presa por pedido e o jeito mais barato de derrubar o painel."""
+        vistos = {}
+
+        def espiar(quanto):
+            vistos.setdefault("posto", quanto)
+
+        antes_set = coletar_github.socket.setdefaulttimeout
+        antes_get = coletar_github.socket.getaddrinfo
+        coletar_github.socket.setdefaulttimeout = espiar
+        coletar_github.socket.getaddrinfo = lambda *a, **k: [
+            (2, 1, 6, "", ("8.8.8.8", 0))]
+        self.addCleanup(setattr, coletar_github.socket, "setdefaulttimeout",
+                        antes_set)
+        self.addCleanup(setattr, coletar_github.socket, "getaddrinfo", antes_get)
+        coletar_github.enderecos_publicos("exemplo.com.br")
+        self.assertEqual(coletar_github.PRAZO_DO_DNS, vistos.get("posto"))
 
 
 if __name__ == "__main__":

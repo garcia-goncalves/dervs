@@ -118,14 +118,8 @@ def escolher_pasta(sugestao: str = "") -> str:
     try:
         import tkinter
         from tkinter import filedialog
-    except Exception:                      # ImportError, TclError, o que vier
-        fala("Nao consegui abrir a janela de escolher pasta neste Python.")
-        fala("Digite o caminho da pasta onde ficam seus projetos e aperte Enter.")
-        fala("Sugestao: " + sugestao)
-        try:
-            return (input("Pasta: ") or "").strip().strip('"')
-        except (EOFError, KeyboardInterrupt):
-            return ""
+    except Exception:                      # ImportError, e o que mais vier
+        return pasta_pelo_teclado(sugestao)
     janela = None
     try:
         janela = tkinter.Tk()
@@ -133,7 +127,13 @@ def escolher_pasta(sugestao: str = "") -> str:
         escolhida = filedialog.askdirectory(
             title="Onde ficam os seus projetos?", initialdir=sugestao)
     except Exception:
-        escolhida = ""
+        # O `import` DEU CERTO e a janela nao abriu. E o caso da VPS por SSH
+        # com `python3-tk` instalado e sem `DISPLAY`: `Tk()` levanta `TclError`
+        # ali dentro. Antes isto caia em `escolhida = ""`, e o programa dizia
+        # "voce fechou sem escolher uma pasta" — culpando a pessoa por algo que
+        # ela nao fez, e sem lhe dar caminho nenhum. Achado pela revisao de
+        # Python, conferido com `Tk()` dublado para levantar.
+        return pasta_pelo_teclado(sugestao)
     finally:
         if janela is not None:
             try:
@@ -141,6 +141,17 @@ def escolher_pasta(sugestao: str = "") -> str:
             except Exception:
                 pass
     return (escolhida or "").strip()
+
+
+def pasta_pelo_teclado(sugestao: str) -> str:
+    """O mesmo passo por outra porta: sem janela, pergunta e segue."""
+    fala("Nao consegui abrir a janela de escolher pasta neste Python.")
+    fala("Digite o caminho da pasta onde ficam seus projetos e aperte Enter.")
+    fala("Sugestao: " + sugestao)
+    try:
+        return (input("Pasta: ") or "").strip().strip('"')
+    except (EOFError, KeyboardInterrupt):
+        return ""
 
 
 # --------------------------------------------------------------------- a rede
@@ -249,13 +260,18 @@ def achar_o_agente(raiz: str = "") -> str:
     bruto = os.environ.get("DERVS_REPO")
     if bruto:
         candidatos.append(Path(bruto).expanduser())
-    aqui = Path(__file__).resolve().parent
-    candidatos.extend([aqui, aqui.parent])
+    # A RAIZ ESCOLHIDA VEM ANTES da pasta do proprio arquivo, e a ordem importa:
+    # na pratica este arquivo mora em Downloads, que e a pasta menos confiavel
+    # da maquina. Achar ali um `agente/enviar.py` e agenda-lo para rodar a cada
+    # logon seria deixar a pasta de downloads escolher o que o Windows executa.
+    # Apontado pela revisao de seguranca de 01/09/2026.
     if raiz:
         try:
             candidatos.extend(sorted(p for p in Path(raiz).iterdir() if p.is_dir()))
         except OSError:
             pass
+    aqui = Path(__file__).resolve().parent
+    candidatos.extend([aqui, aqui.parent])
     for pasta in candidatos:
         alvo = pasta / "agente" / "enviar.py"
         try:
@@ -274,7 +290,7 @@ def comando_da_tarefa(agente: str, alvo: str) -> str:
     sem aspas vira dois argumentos la dentro. As aspas entram AQUI, uma vez, e
     `test_conectador.py` prova isso com um caminho com espaco.
     """
-    return '"%s" "%s" --alvo %s --intervalo 60' % (
+    return '"%s" "%s" --alvo "%s" --intervalo 60' % (
         sys.executable or "python", agente, alvo.rstrip("/"))
 
 
@@ -316,7 +332,7 @@ def perguntar(rotulo: str) -> str:
         return ""
 
 
-def main(argv=None) -> int:
+def main() -> int:
     fala("=" * 62)
     fala("DERVS - conectar este computador")
     fala("=" * 62)
@@ -345,6 +361,14 @@ def main(argv=None) -> int:
     codigo = (CODIGO or os.environ.get("DERVS_CODIGO") or "").strip()
     if not codigo:
         codigo = perguntar("Passo 2 de 3 - digite o numero de 6 digitos do painel: ")
+    if not codigo:
+        # Sem numero nao ha o que trocar: a viagem ate o painel seria so para
+        # levar um 401 de volta.
+        fala("")
+        fala("Sem o numero de 6 digitos nao da para conectar. Gere um na tela")
+        fala("Conectar projeto e rode este arquivo de novo. Nada foi alterado.")
+        pausa()
+        return SEM_PAREAMENTO
     fala("")
     fala("Passo 2 de 3 - conectando com o painel...")
     token = parear(alvo, codigo)

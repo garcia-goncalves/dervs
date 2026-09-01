@@ -53,6 +53,7 @@ se alguma nascer sem classificacao. Nega por padrao, inclusive no teste.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import http.cookies
@@ -84,6 +85,7 @@ import banco
 # `from coletar_github import ...`: `test_rotas.EXECUTA` guarda a palavra
 # `coletar`, e `servir.coletar` existe como funcao de modulo aqui.
 import coletar_github
+import github_app
 import cortina
 import tarefas
 import memoria
@@ -124,6 +126,11 @@ E_LOCAL = AMBIENTE == "local"
 # a rota de entrar responde como se nao existisse — falha fechada.
 GITHUB_ID = (os.environ.get("DERVS_GITHUB_ID") or "").strip()
 GITHUB_SECRET = (os.environ.get("DERVS_GITHUB_SECRET") or "").strip()
+# O "slug" do GitHub App — o nome que aparece na URL de instalacao. E PUBLICO
+# (github.com/apps/<slug>), e por isso mora ao lado do Client ID e nao junto do
+# segredo. Sem ele a porta 2 responde 404: melhor nao ter porta do que ter
+# porta que leva a um endereco que nao abre.
+APP_DO_GITHUB = (os.environ.get("DERVS_GITHUB_APP_SLUG") or "").strip()
 
 # Os UNICOS arquivos servidos alem da pagina. Delegar ao handler estatico
 # publicava a pasta toda — inclusive o hub.db e o .git/config.
@@ -1233,19 +1240,52 @@ class Hub(SimpleHTTPRequestHandler):
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
             return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
-        # Colisao levanta IntegrityError (ver `banco.abrir_pareamento`): duas
-        # contas sorteando o mesmo numero no mesmo minuto e raro, e silenciar
-        # isso punha a maquina de um dentro da conta do outro. Tenta de novo.
+        codigo = self._novo_pareamento(sessao["usuario_id"])
+        if not codigo:
+            return self._json(503, {"erro": "tente de novo em um minuto"})
+        return self._json(200, {"codigo": codigo,
+                                "minutos": self.MINUTOS_DO_CODIGO})
+
+    # Quantos codigos abertos uma origem pode criar por janela. NAO e teto de
+    # chute de segredo: e teto de CRIACAO, e existe porque cada codigo ocupa
+    # uma vaga num espaco de um milhao COMPARTILHADO por todas as contas. Vinte
+    # e folga larga para quem esta conectando maquinas de verdade.
+    TETO_DE_CODIGOS = 20
+
+    def _novo_pareamento(self, usuario_id: int) -> str:
+        """Um codigo de seis digitos aberto para aquela conta, ou "".
+
+        DUAS COISAS QUE NAO ESTAVAM AQUI, e as duas sao da revisao de seguranca
+        de 01/09/2026:
+
+        1. A LIMPEZA. `codigo_hash` e PRIMARY KEY global e nada nunca era
+           apagado: quem gerasse codigos em laco enchia o espaco e trancava o
+           dono junto. Limpar o vencido antes de sortear e o conserto barato.
+        2. O TETO POR ORIGEM, com balcao proprio. Sem ele, esta rota criava
+           estado permanente de graca. Balcao SEPARADO do chute de codigo
+           (`pareamento`) de proposito: misturar os dois faria quem gera trancar
+           quem digita.
+
+        O laco de cinco continua: colisao levanta `IntegrityError`, e silencia-la
+        punha a maquina de um dentro da conta do outro.
+        """
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="codigos",
+                                           teto=self.TETO_DE_CODIGOS):
+            return ""
+        try:
+            banco.limpar_pareamentos_vencidos()
+        except sqlite3.Error:
+            pass                      # limpar e higiene, nao pre-requisito
         for _ in range(5):
             codigo = banco.novo_codigo(6)
             try:
-                banco.abrir_pareamento(sessao["usuario_id"], codigo,
+                banco.abrir_pareamento(usuario_id, codigo,
                                        banco.prazo(self.MINUTOS_DO_CODIGO * 60))
             except sqlite3.IntegrityError:
                 continue
-            return self._json(200, {"codigo": codigo,
-                                    "minutos": self.MINUTOS_DO_CODIGO})
-        return self._json(503, {"erro": "tente de novo em um minuto"})
+            return codigo
+        return ""
 
     # O conectador que a tela entrega, com o codigo ja dentro (etapa A3).
     #
@@ -1283,19 +1323,7 @@ class Hub(SimpleHTTPRequestHandler):
         except OSError:
             # Falha fechada: sem o arquivo nao ha meio codigo nem meio download.
             return self._json(503, {"erro": "o conectador nao esta nesta copia"})
-        # O MESMO laco de cinco tentativas de `_maquina_parear`, e pelo mesmo
-        # motivo: colisao silenciada punha a maquina de um dentro da conta do
-        # outro.
-        codigo = ""
-        for _ in range(5):
-            tentativa = banco.novo_codigo(6)
-            try:
-                banco.abrir_pareamento(sessao["usuario_id"], tentativa,
-                                       banco.prazo(self.MINUTOS_DO_CODIGO * 60))
-            except sqlite3.IntegrityError:
-                continue
-            codigo = tentativa
-            break
+        codigo = self._novo_pareamento(sessao["usuario_id"])
         if not codigo:
             return self._json(503, {"erro": "tente de novo em um minuto"})
         corpo = self._injetar(fonte, codigo, self._endereco_do_painel()).encode("utf-8")
@@ -1386,14 +1414,22 @@ class Hub(SimpleHTTPRequestHandler):
         # IPv4 mapeado em IPv6 — e `mede_site` nunca segue redirecionamento,
         # que e como o endereco publico viraria um interno no meio do caminho.
         if not coletar_github.url_segura(url):
-            return self._json(400, {"erro": self.ENDERECO_RECUSADO})
-        if not coletar_github.host_publico(urllib.parse.urlsplit(url).hostname):
+            # PURA E SEM REDE: pode vir antes do teto sem custo nenhum, e barra
+            # de graca o caso mais comum.
             return self._json(400, {"erro": self.ENDERECO_RECUSADO})
 
+        # O TETO VEM ANTES DE QUALQUER COISA QUE TOQUE A REDE, e nao so antes de
+        # `mede_site`. `host_publico` chama `getaddrinfo` SEM PRAZO: um punhado
+        # de POSTs com nomes que nao resolvem segura uma thread cada um pelo
+        # tempo do resolvedor, e o teto nunca chegava a ser consultado porque a
+        # fila ja estava presa. Achado pela revisao de Python.
         if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
                                            balcao="endereco",
                                            teto=self.TETO_DE_ENDERECOS):
             return self._json(429, self.RECUSA)
+
+        if not coletar_github.host_publico(urllib.parse.urlsplit(url).hostname):
+            return self._json(400, {"erro": self.ENDERECO_RECUSADO})
 
         banco.guardar_endereco_de_producao(sessao["usuario_id"], projeto, url)
         # `mede_site` devolve `ok` como None para NAO DEU PARA MEDIR, e isso nao
@@ -1414,6 +1450,173 @@ class Hub(SimpleHTTPRequestHandler):
     ENDERECO_RECUSADO = ("esse endereco aponta para dentro de uma rede privada, "
                          "ou nao e um endereco http(s) publico. O DERVS so mede "
                          "endereco que qualquer um alcanca pela internet.")
+
+    # ------------------------------------------- a conta do GitHub (etapa C2)
+    #
+    # O `state` E ASSINADO COM O COFRE, e nao guardado em cookie. O caminho do
+    # OAuth de ENTRAR usa cookie porque quem chega ali ainda nao tem sessao;
+    # aqui quem pede a ida JA esta dentro, e o que o `state` precisa carregar e
+    # DE QUEM e a instalacao — informacao que nao pode vir do navegador na
+    # volta. Assinado, ele carrega o `usuario_id` e um prazo curto sem que o
+    # servidor guarde estado nenhum entre as duas pontas.
+    #
+    # QUEM CANCELA NO MEIO NUNCA CHEGA AQUI, E ISSO E NORMAL. Nao e erro e nao
+    # e alarme: e "nao deu para conferir", o quarto estado. O `state` tambem se
+    # perde em variacoes legitimas do fluxo — a spec registra isso como risco
+    # conhecido, e nao como garantia.
+    MINUTOS_DA_INSTALACAO = 30
+    ASSUNTO_DA_INSTALACAO = "instalar-github"
+
+    # OS DOIS SAO ESTATICOS de proposito: eles nao leem nada do pedido, e
+    # amarra-los a uma instancia so faria a prova depender de subir um servidor.
+    # O que assina e a chave do cofre, e ela nao vem daqui.
+    @staticmethod
+    def _selo_da_instalacao(usuario_id: int, ate: int) -> str:
+        """`usuario_id.ate.assinatura`. A assinatura cobre os dois primeiros."""
+        corpo = "%d.%d" % (usuario_id, ate)
+        marca = hmac.new(banco.chave_do_cofre(),
+                         ("%s|%s" % (Hub.ASSUNTO_DA_INSTALACAO, corpo)).encode("utf-8"),
+                         hashlib.sha256).hexdigest()
+        return corpo + "." + marca
+
+    @staticmethod
+    def _dono_do_selo(selo: str, agora=None):
+        """O `usuario_id` de dentro do selo, ou `None`. NUNCA levanta.
+
+        Falha fechada em toda porta: selo torto, assinatura errada e prazo
+        vencido saem todos como `None`, e nao como excecao para quem chamou
+        tratar — a lei 3 deste repositorio.
+        """
+        partes = (selo or "").split(".")
+        if len(partes) != 3:
+            return None
+        try:
+            usuario_id, ate = int(partes[0]), int(partes[1])
+        except ValueError:
+            return None
+        esperado = Hub._selo_da_instalacao(usuario_id, ate)
+        # `compare_digest`: comparar com `==` vaza o tamanho do prefixo igual
+        # pelo tempo, e e assim que uma assinatura se descobre byte a byte.
+        if not hmac.compare_digest(esperado, selo or ""):
+            return None
+        if (time.time() if agora is None else agora) > ate:
+            return None
+        return usuario_id
+
+    def _github_estado(self):
+        """A instalacao DESTA conta, ou vazio. Nunca a de outra."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        return self._json(200, {
+            "instalacao": banco.instalacao_do_github(sessao["usuario_id"]) or "",
+            "da_para_instalar": bool(APP_DO_GITHUB),
+            "lido_em": banco.agora()})
+
+    def _github_instalar(self):
+        """Devolve o endereco da instalacao, com o selo dentro."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        if not self._csrf_ok(sessao):
+            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+        if not APP_DO_GITHUB:
+            # Falha FECHADA: sem aplicativo registrado, a porta diz que nao
+            # existe em vez de mandar o dono para um endereco que nao abre.
+            return self._json(404, {"erro": "nao existe"})
+        ate = int(time.time()) + self.MINUTOS_DA_INSTALACAO * 60
+        selo = self._selo_da_instalacao(sessao["usuario_id"], ate)
+        return self._json(200, {
+            "url": "https://github.com/apps/%s/installations/new?state=%s" % (
+                urllib.parse.quote(APP_DO_GITHUB, safe=""),
+                urllib.parse.quote(selo, safe="")),
+            "minutos": self.MINUTOS_DA_INSTALACAO})
+
+    def _github_instalado(self):
+        """A volta. Acesso `cortina` de proposito, e a decisao esta escrita.
+
+        Quem chega aqui vem DO GITHUB, num salto de pagina que o nosso
+        JavaScript nao fez — a mesma situacao de `/entrar/github/retorno`, que
+        e `cortina` pelo mesmo motivo. E a autorizacao NAO sai da sessao: sai do
+        selo assinado, que e o unico pedaco desta volta que o visitante nao
+        consegue escrever.
+        """
+        pedido = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        selo = (pedido.get("state") or [""])[0]
+        instalacao = (pedido.get("installation_id") or [""])[0]
+        usuario_id = self._dono_do_selo(selo)
+
+        # A ORDEM AQUI E A ETAPA INTEIRA. Nada e gravado antes das duas provas:
+        # o selo diz de quem e, e o GitHub diz que a instalacao existe. Gravar
+        # antes de conferir "porque a conferencia e lenta" e gravar um dado
+        # forjado, e o desfazer nunca vem.
+        confirmada = None
+        if usuario_id is not None and instalacao:
+            confirmada = github_app.confirmar_instalacao(
+                (os.environ.get("DERVS_GITHUB_APP_ID") or "").strip(),
+                os.environ.get("DERVS_GITHUB_APP_KEY") or "",
+                instalacao)
+        if usuario_id is not None and confirmada is not None \
+                and self._instalacao_e_dele(usuario_id, confirmada):
+            try:
+                banco.guardar_instalacao_do_github(usuario_id, instalacao)
+            except ValueError:
+                # O numero ja e de outra conta. Mesmo desfecho de todo o resto
+                # que nao deu: nao gravou, e nao e um erro vermelho.
+                return self._ir_para("/?github=nao-deu#/conectar")
+            return self._ir_para("/?github=ligado#/conectar")
+            # A QUERY VAI ANTES DO `#`, e nao depois. `/#/conectar?github=x`
+            # poe o parametro DENTRO do fragmento, e `location.search` sai
+            # vazio — a tela nunca leria o recado. Achado clicando, nao lendo:
+            # o 302 estava certo e a tela ficava muda.
+            return self._ir_para("/?github=ligado#/conectar")
+        # Cancelou no meio, o selo venceu, ou o GitHub nao confirmou: os tres
+        # sao o MESMO estado para quem le a tela — nao deu para conferir. E
+        # nenhum deles e um erro vermelho.
+        return self._ir_para("/?github=nao-deu#/conectar")
+
+    @staticmethod
+    def _instalacao_e_dele(usuario_id: int, confirmada: dict) -> bool:
+        """A instalacao confirmada e da conta do GitHub AMARRADA a esta sessao?
+
+        PORQUE ISTO EXISTE, e e o achado das duas revisoes de 01/09/2026:
+        `confirmar_instalacao` prova que a instalacao EXISTE e que e deste App.
+        Nao prova que ela e SUA. O `installation_id` e publico e sequencial:
+        sem esta conferencia, uma conta convidada pedia o proprio selo e
+        chamava a volta com o numero de OUTRA pessoa, iterando ate acertar — e
+        ficava amarrada a instalacao alheia. Hoje o estrago pararia no estado
+        mostrado na tela; no dia em que `banco.instalacoes_do_github` ganhasse
+        leitor, viraria token sobre os repositorios do outro.
+
+        A PROVA E O `account.id`: o GitHub diz de quem e a instalacao, e nos
+        sabemos a qual id do GitHub esta conta esta amarrada
+        (`banco.ligar_github`, que guarda o id NUMERICO justamente porque login
+        se troca).
+
+        O QUE ISTO NAO RESOLVE, e esta escrito para nao ser descoberto depois:
+        instalacao em ORGANIZACAO. Ali o `account.id` e o da organizacao, e nao
+        o da pessoa — e provar que alguem e membro dela exige o fluxo de token
+        DO USUARIO, que e outra etapa. Ate la, instalacao de organizacao e
+        recusada aqui: recusar quem tem direito e um incomodo, aceitar quem nao
+        tem e uma porta. Divida nomeada.
+        """
+        conta = (confirmada or {}).get("account") or {}
+        dono = str(conta.get("id") or "").strip()
+        if not dono:
+            return False
+        with contextlib.closing(banco.conectar()) as con:
+            linha = con.execute(
+                "SELECT usuario_id FROM credencial"
+                " WHERE tipo = 'github' AND identificador = ?", (dono,)).fetchone()
+        return linha is not None and linha["usuario_id"] == usuario_id
+
+    def _ir_para(self, destino: str):
+        self.send_response(302)
+        self.send_header("Location", destino)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _maquina_remover(self):
         sessao = self._sessao()
@@ -2164,6 +2367,15 @@ ROTAS = {
     # consertado duas vezes neste repositorio.
     "/api/enderecos":           Rota("GET",  Hub._enderecos,        "dado"),
     "/api/enderecos/guardar":   Rota("POST", Hub._endereco_guardar, "dado"),
+
+    # A porta 2 (fatia C). A de ida e `dado` — so quem esta dentro pede a
+    # instalacao da PROPRIA conta. A de volta e `cortina` PELA MESMA RAZAO que
+    # `/entrar/github/retorno`: quem chega vem do GitHub, num salto de pagina
+    # que o nosso JavaScript nao fez. A autorizacao dela nao sai da sessao, sai
+    # do selo assinado com o cofre.
+    "/api/github/instalar":     Rota("POST", Hub._github_instalar,  "dado"),
+    "/api/github":              Rota("GET",  Hub._github_estado,    "dado"),
+    "/github/instalado":        Rota("GET",  Hub._github_instalado, "cortina"),
 
     # As tarefas (Fatia 2). `/agente/resultado` e a UNICA de acesso `maquina`
     # aqui: e por ela que o agente conta o que esta acontecendo, e e na

@@ -40,6 +40,12 @@ import urllib.request
 from typing import NamedTuple
 
 API = "https://api.github.com/app/installations/%s/access_tokens"
+# A MESMA instalacao, so que lida em vez de trocada por token. Existe porque o
+# `installation_id` que volta na URL de instalacao NAO E PROVA DE NADA: a
+# propria documentacao do GitHub avisa que qualquer um pode bater na setup URL
+# com um numero forjado. Perguntar ao GitHub e o que separa "o navegador disse"
+# de "o GitHub confirmou".
+API_INSTALACAO = "https://api.github.com/app/installations/%s"
 AGENTE = "dervs-coletor"
 
 # Teto do JWT no GitHub e 10 min. 9 deixa folga para o relogio dos dois lados
@@ -282,10 +288,15 @@ class _SemRedirecionar(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _pedir_ao_github(url: str, jwt: str, teto: int):
-    """POST na API, com o JWT. Levanta em qualquer falha; quem chama traduz."""
+def _pedir_ao_github(url: str, jwt: str, teto: int, metodo: str = "POST"):
+    """Uma chamada na API, com o JWT. Levanta em qualquer falha; quem chama traduz.
+
+    `metodo` entrou na etapa C2, e o corpo vazio segue junto: o `GET` da
+    instalacao nao manda corpo nenhum, e mandar `b""` num GET faz o urllib
+    trata-lo como POST de novo.
+    """
     pedido = urllib.request.Request(
-        url, data=b"", method="POST",
+        url, data=(b"" if metodo == "POST" else None), method=metodo,
         headers={"Authorization": "Bearer " + jwt,
                  "Accept": "application/vnd.github+json",
                  "X-GitHub-Api-Version": "2022-11-28",
@@ -293,6 +304,60 @@ def _pedir_ao_github(url: str, jwt: str, teto: int):
     abridor = urllib.request.build_opener(_SemRedirecionar)
     with abridor.open(pedido, timeout=teto) as resp:
         return json.loads(resp.read().decode("utf-8", "replace"))
+
+
+def confirmar_instalacao(app_id, chave_pem, instalacao_id, teto: int = 15,
+                         _pedir=None):
+    """O GitHub confirma que ESTA instalacao existe e e deste app? Ou `None`.
+
+    ESTA E A UNICA PROVA QUE VALE. O `installation_id` chega pela query string
+    da setup URL, e a documentacao do GitHub avisa, com todas as letras, que
+    qualquer pessoa pode bater ali com um numero inventado. Gravar o numero da
+    URL e gravar o que o visitante escreveu.
+
+    LEI 3 DESTE REPOSITORIO, sem excecao: devolve `None` em toda falha e nunca
+    levanta para quem chamou tratar. Um `except` esquecido em caminho de login
+    vira porta aberta.
+
+    NENHUMA PRIMITIVA DE CRIPTOGRAFIA NOVA aqui. `montar_jwt` e `chave_de_pem`
+    ja existem e sao conferidos byte a byte contra o OpenSSL; esta funcao e uma
+    chamada HTTP a mais em cima deles. Peca de criptografia sem testemunha
+    externa nao entra neste arquivo.
+
+    Devolve o dicionario que o GitHub mandou (`id`, `account`, `app_id`...) —
+    nunca um segredo, porque a resposta desta rota nao carrega token nenhum.
+    """
+    if not isinstance(instalacao_id, str) or \
+            not SO_DIGITOS.fullmatch(instalacao_id):
+        # O id entra numa URL. Um valor com `../` apontaria a requisicao — com o
+        # JWT junto — para outro caminho da API. Mesma guarda de `Coletor.token`.
+        _diga("o identificador da instalacao nao e um numero; nao perguntei")
+        return None
+    chave = chave_de_pem(chave_pem)
+    if chave is None:
+        _diga("a chave privada do app nao foi lida; nao da para perguntar")
+        return None
+    jwt = montar_jwt(app_id, chave)
+    if jwt is None:
+        _diga("nao consegui montar o pedido; confira o App ID")
+        return None
+    pedir = _pedir or _pedir_ao_github
+    try:
+        resposta = pedir(API_INSTALACAO % instalacao_id, jwt, teto, "GET")
+    except Exception:                      # noqa: BLE001 — rede, HTTP, JSON
+        # A MENSAGEM E NOSSA, nunca repassada da excecao: `URLError` carrega a
+        # URL, e URL de API carrega o que o chamador pos nela.
+        _diga("o GitHub nao confirmou a instalacao")
+        return None
+    if not isinstance(resposta, dict):
+        return None
+    # O GitHub tem de devolver O MESMO id que perguntamos. Um 200 com outro id
+    # seria a API respondendo sobre outra coisa, e aceitar isso e aceitar
+    # qualquer coisa.
+    if str(resposta.get("id") or "") != instalacao_id:
+        _diga("o GitHub respondeu sobre outra instalacao")
+        return None
+    return resposta
 
 
 class Coletor:

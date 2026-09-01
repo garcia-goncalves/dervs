@@ -2470,5 +2470,106 @@ class InstalacaoDoGithubTemDono(unittest.TestCase):
         self.assertEqual(banco.instalacao_do_github(self.b, con=self.con), "222")
 
 
+class UmaInstalacaoPertenceAUmaContaSo(unittest.TestCase):
+    """O achado das DUAS revisoes de 01/09/2026.
+
+    Perguntar ao GitHub prova que a instalacao EXISTE — para qualquer numero
+    deste App, inclusive o de outra pessoa. O `installation_id` e publico e
+    sequencial. Sem esta trava, duas contas gravavam o mesmo numero e a segunda
+    ficava amarrada a instalacao da primeira.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.antes = banco.BANCO
+        banco.BANCO = Path(self.dir.name) / "hub.db"
+        self.addCleanup(setattr, banco, "BANCO", self.antes)
+        con = banco.conectar()
+        try:
+            self.a = banco.criar_usuario("a@teste.local", con=con)
+            self.b = banco.criar_usuario("b@teste.local", con=con)
+            con.commit()
+        finally:
+            con.close()
+
+    def test_a_segunda_conta_nao_grava_o_numero_da_primeira(self):
+        banco.guardar_instalacao_do_github(self.a, "424242")
+        with self.assertRaises(ValueError):
+            banco.guardar_instalacao_do_github(self.b, "424242")
+        self.assertEqual("424242", banco.instalacao_do_github(self.a))
+        self.assertIsNone(banco.instalacao_do_github(self.b))
+
+    def test_a_mesma_conta_pode_regravar_o_proprio_numero(self):
+        """Reinstalar o App na propria conta nao pode virar recusa."""
+        banco.guardar_instalacao_do_github(self.a, "424242")
+        banco.guardar_instalacao_do_github(self.a, "424242")
+        self.assertEqual("424242", banco.instalacao_do_github(self.a))
+
+    def test_a_conta_pode_trocar_de_instalacao(self):
+        banco.guardar_instalacao_do_github(self.a, "111")
+        banco.guardar_instalacao_do_github(self.a, "222")
+        self.assertEqual("222", banco.instalacao_do_github(self.a))
+        # E o numero antigo fica livre para quem o tiver de verdade.
+        banco.guardar_instalacao_do_github(self.b, "111")
+        self.assertEqual("111", banco.instalacao_do_github(self.b))
+
+    def test_o_unique_do_numero_existe_no_esquema_E_na_migracao(self):
+        """As duas definicoes tem de andar juntas: a que diverge e sempre a que
+        ninguem le."""
+        self.assertIn("UNIQUE (installation_id)", banco.ESQUEMA)
+        self.assertIn("UNIQUE (installation_id)", banco._CREATE_INSTALACAO_GITHUB)
+
+
+class OsCodigosVencidosSaoAPAGADOS(unittest.TestCase):
+    """`codigo_hash` e PRIMARY KEY GLOBAL, e ate 01/09/2026 nada era apagado.
+
+    Seis digitos sao um milhao de vagas para TODAS as contas juntas: quem
+    gerasse codigos em laco enchia o espaco, e o laco de cinco tentativas de
+    todo mundo — inclusive o do dono — passava a colidir para sempre. E o
+    "teto compartilhado tranca o dono" pela terceira vez nesta casa, agora pelo
+    ESPACO em vez do contador.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.antes = banco.BANCO
+        banco.BANCO = Path(self.dir.name) / "hub.db"
+        self.addCleanup(setattr, banco, "BANCO", self.antes)
+        con = banco.conectar()
+        try:
+            self.uid = banco.criar_usuario("dono@teste.local", con=con)
+            con.commit()
+        finally:
+            con.close()
+
+    def test_apaga_o_vencido_e_deixa_o_vivo(self):
+        banco.abrir_pareamento(self.uid, "111111", banco.prazo(-60))
+        banco.abrir_pareamento(self.uid, "222222", banco.prazo(600))
+        self.assertEqual(1, banco.limpar_pareamentos_vencidos())
+        con = banco.conectar()
+        try:
+            sobraram = con.execute("SELECT COUNT(*) FROM pareamento").fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual(1, sobraram)
+        # E o que sobrou e o que ainda vale.
+        self.assertTrue(banco.usar_pareamento("222222", "pc"))
+
+    def test_a_vaga_do_vencido_volta_a_ficar_livre(self):
+        """O ponto inteiro: o numero apagado pode ser sorteado de novo."""
+        banco.abrir_pareamento(self.uid, "111111", banco.prazo(-60))
+        with self.assertRaises(sqlite3.IntegrityError):
+            banco.abrir_pareamento(self.uid, "111111", banco.prazo(600))
+        banco.limpar_pareamentos_vencidos()
+        banco.abrir_pareamento(self.uid, "111111", banco.prazo(600))
+        self.assertTrue(banco.usar_pareamento("111111", "pc"))
+
+    def test_sem_nada_vencido_nao_apaga_nada(self):
+        banco.abrir_pareamento(self.uid, "333333", banco.prazo(600))
+        self.assertEqual(0, banco.limpar_pareamentos_vencidos())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

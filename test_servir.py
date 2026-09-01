@@ -26,7 +26,9 @@ import os
 import re
 import tempfile
 import threading
+import time
 import unittest
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -1966,6 +1968,308 @@ class OEnderecoDoServidorNoServidorDeVerdade(BaseServidorDeVerdade):
         # E a cortina continua de pe para quem chega.
         self.assertEqual(204, self.pedir("/entrada", "POST",
                                  {"combinacao": self.combinacao}).status)
+
+
+class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
+    """A porta 2. O caso que da nome a esta classe e um so:
+
+        O `installation_id` chega pela QUERY STRING, e a documentacao do GitHub
+        avisa que qualquer um pode bater na setup URL com um numero forjado.
+        Aceita-lo por ter vindo na URL e gravar o que o visitante escreveu.
+
+    Nada aqui bate no GitHub: a CI nao tem credencial nenhuma, e um teste que
+    dependesse disso ficaria vermelho por motivo errado.
+    """
+
+    IDA = "/api/github/instalar"
+    VOLTA = "/github/instalado"
+    ESTADO = "/api/github"
+
+    def setUp(self):
+        super().setUp()
+        self._slug = servir.APP_DO_GITHUB
+        servir.APP_DO_GITHUB = "dervs-de-teste"
+        self.addCleanup(setattr, servir, "APP_DO_GITHUB", self._slug)
+        self._confirmar = servir.github_app.confirmar_instalacao
+        self.addCleanup(setattr, servir.github_app, "confirmar_instalacao",
+                        self._confirmar)
+        # Por padrao o GitHub CONFIRMA. Cada caso que precisa do contrario
+        # troca este duble, e o que ele devolve nunca carrega segredo.
+        # O duble devolve o `account` porque e ELE que prova a posse: a conta
+        # de teste esta amarrada ao id "4242" do GitHub (ver o andaime).
+        servir.github_app.confirmar_instalacao = \
+            lambda app_id, chave, inst, **k: {"id": int(inst), "app_id": 1,
+                                              "account": {"id": 4242,
+                                                          "login": "dono"}}
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM instalacao_github")
+            con.commit()
+        finally:
+            con.close()
+
+    def gravada(self, usuario_id=None):
+        return banco.instalacao_do_github(
+            self.uid if usuario_id is None else usuario_id)
+
+    def selo(self, usuario_id=None, minutos=30):
+        ate = int(time.time()) + minutos * 60
+        return servir.Hub._selo_da_instalacao(
+            self.uid if usuario_id is None else usuario_id, ate)
+
+    def voltar(self, selo, instalacao):
+        """A volta do GitHub, com o cookie da cortina junto.
+
+        A rota e `cortina`, e o navegador que volta do GitHub carrega esse
+        cookie: e um salto de pagina de primeiro nivel, e o cookie e
+        `SameSite=Lax`. Sem ele a rota responde 404 — a MESMA resposta de rota
+        inexistente, de proposito: quem nao passou pela cortina nao pode nem
+        descobrir que esta porta existe.
+        """
+        return self.pedir("%s?state=%s&installation_id=%s"
+                          % (self.VOLTA, urllib.parse.quote(selo), instalacao),
+                          cookies=self.abrir_cortina())
+
+    def test_a_volta_sem_a_cortina_e_indistinguivel_de_rota_inexistente(self):
+        r = self.pedir("%s?state=%s&installation_id=424242"
+                       % (self.VOLTA, urllib.parse.quote(self.selo())))
+        self.assertEqual(404, r.status)
+        self.assertIsNone(self.gravada(), "gravou sem passar pela cortina")
+
+    # ------------------------------------------------------------ a ida
+    def test_a_ida_sem_sessao_e_recusada(self):
+        self.assertEqual(401, self.pedir(self.IDA, "POST", {}).status)
+
+    def test_a_ida_sem_anti_csrf_e_recusada(self):
+        r = self.pedir(self.IDA, "POST", {}, cookies=self.com_sessao())
+        self.assertEqual(403, r.status)
+
+    def test_a_ida_devolve_o_endereco_com_o_selo(self):
+        cookies, token = self.sessao_e_token()
+        r = self.pedir(self.IDA, "POST", {}, cookies=cookies,
+                       cabecalhos={"X-Token": token})
+        self.assertEqual(200, r.status, r.corpo)
+        url = json.loads(r.corpo)["url"]
+        self.assertIn("github.com/apps/dervs-de-teste/installations/new", url)
+        self.assertIn("state=", url)
+        selo = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["state"][0]
+        self.assertEqual(self.uid, servir.Hub._dono_do_selo(selo))
+
+    def test_sem_app_registrado_a_porta_diz_que_nao_existe(self):
+        """Falha FECHADA: melhor nao ter porta do que ter porta que leva a um
+        endereco que nao abre."""
+        servir.APP_DO_GITHUB = ""
+        cookies, token = self.sessao_e_token()
+        r = self.pedir(self.IDA, "POST", {}, cookies=cookies,
+                       cabecalhos={"X-Token": token})
+        self.assertEqual(404, r.status)
+
+    # ---------------------------------------------------------- a volta
+    def test_installation_id_na_query_SEM_selo_valido_nao_grava_nada(self):
+        """O caso central. O numero na URL nao e prova de coisa nenhuma."""
+        r = self.voltar("mentira.999.abcdef", "12345")
+        self.assertEqual(302, r.status)
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada())
+
+    def test_selo_sem_assinatura_nao_grava(self):
+        self.assertIsNone(self.gravada())
+        r = self.voltar("%d.%d." % (self.uid, int(time.time()) + 600), "12345")
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada())
+
+    def test_selo_de_OUTRO_usuario_nao_grava_na_minha_conta(self):
+        """O selo diz DE QUEM e a volta, e ele nao pode escrever na conta ao
+        lado. Para o caso ficar completo, a outra conta tem GitHub proprio: sem
+        isso a conferencia de posse recusaria por outro motivo, e o teste
+        provaria a trava errada."""
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("outro-c2@teste.local", con=con)
+            banco.ligar_github(outro, "8888", con=con)
+            con.commit()
+        finally:
+            con.close()
+        servir.github_app.confirmar_instalacao =             lambda app_id, chave, inst, **k: {"id": int(inst), "app_id": 1,
+                                              "account": {"id": 8888,
+                                                          "login": "outro"}}
+        self.voltar(self.selo(outro), "777")
+        self.assertIsNone(self.gravada(self.uid),
+                          "a instalacao caiu na conta errada")
+        self.assertEqual("777", self.gravada(outro))
+
+    def test_selo_vencido_nao_grava(self):
+        r = self.voltar(self.selo(minutos=-1), "12345")
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada())
+
+    def test_selo_valido_mas_a_API_nao_confirma_NAO_GRAVA(self):
+        """Este e o unico caso que prova que o parametro da URL nao e a prova.
+
+        Sem ele, um selo valido do proprio dono bastaria para gravar qualquer
+        numero — inclusive a instalacao de outra pessoa, colada na URL.
+        """
+        servir.github_app.confirmar_instalacao = lambda *a, **k: None
+        r = self.voltar(self.selo(), "999999")
+        self.assertEqual(302, r.status)
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada())
+
+    def test_selo_valido_E_API_confirma_grava_PARA_AQUELE_usuario(self):
+        r = self.voltar(self.selo(), "424242")
+        self.assertEqual(302, r.status)
+        self.assertIn("ligado", r.cabecalhos.get("Location"))
+        self.assertEqual("424242", self.gravada())
+
+    def test_o_recado_da_volta_vai_ANTES_do_fragmento(self):
+        """`/#/conectar?github=x` poe o parametro DENTRO do fragmento, e
+        `location.search` sai vazio: a tela nunca le o recado. O 302 fica
+        certo e a tela fica muda — achado clicando, nao lendo."""
+        for selo, esperado in ((self.selo(), "ligado"),
+                               ("forjado.1.abc", "nao-deu")):
+            with self.subTest(esperado=esperado):
+                destino = self.voltar(selo, "424242").cabecalhos.get("Location")
+                self.assertIn("?github=" + esperado, destino)
+                self.assertLess(destino.index("?"), destino.index("#"),
+                                "a query ficou depois do # e a tela nao le: "
+                                + destino)
+
+    # ------------------------------------------------ a POSSE da instalacao
+    #
+    # O achado das duas revisoes de 01/09/2026, e o mais grave da esteira:
+    # `confirmar_instalacao` prova que a instalacao EXISTE e que e deste App.
+    # NAO prova que ela e SUA. O `installation_id` e publico e sequencial.
+
+    def test_instalacao_de_OUTRA_pessoa_nao_gruda_na_minha_conta(self):
+        """O ataque inteiro, escrito: peco o MEU selo, e chamo a volta com o
+        numero DA OUTRA PESSOA, iterando ate acertar."""
+        servir.github_app.confirmar_instalacao = \
+            lambda app_id, chave, inst, **k: {"id": int(inst), "app_id": 1,
+                                              "account": {"id": 9999,
+                                                          "login": "outra-pessoa"}}
+        r = self.voltar(self.selo(), "555555")
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada(),
+                          "gravou a instalacao de outra pessoa na minha conta")
+
+    def test_instalacao_sem_account_nao_grava(self):
+        """Falha fechada: sem saber de quem e, nao e de ninguem."""
+        servir.github_app.confirmar_instalacao = \
+            lambda *a, **k: {"id": 424242, "app_id": 1}
+        self.voltar(self.selo(), "424242")
+        self.assertIsNone(self.gravada())
+
+    def test_instalacao_de_ORGANIZACAO_e_recusada_e_isso_e_deliberado(self):
+        """Divida NOMEADA, e nao esquecimento: provar que alguem e membro de uma
+        organizacao exige o fluxo de token DO USUARIO, que e outra etapa.
+
+        Recusar quem tem direito e um incomodo; aceitar quem nao tem e uma
+        porta. Este caso existe para que a escolha nao seja redescoberta como
+        se fosse um defeito.
+        """
+        servir.github_app.confirmar_instalacao = \
+            lambda *a, **k: {"id": 424242, "app_id": 1,
+                             "account": {"id": 777, "login": "minha-org",
+                                         "type": "Organization"}}
+        self.voltar(self.selo(), "424242")
+        self.assertIsNone(self.gravada())
+
+    def test_numero_ja_gravado_por_outra_conta_nao_e_roubado(self):
+        """A segunda tranca, no banco. A primeira e a conferencia do dono."""
+        con = banco.conectar()
+        try:
+            vizinho = banco.criar_usuario("vizinho-posse@teste.local", con=con)
+            banco.guardar_instalacao_do_github(vizinho, "313131", con=con)
+            con.commit()
+        finally:
+            con.close()
+        r = self.voltar(self.selo(), "313131")
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada(self.uid))
+        self.assertEqual("313131", self.gravada(vizinho))
+
+    # ------------------------------------------------------- a leitura
+    def test_o_estado_sem_sessao_e_recusado(self):
+        self.assertEqual(401, self.pedir(self.ESTADO).status)
+
+    def test_uma_conta_nao_le_a_instalacao_da_outra(self):
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("vizinho-c2@teste.local", con=con)
+            banco.guardar_instalacao_do_github(outro, "999888", con=con)
+        finally:
+            con.close()
+        cookies = self.com_sessao()
+        d = json.loads(self.pedir(self.ESTADO, cookies=cookies).corpo)
+        self.assertEqual("", d["instalacao"],
+                         "a instalacao do vizinho vazou para esta sessao")
+        self.assertTrue(d["lido_em"], "toda leitura leva carimbo")
+
+    def test_nenhuma_resposta_desta_porta_carrega_segredo(self):
+        """Chave privada e token nunca saem por HTTP. A guarda e por forma."""
+        cookies, token = self.sessao_e_token()
+        corpos = [self.pedir(self.ESTADO, cookies=cookies).corpo,
+                  self.pedir(self.IDA, "POST", {}, cookies=cookies,
+                             cabecalhos={"X-Token": token}).corpo,
+                  self.voltar(self.selo(), "424242").corpo]
+        for corpo in corpos:
+            for proibido in ("BEGIN", "PRIVATE KEY", "ghs_", "ghp_",
+                             "DERVS_COFRE", "DERVS_GITHUB_APP_KEY"):
+                self.assertNotIn(proibido, corpo, proibido)
+
+
+class OEspacoDosCodigosNaoSeEnche(BaseServidorDeVerdade):
+    """`codigo_hash` e PRIMARY KEY GLOBAL, e nada era apagado nunca.
+
+    Duas travas nasceram do achado da revisao de seguranca de 01/09/2026: um
+    teto de CRIACAO por origem, com balcao proprio, e a limpeza do vencido
+    antes de sortear. Sem elas, quem gerasse codigos em laco enchia um espaco de
+    um milhao compartilhado por todas as contas — e trancava o dono junto.
+    """
+
+    def test_o_teto_de_criacao_vale_para_as_DUAS_portas(self):
+        """O conectador e o botao 'Gerar o numero' criam o mesmo tipo de
+        estado. Um teto so numa delas e uma porta aberta ao lado da fechada."""
+        cookies, token = self.sessao_e_token()
+        cab = {"X-Token": token}
+        for _ in range(servir.Hub.TETO_DE_CODIGOS + 2):
+            self.pedir("/api/maquinas/parear", "POST", {}, cookies=cookies,
+                       cabecalhos=cab)
+        self.assertEqual(503, self.pedir("/api/maquinas/parear", "POST", {},
+                                         cookies=cookies, cabecalhos=cab).status)
+        self.assertEqual(503, self.pedir("/api/conectador", "POST", {},
+                                         cookies=cookies, cabecalhos=cab).status)
+
+    def test_gastar_o_teto_de_codigos_NAO_tranca_a_cortina(self):
+        """Balcao proprio. Misturar balcoes tranca o dono, e isso ja aconteceu
+        duas vezes nesta casa."""
+        cookies, token = self.sessao_e_token()
+        for _ in range(servir.Hub.TETO_DE_CODIGOS + 2):
+            self.pedir("/api/maquinas/parear", "POST", {}, cookies=cookies,
+                       cabecalhos={"X-Token": token})
+        self.assertEqual(204, self.pedir("/entrada", "POST",
+                                         {"combinacao": self.combinacao}).status)
+
+    def test_o_codigo_vencido_e_apagado_antes_de_sortear(self):
+        cookies, token = self.sessao_e_token()
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM pareamento")
+            con.commit()
+            banco.abrir_pareamento(self.uid, "111111", banco.prazo(-60), con=con)
+            con.commit()
+        finally:
+            con.close()
+        self.pedir("/api/maquinas/parear", "POST", {}, cookies=cookies,
+                   cabecalhos={"X-Token": token})
+        con = banco.conectar()
+        try:
+            vencidos = con.execute(
+                "SELECT COUNT(*) FROM pareamento WHERE expira_em < ?",
+                (banco.agora(),)).fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual(0, vencidos, "o codigo vencido continuou ocupando vaga")
 
 
 if __name__ == "__main__":

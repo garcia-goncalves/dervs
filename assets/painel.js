@@ -138,7 +138,8 @@ function navegar() {
        fica reservado para a pergunta que falhou, e nao para a que nunca foi
        feita. As duas coisas se parecem na tela e nao sao a mesma. */
     case "conectar":     mostrar("conectar"); pintarConectar();
-                         olharOsComputadores(); olharOsEnderecos(); break;
+                         olharOsComputadores(); olharOsEnderecos();
+                         olharOGithub(); break;
     case "computadores": mostrar("computadores"); carregarComputadores(); break;
     case "entrada":      mostrar("entrada"); pdCarregar(); break;
     default:             mostrar("painel"); pintarPainel(); break;
@@ -873,6 +874,11 @@ async function baixarConectador() {
    foram lidos. Vazio NAO e a mesma coisa que "nao li": por isso o carimbo mora
    ao lado, e a porta 3 se pinta de "nao deu para conferir" enquanto ele nao
    existe. */
+/* A instalacao do GitHub desta conta, e o carimbo de quando foi lida. `null`
+   e "nao li"; string vazia e "li, e nao ha". Sao coisas diferentes. */
+let GITHUB = null;
+let GITHUB_LIDO_EM = "";
+
 let ENDERECOS = null;
 let ENDERECOS_LIDO_EM = "";
 /* O resultado da ultima medicao feita pela tela, por projeto. Ele NAO vem da
@@ -1041,6 +1047,31 @@ function pintarEspera({ estado, maquina }) {
    aberta. `carregarComputadores()` nao serve aqui: ela pinta a lista e o
    carimbo daquela outra tela, e chama-la daqui escreveria numa tela que
    ninguem esta vendo. */
+async function olharOGithub() {
+  try {
+    const r = await fetch("/api/github");
+    if (!r.ok) throw new Error("recusado");
+    GITHUB = await r.json();
+    GITHUB_LIDO_EM = new Date().toISOString();
+  } catch {
+    return;                 /* sem carimbo: a porta 2 dirá que não olhou */
+  }
+  if (rota().tela === "conectar") pintarConectar();
+}
+
+async function ligarOGithub() {
+  const r = await escrever("/api/github/instalar");
+  if (!r.ok) {
+    recado("não conseguimos abrir a instalação agora. Tente de novo.", true);
+    return;
+  }
+  const d = await r.json();
+  /* Salto de página inteiro, e não uma aba nova: a volta do GitHub cai numa
+     rota nossa que precisa do cookie da cortina, e aba nova aberta por script
+     é o que os navegadores bloqueiam primeiro. */
+  location.href = d.url;
+}
+
 async function olharOsEnderecos() {
   try {
     const r = await fetch("/api/enderecos");
@@ -1131,19 +1162,53 @@ function pintarConectar() {
         + "programa associado a essa extensão na sua máquina."
   }));
 
-  /* PORTA 2 — a conta do GitHub. Enquanto a fatia C não existe, ela diz o que
-     é: não conectado, com o caminho desligado e o motivo escrito. Promessa na
-     tela é a mentira que este produto existe para não contar. */
+  /* PORTA 2 — a conta do GitHub (etapa C3).
+
+     QUEM CANCELOU NO MEIO vê "não deu para conferir", com o caminho de tentar
+     de novo — nunca um erro vermelho, e nunca "conectado". Cancelar não é
+     defeito: é o quarto estado, e ele é de primeira classe aqui. */
+  const leuGh = !!GITHUB_LIDO_EM;
+  const ligado = leuGh && !!GITHUB.instalacao;
+  const voltou = new URLSearchParams(location.search).get("github");
+  const caminhos2 = [];
+  if (leuGh && !GITHUB.da_para_instalar) {
+    caminhos2.push({ rotulo: "Conectar a conta", desligado: true,
+                     porque: "o aplicativo do GitHub ainda não foi registrado "
+                           + "neste servidor" });
+  } else {
+    caminhos2.push({ rotulo: ligado ? "Instalar em mais repositórios"
+                                    : "Conectar a conta",
+                     aoClicar: ligarOGithub });
+  }
   onde.append(porta({
     titulo: "A sua conta do GitHub",
-    estado: "desconectado",
-    resumo: "Conectada, ela traz sozinha os pedidos de alteração, a "
-          + "verificação automática e os alertas de segurança dos seus "
-          + "repositórios — sem você colar chave nenhuma.",
-    caminhos: [{ rotulo: "Conectar a conta", desligado: true,
-                 porque: "ainda não construído" }],
-    nota: "Ainda não dá para conectar por aqui: esta porta guarda segredo de "
-        + "terceiro, e o cofre vem antes da gaveta."
+    estado: !leuGh ? "sem_dados"
+          : (ligado ? "conectado"
+                    : (voltou === "nao-deu" ? "sem_dados" : "desconectado")),
+    resumo: !leuGh
+      ? "Não consegui ler o estado desta conta. Isso não quer dizer que ela "
+        + "não está conectada — quer dizer que não olhei."
+      : (ligado
+         ? "Conectada. O DERVS traz sozinho os pedidos de alteração, a "
+           + "verificação automática e os alertas de segurança dos "
+           + "repositórios que você liberou."
+         : (voltou === "nao-deu"
+            ? "Não deu para confirmar a instalação. Se você fechou a página do "
+              + "GitHub no meio, é isso mesmo e não é erro: é só tentar de "
+              + "novo. O DERVS só liga a conta depois que o GitHub confirma."
+            : "Conectada, ela traz sozinha os pedidos de alteração, a "
+              + "verificação automática e os alertas de segurança dos seus "
+              + "repositórios — sem você colar chave nenhuma.")),
+    carimbo: leuGh ? "estado lido " + haQuanto(GITHUB_LIDO_EM) : "",
+    caminhos: caminhos2,
+    /* DESCONECTAR ACONTECE EM github.com, e a tela DIZ isso. Foi cortado do
+       escopo de propósito, e esconder o corte é mentir por omissão. */
+    nota: ligado
+      ? "Para desconectar, remova o aplicativo em github.com → Settings → "
+        + "Applications. Não fazemos isso por aqui de propósito: revogar o "
+        + "acesso é decisão que tem de morar do lado de quem dá o acesso."
+      : "Você escolhe no GitHub quais repositórios liberar, e pode mudar "
+        + "depois. Nenhuma chave é digitada aqui."
   }));
 
   /* PORTA 3 — o servidor (etapa B3). */
