@@ -263,8 +263,24 @@ Esta seção é a razão de o arquivo existir.
    publicação só existiam fora do localhost. **Isso não foi feito**, e depende
    do sinal do dono para publicar.
 
-5. **A verificação automática no GitHub ainda não rodou** nestes commits. Verde
-   nesta máquina não basta: a CI roda em Linux, e esta máquina é Windows.
+5. ~~**A verificação automática no GitHub ainda não rodou.**~~ **Rodou, e ficou
+   VERMELHA — este item deixou de ser uma ressalva e virou um defeito
+   consertado.** A linha que o painel entrega carregava `gente\enviar.py`,
+   com a barra invertida do Windows; no Linux o Python responde
+   `can't open file '.../dervsgente\enviar.py'`, e seis casos caíram. Foi o
+   único defeito que 1.449 testes verdes nesta máquina não podiam pegar, e ele
+   estava escrito nesta seção uma hora antes de acontecer.
+
+   O conserto: **barra normal**, que o Python aceita nos três sistemas — o
+   painel serve a máquina do dono (Windows) *e* o servidor (Linux), e uma linha
+   que só roda num deles é uma linha errada para metade de quem lê. O teste
+   ganhou a guarda (`assertNotIn("\\", argv[1])`) e passou a montar o caminho
+   com `as_posix()`; `str(AQUI)` traria a barra do Windows de volta e
+   reproduziria exatamente o mesmo modo de falha.
+
+   Depois disso a suíte foi rodada **em Linux de verdade**, num
+   `python:3.12-slim`: `TOTAL=1449 VERMELHOS=0`. E a verificação do GitHub
+   passou (`testes  pass  49s`).
 
 6. **Instalação de organização é recusada.** É decisão, não defeito, e está
    escrita no código: provar que alguém é membro de uma organização exige o
