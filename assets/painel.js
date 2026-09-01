@@ -1440,9 +1440,16 @@ async function gerarNumero() {
      `<CAMINHO DO DERVS>` fica como espaço reservado de propósito: o painel
      NÃO pode saber onde o repositório está na máquina de quem lê, e inventar
      um caminho seria o painel mentindo. Quem não quer trocar nada usa o
-     conectador, que é o outro caminho desta mesma porta. */
+     conectador, que é o outro caminho desta mesma porta.
+
+     BARRA NORMAL, E NÃO A INVERTIDA DO WINDOWS. O Python aceita `/` em caminho
+     nos três sistemas, inclusive no Windows; a barra invertida só funciona num.
+     Este painel serve a máquina do dono (Windows) E o servidor (Linux), e uma
+     linha que só roda num deles é uma linha errada para metade de quem lê.
+     Achado pela verificação automática, que roda em Linux — verde na máquina de
+     quem escreve não bastava, e não bastou. */
   $("#comando-pareamento").textContent =
-    "python \"<CAMINHO DO DERVS>\\agente\\enviar.py\" --alvo " + location.origin + " --codigo " + d.codigo;
+    "python \"<CAMINHO DO DERVS>/agente/enviar.py\" --alvo " + location.origin + " --codigo " + d.codigo;
   $("#pareamento").hidden = false;
   /* A MESMA espera da porta 1, aqui. Quem cola a linha de comando merece a
      mesma confirmação de quem usa o conectador — os dois caminhos são iguais,

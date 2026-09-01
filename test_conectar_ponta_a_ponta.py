@@ -145,7 +145,11 @@ def comando_do_painel(alvo: str, codigo: str) -> list[str]:
             "a linha do painel perdeu o espaco reservado %r. Se o painel passou "
             "a inventar um caminho, ele esta mentindo: ele nao pode saber onde "
             "o repositorio esta na maquina de quem le." % LUGAR_DO_DERVS)
-    return _partir(linha.replace(LUGAR_DO_DERVS, str(AQUI)))
+    # `as_posix()`: a linha usa BARRA NORMAL, e o Python a aceita nos tres
+    # sistemas. `str(AQUI)` traria a barra invertida do Windows, e o teste
+    # passaria aqui e ficaria vermelho na CI, que roda em Linux — foi
+    # exatamente o que aconteceu em 01/09/2026.
+    return _partir(linha.replace(LUGAR_DO_DERVS, AQUI.as_posix()))
 
 
 class OComandoQueOPainelEntrega(unittest.TestCase):
@@ -258,6 +262,9 @@ class OComandoQueOPainelEntrega(unittest.TestCase):
         alvo = Path(argv[1])
         self.assertEqual("enviar.py", alvo.name)
         self.assertEqual("agente", alvo.parent.name)
+        self.assertNotIn("\\", argv[1],
+                         "barra invertida so funciona no Windows, e este painel "
+                         "serve a maquina do dono E o servidor")
         self.assertTrue(alvo.is_absolute(),
                         "caminho relativo volta a depender da pasta atual")
         self.assertTrue(alvo.is_file(), "%s nao existe" % alvo)
