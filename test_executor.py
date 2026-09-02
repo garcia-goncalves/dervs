@@ -65,6 +65,31 @@ SESSAO_DE_MENTIRA = textwrap.dedent('''
 ''').strip()
 
 
+# O duble da auditoria: emite um Read (nunca um Edit) e o `result` traz o
+# JSON dos achados — exatamente o formato pedido por `--json-schema`. Nao
+# valida nada aqui: `auditoria.validar` e quem valida, do lado do servidor.
+SESSAO_DE_AUDITORIA_DE_MENTIRA = textwrap.dedent('''
+    import json, sys, time
+    def diga(o):
+        sys.stdout.write(json.dumps(o) + "\\n")
+        sys.stdout.flush()
+    diga({"type": "system", "subtype": "init"})
+    time.sleep(0.1)
+    diga({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Read", "input": {"file_path": "x.py"}}]}})
+    time.sleep(0.1)
+    achados = {"achados": [
+        {"arquivo": "x.py", "linha": 1, "categoria": "bug",
+         "gravidade": "alta",
+         "frase": "x começa fixado em 1, e deveria vir de configuração.",
+         "o_que_fazer": "Ler o valor de uma variável de ambiente ou arquivo."}
+    ]}
+    diga({"type": "result", "subtype": "success", "is_error": False,
+          "terminal_reason": "completed", "num_turns": 2,
+          "total_cost_usd": 0.42, "result": json.dumps(achados)})
+''').strip()
+
+
 class ComRepositorioDeMentira(unittest.TestCase):
     """Um repositorio de verdade, criado do zero, com `git init`.
 
@@ -245,6 +270,94 @@ class OTetoRecusaAntesDeComecar(ComRepositorioDeMentira):
         self.assertTrue(fora.get("recusada"))
 
 
+class ComAuditoriaLimpa(ComRepositorioDeMentira):
+    """Como `ComRepositorioDeMentira`, e tambem zera `execucao._auditoria` —
+    o estado proprio de `auditar()`, que `ComRepositorioDeMentira.setUp` nao
+    conhecia quando foi escrita (Etapa 4 e posterior)."""
+
+    def setUp(self):
+        super().setUp()
+        execucao._auditoria = execucao._zerada_auditoria()
+
+    def com_sessao_de_auditoria_de_mentira(self):
+        script = Path(self.pasta) / "sessao_de_auditoria_de_mentira.py"
+        script.write_text(SESSAO_DE_AUDITORIA_DE_MENTIRA, encoding="utf-8")
+        original = execucao.montar_comando_de_auditoria
+        execucao.montar_comando_de_auditoria = lambda *a, **k: [sys.executable,
+                                                                 str(script)]
+        self.addCleanup(setattr, execucao, "montar_comando_de_auditoria",
+                        original)
+
+    def tarefa_de_auditoria(self, **kw):
+        base = {"id": "a:1", "projeto": "alvo", "regra": "auditoria_vencida",
+                "trilho": "claude", "executor": "auditor",
+                "detalhe": "", "caminho": str(self.projeto), "teto_usd": 1.5,
+                "tentativas": 0}
+        base.update(kw)
+        return base
+
+
+class OBracoDaAuditoriaRoda(ComAuditoriaLimpa):
+    """O critério 1 do briefing, para a auditoria: uma sessão SÓ-LEITURA que
+    devolve achados — nunca ramo, diff ou pedido de alteração."""
+
+    def test_a_auditoria_devolve_os_achados_no_resumo_e_nunca_abre_pr(self):
+        self.com_sessao_de_auditoria_de_mentira()
+        fora = ex.ExecutorAuditor().rodar(
+            self.tarefa_de_auditoria(),
+            repinturas={"auditoria_vencida": "verde"})
+        self.assertEqual(fora["tipo"], "desfecho")
+        self.assertEqual(fora["id"], "a:1")
+        self.assertIn(fora["estado"], ("ok", "falha"))
+        self.assertEqual(fora["ramo"], "")
+        self.assertEqual(fora["pr_url"], "")
+        achados = json.loads(fora["resumo"])["achados"]
+        self.assertEqual(achados[0]["arquivo"], "x.py")
+        self.assertEqual(achados[0]["categoria"], "bug")
+
+    def test_o_custo_e_as_rodadas_do_evento_final_chegam_ao_desfecho(self):
+        self.com_sessao_de_auditoria_de_mentira()
+        fora = ex.ExecutorAuditor().rodar(
+            self.tarefa_de_auditoria(),
+            repinturas={"auditoria_vencida": "verde"})
+        self.assertEqual(fora["rodadas"], 2)
+        self.assertAlmostEqual(fora["custo_usd"], 0.42, places=2)
+
+
+class OTetoDaAuditoriaRecusaAntesDeComecar(ComAuditoriaLimpa):
+    """Sabotagem 4g e o critério 5 do briefing, para a auditoria."""
+
+    def test_4g_com_o_teto_do_dia_consumido_o_argv_NUNCA_E_MONTADO(self):
+        def nao_deveria(*_a, **_k):
+            raise AssertionError("o argv foi montado com o teto estourado")
+
+        original = execucao.montar_comando_de_auditoria
+        execucao.montar_comando_de_auditoria = nao_deveria
+        self.addCleanup(setattr, execucao, "montar_comando_de_auditoria",
+                        original)
+
+        estourado = (tarefas.TETO_DIARIO_BRL / tarefas.USD_BRL) + 1
+        fora = ex.ExecutorAuditor().rodar(
+            self.tarefa_de_auditoria(), gasto_usd=estourado,
+            repinturas={"auditoria_vencida": "verde"})
+        self.assertEqual(fora["estado"], "falha")
+        self.assertTrue(fora.get("recusada"))
+        self.assertIn("teto", fora["erro"])
+
+    def test_tarefa_vermelha_tambem_nao_monta_argv(self):
+        def nao_deveria(*_a, **_k):
+            raise AssertionError("o argv foi montado com a tarefa vermelha")
+
+        original = execucao.montar_comando_de_auditoria
+        execucao.montar_comando_de_auditoria = nao_deveria
+        self.addCleanup(setattr, execucao, "montar_comando_de_auditoria",
+                        original)
+
+        fora = ex.ExecutorAuditor().rodar(self.tarefa_de_auditoria(),
+                                          repinturas={})
+        self.assertTrue(fora.get("recusada"))
+
+
 class ATomada(unittest.TestCase):
     """A interface, e o braco que ainda nao existe."""
 
@@ -259,6 +372,16 @@ class ATomada(unittest.TestCase):
     def test_o_claude_esta_na_tabela_e_e_o_padrao_do_painel(self):
         self.assertIn("claude", ex.EXECUTORES)
         self.assertIsInstance(ex.executor_de("claude"), ex.ExecutorClaude)
+
+    def test_4h_o_nome_do_auditor_e_o_MESMO_OBJETO_de_auditoria_EXECUTOR(self):
+        """Identidade, não igualdade: `auditoria.EXECUTOR` é a constante, e
+        `ExecutorAuditor.nome` tem de apontar para ELA — nunca para uma
+        segunda string "auditor" escrita à mão, que divergiria em silêncio."""
+        import auditoria
+        self.assertIs(ex.ExecutorAuditor.nome, auditoria.EXECUTOR)
+        self.assertIn(auditoria.EXECUTOR, ex.EXECUTORES)
+        self.assertIsInstance(ex.executor_de(auditoria.EXECUTOR),
+                              ex.ExecutorAuditor)
 
     def test_nome_desconhecido_devolve_nada_e_nao_o_padrao(self):
         """Falha fechada. Um nome torto que caisse no padrao faria o painel
