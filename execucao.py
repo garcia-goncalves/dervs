@@ -120,9 +120,11 @@ FERRAMENTAS_PROIBIDAS_NA_AUDITORIA = [
     "Task", "WebFetch", "WebSearch",
 ]
 
-# Decisao do dono no portao de risco: prontuario sob LGPD fica fora da entrega 1.
-# Comparacao sempre em minusculas.
-PROJETOS_BLOQUEADOS = {"ajudei-saude"}
+# MUDOU DE CASA (revisao de seguranca de 02/09/2026) para `tarefas.py`: o
+# SERVIDOR precisa desta lista para recusar o pedido de auditoria de um
+# projeto bloqueado, e nao pode importar `execucao` (`test_rotas.AMPUTADOS`).
+# O nome continua aqui, e e' o MESMO objeto — nao ha uma segunda lista.
+PROJETOS_BLOQUEADOS = tarefas.PROJETOS_BLOQUEADOS
 
 # As 7 frases da linha de status, literais do design.md. Ficam aqui, e nao no
 # HTML, porque quem sabe em que pe a sessao esta e quem le os eventos.

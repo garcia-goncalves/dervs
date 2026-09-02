@@ -2907,9 +2907,15 @@ class OPedidoDeAuditoriaERecusadoFechado(BaseServidorDeVerdade):
             con.close()
 
     def outra_conta(self):
+        # O banco e' compartilhado por TODOS os testes da classe
+        # (`setUpClass` cria um so). Email fixo colidiria quando mais de um
+        # teste desta classe pede uma conta vizinha nova.
+        OPedidoDeAuditoriaERecusadoFechado._contador_vizinho = getattr(
+            OPedidoDeAuditoriaERecusadoFechado, "_contador_vizinho", 0) + 1
+        email = "vizinho%d@teste.local" % self._contador_vizinho
         con = banco.conectar()
         try:
-            uid = banco.criar_usuario("vizinho@teste.local", con=con)
+            uid = banco.criar_usuario(email, con=con)
             con.commit()
         finally:
             con.close()

@@ -58,6 +58,14 @@ MAX_TENTATIVAS = 2
 # e mais facil que o contrario (a mesma logica de TETO_DIARIO_BRL, acima).
 TETO_AUDITORIA_USD = 1.50
 
+# Decisao do dono no portao de risco: prontuario sob LGPD fica fora da entrega
+# 1. Comparacao sempre em minusculas. MUDOU DE CASA (revisao de seguranca de
+# 02/09/2026): `servir._auditoria_pedir` precisa desta lista para nao
+# enfileirar auditoria de um projeto bloqueado, e o servidor nao pode importar
+# `execucao` (`test_rotas.AMPUTADOS`). `execucao.py` reexporta o MESMO
+# objeto — nao ha uma segunda lista no repositorio.
+PROJETOS_BLOQUEADOS = {"ajudei-saude"}
+
 # Palpite, nao decisao: a spec nao fixa numero de turnos para auditoria. 60 e
 # o dobro de MAX_TURNOS porque ler um repositorio inteiro com Read/Grep/Glob
 # gasta turno rapido, e nenhum deles escreve nada — a primeira auditoria real

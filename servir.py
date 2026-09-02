@@ -1142,6 +1142,25 @@ class Hub(SimpleHTTPRequestHandler):
             return ""
         return valor
 
+    @staticmethod
+    def _numero_do_corpo(corpo, campo: str, conversor):
+        """Um campo numerico OPCIONAL do corpo, convertido com `conversor`
+        (`int` ou `float`). Ausente ou `None` -> `(True, None)`. Presente e
+        valido -> `(True, valor)`. Torto (`{}`, `[]`, texto nao numerico)
+        -> `(False, None)` — quem chama recusa fechado com 400, em vez de
+        deixar `float()`/`int()` estourar `TypeError` fora de um `try` e
+        derrubar a rota em 500 (achado da revisao de seguranca de
+        02/09/2026: uma maquina pareada mandando `custo_usd: {}`)."""
+        valor = (corpo or {}).get(campo)
+        if valor is None:
+            return True, None
+        if isinstance(valor, bool):
+            return False, None
+        try:
+            return True, conversor(valor)
+        except (TypeError, ValueError):
+            return False, None
+
     def _bytes_do_corpo(self, corpo, campo: str):
         """Um campo base64url do corpo, ja decodificado. None se torto."""
         return passkey.de_b64url(self._texto_do_corpo(corpo, campo,
@@ -2003,14 +2022,19 @@ class Hub(SimpleHTTPRequestHandler):
 
         if tipo == "desfecho":
             estado = self._texto_do_corpo(corpo, "estado", teto=20)
+            rodadas_ok, rodadas = self._numero_do_corpo(corpo, "rodadas", int)
+            custo_ok, custo_usd = self._numero_do_corpo(corpo, "custo_usd",
+                                                         float)
+            if not (rodadas_ok and custo_ok):
+                return self._json(400, {"erro": "numero invalido"})
             ok = banco.registrar_desfecho(
                 tarefa_id, maquina["id"], estado,
                 ramo=self._texto_do_corpo(corpo, "ramo", teto=200),
                 resumo=self._texto_do_corpo(corpo, "resumo", teto=4000),
                 diff=self._recorte(corpo.get("diff"), 1024 * 1024),
                 pr_url=self._texto_do_corpo(corpo, "pr_url", teto=500),
-                rodadas=corpo.get("rodadas"),
-                custo_usd=corpo.get("custo_usd"),
+                rodadas=rodadas,
+                custo_usd=custo_usd,
                 erro=self._texto_do_corpo(corpo, "erro", teto=2000))
             if not ok:
                 # A tarefa nao e desta maquina, ou o estado nao existe. A mesma
@@ -2052,13 +2076,17 @@ class Hub(SimpleHTTPRequestHandler):
                     banco.gravar_auditoria(
                         maquina["usuario_id"], projeto, "ok", prontos,
                         tarefa_id=tarefa_id,
-                        custo_usd=float(corpo.get("custo_usd") or 0.0),
-                        rodadas=int(corpo.get("rodadas") or 0))
+                        custo_usd=custo_usd or 0.0,
+                        rodadas=rodadas or 0)
             return self._json(200, {"ok": True, "pare": False})
 
         if tipo != "progresso":
             return self._json(400, {"erro": "tipo desconhecido"})
 
+        rodadas_ok, rodadas = self._numero_do_corpo(corpo, "rodadas", int)
+        custo_ok, custo_usd = self._numero_do_corpo(corpo, "custo_usd", float)
+        if not (rodadas_ok and custo_ok):
+            return self._json(400, {"erro": "numero invalido"})
         linhas = []
         cru = corpo.get("linhas")
         if isinstance(cru, list):
@@ -2071,8 +2099,8 @@ class Hub(SimpleHTTPRequestHandler):
         pare = banco.registrar_progresso(
             tarefa_id, maquina["id"],
             frase=self._texto_do_corpo(corpo, "frase", teto=500),
-            linhas=linhas, rodadas=corpo.get("rodadas"),
-            custo_usd=corpo.get("custo_usd"))
+            linhas=linhas, rodadas=rodadas,
+            custo_usd=custo_usd)
         return self._json(200, {"ok": True, "pare": bool(pare)})
 
     # ------------------------------------------------- as quatro rotas do dono
@@ -2372,8 +2400,16 @@ class Hub(SimpleHTTPRequestHandler):
         pelo `executor` e `agente/enviar.fazer_a_tarefa`) e o `executor` e
         `auditoria.EXECUTOR` — a MESMA constante usada em `auditoria.py` e
         `banco.enfileirar`, nunca a string escrita a mao duas vezes.
+
+        Duas travas antes de escrever, achadas na revisao de seguranca de
+        02/09/2026: o projeto tem de ser DESTA conta (`banco.montar_estado`),
+        e nao pode estar em `tarefas.PROJETOS_BLOQUEADOS` — a mesma lista que
+        `fila.trilho_de` aplica, comparada em minusculas para nao se escapar
+        com maiuscula. "Nao existe" e "nao e seu" devolvem a MESMA resposta:
+        distinguir diria a quem tem sessao quais projetos existem na conta do
+        vizinho.
         """
-        corpo, _sessao = self._guarda_de_escrita()
+        corpo, sessao = self._guarda_de_escrita()
         if corpo is None:
             return
         if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
@@ -2383,6 +2419,17 @@ class Hub(SimpleHTTPRequestHandler):
         projeto = self._texto_do_corpo(corpo, "projeto", teto=200)
         if not projeto:
             return self._json(400, {"erro": "faltou o projeto"})
+        con = banco.conectar()
+        try:
+            estado = banco.montar_estado(con, usuario_id=sessao["usuario_id"])
+        finally:
+            con.close()
+        nomes_da_conta = {(p.get("nome") or "").lower()
+                          for p in estado["projetos"]}
+        if projeto.lower() not in nomes_da_conta:
+            return self._json(404, {"erro": "projeto nao encontrado"})
+        if projeto.lower() in tarefas.PROJETOS_BLOQUEADOS:
+            return self._json(403, {"erro": "projeto bloqueado"})
         entraram = banco.enfileirar([{
             "id": "%s:%s" % (auditoria.REGRA_DE_VENCIMENTO, projeto),
             "projeto": projeto,
