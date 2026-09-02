@@ -46,6 +46,34 @@ services:
       DERVS_GITHUB_ID: ${DERVS_GITHUB_ID:-}
       DERVS_GITHUB_SECRET: ${DERVS_GITHUB_SECRET:-}
 
+      # A PORTA 2 — conectar a conta do GitHub. Estas três são de um aplicativo
+      # DIFERENTE das duas de cima: aquelas são o OAuth App, que só diz quem
+      # você é; estas são o GitHub App, que é quem lê os repositórios.
+      #
+      # Faltavam aqui, e a falta era invisível. `servir.py` lê
+      # `DERVS_GITHUB_APP_SLUG` para decidir se oferece a instalação; sem ela,
+      # `/api/github/instalar` responde 404 e a tela diz apenas "o aplicativo
+      # não está registrado" — a mesma frase de quando ele realmente não está.
+      # Registrar o app no github.com e escrever os valores no `.env` do
+      # servidor não mudaria nada, porque nada os punha dentro do processo.
+      # É a segunda metade do defeito de 28/08/2026, um arquivo adiante.
+      #
+      # `:-` e não `:?`, de propósito: o painel serve para muito mais que esta
+      # porta, e trocar uma função ausente por um site fora do ar é pior.
+      # Ausente, a porta some da tela; presente, ela aparece.
+      #
+      # A CHAVE PRIVADA vive aqui em UMA LINHA, sem as linhas `-----BEGIN`/
+      # `-----END`. Arquivo de ambiente não guarda texto de várias linhas, e
+      # `github_app.chave_de_pem` junta o miolo ignorando a armadura — medido
+      # nos dois formatos (PKCS#1 e PKCS#8) em 02/09/2026, com a chave de
+      # teste do repositório: o resultado é a mesma chave. Quem achata o
+      # arquivo é o workflow de publicação, e ele tira a armadura ANTES —
+      # colar o arquivo inteiro numa linha só produz algo que começa com
+      # `-----`, e o filtro descarta a linha inteira: a chave sairia vazia.
+      DERVS_GITHUB_APP_SLUG: ${DERVS_GITHUB_APP_SLUG:-}
+      DERVS_GITHUB_APP_ID: ${DERVS_GITHUB_APP_ID:-}
+      DERVS_GITHUB_APP_KEY: ${DERVS_GITHUB_APP_KEY:-}
+
       # O banco fora da imagem. A imagem é jogada fora a cada publicação; o
       # volume não. Sem isto, toda conta e todo pareamento sumiriam a cada
       # deploy, em silêncio.

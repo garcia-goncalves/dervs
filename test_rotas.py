@@ -297,11 +297,37 @@ class TodaRotaDeclaraAcesso(unittest.TestCase):
 
     def test_a_classe_maquina_e_conferida_no_despacho(self):
         """Rotulo que ninguem le e pior que rotulo nenhum: da a impressao de
-        haver guarda. O despacho tem de citar a classe e o token."""
+        haver guarda. O despacho tem de citar a classe e o token.
+
+        ESTE GUARDA JA FICOU VERMELHO POR ESTAR CERTO, em 02/09/2026. Uma
+        primeira versao do dreno do corpo do pedido transformou `_despachar`
+        num envelope e mudou a decisao de acesso para uma funcao vizinha:
+        lendo so `_despachar`, o guarda achou o dreno e nao achou a
+        conferencia. Nao era falso alarme -- mover a conferencia para o
+        vizinho e ESQUECE-LA la teria o mesmo sintoma. O dreno depois subiu
+        para `handle_one_request`, e `_despachar` voltou a ser o roteador
+        inteiro.
+
+        A licao ficou, e e o segundo caso abaixo: nao basta que a conferencia
+        exista em ALGUMA funcao -- ela tem de estar na que `do_POST` de fato
+        chama. Guarda que le um nome fixo fica verde sobre um servidor sem
+        guarda no dia em que o nome mudar de dono.
+        """
         import inspect
         fonte = inspect.getsource(servir.Hub._despachar)
         self.assertIn('rota.acesso == "maquina"', fonte)
         self.assertIn("maquina_por_token", fonte)
+
+    def test_o_despacho_lido_acima_e_o_que_os_verbos_chamam(self):
+        """A ponte entre o nome lido e o codigo que roda de verdade."""
+        import inspect
+        for verbo in ("do_GET", "do_POST"):
+            fonte = inspect.getsource(getattr(servir.Hub, verbo))
+            self.assertIn(
+                "self._despachar(", fonte,
+                "%s nao chama mais _despachar. O guarda acima passou a ler "
+                "codigo que ninguem executa: aponte-o para o nome novo."
+                % verbo)
 
     def test_nenhuma_rota_de_dono_aceita_token_de_maquina(self):
         """O token do agente vale para reportar, e para mais nada. Se ele

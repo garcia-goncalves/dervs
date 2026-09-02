@@ -44,11 +44,100 @@ passou por conversa nem por arquivo do repositorio.
 
 O Client ID tambem esta gravado como *variable* `DERVS_GITHUB_ID` no mesmo lugar.
 
-**Falta**: as duas variaveis chegarem ao ambiente do servidor, e convidar cada
-pessoa pela tabela `credencial` (secao "Depois: liberar quem entra").
+As duas ja chegam ao `/opt/dervs/.env` do servidor a cada publicacao (desde
+28/08/2026) e cada pessoa e convidada automaticamente pela *variable*
+`DERVS_DONOS` — a secao "Depois: liberar quem entra" descreve o caminho manual,
+que continua valendo para quem entrar depois.
 
 **Nao existe** app para `localhost`: na maquina do dono a porta
 **Entrar - ambiente local** ja resolve, e app de teste seria superficie a toa.
+
+---
+
+## A porta 2 — conectar a sua conta do GitHub
+
+**Isto e outro aplicativo.** O de cima (OAuth App, `DERVS`) so diz *quem voce
+e*. Este (GitHub App, `DERVS coletor`) e quem *le os seus repositorios* — e o
+que faz a tela **Conectar projeto** funcionar de verdade.
+
+Ele **ja existe**, criado em 27/08/2026:
+
+| Valor | Conteudo |
+|---|---|
+| Nome | `DERVS coletor` |
+| Nome curto na URL (`DERVS_GITHUB_APP_SLUG`) | `dervs-coletor` |
+| **App ID** (`DERVS_GITHUB_APP_ID`) | `4739197` |
+| Chave privada (`DERVS_GITHUB_APP_KEY`) | no cofre do repositorio |
+| Onde administrar | <https://github.com/settings/apps/dervs-coletor> |
+
+As tres ja estao gravadas no repositorio e, desde 02/09/2026, chegam ao
+`/opt/dervs/.env` e **entram no container** a cada publicacao. Ate essa data as
+tres paravam no meio do caminho: o `docker-compose.yml` nao as passava para
+dentro do processo, e a porta 2 estava morta em producao sem que nada
+avisasse. O teste `test_publicar.OContainerRecebeOQueOCodigoLe` existe para que
+isso nao volte — e ele vale para qualquer variavel nova, nao so para estas.
+
+### O unico passo que falta, e ele exige a sua mao
+
+O GitHub precisa saber **para onde mandar a pessoa de volta** depois que ela
+autoriza a instalacao. Sem isso ela termina numa pagina do proprio GitHub, o
+DERVS nunca fica sabendo, e a tela continua dizendo "nao deu para conferir".
+
+**1.** Abra <https://github.com/settings/apps/dervs-coletor>.
+
+> O GitHub vai pedir a sua identidade de novo (digital, PIN ou chave). Isso
+> chama-se *sudo mode* e nao tem como evitar: e biometria, ninguem faz por
+> voce.
+
+**2.** Na aba **General**, ache o bloco **Identifying and authorizing users**.
+
+**3.** No campo **Setup URL (optional)**, cole exatamente isto — inclusive o
+`https://`, e sem barra no fim:
+
+```
+https://dervs.com.br/github/instalado
+```
+
+**4.** Logo abaixo, **marque** a caixa **Redirect on update**. Ela e o que faz
+o GitHub mandar a pessoa de volta tambem quando ela *muda* os repositorios de
+uma instalacao que ja existia — sem ela, so a primeira vez volta.
+
+**5.** Role ate o fim e clique em **Save changes**.
+
+**O que aparece se der certo:** uma faixa verde no alto escrita
+**"Registration successfully updated"**, e o campo **Setup URL** mostrando o
+endereco que voce colou.
+
+**O que fazer se der errado:**
+
+| O que voce ve | O que e |
+|---|---|
+| `Setup URL is not a valid URL` | faltou o `https://`, ou sobrou um espaco |
+| A pagina volta ao inicio pedindo a digital | o *sudo mode* venceu (sao alguns minutos); confirme e refaca |
+| Nao acho **Setup URL** | voce esta em **OAuth Apps**, nao em **GitHub Apps** — sao listas diferentes no mesmo menu |
+
+### Como saber que a porta 2 esta viva
+
+Depois da proxima publicacao, entre em <https://dervs.com.br>, va em
+**Conectar projeto** e olhe a porta do meio:
+
+- **Antes:** o botao de conectar a conta do GitHub nao aparece.
+- **Depois:** ele aparece, leva ao GitHub, e ao voltar a tela mostra a
+  instalacao ligada.
+
+Se o botao continuar sumido depois de publicar, o registro da publicacao
+diz por que, e ha tres desfechos possiveis:
+
+| No registro da publicacao | O que aconteceu |
+|---|---|
+| `as tres do GitHub App gravadas no .env` | deu certo |
+| `AVISO: as tres do GitHub App nao foram gravadas (<motivo>)` | faltou uma, ou uma nao passou na peneira; **o que ja estava no servidor continua valendo** |
+| `A CHAVE DO GITHUB APP NAO SERVE` | as tres chegaram, mas o servidor nao consegue ler a chave — quase sempre ela esta protegida por senha |
+
+A ultima linha e a publicacao **falhando de proposito**. O site continua no ar
+e tudo o mais funciona; so a porta 2 esta morta, e sem essa conferencia ela
+morreria em silencio, dizendo apenas "nao deu para conferir" — que e a mesma
+frase de quando voce cancela no meio.
 
 ---
 

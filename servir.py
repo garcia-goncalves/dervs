@@ -562,6 +562,172 @@ class Hub(SimpleHTTPRequestHandler):
         """So o caminho, sem a query. A tabela de rotas casa EXATO."""
         return self.path.split("?", 1)[0]
 
+    # ------------------------------------------------------- o dreno
+    #
+    # `protocol_version` e HTTP/1.0: o soquete fecha depois de TODA resposta.
+    # E quem recusa um POST (401, 403, 404, 500) responde antes de qualquer
+    # rota rodar -- e as rotas sao os unicos lugares que leem `rfile`. Recusa =
+    # corpo INTOCADO no buffer de recepcao.
+    #
+    # Fechar um soquete com bytes por ler faz o sistema mandar um RST em vez do
+    # FIN, e o RST DESCARTA a resposta que ja estava no buffer do outro lado. A
+    # resposta foi escrita, viajou, e morreu a um passo de ser lida.
+    #
+    # No teste isso aparecia como `WinError 10053` em caso DIFERENTE a cada
+    # corrida -- 2 em 24, medido em 02/09/2026, e havia quem chamasse de ruido
+    # do Windows. Nao e: dos 405 pedidos com corpo de uma corrida, 189
+    # terminavam com bytes por ler. Fora do teste, e o navegador de quem usa o
+    # painel levando "conexao perdida" no lugar do 401 -- e toda tela que
+    # trataria `401` mostrando "sua sessao venceu" mostra um erro de rede.
+    #
+    # AQUI E NAO EM CADA ROTA, pelo mesmo motivo de a classificacao de acesso
+    # viver na tabela: `if` escrito dentro da funcao nasce esquecido na rota
+    # seguinte. Rota nova ja nasce coberta.
+
+    #: Ate onde vale drenar. Acima do maior corpo aceito (`TETO_DO_RELATORIO`,
+    #: 4 MiB) e uma promessa que ninguem precisa cumprir: drenar um gigabyte
+    #: que o cliente inventou seria pagar a banda de quem ataca. Corpo maior
+    #: que isto continua levando RST, e isso e o certo.
+    TETO_A_DRENAR = 8 * 1024 * 1024
+
+    class _Contado:
+        """Envelope de `rfile` que so anota quanto a rota leu.
+
+        Sem contar nao da para saber quanto falta: cada rota tem um teto
+        proprio, e algumas nao leem nada.
+        """
+
+        def __init__(self, arquivo):
+            self._arquivo = arquivo
+            self.lido = 0
+
+        def read(self, k=-1):
+            d = self._arquivo.read(k)
+            self.lido += len(d)
+            return d
+
+        def readline(self, *a):
+            d = self._arquivo.readline(*a)
+            self.lido += len(d)
+            return d
+
+        #: Formas de LER que este envelope nao sabe contar. Delegar em
+        #: silencio deixaria `lido` baixo, e o dreno tentaria ler A MAIS —
+        #: num soquete de verdade isso nao estoura, BLOQUEIA, e a thread fica
+        #: presa ate o cliente fechar. Melhor quebrar alto, na primeira vez,
+        #: do que pendurar o servidor de vez em quando.
+        NAO_CONTADAS = ("readinto", "readinto1", "read1", "peek", "readlines")
+
+        def __getattr__(self, nome):
+            if nome in self.NAO_CONTADAS:
+                raise AttributeError(
+                    "%s nao passa pelo contador do dreno. Use read() ou "
+                    "readline(), ou ensine _Contado a contar %s."
+                    % (nome, nome))
+            return getattr(self._arquivo, nome)
+
+    def parse_request(self):
+        """Depois de ler a linha de pedido e os cabecalhos, zera a conta.
+
+        O envelope e instalado antes de qualquer leitura, porque e so aqui que
+        da para envolve-lo. Mas `parse_request` consome a linha de pedido e os
+        cabecalhos pelo mesmo `rfile`, e esses bytes NAO sao corpo: contados,
+        eles fariam o dreno achar que a rota ja leu o que nao leu.
+        """
+        pronto = super().parse_request()
+        if isinstance(self.rfile, self._Contado):
+            self.rfile.lido = 0
+        return pronto
+
+    def handle_one_request(self):
+        """Atende um pedido e, ao fim, LE O CORPO QUE NINGUEM LEU.
+
+        AQUI, E NAO NO DESPACHO. A primeira versao disto vivia em
+        `_despachar`, e por isso cobria GET e POST e mais nada: `do_HEAD`
+        responde 405 por fora, e PUT/DELETE/PATCH caem no 501 do
+        `BaseHTTPRequestHandler` sem passar por rota nenhuma. Os tres deixavam
+        o corpo inteiro por ler — 16 de 16 bytes, medido — e levavam o mesmo
+        RST que este conserto existe para evitar. Achado pela revisao de
+        02/09/2026, contra a mensagem de commit que dizia "num lugar so".
+        """
+        verdadeiro = self.rfile
+        contado = self._Contado(verdadeiro)
+        self.rfile = contado
+        try:
+            super().handle_one_request()
+        finally:
+            self.rfile = verdadeiro
+            try:
+                self._drenar(contado.lido)
+            except Exception:
+                # O dreno e cortesia com o cliente, nunca o desfecho do
+                # pedido. Deixar uma excepcao daqui subir SUBSTITUIRIA o que
+                # de fato aconteceu — inclusive uma excepcao de verdade vinda
+                # do atendimento, cujo rastro se perderia.
+                pass
+
+    def _drenar(self, ja_lido: int):
+        """Le o que sobrou do corpo declarado, para o fecho ser FIN e nao RST."""
+        cabecalhos = getattr(self, "headers", None)
+        if cabecalhos is None:
+            return              # o pedido nem chegou a ser entendido
+        # `Transfer-Encoding: chunked` sem `Content-Length` nao e drenado, e
+        # isso e deliberado: o corpo em pedacos nao diz de antemao quanto e, e
+        # adivinhar seria ler o inicio de outra coisa. Em producao o nginx
+        # normaliza chunked em `Content-Length` antes de repassar, entao o
+        # caminho nao existe la; um cliente que fale direto com a porta leva o
+        # RST, e o preco e dele.
+        try:
+            n = int(cabecalhos.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            # Cabecalho torto: nao da para saber quanto e corpo, e chutar
+            # seria ler o inicio de outra coisa. Quem manda `Content-Length`
+            # invalido perde a propria resposta, e so a dele.
+            return
+        falta = min(n, self.TETO_A_DRENAR) - ja_lido
+        if falta <= 0:
+            return
+        # PRAZO, E SO AQUI. Esta e a unica espera que um anonimo alcanca em
+        # QUALQUER caminho -- 404 de URL inventada, 403 de Host, 401 sem
+        # sessao --, e nenhum desses passa por balcao. Hoje o nginx segura
+        # (`proxy_request_buffering` ligado, `client_max_body_size 2m`) e a
+        # porta so aceita 127.0.0.1; mas essa defesa mora num arquivo que
+        # nenhum workflow aplica. `socket.timeout` e subclasse de `OSError`, e
+        # o laco abaixo ja para nele.
+        #
+        # O prazo e devolvido no fim porque `protocol_version` pode virar
+        # HTTP/1.1 um dia -- o comentario de `do_HEAD` ja anuncia a intencao --
+        # e ai a conexao seguiria viva com um prazo que ninguem escolheu.
+        try:
+            antes = self.connection.gettimeout()
+            self.connection.settimeout(self.SEGUNDOS_PARA_DRENAR)
+        except (OSError, AttributeError):
+            antes = None            # soquete de mentira, ou ja fechado
+        try:
+            self._drenar_ate(falta)
+        finally:
+            try:
+                self.connection.settimeout(antes)
+            except (OSError, AttributeError):
+                pass
+
+    #: Quanto tempo vale esperar pelo corpo que o cliente prometeu. Curto de
+    #: proposito: o corpo ja deveria estar no buffer -- quem manda o
+    #: cabecalho e some nao merece uma thread.
+    SEGUNDOS_PARA_DRENAR = 5
+
+    def _drenar_ate(self, falta: int):
+        while falta > 0:
+            try:
+                pedaco = self.rfile.read(min(falta, 65536))
+            except OSError:
+                # O cliente ja foi embora. Nao ha o que drenar e nao ha erro a
+                # relatar: a resposta dele ja nao interessa a ninguem.
+                break
+            if not pedaco:
+                break              # fim do fluxo: prometeu mais do que mandou
+            falta -= len(pedaco)
+
     def _despachar(self, metodo: str):
         if not self._host_confiavel():
             return self._json(403, {"erro": "host nao permitido"})
@@ -786,7 +952,7 @@ class Hub(SimpleHTTPRequestHandler):
             return self._sem_conteudo()
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            corpo = json.loads(self.rfile.read(min(n, 1024)) or b"{}")
+            corpo = json.loads(self.rfile.read(max(0, min(n, 1024))) or b"{}")
         except (ValueError, OSError):
             return self._sem_conteudo()
         if not isinstance(corpo, dict):
@@ -942,7 +1108,7 @@ class Hub(SimpleHTTPRequestHandler):
         """O corpo do pedido como dicionario, ou None. Nunca levanta."""
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            corpo = json.loads(self.rfile.read(min(n, teto)) or b"{}")
+            corpo = json.loads(self.rfile.read(max(0, min(n, teto))) or b"{}")
         except (ValueError, OSError):
             return None
         return corpo if isinstance(corpo, dict) else None
@@ -1566,7 +1732,6 @@ class Hub(SimpleHTTPRequestHandler):
                 # O numero ja e de outra conta. Mesmo desfecho de todo o resto
                 # que nao deu: nao gravou, e nao e um erro vermelho.
                 return self._ir_para("/?github=nao-deu#/conectar")
-            return self._ir_para("/?github=ligado#/conectar")
             # A QUERY VAI ANTES DO `#`, e nao depois. `/#/conectar?github=x`
             # poe o parametro DENTRO do fragmento, e `location.search` sai
             # vazio — a tela nunca leria o recado. Achado clicando, nao lendo:
@@ -2161,7 +2326,7 @@ class Hub(SimpleHTTPRequestHandler):
             return None, None
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            corpo = json.loads(self.rfile.read(min(n, 16_384)) or b"{}")
+            corpo = json.loads(self.rfile.read(max(0, min(n, 16_384))) or b"{}")
         except (ValueError, OSError):
             self._json(400, {"erro": "pedido invalido"})
             return None, None

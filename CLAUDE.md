@@ -117,6 +117,39 @@ teste que cobra os módulos — o nome entra à mão no `Dockerfile` e em
 propósito.** O painel não pode saber onde o repositório está na máquina de quem
 lê. `test_conectar_ponta_a_ponta` reprova se o espaço reservado sumir.
 
+## As duas travas de 02/09/2026
+
+**Chegar ao servidor não põe a variável dentro do container.** São dois
+arquivos, mantidos por mãos diferentes: `publicar.yml` escreve no ambiente do
+servidor, e o bloco `environment:` do `docker-compose.yml` é que passa aquilo
+para dentro do processo. As três variáveis do GitHub App tinham a primeira
+metade e não a segunda — a porta 2 estava morta em produção **por
+construção**, e a tela dizia "o aplicativo não está registrado", que é a mesma
+frase do estado legítimo. `test_publicar.OContainerRecebeOQueOCodigoLe` compara
+as **duas listas** — toda leitura de ambiente de `servir.py` e `banco.py`
+contra o compose. Variável nova sem entrada reprova; deixar de fora exige
+motivo escrito em `FORA_DO_COMPOSE_DE_PROPOSITO`.
+
+**Resposta escrita não é resposta entregue.** `protocol_version` é HTTP/1.0:
+o soquete fecha depois de toda resposta. Quem **recusa** um POST (401, 403,
+404, 500) responde em `_despachar` antes de qualquer rota rodar, e as rotas são
+os únicos lugares que leem `rfile` — recusa deixava o corpo intocado. Fechar
+com bytes por ler gera RST em vez de FIN, e o RST **descarta a resposta já
+entregue ao buffer do outro lado**. Por isso o dreno vive em
+`handle_one_request`, e não no despacho: ali passa **todo verbo**, inclusive o
+`405` do `HEAD` e o `501` de `PUT`/`DELETE`/`PATCH`, que não passam por rota
+nenhuma. Uma primeira versão morava em `_despachar` e cobria só `GET` e `POST`
+— "rota nova já nasce coberta" era verdade para rota, não para verbo.
+
+`test_rotas` lê o código-fonte de `_despachar` para cobrar a conferência de
+acesso, **e um segundo caso cobra que `do_GET`/`do_POST` chamem justamente
+essa função**. Sem essa ponte, o guarda fica verde lendo código que ninguém
+executa — foi o que quase aconteceu quando o dreno mudou de casa.
+
+*Medido antes do conserto:* 189 de 405 pedidos com corpo deixavam bytes por
+ler, e a suíte caía em 2 de 24 corridas, em caso diferente a cada vez. **Não
+era o Windows, e não era o teste.**
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em
@@ -144,6 +177,19 @@ lê. `test_conectar_ponta_a_ponta` reprova se o espaço reservado sumir.
 - Teste com data fixa (`AGORA = datetime(...)`) tem de passar `agora_iso` para
   toda função que compara prazo. Sem isso o teste passa hoje e fica vermelho
   sozinho amanhã, sem ninguém tocar em nada.
+- **Falha probabilística não vira teste pelo soquete.** Medido em 02/09: pelo
+  soquete de verdade, corpo de 2 KB nunca falhou em 200 tentativas e corpo de
+  256 KB falhou 5% das vezes — um teste assim ficaria verde quase sempre com o
+  defeito de pé. `OCorpoDoPedidoEDrenado` dirige o handler por um soquete de
+  mentira e pergunta pelo **mecanismo**, que é determinístico.
+- **Sabote com tamanho, não só com presença.** A sabotagem que fez o dreno
+  parar depois do primeiro pedaço deixou a suíte verde: todo corpo dos casos
+  cabia num `read(65536)`, e o teste media "leu alguma coisa" em vez de "leu
+  tudo". Foi preciso um caso de 200 KiB. Guarda de laço precisa de entrada que
+  obrigue mais de uma volta.
+- **Rodar dois arquivos não é rodar a suíte.** Em 02/09 a CI ficou vermelha num
+  guarda que lê código-fonte, porque um rename mudou a função de lugar e eu só
+  havia rodado os dois arquivos que estava mexendo.
 
 ## Armadilhas desta máquina
 
