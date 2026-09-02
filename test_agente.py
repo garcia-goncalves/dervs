@@ -24,7 +24,11 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
+import textwrap
 import threading
 import unittest
 from http.server import ThreadingHTTPServer
@@ -34,10 +38,12 @@ os.environ.setdefault("DERVS_AMBIENTE", "local")
 os.environ.setdefault("DERVS_COFRE",
                       "chave-de-teste-que-nao-e-segredo-nenhum-0123456789")
 
-import banco     # noqa: E402
-import coletar   # noqa: E402
-import cortina   # noqa: E402
-import servir    # noqa: E402
+import auditoria  # noqa: E402
+import banco      # noqa: E402
+import coletar    # noqa: E402
+import cortina    # noqa: E402
+import execucao   # noqa: E402
+import servir     # noqa: E402
 
 from agente import enviar  # noqa: E402
 
@@ -991,6 +997,210 @@ class OCodigoRecusadoDizOsQuatroMotivos(unittest.TestCase):
         frase = enviar._explicar("/agente/relatorio", 401)
         self.assertNotIn("outro DERVS", frase)
         self.assertIn("nao esta mais autorizada", frase)
+
+
+# O duble da sessao de auditoria: o MESMO molde de `test_executor.py`, um
+# script Python que cospe `stream-json` linha a linha. O binario `claude` nao
+# e chamado em lugar nenhum deste arquivo — a CI nao tem login, e cada corrida
+# gastaria a assinatura do dono.
+SESSAO_DE_AUDITORIA_DE_MENTIRA = textwrap.dedent('''
+    import json, sys, time
+    def diga(o):
+        sys.stdout.write(json.dumps(o) + "\\n")
+        sys.stdout.flush()
+    diga({"type": "system", "subtype": "init"})
+    time.sleep(0.1)
+    diga({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Read", "input": {"file_path": "x.py"}}]}})
+    time.sleep(0.1)
+    achados = {"achados": [
+        {"arquivo": "x.py", "linha": 1, "categoria": "seguranca",
+         "gravidade": "alta",
+         "frase": "x comeca fixado em 1, e deveria vir de configuracao.",
+         "o_que_fazer": "Ler o valor de uma variavel de ambiente ou arquivo."},
+        {"arquivo": "x.py", "linha": 2, "categoria": "teste",
+         "gravidade": "baixa",
+         "frase": "nao ha teste nenhum cobrindo o valor de x neste arquivo.",
+         "o_que_fazer": "Escrever um caso que reprove quando x mudar sozinho."}
+    ]}
+    diga({"type": "result", "subtype": "success", "is_error": False,
+          "terminal_reason": "completed", "num_turns": 2,
+          "total_cost_usd": 0.42, "result": json.dumps(achados)})
+''').strip()
+
+
+class OFioDaAuditoriaVaiAteOBanco(unittest.TestCase):
+    """**O teste que faltava.** Uma corrida de auditoria inteira, do script de
+    mentira ate a linha gravada no banco — sem duble no meio.
+
+    Cada metade disto ja tinha teste, e a suite ficava verde com o produto
+    quebrado: `test_executor.py` provava que o braco devolve o JSON, e
+    `test_servir.py` provava que `_resultado` grava quando recebe `achados`.
+    Faltava ligar as pontas — e nada, em lugar nenhum do repositorio, produzia
+    a chave `achados`. A auditoria disparava o binario, gastava o teto do dia,
+    e o bloco de gravacao era INALCANCAVEL.
+
+    Por isso este caso sobe um servidor de verdade, roda o braco de verdade
+    sobre um repositorio git de verdade, e pergunta ao BANCO — nunca ao
+    desfecho que o braco devolveu.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tem_git = bool(shutil.which("git"))
+        cls.dir = tempfile.TemporaryDirectory()
+        cls._banco_antigo = banco.BANCO
+        banco.BANCO = Path(cls.dir.name) / "hub.db"
+        con = banco.conectar()
+        cls.uid = banco.criar_usuario("dono@teste.local", con=con)
+        con.close()
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), servir.Hub)
+        cls.porta = cls.srv.server_address[1]
+        cls._porta_antiga, servir.PORTA = servir.PORTA, cls.porta
+        cls._hosts_antigos = servir.HOSTS_OK
+        servir.HOSTS_OK = {"127.0.0.1:%d" % cls.porta}
+        cls.linha = threading.Thread(target=cls.srv.serve_forever, daemon=True)
+        cls.linha.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+        servir.PORTA = cls._porta_antiga
+        servir.HOSTS_OK = cls._hosts_antigos
+        banco.BANCO = cls._banco_antigo
+        cls.dir.cleanup()
+
+    def setUp(self):
+        if not self.tem_git:
+            self.skipTest("sem git nesta maquina")
+        cortina.zerar_tentativas()
+        self.addCleanup(cortina.zerar_tentativas)
+        self.pasta = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.pasta, True)
+        self.projeto = Path(self.pasta) / "alvo"
+        self.projeto.mkdir()
+        for argv in (["git", "init", "-q", "-b", "main"],
+                     ["git", "config", "user.email", "teste@teste.local"],
+                     ["git", "config", "user.name", "Teste"]):
+            subprocess.run(argv, cwd=str(self.projeto), capture_output=True)
+        (self.projeto / "x.py").write_text("x = 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=str(self.projeto),
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "inicio"],
+                       cwd=str(self.projeto), capture_output=True)
+
+        execucao._auditoria = execucao._zerada_auditoria()
+        execucao._proc = None
+        self.addCleanup(setattr, execucao, "_proc", None)
+        script = Path(self.pasta) / "sessao_de_auditoria_de_mentira.py"
+        script.write_text(SESSAO_DE_AUDITORIA_DE_MENTIRA, encoding="utf-8")
+        original = execucao.montar_comando_de_auditoria
+        execucao.montar_comando_de_auditoria = lambda *a, **k: [
+            sys.executable, str(script)]
+        self.addCleanup(setattr, execucao, "montar_comando_de_auditoria",
+                        original)
+
+    def token_de_maquina(self):
+        codigo = banco.novo_codigo(6)
+        banco.abrir_pareamento(self.uid, codigo, banco.prazo(600))
+        dados = json.dumps({"codigo": codigo,
+                            "maquina": "maquina-de-teste"}).encode("utf-8")
+        c = http.client.HTTPConnection("127.0.0.1", self.porta, timeout=10)
+        try:
+            c.request("POST", "/agente/parear", body=dados, headers={
+                "Host": "127.0.0.1:%d" % self.porta,
+                "Content-Type": "application/json",
+                "Content-Length": str(len(dados))})
+            r = c.getresponse()
+            corpo = json.loads((r.read() or b"").decode("utf-8"))
+        finally:
+            c.close()
+        return corpo["token"]
+
+    def subir(self, desfecho, token):
+        dados = json.dumps(desfecho).encode("utf-8")
+        c = http.client.HTTPConnection("127.0.0.1", self.porta, timeout=30)
+        try:
+            c.request("POST", "/agente/resultado", body=dados, headers={
+                "Host": "127.0.0.1:%d" % self.porta,
+                "Authorization": "Token " + token,
+                "Content-Type": "application/json",
+                "Content-Length": str(len(dados))})
+            r = c.getresponse()
+            return r.status, (r.read() or b"").decode("utf-8", "replace")
+        finally:
+            c.close()
+
+    def test_a_auditoria_ponta_a_ponta_TERMINA_COM_ACHADOS_NO_BANCO(self):
+        from agente import executor as ex
+
+        token = self.token_de_maquina()
+        maquina = banco.maquina_por_token(token)
+        tarefa_id = "%s:alvo" % auditoria.REGRA_DE_VENCIMENTO
+        banco.enfileirar([{"id": tarefa_id, "projeto": "alvo",
+                           "regra": auditoria.REGRA_DE_VENCIMENTO,
+                           "gravidade": "baixa", "trilho": "claude",
+                           "executor": auditoria.EXECUTOR}])
+        self.assertTrue(banco.entregar_tarefa(tarefa_id, maquina["id"]))
+
+        desfecho = ex.ExecutorAuditor().rodar(
+            {"id": tarefa_id, "projeto": "alvo",
+             "regra": auditoria.REGRA_DE_VENCIMENTO, "trilho": "claude",
+             "executor": auditoria.EXECUTOR, "detalhe": "",
+             "caminho": str(self.projeto), "teto_usd": 1.5, "tentativas": 0},
+            repinturas={auditoria.REGRA_DE_VENCIMENTO: "verde"})
+        self.assertEqual(desfecho["estado"], "ok", desfecho)
+
+        status, corpo = self.subir(desfecho, token)
+        self.assertEqual(status, 200, corpo)
+
+        corrida = banco.auditoria_do_projeto(self.uid, "alvo")
+        self.assertIsNotNone(corrida, "a corrida de auditoria nao foi gravada: "
+                             "o desfecho subiu sem a chave `achados` e o bloco "
+                             "de gravacao de `_resultado` ficou inalcancavel.")
+        self.assertEqual(corrida["estado"], "ok", corrida["motivo"])
+        self.assertEqual(corrida["achados_n"], 2)
+        gravados = banco.achados_do_projeto(self.uid, "alvo")
+        self.assertEqual(len(gravados), 2, gravados)
+        self.assertEqual(sorted(a["categoria"] for a in gravados),
+                         ["seguranca", "teste"])
+
+    def test_uma_auditoria_grande_nao_e_destruida_pelo_corte_do_resumo(self):
+        """O corte de 4.000 caracteres do `resumo` (`servir.py`) destruiria o
+        JSON de uma auditoria de verdade — 60 achados passam disso com folga.
+
+        Por isso os achados sobem em campo PROPRIO, com teto proprio. Este
+        caso monta 60 achados validos (o maximo do esquema), sobe pelo fio e
+        exige os 60 gravados.
+        """
+        token = self.token_de_maquina()
+        maquina = banco.maquina_por_token(token)
+        tarefa_id = "%s:grande" % auditoria.REGRA_DE_VENCIMENTO
+        banco.enfileirar([{"id": tarefa_id, "projeto": "grande",
+                           "regra": auditoria.REGRA_DE_VENCIMENTO,
+                           "gravidade": "baixa", "trilho": "claude",
+                           "executor": auditoria.EXECUTOR}])
+        self.assertTrue(banco.entregar_tarefa(tarefa_id, maquina["id"]))
+
+        crus = json.dumps({"achados": [
+            {"arquivo": "modulo_%02d.py" % n, "linha": n + 1,
+             "categoria": "bug", "gravidade": "media",
+             "frase": "o achado numero %02d descreve um defeito de verdade." % n,
+             "o_que_fazer": "Conserte o defeito %02d do jeito descrito acima." % n}
+            for n in range(auditoria.MAX_ACHADOS)]})
+        self.assertGreater(len(crus), 4000,
+                           "o corpo do teste encolheu: ele precisa passar do "
+                           "corte de 4.000 do `resumo` para provar algo")
+
+        status, corpo = self.subir({
+            "tipo": "desfecho", "id": tarefa_id, "estado": "ok", "ramo": "",
+            "diff": "", "pr_url": "", "resumo": "", "achados": crus,
+            "rodadas": 9, "custo_usd": 1.5, "erro": ""}, token)
+        self.assertEqual(status, 200, corpo)
+        corrida = banco.auditoria_do_projeto(self.uid, "grande")
+        self.assertEqual(corrida["estado"], "ok", corrida["motivo"])
+        self.assertEqual(corrida["achados_n"], auditoria.MAX_ACHADOS)
 
 
 if __name__ == "__main__":

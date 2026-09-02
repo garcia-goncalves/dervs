@@ -2884,5 +2884,174 @@ class AAuditoriaNoServidorDeVerdade(BaseServidorDeVerdade):
                                   tarefas.teto_da_sessao(0.0), places=6)
 
 
+# ---------------------------------------------------------------------------
+# Os quatro defeitos que a revisao de seguranca de 02/09/2026 achou na
+# Auditoria Profunda, com a suite inteira verde. Cada caso aqui reproduz o
+# CENARIO DE ATAQUE descrito na revisao, e nao uma versao simplificada dele.
+# ---------------------------------------------------------------------------
+
+class OPedidoDeAuditoriaERecusadoFechado(BaseServidorDeVerdade):
+    """Defeitos 2 e 3: quem pode pedir auditoria de qual projeto."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.limpar_fila)
+
+    def com_projeto(self, nome, usuario_id=None):
+        con = banco.conectar()
+        try:
+            banco.gravar(nome, "local", {"nome": nome}, con=con,
+                         usuario_id=usuario_id or self.uid)
+            con.commit()
+        finally:
+            con.close()
+
+    def outra_conta(self):
+        con = banco.conectar()
+        try:
+            uid = banco.criar_usuario("vizinho@teste.local", con=con)
+            con.commit()
+        finally:
+            con.close()
+        return uid
+
+    def pedir_auditoria(self, projeto):
+        cookies, csrf = self.sessao_e_token()
+        return self.pedir("/api/auditoria/pedir", "POST",
+                          {"projeto": projeto}, cookies=cookies,
+                          cabecalhos={"X-Token": csrf})
+
+    def na_fila(self, projeto):
+        con = banco.conectar()
+        try:
+            return con.execute("SELECT COUNT(*) FROM fila WHERE projeto = ?",
+                               (projeto,)).fetchone()[0]
+        finally:
+            con.close()
+
+    # ------------------------------------------------------------- defeito 2
+    def test_defeito2_projeto_bloqueado_nao_entra_na_fila_pela_rota(self):
+        """O cenario: uma conta com sessao manda
+        `{"projeto": "ajudei-saude"}`. Sem esta trava a tarefa entra elegivel,
+        e a maquina clona e roda uma sessao do Claude Code LENDO UM
+        REPOSITORIO DE PRONTUARIO SOB LGPD, excluido de proposito de
+        `execucao.PROJETOS_BLOQUEADOS`.
+
+        A rota escrevia `trilho: "claude"` a mao, pulando `fila.trilho_de` —
+        o unico lugar que aplicava a lista.
+        """
+        bloqueado = sorted(tarefas.PROJETOS_BLOQUEADOS)[0]
+        self.com_projeto(bloqueado)          # ele E um projeto desta conta
+        r = self.pedir_auditoria(bloqueado)
+        self.assertEqual(r.status, 403, r.corpo)
+        self.assertEqual(self.na_fila(bloqueado), 0,
+                         "o projeto bloqueado entrou na fila de auditoria")
+
+    def test_defeito2_o_bloqueio_nao_se_escapa_com_maiuscula(self):
+        """`fila.trilho_de` compara em minusculas. A rota tem de fazer o
+        mesmo, senao `Ajudei-Saude` atravessa."""
+        bloqueado = sorted(tarefas.PROJETOS_BLOQUEADOS)[0].upper()
+        self.com_projeto(bloqueado)
+        r = self.pedir_auditoria(bloqueado)
+        self.assertEqual(r.status, 403, r.corpo)
+        self.assertEqual(self.na_fila(bloqueado), 0)
+
+    # ------------------------------------------------------------- defeito 3
+    def test_defeito3_projeto_da_conta_vizinha_nao_entra_na_fila(self):
+        """O cenario: a conta A manda o nome de um projeto da conta B. A linha
+        aparece no painel de todas as contas e roda NA MAQUINA DE B, queimando
+        o teto diario de R$ 50, que e compartilhado."""
+        vizinho = self.outra_conta()
+        self.com_projeto("segredo-do-vizinho", usuario_id=vizinho)
+        r = self.pedir_auditoria("segredo-do-vizinho")
+        self.assertEqual(r.status, 404, r.corpo)
+        self.assertEqual(self.na_fila("segredo-do-vizinho"), 0,
+                         "a conta A enfileirou trabalho no projeto da conta B")
+
+    def test_defeito3_projeto_inexistente_e_alheio_tem_a_MESMA_resposta(self):
+        """Distinguir "nao existe" de "nao e seu" diria a quem tem sessao
+        quais projetos existem na conta do vizinho."""
+        vizinho = self.outra_conta()
+        self.com_projeto("so-do-vizinho", usuario_id=vizinho)
+        alheio = self.pedir_auditoria("so-do-vizinho")
+        inexistente = self.pedir_auditoria("nao-existe-em-conta-nenhuma")
+        self.assertEqual(alheio.status, inexistente.status)
+        self.assertEqual(alheio.corpo, inexistente.corpo)
+
+    def test_o_projeto_da_propria_conta_continua_entrando(self):
+        """A guarda da guarda: se a recusa passasse a valer para todo mundo,
+        os casos acima ficariam verdes com a funcionalidade morta."""
+        self.com_projeto("meu-projeto")
+        r = self.pedir_auditoria("meu-projeto")
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertEqual(self.na_fila("meu-projeto"), 1)
+
+
+class OResultadoDaAuditoriaNaoDerrubaARota(BaseServidorDeVerdade):
+    """Defeito 1 (o teto proprio dos achados) e o menor do `custo_usd`."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.limpar_fila)
+
+    def test_achados_acima_do_teto_proprio_sao_recusados_inteiros(self):
+        """O JSON dos achados NAO passa pelo corte de 4.000 do `resumo` — mas
+        tambem nao e um balde sem fundo. Acima de `auditoria.TETO_DOS_ACHADOS`
+        a corrida vira `falha` com motivo, e nunca uma lista truncada com cara
+        de completa (lei 2)."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="a:1", regra=auditoria.REGRA_DE_VENCIMENTO,
+                               executor=auditoria.EXECUTOR)
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        gigante = "x" * (auditoria.TETO_DOS_ACHADOS + 1)
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "a:1", "estado": "ok",
+             "achados": gigante})
+        self.assertEqual(r.status, 200, r.corpo)
+        con = banco.conectar()
+        try:
+            corrida = banco.auditoria_do_projeto(self.uid, "dervs", con=con)
+            abertos = banco.achados_do_projeto(self.uid, "dervs", con=con)
+        finally:
+            con.close()
+        self.assertEqual(corrida["estado"], "falha")
+        self.assertTrue(corrida["motivo"])
+        self.assertEqual(abertos, [])
+
+    def test_custo_usd_torto_recusa_fechado_e_nunca_derruba_em_500(self):
+        """O menor: uma maquina pareada mandando `custo_usd: {}` derrubava a
+        rota em 500 (`float({})` levanta `TypeError` fora do `try`)."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="a:1", regra=auditoria.REGRA_DE_VENCIMENTO,
+                               executor=auditoria.EXECUTOR)
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "a:1", "estado": "ok",
+             "custo_usd": {}, "achados": json.dumps({"achados": []})})
+        self.assertEqual(r.status, 400, r.corpo)
+
+    def test_rodadas_torto_tambem_recusa_fechado(self):
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="d:1", regra="env_drift")
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "d:1", "estado": "ok",
+             "rodadas": ["nove"]})
+        self.assertEqual(r.status, 400, r.corpo)
+
+    def test_progresso_com_custo_torto_tambem_recusa_fechado(self):
+        """O mesmo campo, o mesmo `float`, o outro tipo de pedido."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="d:1", regra="env_drift")
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "progresso", "id": "d:1", "custo_usd": {}})
+        self.assertEqual(r.status, 400, r.corpo)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)

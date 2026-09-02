@@ -283,6 +283,29 @@ def _motivo_invalido(achado, indice: int) -> str:
 # objeto de proposito — dois numeros divergem em silencio.
 MAX_ACHADOS = ESQUEMA["properties"]["achados"]["maxItems"]
 
+# O teto do TEXTO CRU dos achados, em caracteres.
+#
+# POR QUE ELE EXISTE, E POR QUE AQUI. O JSON da auditoria sobe do agente num
+# campo PROPRIO do desfecho (`achados`), e nao no `resumo`: o `resumo` e
+# cortado em 4.000 caracteres por `servir._resultado`, e 4.000 caracteres
+# destroem o JSON de qualquer auditoria de verdade — 60 achados passam disso
+# com folga, e um JSON cortado nao e um JSON menor, e lixo.
+#
+# POR QUE ESTE NUMERO. Ele e DERIVADO do esquema, nunca escrito a mao: cada
+# achado cabe em 400 (arquivo) + 300 (frase) + 500 (o_que_fazer) + 400
+# (trecho) = 1.600 caracteres de conteudo, e 4.096 dao 2,5x de folga para as
+# chaves, a pontuacao e o escape de JSON. Vezes `MAX_ACHADOS`, da 240 KiB —
+# generoso o bastante para a auditoria maxima e ainda assim FINITO, que e o
+# que impede o balde sem fundo. Fica abaixo do teto do corpo inteiro do pedido
+# (`servir.Hub.TETO_DO_RESULTADO`, 2 MiB), entao o desfecho ainda sobe.
+#
+# UMA VEZ ALCANCADO, RECUSA-SE INTEIRO — nunca se corta. Cortar deixaria o
+# parse quebrar por acidente e, no pior caso, entregaria uma lista parcial com
+# cara de completa: a mentira da lei 2. Quem cobra o teto e `servir.py`, na
+# fronteira; `execucao.py` corta ANTES de mandar so para o desfecho caber no
+# corpo e subir — o corte quebra o JSON de proposito, e o servidor recusa.
+TETO_DOS_ACHADOS = MAX_ACHADOS * 4096
+
 
 def validar(bruto):
     """A saida do agente -> (achados, "") ou (None, motivo em português).

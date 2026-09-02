@@ -1290,7 +1290,7 @@ def estado(desde=0) -> dict:
 def _zerada_auditoria() -> dict:
     return {
         "estado": "parada", "projeto": "", "custo_usd": 0.0, "linhas": [],
-        "resumo": "", "manchete": "", "corpo": "", "copia": "",
+        "resumo": "", "achados": "", "manchete": "", "corpo": "", "copia": "",
         "projeto_caminho": "", "rodadas": 0,
     }
 
@@ -1414,7 +1414,16 @@ def _ler_auditoria(proc, destino, projeto_caminho) -> None:
             if tipo != "result":
                 continue
 
-            _auditoria["resumo"] = str(evento.get("result") or "")
+            bruto = str(evento.get("result") or "")
+            _auditoria["resumo"] = bruto
+            # O MESMO texto, num campo PROPRIO — e e este que sobe como
+            # `achados` no desfecho. O `resumo` nao serve: `servir._resultado`
+            # o corta em 4.000 caracteres, e um JSON cortado nao e um JSON
+            # menor, e lixo. Aqui o corte e so o que garante que o desfecho
+            # CABE no corpo do pedido e sobe; passando disso o JSON quebra de
+            # proposito e `auditoria.validar` recusa a corrida inteira, do
+            # lado do servidor, que e onde o teto vale.
+            _auditoria["achados"] = bruto[:auditoria.TETO_DOS_ACHADOS]
             if isinstance(evento.get("num_turns"), int) and evento["num_turns"] > 0:
                 _auditoria["rodadas"] = evento["num_turns"]
             _auditoria["estado"] = avancar(_auditoria.get("estado", "rodando"),
@@ -1517,6 +1526,7 @@ def estado_auditoria(desde=0) -> dict:
         "total_de_linhas": len(log),
         "rodadas": int(_auditoria.get("rodadas", 0)),
         "resumo": _auditoria.get("resumo", ""),
+        "achados": _auditoria.get("achados", ""),
         "manchete": _auditoria.get("manchete", ""),
         "corpo": _auditoria.get("corpo", ""),
     }
