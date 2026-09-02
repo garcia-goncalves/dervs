@@ -246,18 +246,14 @@ def settings_da_barreira(python: str = "", script: str = "") -> str:
 METACARACTERES_DO_CMD = ("|", "&", "<", ">", "^", "%")
 
 
-# A etiqueta que separa dado de instrucao dentro do prompt. Se o proprio dado
-# trouxer essa etiqueta escrita, ele fecha o bloco antes da hora e o resto vira
-# instrucao — e exatamente o buraco que o bloco existe para tapar.
-FIM_DO_BLOCO = "</dados-coletados-nao-confiaveis>"
-
-
-def so_dado(texto) -> str:
-    """Tira do campo qualquer tentativa de fechar o bloco de dados na marra."""
-    limpo = str(texto or "")
-    for marca in (FIM_DO_BLOCO, FIM_DO_BLOCO.replace("/", "")):
-        limpo = limpo.replace(marca, "[etiqueta removida]")
-    return limpo
+# MUDARAM DE CASA (Auditoria Profunda, 02/09/2026): FIM_DO_BLOCO e `so_dado`
+# agora moram em `tarefas.py`, porque `auditoria.py` (que ENTRA na imagem)
+# precisa da mesma peneira, e `execucao.py` NAO entra na imagem
+# (`test_imagem.PROIBIDOS`). Os nomes continuam aqui de proposito — sao os
+# MESMOS objetos, nao copias, no molde de `em_reais` (acima). Uma segunda
+# copia divergiria em silencio ("As tres portas", CLAUDE.md).
+FIM_DO_BLOCO = tarefas.FIM_DO_BLOCO
+so_dado = tarefas.so_dado
 
 
 def montar_prompt(pendencia: dict) -> str:
