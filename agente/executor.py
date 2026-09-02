@@ -185,10 +185,14 @@ class ExecutorAuditor(Executor):
 
     Nada aqui monta comando nem clona repositorio: tudo isso e
     `execucao.auditar`, a irma so-leitura de `execucao.iniciar`. O desfecho
-    sobe pelo MESMO contrato de `tarefas.CAMPOS_DO_DESFECHO` — o campo
-    `resumo` carrega o JSON cru que o agente respondeu (o esquema pedido por
-    `--json-schema`), e quem valida aquele JSON e `auditoria.validar`, do
+    sobe pelo contrato de `tarefas.CAMPOS_DO_DESFECHO` MAIS UM CAMPO,
+    `achados`, que carrega o JSON cru que o agente respondeu (o esquema pedido
+    por `--json-schema`). Quem valida aquele JSON e `auditoria.validar`, do
     lado do servidor, nunca este arquivo.
+
+    O JSON NAO VAI NO `resumo`: `servir._resultado` corta o `resumo` em 4.000
+    caracteres, e um JSON cortado nao e um JSON menor, e lixo. O teto do campo
+    proprio e `auditoria.TETO_DOS_ACHADOS`.
     """
 
     nome = auditoria.EXECUTOR
@@ -253,6 +257,13 @@ class ExecutorAuditor(Executor):
             "estado": "ok" if terminou_bem else "falha",
             "ramo": "", "diff": "", "pr_url": "",
             "resumo": final.get("resumo") or "",
+            # O CAMPO QUE FECHA O FIO. Sem ele o desfecho subia sem `achados`,
+            # e o bloco de gravacao de `servir._resultado` — que so roda com
+            # essa chave — era INALCANCAVEL: a auditoria rodava, gastava o teto
+            # do dia e nao gravava nada. Vai separado do `resumo` de proposito:
+            # o `resumo` e cortado em 4.000 caracteres do outro lado, e isso
+            # destruiria o JSON de qualquer auditoria de verdade.
+            "achados": final.get("achados") or "",
             "rodadas": int(final.get("rodadas") or 0),
             "custo_usd": float(final.get("custo_usd") or 0.0),
             "erro": "" if terminou_bem else (final.get("corpo") or
