@@ -1781,7 +1781,18 @@ def gravar_auditoria(usuario_id: int, projeto: str, estado: str, achados: list,
         for a in achados:
             aid = str(a.get("id") or "")
             if not aid:
-                continue
+                # NAO pular em silencio. `achados_n` acima ja contou este
+                # achado; pular aqui gravaria uma corrida dizendo "3 achados"
+                # com zero linhas na tabela — o numero errado com cara de
+                # certo que a lei 2 deste repositorio proibe, e que na tela
+                # vira um contador que nao abre nada.
+                #
+                # Quem chama (`servir._resultado`) carimba o id com
+                # `auditoria.id_do_achado` antes de chegar aqui. Se um dia
+                # esquecer, isto tem de estourar dentro da transacao — e o
+                # `except` abaixo desfaz a corrida inteira.
+                raise ValueError(
+                    "achado sem id chegou a gravar_auditoria: %r" % (a,))
             presentes.append(aid)
             con.execute(
                 "INSERT INTO achado (id, auditoria_id, usuario_id, projeto,"

@@ -2623,6 +2623,88 @@ class AAuditoriaNoServidorDeVerdade(BaseServidorDeVerdade):
         self.assertEqual(len(alvo), 1)
         self.assertIsNone(alvo[0]["auditoria"])
 
+    # ------------------------------- o estado geral nao carrega o que nao usa
+
+    def _projeto_com_achados(self, nome="dervs", n=3):
+        """Um projeto com uma corrida `ok` e `n` achados no banco."""
+        con = banco.conectar()
+        try:
+            banco.gravar(nome, "local", {"nome": nome}, con=con,
+                         usuario_id=self.uid)
+            con.commit()
+        finally:
+            con.close()
+        # O id e carimbado por quem chama, como `servir._resultado` faz.
+        achados = []
+        for a in self._achados_validos(n):
+            pronto = dict(a)
+            regra = auditoria.REGRAS[a["categoria"]]
+            pronto["regra"] = regra
+            pronto["id"] = auditoria.id_do_achado(regra, nome, a)
+            achados.append(pronto)
+        banco.gravar_auditoria(self.uid, nome, "ok", achados)
+
+    def test_o_estado_geral_nao_carrega_a_lista_de_achados(self):
+        """`/api/dados` e o poll de 60 segundos de TODA aba, inclusive as que
+        nao mostram achado nenhum.
+
+        A lista de achados carrega `frase`, `o_que_fazer` e `trecho` — ate 1.200
+        caracteres por achado. Mandar isso a cada minuto para desenhar uma tela
+        que nao usa o dado e peso puro, e o dado ja tem rota propria
+        (`/api/auditoria`), buscada so quando a tela de Auditoria abre.
+
+        O RESUMO fica: `achados_n` e o que o selo e o card precisam, e tira-lo
+        seria trocar um problema de peso por uma tela cega.
+
+        Achado da revisao de Python de 02/09/2026. O conserto que ela propos —
+        tirar os achados de `banco.montar_estado` — teria quebrado a entrega
+        inteira: e de `montar_estado` que `regras.avaliar` (`servir.py:816`) le
+        os achados para virar pendencia. A poda tem de ser DEPOIS do motor, na
+        saida da rota, e e isso que este caso trava.
+        """
+        self._projeto_com_achados()
+        corpo = json.loads(
+            self.pedir("/api/dados", cookies=self.com_sessao()).corpo)
+        alvo = [p for p in corpo["projetos"] if p.get("nome") == "dervs"]
+        self.assertEqual(len(alvo), 1, "o projeto tem de estar no estado")
+        camada = alvo[0]["auditoria"]
+        self.assertIsNotNone(camada, "a corrida existe; a camada nao pode sumir")
+        self.assertNotIn("achados", camada,
+                         "o poll de 60s nao carrega a lista de achados")
+        self.assertEqual(camada["achados_n"], 3,
+                         "mas o RESUMO fica: sem ele a tela ficaria cega")
+
+    def test_a_rota_dedicada_continua_trazendo_os_achados(self):
+        """A outra metade do caso acima, e a que impede o conserto de virar
+        uma tela de Auditoria vazia.
+
+        Sem este caso, podar os achados em `/api/dados` E em `/api/auditoria`
+        deixaria os dois testes verdes e a tela sem nada para mostrar.
+        """
+        self._projeto_com_achados()
+        corpo = json.loads(
+            self.pedir("/api/auditoria", cookies=self.com_sessao()).corpo)
+        alvo = [p for p in corpo["projetos"] if p["projeto"] == "dervs"][0]
+        self.assertEqual(len(alvo["auditoria"]["achados"]), 3)
+
+    def test_o_motor_de_regras_ainda_enxerga_os_achados(self):
+        """A terceira ponta: a poda e DEPOIS do motor, nunca antes.
+
+        Se alguem 'consertar' isto tirando os achados de `banco.montar_estado`,
+        o motor para de gerar pendencia de achado — em silencio, com os dois
+        testes acima verdes. Este caso le a mesma fonte que `servir._estado` le
+        e exige que os achados estejam la.
+        """
+        self._projeto_com_achados()
+        con = banco.conectar()
+        try:
+            estado = banco.montar_estado(con, usuario_id=self.uid)
+        finally:
+            con.close()
+        alvo = [p for p in estado["projetos"] if p.get("nome") == "dervs"][0]
+        self.assertEqual(len(alvo["auditoria"]["achados"]), 3,
+                         "o motor le daqui; podar aqui quebra a entrega")
+
     # ------------------------------------------------- POST /api/auditoria/pedir
 
     def test_pedir_sem_sessao_e_401(self):

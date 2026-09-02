@@ -842,6 +842,24 @@ class Hub(SimpleHTTPRequestHandler):
         for p in e["projetos"]:
             p["selo"] = regras.selo_do_projeto(p, pend)
             p["camadas"] = regras.camadas_do_selo(p)
+            # A LISTA de achados sai daqui, e o RESUMO fica.
+            #
+            # Esta rota e o poll de 60 segundos de TODA aba, inclusive as que
+            # nao mostram achado nenhum. Cada achado carrega `frase`,
+            # `o_que_fazer` e `trecho` — ate 1.200 caracteres. Mandar isso a
+            # cada minuto para desenhar tela que nao usa o dado e peso puro, e
+            # o dado tem rota propria (`/api/auditoria`), buscada so quando a
+            # tela de Auditoria abre.
+            #
+            # A poda e DEPOIS de `regras.avaliar` e de `selo_do_projeto`, e
+            # isso e o ponto inteiro: e de `banco.montar_estado` que o motor le
+            # os achados para virar pendencia. Podar la em cima — como a
+            # revisao de Python de 02/09/2026 chegou a propor — deixaria os
+            # dois testes de rota verdes e mataria a entrega em silencio.
+            camada = p.get("auditoria")
+            if isinstance(camada, dict):
+                p["auditoria"] = {k: v for k, v in camada.items()
+                                  if k != "achados"}
         return {
             "agora": agora_iso,
             "pendencias": pend,
