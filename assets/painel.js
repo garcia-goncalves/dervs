@@ -2106,9 +2106,22 @@ async function pintarAuditoria(alvo) {
 
   let dado = null;
   try {
-    const r = await fetch("/api/auditoria/" + encodeURIComponent(nome));
+    /* A rota devolve a camada de TODOS os projetos da conta de uma vez, e a
+       tela recorta o dela aqui. E de proposito: um caminho com o nome do
+       projeto dentro (`/api/auditoria/<nome>`) obrigaria o servidor a casar
+       rota por PREFIXO, e neste servidor a conferencia de acesso casa por
+       caminho EXATO -- trocar isso por prefixo e a forma classica de abrir um
+       furo sem ninguem perceber. Nao vale a pena por um recorte que o
+       navegador faz de graca. */
+    const r = await fetch("/api/auditoria");
     if (!r.ok) throw new Error(r.status);
-    dado = await r.json();
+    const todos = await r.json();
+    const meu = (todos.projetos || []).find((p) => p.projeto === nome);
+    /* Projeto que a rota nao conhece NAO vira "nunca auditado": isso seria
+       afirmar sobre um dado que nao veio. `undefined` cai no mesmo caminho de
+       "nao deu para perguntar" logo abaixo. */
+    if (!meu) throw new Error("projeto ausente na resposta");
+    dado = meu.auditoria;
   } catch {
     /* A rota pode ainda nao existir, ou a rede pode ter falhado -- as duas
        coisas se parecem daqui. A tela NAO finge um dos tres estados de dado:
