@@ -33,6 +33,7 @@ from pathlib import Path
 # nem gravar um. Tem de ser definida ANTES de importar banco.
 # Precisa de 32 caracteres ou mais: o banco recusa chave curta, porque frase
 # curta se quebra offline a partir de uma copia do hub.db.
+os.environ.setdefault("DERVS_AMBIENTE", "local")
 os.environ.setdefault("DERVS_COFRE",
                       "chave-de-teste-que-nao-e-segredo-nenhum-0123456789")
 
@@ -132,6 +133,7 @@ class Esquema(unittest.TestCase):
         decisao sobre o que acontece quando a conta e apagada.
         """
         self.assertEqual(self.tabelas(), [
+            "achado", "auditoria",
             "chave_de_acesso", "codigo_recuperacao", "cor_da_regra",
             "credencial", "endereco_producao", "fila", "gasto",
             "historico", "instalacao", "instalacao_github",
@@ -2569,6 +2571,417 @@ class OsCodigosVencidosSaoAPAGADOS(unittest.TestCase):
     def test_sem_nada_vencido_nao_apaga_nada(self):
         banco.abrir_pareamento(self.uid, "333333", banco.prazo(600))
         self.assertEqual(0, banco.limpar_pareamentos_vencidos())
+
+
+class ContadorDeExecute:
+    """Proxy de conexao que conta chamadas a `execute` e falha numa delas.
+
+    Existe so para forcar `gravar_auditoria` a levar uma excecao NO MEIO do
+    laco de achados, e conferir que a tabela fica vazia — a mesma familia de
+    prova que `test_publicar` fez para o corpo do pedido: sabotagem POR
+    TAMANHO, nao por presenca. Com 2 achados o guarda nao distingue "grava
+    tudo numa transacao" de "grava e comita cada um".
+    """
+
+    def __init__(self, con, falha_na_chamada):
+        self._con = con
+        self._n = 0
+        self._falha_na = falha_na_chamada
+
+    def execute(self, sql, params=()):
+        self._n += 1
+        if self._n == self._falha_na:
+            raise sqlite3.OperationalError("falha simulada pelo teste")
+        return self._con.execute(sql, params)
+
+    def __getattr__(self, nome):
+        return getattr(self._con, nome)
+
+
+class AuditoriaProfundaNoBanco(unittest.TestCase):
+    """As duas tabelas novas (corrida + achado), a migracao e as quatro
+    funcoes — etapa 2 do plano `dervs-auditoria-profunda`.
+
+    O que este arquivo cobra, alem de "a tabela existe":
+
+      1. PROJETO NUNCA AUDITADO RECEBE `None`. `{}` ou `{"achados": []}` teriam
+         a mesma cara de "auditei e nao achei nada" — a lei 2 deste repositorio.
+      2. ACHADO QUE REAPARECE MANTEM O `visto_em` MAIS ANTIGO. E o que permite
+         dizer "isto esta aberto ha 12 dias".
+      3. ACHADO QUE SUMIU GANHA `fechado_em`. NUNCA `DELETE` — o historico nao
+         pode mentir.
+      4. GRAVAR OS ACHADOS DE UMA CORRIDA E TUDO OU NADA. Uma corrida de 60
+         achados que quebra no 40 nao pode deixar 39 na tabela.
+      5. `enfileirar` GRAVA O `executor`. Sem isso toda tarefa nasce 'claude'
+         pelo DEFAULT, e a auditoria iria para o braco errado em silencio.
+    """
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.uid = banco.criar_usuario("dono@teste.local", "teste1234", con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    # -- as duas tabelas ---------------------------------------------------
+
+    def test_as_duas_tabelas_existem_com_a_forma_do_esquema(self):
+        presentes = {l[0] for l in self.con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertIn("auditoria", presentes)
+        self.assertIn("achado", presentes)
+        colunas_auditoria = {l[1] for l in
+                             self.con.execute("PRAGMA table_info(auditoria)")}
+        for esperada in ("id", "usuario_id", "projeto", "tarefa_id", "estado",
+                         "motivo", "achados_n", "arquivos_n", "custo_usd",
+                         "rodadas", "medido_em"):
+            self.assertIn(esperada, colunas_auditoria)
+        colunas_achado = {l[1] for l in
+                          self.con.execute("PRAGMA table_info(achado)")}
+        for esperada in ("id", "auditoria_id", "usuario_id", "projeto", "regra",
+                         "categoria", "arquivo", "linha", "gravidade", "frase",
+                         "o_que_fazer", "trecho", "visto_em", "fechado_em"):
+            self.assertIn(esperada, colunas_achado)
+
+    def test_achado_id_e_texto_e_chave_primaria(self):
+        """`achado.id` e o id ESTAVEL da pendencia — e por isso ele e a chave,
+        e nao um autoincremento."""
+        colunas = {l[1]: l for l in self.con.execute("PRAGMA table_info(achado)")}
+        self.assertEqual(colunas["id"][2], "TEXT")
+        self.assertEqual(colunas["id"][5], 1)         # pk
+
+    def test_o_esquema_e_a_migracao_criam_a_mesma_forma(self):
+        """Duas copias do mesmo CREATE, de proposito — se uma mudar sozinha,
+        um hub.db velho e um novo ficam com formas diferentes."""
+        do_esquema_a = {(l[1], l[2], l[3]) for l in
+                        self.con.execute("PRAGMA table_info(auditoria)")}
+        do_esquema_b = {(l[1], l[2], l[3]) for l in
+                        self.con.execute("PRAGMA table_info(achado)")}
+        outra = sqlite3.connect(":memory:")
+        outra.execute(banco._CREATE_AUDITORIA)
+        outra.execute(banco._CREATE_ACHADO)
+        da_migracao_a = {(l[1], l[2], l[3]) for l in
+                         outra.execute("PRAGMA table_info(auditoria)")}
+        da_migracao_b = {(l[1], l[2], l[3]) for l in
+                         outra.execute("PRAGMA table_info(achado)")}
+        outra.close()
+        self.assertEqual(do_esquema_a, da_migracao_a)
+        self.assertEqual(do_esquema_b, da_migracao_b)
+
+    # -- gravar_auditoria: uma corrida ok --------------------------------
+
+    def _achado(self, n, arquivo="a.py", categoria="seguranca", gravidade="alta"):
+        return {
+            "id": "auditoria_%s:dervs:%012d" % (categoria, n),
+            "regra": "auditoria_%s" % categoria,
+            "categoria": categoria,
+            "arquivo": arquivo,
+            "linha": n,
+            "gravidade": gravidade,
+            "frase": "achado numero %d" % n,
+            "o_que_fazer": "conserte %d" % n,
+            "trecho": "codigo %d" % n,
+        }
+
+    def test_gravar_e_ler_a_corrida_e_os_achados(self):
+        achados = [self._achado(1), self._achado(2)]
+        aid = banco.gravar_auditoria(self.uid, "dervs", "ok", achados,
+                                     custo_usd=0.42, rodadas=3,
+                                     agora_iso=daqui(), con=self.con)
+        self.assertIsInstance(aid, int)
+        corrida = banco.auditoria_do_projeto(self.uid, "dervs", con=self.con)
+        self.assertEqual(corrida["estado"], "ok")
+        self.assertEqual(corrida["achados_n"], 2)
+        self.assertEqual(corrida["arquivos_n"], 1)
+        lidos = banco.achados_do_projeto(self.uid, "dervs", con=self.con)
+        self.assertEqual({a["id"] for a in lidos}, {a["id"] for a in achados})
+
+    def test_projeto_nunca_auditado_devolve_none(self):
+        self.assertIsNone(banco.auditoria_do_projeto(self.uid, "dervs", con=self.con))
+        self.assertEqual(banco.achados_do_projeto(self.uid, "dervs", con=self.con), [])
+
+    def test_corrida_falha_nao_apaga_a_ultima_corrida_ok(self):
+        """Saida invalida grava a corrida com `estado='falha'` e o motivo, mas
+        NAO fecha os achados da corrida anterior."""
+        banco.gravar_auditoria(self.uid, "dervs", "ok", [self._achado(1)],
+                               agora_iso=daqui(), con=self.con)
+        banco.gravar_auditoria(self.uid, "dervs", "falha", [],
+                               motivo="JSON quebrado", agora_iso=daqui(minutes=5),
+                               con=self.con)
+        abertos = banco.achados_do_projeto(self.uid, "dervs", con=self.con)
+        self.assertEqual(len(abertos), 1, "a corrida que falhou apagou o achado"
+                                          " da corrida anterior")
+        # E a corrida mais recente e a que ficou registrada como falha.
+        ultima = banco.auditoria_do_projeto(self.uid, "dervs", con=self.con)
+        self.assertEqual(ultima["estado"], "falha")
+        self.assertEqual(ultima["motivo"], "JSON quebrado")
+
+    # -- 2b: achado que reaparece mantem o visto_em mais antigo -----------
+
+    def test_achado_que_reaparece_mantem_o_visto_em_mais_antigo(self):
+        a = self._achado(1)
+        banco.gravar_auditoria(self.uid, "dervs", "ok", [a],
+                               agora_iso=daqui(), con=self.con)
+        primeiro = banco.achados_do_projeto(self.uid, "dervs", con=self.con)[0]
+        visto_em_1 = primeiro["visto_em"]
+        banco.gravar_auditoria(self.uid, "dervs", "ok", [a],
+                               agora_iso=daqui(days=1), con=self.con)
+        segundo = banco.achados_do_projeto(self.uid, "dervs", con=self.con)[0]
+        self.assertEqual(segundo["visto_em"], visto_em_1,
+                         "achado que reaparece nao pode ganhar um visto_em novo")
+
+    # -- 2c: achado que sumiu ganha fechado_em, nunca DELETE ---------------
+
+    def test_achado_que_sumiu_ganha_fechado_em_e_continua_na_tabela(self):
+        a1, a2 = self._achado(1), self._achado(2)
+        banco.gravar_auditoria(self.uid, "dervs", "ok", [a1, a2],
+                               agora_iso=daqui(), con=self.con)
+        # a2 nao volta na proxima corrida.
+        banco.gravar_auditoria(self.uid, "dervs", "ok", [a1],
+                               agora_iso=daqui(days=1), con=self.con)
+        total = self.con.execute("SELECT COUNT(*) FROM achado").fetchone()[0]
+        self.assertEqual(total, 2, "achado que sumiu foi APAGADO, e nao fechado")
+        linha_a2 = self.con.execute("SELECT fechado_em FROM achado WHERE id = ?",
+                                    (a2["id"],)).fetchone()
+        self.assertIsNotNone(linha_a2["fechado_em"])
+        abertos = banco.achados_do_projeto(self.uid, "dervs", con=self.con)
+        self.assertEqual({x["id"] for x in abertos}, {a1["id"]})
+
+    def test_fechar_achados_ausentes_nao_usa_delete(self):
+        inspect_ = __import__("inspect")
+        fonte = (inspect_.getsource(banco.fechar_achados_ausentes)
+                + inspect_.getsource(banco._fechar_ausentes))
+        self.assertNotIn("DELETE FROM achado", fonte)
+
+    def test_achado_que_reaparece_depois_de_fechado_reabre(self):
+        a1 = self._achado(1)
+        banco.gravar_auditoria(self.uid, "dervs", "ok", [a1],
+                               agora_iso=daqui(), con=self.con)
+        banco.gravar_auditoria(self.uid, "dervs", "ok", [],
+                               agora_iso=daqui(days=1), con=self.con)
+        fechado = self.con.execute("SELECT fechado_em FROM achado WHERE id = ?",
+                                   (a1["id"],)).fetchone()
+        self.assertIsNotNone(fechado["fechado_em"])
+        banco.gravar_auditoria(self.uid, "dervs", "ok", [a1],
+                               agora_iso=daqui(days=2), con=self.con)
+        reaberto = self.con.execute("SELECT fechado_em FROM achado WHERE id = ?",
+                                    (a1["id"],)).fetchone()
+        self.assertIsNone(reaberto["fechado_em"])
+
+    # -- 2f: gravar 60 achados e tudo-ou-nada, por TAMANHO -----------------
+
+    def test_gravar_60_achados_e_tudo_ou_nada(self):
+        """A gravacao quebra na escrita do 40o achado. A tabela tem de ficar
+        VAZIA — nao 39 achados, que e o que um commit por achado deixaria."""
+        achados = [self._achado(n) for n in range(1, 61)]
+        proxy = ContadorDeExecute(self.con, falha_na_chamada=42)
+        with self.assertRaises(sqlite3.OperationalError):
+            banco.gravar_auditoria(self.uid, "dervs", "ok", achados,
+                                   agora_iso=daqui(), con=proxy)
+        self.assertEqual(
+            self.con.execute("SELECT COUNT(*) FROM achado").fetchone()[0], 0)
+        self.assertEqual(
+            self.con.execute("SELECT COUNT(*) FROM auditoria").fetchone()[0], 0)
+
+    # -- a migracao ---------------------------------------------------------
+
+    def test_migrar_nao_usa_executescript(self):
+        import ast
+        import inspect
+        fonte = inspect.getsource(banco._migrar_auditoria)
+        arvore = ast.parse(textwrap.dedent(fonte))
+        chamadas = [n.func.attr for n in ast.walk(arvore)
+                   if isinstance(n, ast.Call)
+                   and isinstance(n.func, ast.Attribute)]
+        self.assertNotIn("executescript", chamadas)
+        self.assertIn("execute", chamadas)
+        self.assertIn("BEGIN IMMEDIATE", fonte)
+        self.assertIn("_religar_fk", fonte)
+        self.assertIn("_migrar_auditoria", inspect.getsource(banco.migrar))
+
+    def test_banco_com_usuario_e_sem_as_tabelas_migra(self):
+        """O caminho de verdade da migracao — o `BEGIN IMMEDIATE`. Sem este
+        caso, o `ESQUEMA` criaria as tabelas sozinho e `_migrar_auditoria`
+        podia estar vazia sem ninguem notar."""
+        pasta = tempfile.TemporaryDirectory()
+        self.addCleanup(pasta.cleanup)
+        caminho = Path(pasta.name) / "velho.db"
+        con = banco.conectar(caminho)
+        uid = banco.criar_usuario("a@teste.local", "teste1234", con=con)
+        con.execute("DROP TABLE achado")
+        con.execute("DROP TABLE auditoria")
+        con.commit()
+        con.close()
+
+        con = sqlite3.connect(caminho)
+        con.row_factory = sqlite3.Row
+        try:
+            banco._migrar_auditoria(con)      # so a migracao, sem ESQUEMA
+            presentes = {l[0] for l in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertIn("auditoria", presentes)
+            self.assertIn("achado", presentes)
+            self.assertFalse(con.in_transaction,
+                             "a conexao nao pode sair daqui com transacao"
+                             " aberta: PRAGMA foreign_keys seria NO-OP silencioso")
+            aid = banco.gravar_auditoria(uid, "dervs", "ok", [self._achado(1)],
+                                         agora_iso=daqui(), con=con)
+            self.assertIsInstance(aid, int)
+        finally:
+            con.close()
+
+    def test_migrar_duas_vezes_nao_quebra(self):
+        pasta = tempfile.TemporaryDirectory()
+        self.addCleanup(pasta.cleanup)
+        caminho = Path(pasta.name) / "velho.db"
+        con = banco.conectar(caminho)
+        uid = banco.criar_usuario("a@teste.local", "teste1234", con=con)
+        banco.gravar_auditoria(uid, "dervs", "ok", [self._achado(1)],
+                               agora_iso=daqui(), con=con)
+        con.close()
+        con = banco.conectar(caminho)          # segunda subida
+        try:
+            achados = banco.achados_do_projeto(uid, "dervs", con=con)
+            self.assertEqual(len(achados), 1, "a linha antiga sumiu na migracao")
+        finally:
+            con.close()
+
+    # -- 2g: apagar o usuario leva as corridas e os achados junto ---------
+
+    def test_auditoria_e_achado_estao_em_filhas_de_usuario(self):
+        """`ON DELETE CASCADE` so vale com `PRAGMA foreign_keys=ON`
+        (`banco.py:509`), e o cascateamento REAL de `achado` acontece por DUAS
+        rotas — direto para `usuario` e por tabela para `auditoria`, que
+        tambem cascateia. Por isso o teste comportamental sozinho nao pega a
+        remocao de `achado` desta lista: as duas travas sao de proposito
+        INDEPENDENTES, e esta cobra a lista em si."""
+        self.assertIn("auditoria", banco.FILHAS_DE_USUARIO)
+        self.assertIn("achado", banco.FILHAS_DE_USUARIO)
+
+    def test_apagar_o_usuario_leva_a_auditoria_e_os_achados(self):
+        banco.gravar_auditoria(self.uid, "dervs", "ok", [self._achado(1)],
+                               agora_iso=daqui(), con=self.con)
+        self.con.execute("DELETE FROM usuario WHERE id = ?", (self.uid,))
+        self.con.commit()
+        self.assertEqual(
+            self.con.execute("SELECT COUNT(*) FROM auditoria").fetchone()[0], 0)
+        self.assertEqual(
+            self.con.execute("SELECT COUNT(*) FROM achado").fetchone()[0], 0)
+
+
+class EnfileirarGravaOExecutor(unittest.TestCase):
+    """2d: `enfileirar` nao gravava a coluna `executor` — toda tarefa nascia
+    'claude' pelo DEFAULT, e a auditoria iria para o braco errado em silencio."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_enfileirar_grava_o_executor_pedido(self):
+        n = banco.enfileirar([{
+            "id": "auditoria_vencida:dervs", "projeto": "dervs",
+            "regra": "auditoria_vencida", "gravidade": "baixa", "risco": 1.0,
+            "trilho": "", "executor": "auditor",
+        }], con=self.con)
+        self.assertEqual(n, 1)
+        linha = self.con.execute(
+            "SELECT executor FROM fila WHERE id = ?",
+            ("auditoria_vencida:dervs",)).fetchone()
+        self.assertEqual(linha["executor"], "auditor")
+
+    def test_sem_executor_continua_nascendo_claude(self):
+        banco.enfileirar([{"id": "x:dervs", "projeto": "dervs", "regra": "x",
+                           "gravidade": "media", "risco": 0.0, "trilho": ""}],
+                         con=self.con)
+        linha = self.con.execute(
+            "SELECT executor FROM fila WHERE id = 'x:dervs'").fetchone()
+        self.assertEqual(linha["executor"], "claude")
+
+
+class MontarEstadoTrazAAuditoria(unittest.TestCase):
+    """A camada `auditoria` no formato que `regras._do_projeto` consome —
+    `None`, nunca `{}` nem `{"achados": []}`, para projeto nunca auditado."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.uid = banco.criar_usuario("dono@teste.local", "teste1234", con=self.con)
+        banco.gravar("dervs", "local", {"nome": "dervs"}, con=self.con,
+                    usuario_id=self.uid)
+
+    def tearDown(self):
+        self.con.close()
+
+    def _projeto(self, estado):
+        estado = banco.montar_estado(con=self.con, usuario_id=self.uid)
+        return next(p for p in estado["projetos"] if p["nome"] == "dervs")
+
+    def test_projeto_nunca_auditado_recebe_none(self):
+        p = self._projeto(None)
+        self.assertIsNone(p["auditoria"],
+                          "projeto sem corrida tem de vir com None, nunca {}"
+                          " nem {'achados': []} — lei 2 deste repositorio")
+
+    def test_projeto_auditado_traz_os_achados(self):
+        achado = {
+            "id": "auditoria_seguranca:dervs:000000000001",
+            "regra": "auditoria_seguranca", "categoria": "seguranca",
+            "arquivo": "a.py", "linha": 1, "gravidade": "alta",
+            "frase": "x", "o_que_fazer": "y", "trecho": "z",
+        }
+        banco.gravar_auditoria(self.uid, "dervs", "ok", [achado],
+                               agora_iso=daqui(), con=self.con)
+        p = self._projeto(None)
+        self.assertIsNotNone(p["auditoria"])
+        self.assertEqual(p["auditoria"]["achados_n"], 1)
+        self.assertEqual(len(p["auditoria"]["achados"]), 1)
+        self.assertIn("auditoria", p["medido_em"])
+
+
+class TarefaParaMaquinaTrazODetalheDoAchado(unittest.TestCase):
+    """`LEFT JOIN achado ON achado.id = fila.id`: o `detalhe` de uma tarefa de
+    conserto sai do achado, e nao mais so de `fila.erro`."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.uid = banco.criar_usuario("dono@teste.local", "teste1234", con=self.con)
+        cur = self.con.execute(
+            "INSERT INTO maquina (usuario_id, nome, token_hash, criado_em, executa)"
+            " VALUES (?,?,?,?,1)", (self.uid, "pc", "hash", daqui()))
+        self.maquina_id = cur.lastrowid
+        self.con.commit()
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_a_tarefa_traz_o_achado_ligado_por_id(self):
+        achado = {
+            "id": "auditoria_seguranca:dervs:000000000001",
+            "regra": "auditoria_seguranca", "categoria": "seguranca",
+            "arquivo": "a.py", "linha": 1, "gravidade": "alta",
+            "frase": "segredo em claro no codigo",
+            "o_que_fazer": "mova para o cofre", "trecho": "SENHA = '123'",
+        }
+        banco.gravar_auditoria(self.uid, "dervs", "ok", [achado],
+                               agora_iso=daqui(), con=self.con)
+        banco.enfileirar([{
+            "id": achado["id"], "projeto": "dervs", "regra": achado["regra"],
+            "gravidade": "alta", "risco": 5.0, "trilho": "conserto",
+            "executor": "claude",
+        }], con=self.con)
+        candidata = banco.tarefa_para_maquina(self.maquina_id, con=self.con)
+        self.assertIsNotNone(candidata)
+        self.assertEqual(candidata["achado_frase"], "segredo em claro no codigo")
+
+    def test_tarefa_sem_achado_ligado_nao_quebra(self):
+        banco.enfileirar([{
+            "id": "outra:dervs", "projeto": "dervs", "regra": "outra",
+            "gravidade": "media", "risco": 1.0, "trilho": "conserto",
+        }], con=self.con)
+        candidata = banco.tarefa_para_maquina(self.maquina_id, con=self.con)
+        self.assertIsNotNone(candidata)
+        self.assertIsNone(candidata["achado_frase"])
 
 
 if __name__ == "__main__":
