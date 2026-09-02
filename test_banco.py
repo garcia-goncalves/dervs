@@ -2643,12 +2643,17 @@ class AuditoriaProfundaNoBanco(unittest.TestCase):
                          "o_que_fazer", "trecho", "visto_em", "fechado_em"):
             self.assertIn(esperada, colunas_achado)
 
-    def test_achado_id_e_texto_e_chave_primaria(self):
-        """`achado.id` e o id ESTAVEL da pendencia — e por isso ele e a chave,
-        e nao um autoincremento."""
+    def test_achado_id_e_texto_e_chave_primaria_composta_com_o_dono(self):
+        """`achado.id` e o id ESTAVEL da pendencia — e por isso ele entra na
+        chave, e nao um autoincremento. Mas SOZINHO ele nao basta: o id e
+        deterministico (`regra:projeto:sha256(...)`) e sem o dono dentro, e
+        duas contas que auditam o mesmo repositorio geram o MESMO id para o
+        mesmo achado. A chave e `(usuario_id, id)`."""
         colunas = {l[1]: l for l in self.con.execute("PRAGMA table_info(achado)")}
         self.assertEqual(colunas["id"][2], "TEXT")
-        self.assertEqual(colunas["id"][5], 1)         # pk
+        self.assertNotEqual(colunas["id"][5], 0, "id tem de fazer parte da PK")
+        self.assertNotEqual(colunas["usuario_id"][5], 0,
+                            "usuario_id tem de fazer parte da PK")
 
     def test_o_esquema_e_a_migracao_criam_a_mesma_forma(self):
         """Duas copias do mesmo CREATE, de proposito — se uma mudar sozinha,
@@ -2869,6 +2874,165 @@ class AuditoriaProfundaNoBanco(unittest.TestCase):
             self.con.execute("SELECT COUNT(*) FROM achado").fetchone()[0], 0)
 
 
+class OAchadoNaoTrocaDeDono(unittest.TestCase):
+    """Revisao de seguranca de 02/09/2026, defeito BLOQUEANTE: `achado.id` e
+    deterministico e sem o dono dentro — `regra:projeto:sha256(arquivo,
+    categoria,frase)[:12]`. Com `id` como PRIMARY KEY global, duas contas que
+    auditam o MESMO repositorio e acham o MESMO defeito geram o MESMO id, e o
+    segundo `ON CONFLICT` TRANSFERIA a linha de dono: o achado sumia do
+    painel da primeira conta, sem erro e sem aviso. A chave passa a ser
+    `(usuario_id, id)`."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.uid_a = banco.criar_usuario("a@teste.local", "teste1234", con=self.con)
+        self.uid_b = banco.criar_usuario("b@teste.local", "teste1234", con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def _achado_identico(self):
+        # MESMO arquivo, MESMA categoria, MESMA frase — o mesmo id, calculado
+        # a mao aqui do mesmo jeito que `auditoria.id_do_achado` calcularia.
+        return {
+            "id": "auditoria_seguranca:dervs:mesmoidcolide",
+            "regra": "auditoria_seguranca", "categoria": "seguranca",
+            "arquivo": "a.py", "linha": 1, "gravidade": "alta",
+            "frase": "segredo em claro", "o_que_fazer": "mova para o cofre",
+            "trecho": "SENHA = '123'",
+        }
+
+    def test_duas_contas_o_mesmo_achado_geram_duas_linhas(self):
+        a = self._achado_identico()
+        banco.gravar_auditoria(self.uid_a, "dervs", "ok", [a],
+                               agora_iso=daqui(), con=self.con)
+        banco.gravar_auditoria(self.uid_b, "dervs", "ok", [a],
+                               agora_iso=daqui(minutes=1), con=self.con)
+        total = self.con.execute("SELECT COUNT(*) FROM achado").fetchone()[0]
+        self.assertEqual(total, 2, "a segunda conta APAGOU/SUBSTITUIU a linha"
+                                   " da primeira em vez de ganhar a propria")
+        de_a = banco.achados_do_projeto(self.uid_a, "dervs", con=self.con)
+        de_b = banco.achados_do_projeto(self.uid_b, "dervs", con=self.con)
+        self.assertEqual(len(de_a), 1, "o achado sumiu do painel da conta A")
+        self.assertEqual(len(de_b), 1, "o achado sumiu do painel da conta B")
+
+    def test_upsert_na_mesma_conta_nao_troca_o_dono(self):
+        a = self._achado_identico()
+        banco.gravar_auditoria(self.uid_a, "dervs", "ok", [a],
+                               agora_iso=daqui(), con=self.con)
+        visto_em_1 = self.con.execute(
+            "SELECT visto_em FROM achado WHERE id = ? AND usuario_id = ?",
+            (a["id"], self.uid_a)).fetchone()["visto_em"]
+        # Regravar para a MESMA conta A: continua sendo dela, e o visto_em
+        # mais antigo sobrevive.
+        banco.gravar_auditoria(self.uid_a, "dervs", "ok", [a],
+                               agora_iso=daqui(days=1), con=self.con)
+        linha = self.con.execute(
+            "SELECT usuario_id, visto_em FROM achado WHERE id = ?",
+            (a["id"],)).fetchone()
+        self.assertEqual(linha["usuario_id"], self.uid_a)
+        self.assertEqual(linha["visto_em"], visto_em_1)
+        total = self.con.execute("SELECT COUNT(*) FROM achado").fetchone()[0]
+        self.assertEqual(total, 1)
+
+    def test_o_set_do_upsert_nunca_toca_usuario_id(self):
+        """Guarda de codigo-fonte, e nao so comportamental: com a chave ja
+        composta em `(id, usuario_id)`, o alvo do `ON CONFLICT` so casa
+        quando as DUAS colunas sao iguais — entao um `usuario_id =
+        excluded.usuario_id` no SET vira codigo morto que nenhum teste
+        comportamental consegue reprovar (confirmado sabotando: a suite
+        continuou verde). Este guarda le a fonte para o dono nunca poder
+        mudar por upsert, nem em teoria."""
+        import inspect
+        fonte = inspect.getsource(banco.gravar_auditoria)
+        self.assertNotIn("usuario_id = excluded.usuario_id", fonte)
+
+
+class AMigracaoDoAchadoPreservaODono(unittest.TestCase):
+    """Defeito 1, a migracao: um `achado` que ja existia no formato antigo
+    (chave `id` sozinha) tem de sobreviver a reconstrucao da tabela, com o
+    mesmo dono que ja tinha."""
+
+    def setUp(self):
+        self.pasta = tempfile.TemporaryDirectory()
+        self.addCleanup(self.pasta.cleanup)
+        self.caminho = Path(self.pasta.name) / "achado_velho.db"
+
+    def _banco_no_formato_antigo(self):
+        """Sobe um banco no esquema de hoje e depois REESCREVE `achado` no
+        formato antigo (PK so em `id`), para simular o hub.db de antes desta
+        etapa."""
+        con = banco.conectar(self.caminho)
+        uid_a = banco.criar_usuario("a@teste.local", "teste1234", con=con)
+        uid_b = banco.criar_usuario("b@teste.local", "teste1234", con=con)
+        banco.gravar_auditoria(uid_a, "dervs", "ok", [{
+            "id": "auditoria_seguranca:dervs:aaaaaaaaaaaa",
+            "regra": "auditoria_seguranca", "categoria": "seguranca",
+            "arquivo": "a.py", "linha": 1, "gravidade": "alta",
+            "frase": "achado de a", "o_que_fazer": "x", "trecho": "y",
+        }], agora_iso=daqui(), con=con)
+        banco.gravar_auditoria(uid_b, "dervs", "ok", [{
+            "id": "auditoria_seguranca:dervs:bbbbbbbbbbbb",
+            "regra": "auditoria_seguranca", "categoria": "seguranca",
+            "arquivo": "b.py", "linha": 1, "gravidade": "media",
+            "frase": "achado de b", "o_que_fazer": "x", "trecho": "y",
+        }], agora_iso=daqui(minutes=1), con=con)
+        con.execute("PRAGMA foreign_keys=OFF")
+        con.execute("ALTER TABLE achado RENAME TO achado_velha")
+        con.execute("""CREATE TABLE achado (
+                id           TEXT    PRIMARY KEY,
+                auditoria_id INTEGER NOT NULL,
+                usuario_id   INTEGER NOT NULL,
+                projeto      TEXT    NOT NULL DEFAULT '',
+                regra        TEXT    NOT NULL DEFAULT '',
+                categoria    TEXT    NOT NULL DEFAULT '',
+                arquivo      TEXT    NOT NULL DEFAULT '',
+                linha        INTEGER,
+                gravidade    TEXT    NOT NULL DEFAULT 'media',
+                frase        TEXT    NOT NULL DEFAULT '',
+                o_que_fazer  TEXT    NOT NULL DEFAULT '',
+                trecho       TEXT    NOT NULL DEFAULT '',
+                visto_em     TEXT    NOT NULL,
+                fechado_em   TEXT)""")
+        con.execute("INSERT INTO achado SELECT * FROM achado_velha")
+        con.execute("DROP TABLE achado_velha")
+        con.execute("PRAGMA foreign_keys=ON")
+        con.commit()
+        con.close()
+        return uid_a, uid_b
+
+    def test_as_linhas_antigas_sobrevivem_com_o_dono_certo(self):
+        uid_a, uid_b = self._banco_no_formato_antigo()
+        con = banco.conectar(self.caminho)     # roda migrar() de novo
+        try:
+            forma = list(con.execute("PRAGMA table_info(achado)"))
+            chave = [l[1] for l in sorted((l for l in forma if l[5]),
+                                          key=lambda l: l[5])]
+            self.assertEqual(chave, ["usuario_id", "id"])
+            de_a = banco.achados_do_projeto(uid_a, "dervs", con=con)
+            de_b = banco.achados_do_projeto(uid_b, "dervs", con=con)
+            self.assertEqual(len(de_a), 1)
+            self.assertEqual(len(de_b), 1)
+            self.assertEqual(de_a[0]["frase"], "achado de a")
+            self.assertEqual(de_b[0]["frase"], "achado de b")
+        finally:
+            con.close()
+
+    def test_migracao_nao_usa_executescript(self):
+        import ast
+        import inspect
+        fonte = inspect.getsource(banco._migrar_achado_dono)
+        arvore = ast.parse(textwrap.dedent(fonte))
+        chamadas = [n.func.attr for n in ast.walk(arvore)
+                   if isinstance(n, ast.Call)
+                   and isinstance(n.func, ast.Attribute)]
+        self.assertNotIn("executescript", chamadas)
+        self.assertIn("execute", chamadas)
+        self.assertIn("BEGIN IMMEDIATE", fonte)
+        self.assertIn("_religar_fk", fonte)
+        self.assertIn("_migrar_achado_dono", inspect.getsource(banco.migrar))
+
+
 class EnfileirarGravaOExecutor(unittest.TestCase):
     """2d: `enfileirar` nao gravava a coluna `executor` — toda tarefa nascia
     'claude' pelo DEFAULT, e a auditoria iria para o braco errado em silencio."""
@@ -2982,6 +3146,43 @@ class TarefaParaMaquinaTrazODetalheDoAchado(unittest.TestCase):
         candidata = banco.tarefa_para_maquina(self.maquina_id, con=self.con)
         self.assertIsNotNone(candidata)
         self.assertIsNone(candidata["achado_frase"])
+
+    def test_o_join_nao_atravessa_contas(self):
+        """Defeito 2 (revisao de seguranca de 02/09/2026): o `LEFT JOIN
+        achado ON achado.id = fila.id` casava por id SOZINHO, sem conferir o
+        dono da maquina. Um achado.id colide entre contas (o id nao carrega o
+        dono) — sem a condicao do dono no JOIN, `frase`/`o_que_fazer`/
+        `trecho`/`arquivo`, que sao CODIGO-FONTE PRIVADO, desceriam para a
+        maquina de outra conta."""
+        uid_outro = banco.criar_usuario("outro@teste.local", "teste1234",
+                                        con=self.con)
+        # O achado da conta B, com o MESMO id que a tarefa de A vai usar.
+        achado_de_b = {
+            "id": "auditoria_seguranca:dervs:000000000001",
+            "regra": "auditoria_seguranca", "categoria": "seguranca",
+            "arquivo": "SEGREDO_DE_B.py", "linha": 1, "gravidade": "alta",
+            "frase": "codigo-fonte privado da conta B",
+            "o_que_fazer": "so a conta B pode ver isto", "trecho": "SENHA_B",
+        }
+        banco.gravar_auditoria(uid_outro, "dervs", "ok", [achado_de_b],
+                               agora_iso=daqui(), con=self.con)
+        # A tarefa de fila com o MESMO id, mas sem achado da conta A (a
+        # conta dona da maquina) — o cenario do enunciado: "hoje nao casa
+        # porque as regras de auditoria estao fora de fila.REGRAS_MECANICAS".
+        # Aqui forcamos o casamento por id para provar que o dono, e nao o
+        # id, e o que decide.
+        banco.enfileirar([{
+            "id": achado_de_b["id"], "projeto": "dervs",
+            "regra": achado_de_b["regra"], "gravidade": "alta", "risco": 5.0,
+            "trilho": "conserto", "executor": "claude",
+        }], con=self.con)
+        candidata = banco.tarefa_para_maquina(self.maquina_id, con=self.con)
+        self.assertIsNotNone(candidata)
+        self.assertIsNone(candidata["achado_frase"],
+                          "codigo-fonte privado da conta B vazou para a"
+                          " maquina da conta A")
+        self.assertIsNone(candidata["achado_trecho"])
+        self.assertIsNone(candidata["achado_arquivo"])
 
 
 if __name__ == "__main__":
