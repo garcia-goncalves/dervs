@@ -3025,6 +3025,35 @@ class OResultadoDaAuditoriaNaoDerrubaARota(BaseServidorDeVerdade):
         self.assertTrue(corrida["motivo"])
         self.assertEqual(abertos, [])
 
+    def test_achados_acima_do_teto_e_recusado_MESMO_SENDO_JSON_VALIDO(self):
+        """A guarda da guarda: o caso acima ('x' * teto) nao e JSON valido de
+        jeito nenhum, entao passaria mesmo SEM nenhuma trava de tamanho em
+        `servir.py` — `auditoria.validar` ja recusa por `json.loads` quebrar.
+        Este caso pad com ESPACO em branco (JSON valido antes E depois de
+        qualquer token) para ficar grande e continuar parseavel, provando que
+        a trava e de TAMANHO, na fronteira do servidor, e nao so o parse."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="a:1", regra=auditoria.REGRA_DE_VENCIMENTO,
+                               executor=auditoria.EXECUTOR)
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        padding = " " * (auditoria.TETO_DOS_ACHADOS + 1)
+        grande_mas_valido = padding + json.dumps({"achados": []})
+        self.assertGreater(len(grande_mas_valido), auditoria.TETO_DOS_ACHADOS)
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "a:1", "estado": "ok",
+             "achados": grande_mas_valido})
+        self.assertEqual(r.status, 200, r.corpo)
+        con = banco.conectar()
+        try:
+            corrida = banco.auditoria_do_projeto(self.uid, "dervs", con=con)
+            abertos = banco.achados_do_projeto(self.uid, "dervs", con=con)
+        finally:
+            con.close()
+        self.assertEqual(corrida["estado"], "falha")
+        self.assertTrue(corrida["motivo"])
+        self.assertEqual(abertos, [])
+
     def test_custo_usd_torto_recusa_fechado_e_nunca_derruba_em_500(self):
         """O menor: uma maquina pareada mandando `custo_usd: {}` derrubava a
         rota em 500 (`float({})` levanta `TypeError` fora do `try`)."""

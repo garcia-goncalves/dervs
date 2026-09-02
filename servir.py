@@ -2052,8 +2052,16 @@ class Hub(SimpleHTTPRequestHandler):
             # maquina antes de eu ler o projeto dela: ler `banco.tarefa` ANTES
             # dessa checagem vazaria o nome de um projeto de outra conta para
             # quem so tem o token errado.
-            achados_brutos = corpo.get("achados")
-            if achados_brutos is not None:
+            if "achados" in corpo:
+                # O teto e' de `auditoria.TETO_DOS_ACHADOS`, e nao do corpo
+                # inteiro (`TETO_DO_RESULTADO`, 2 MiB) — e' o proprio
+                # `auditoria.py` que documenta "quem cobra o teto e'
+                # servir.py, na fronteira". Sem esta linha, um texto acima do
+                # teto so' seria pego se tambem quebrasse o parse do JSON —
+                # padding em branco (JSON valido antes e depois de qualquer
+                # token) bastava para passar batido.
+                achados_brutos = self._texto_do_corpo(
+                    corpo, "achados", teto=auditoria.TETO_DOS_ACHADOS)
                 gravada = banco.tarefa(tarefa_id)
                 projeto = (gravada or {}).get("projeto") or ""
                 limpos, motivo = auditoria.validar(achados_brutos)
