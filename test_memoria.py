@@ -422,9 +422,20 @@ class Agrupar(unittest.TestCase):
         ids reais eram `nao_enviado` e `caso_vazio`.
         """
         import re
+        import auditoria
         fonte = open("regras.py", encoding="utf-8").read()
         ids = {m.group(1) for m in re.finditer(r'_p\(\s*\n?\s*"([a-z_]+)"', fonte)}
         self.assertTrue(ids, "nao achei regra nenhuma na fonte")
+        # As cinco regras de achado NAO aparecem como texto solto em
+        # `regras.py`: elas sao DERIVADAS de `auditoria.CATEGORIAS`, que e a
+        # lista unica de onde saem tambem o enum do esquema e os rotulos. Cinco
+        # nomes escritos a mao seriam cinco chances de divergir em silencio —
+        # que e o defeito que este proprio guarda existe para pegar.
+        #
+        # Isto NAO afrouxa a trava, porque `REGRAS` vem da mesma lista unica:
+        # rotulo sem categoria continua orfao, e categoria sem rotulo continua
+        # sendo regra sem rotulo. As duas asercoes abaixo seguem valendo.
+        ids |= set(auditoria.REGRAS.values())
         self.assertEqual(ids - set(regras.ROTULO_REGRA), set(),
                          "regra sem rótulo: o grupo cairia no texto genérico")
         self.assertEqual(set(regras.ROTULO_REGRA) - ids, set(),
