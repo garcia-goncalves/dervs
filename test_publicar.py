@@ -269,7 +269,7 @@ def variaveis_lidas(arquivo):
     """
     t = (AQUI / arquivo).read_text(encoding="utf-8")
     nomes = set(re.findall(
-        r'os\.(?:environ(?:\.get)?[\(\[]|getenv\()"(DERVS_[A-Z_]+)"', t))
+        r'os\.(?:environ(?:\.get)?[\(\[]|getenv\()[\'"](DERVS_[A-Z_]+)[\'"]', t))
     assert nomes, "nenhuma variavel encontrada em %s; a busca quebrou." % arquivo
     return nomes
 
@@ -284,6 +284,12 @@ def leituras_indiretas(arquivo):
     t = (AQUI / arquivo).read_text(encoding="utf-8")
     return [l.strip() for l in t.splitlines()
             if re.search(r'os\.(?:environ(?:\.get)?[\(\[]|getenv\()\s*[A-Za-z_]', l)]
+
+
+#: As duas expressoes acima aceitam aspa simples E dupla. A cegueira por aspa
+#: e sorrateira: a guarda continua verde, so que sobre menos codigo do que
+#: parece. Achado na revisao de 02/09/2026, uma revisao depois de a mesma
+#: classe ter fechado a cegueira por `os.getenv`.
 
 
 class OContainerRecebeOQueOCodigoLe(unittest.TestCase):

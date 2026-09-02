@@ -2430,6 +2430,120 @@ class OCorpoDoPedidoEDrenado(unittest.TestCase):
             "o servidor ficou preso esperando um corpo que o cliente prometeu "
             "e nao mandou. Um pedido assim tranca uma thread para sempre.")
 
+    def test_todo_verbo_drena_e_nao_so_GET_e_POST(self):
+        """O dreno mora no laco do pedido, nao no despacho.
+
+        A primeira versao vivia em `_despachar` e cobria GET e POST e mais
+        nada: `do_HEAD` responde 405 por fora, e PUT/DELETE/PATCH caem no 501
+        do `BaseHTTPRequestHandler` sem passar por rota nenhuma. Os tres
+        deixavam 16 de 16 bytes por ler -- e levavam o mesmo RST. Achado pela
+        revisao de 02/09/2026, contra uma mensagem de commit que dizia "num
+        lugar so": era verdade para ROTA, nao para VERBO.
+        """
+        for metodo in ("HEAD", "PUT", "DELETE", "PATCH"):
+            with self.subTest(metodo=metodo):
+                status, sobrou = self.pedir(
+                    "/api/arquivar", b'{"projeto": "x"}', metodo=metodo)
+                self.assertEqual(
+                    0, sobrou,
+                    "%s respondeu %s e deixou %d bytes por ler."
+                    % (metodo, status, sobrou))
+
+    def test_o_dreno_para_no_teto_e_nao_le_o_que_o_cliente_prometeu(self):
+        """Drenar sem teto e pagar a banda de quem ataca.
+
+        `TETO_A_DRENAR` existia sem NENHUMA assercao: trocar
+        `min(n, self.TETO_A_DRENAR)` por `n` deixava a suite verde, e o
+        servidor passaria a ler os gigabytes que um cliente hostil declarasse.
+        Achado por sabotagem na revisao de 02/09/2026.
+
+        O teto e baixado aqui de proposito: o que se mede e se ele e
+        RESPEITADO, e um corpo de 8 MiB num teste custaria memoria e segundos
+        para provar a mesma coisa.
+        """
+        anterior = servir.Hub.TETO_A_DRENAR
+        servir.Hub.TETO_A_DRENAR = 1024
+        try:
+            corpo = b"z" * 5000
+            status, sobrou = self.pedir("/api/arquivar", corpo)
+            self.assertIn("401", status)
+            self.assertEqual(
+                len(corpo) - 1024, sobrou,
+                "com teto de 1024 o dreno devia parar deixando %d bytes, e "
+                "deixou %d. Teto que nao segura nao e teto."
+                % (len(corpo) - 1024, sobrou))
+        finally:
+            servir.Hub.TETO_A_DRENAR = anterior
+
+    def test_cliente_que_some_no_meio_nao_derruba_o_pedido(self):
+        """Ler de um soquete morto levanta OSError, e isso nao e um erro.
+
+        O ramo `except OSError` do dreno nao era tocado por caso nenhum:
+        trocar o `break` por `pass` poria o laco em espera infinita sem que
+        nada acusasse.
+        """
+        class MorreNaSegundaLeitura(_NaoFecha):
+            """Devolve dados uma vez, depois levanta OSError PARA SEMPRE.
+
+            "Para sempre" e o ponto. Se o dreno tratasse o OSError com
+            `continue` em vez de `break`, isto seria um laco infinito e o
+            teste PENDURARIA -- que e como se prova que o `break` esta la.
+            A primeira versao deste dublê so levantava a partir da terceira
+            leitura, e a segunda ja devolvia vazio: o laco saia pelo
+            `if not pedaco: break` e o ramo do OSError nunca era tocado.
+            Verde pelo motivo errado.
+            """
+
+            def __init__(self, dados):
+                super().__init__(dados)
+                self.leituras = 0
+
+            def read(self, k=-1):
+                self.leituras += 1
+                if self.leituras >= 2:
+                    raise OSError("o cliente foi embora")
+                return super().read(k)
+
+        cru = (b"POST /api/arquivar HTTP/1.1\r\n"
+               b"Host: localhost:4777\r\n"
+               b"Content-Length: 500000\r\n\r\n" + b"z" * 1000)
+        s = _SoqueteDeMentira(b"")
+        s.entrada = MorreNaSegundaLeitura(cru)
+        # Sem prazo aqui de proposito: se o laco nao parar no OSError, este
+        # teste PENDURA, e suite pendurada e o sintoma que se quer ver.
+        servir.Hub(s, ("127.0.0.1", 5555), object())
+        self.assertIn(
+            b"401", s.saida.getvalue()[:20],
+            "o pedido nao chegou a ser respondido antes de o cliente sumir.")
+        self.assertGreaterEqual(
+            s.entrada.leituras, 2,
+            "o dublê nunca chegou a levantar OSError: o caso passou sem "
+            "tocar o ramo que diz testar.")
+
+    def test_content_length_negativo_nao_pendura_a_thread(self):
+        """`read(-1)` num soquete de verdade le ATE O FIM.
+
+        `_corpo_json` fazia `read(min(n, teto))`: com `Content-Length: -1`
+        isso vira `read(-1)`, e a thread fica presa ate o cliente fechar.
+        Anterior ao dreno (`n <= 0` desvia dele), e latente porque o nginx
+        recusa antes -- mas essa defesa mora num arquivo que nenhum workflow
+        aplica. `max(0, ...)` fecha. Achado da revisao de seguranca de
+        02/09/2026.
+
+        Aqui o soquete de mentira devolve vazio na hora, entao o que se prova
+        e que a leitura pede ZERO byte, e nao "ate o fim": sabotando o
+        `max(0, ...)` de volta, o arreio le o resto do fluxo e a assercao de
+        `sobrou` acusa.
+        """
+        status, sobrou = self.pedir(
+            "/entrada", b'{"codigo": "123456"}', declarado=-1)
+        self.assertTrue(status.startswith("HTTP/"))
+        self.assertEqual(
+            len(b'{"codigo": "123456"}'), sobrou,
+            "com Content-Length negativo nada devia ser lido do corpo, e "
+            "foram lidos %d bytes."
+            % (len(b'{"codigo": "123456"}') - sobrou))
+
     def test_get_sem_corpo_continua_funcionando(self):
         """A guarda da guarda: o dreno nao pode ter quebrado o caminho comum."""
         status, sobrou = self.pedir("/robots.txt", b"", metodo="GET")
