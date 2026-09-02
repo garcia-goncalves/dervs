@@ -231,6 +231,48 @@ na pasta de Downloads antes da raiz escolhida.
 
 ---
 
+## 7.0. O QUE MUDOU EM 02/09/2026 (leia antes da lista abaixo)
+
+Três itens da lista seguinte mudaram de natureza no dia seguinte. A lista fica
+como estava — ela é o registro do que se sabia então —, e o que mudou está
+aqui.
+
+**O item 1 tinha uma SEGUNDA tranca, e ninguém a tinha visto.** "A porta 2
+nunca falou com o GitHub de verdade" estava certo, e o motivo escrito
+(*setup URL* não registrada) era só metade. A outra metade: o
+`docker-compose.yml` não passava **nenhuma** das três variáveis do GitHub App
+para dentro do container. Registrar o aplicativo no github.com e escrever os
+valores no servidor não teria mudado nada — o processo nunca os enxergaria, e
+a tela diria "o aplicativo não está registrado", que é a mesma frase do estado
+legítimo. É a segunda metade do defeito de 28/08, um arquivo adiante.
+Consertado no PR #22, com uma guarda que compara **as duas listas** — toda
+leitura de ambiente de `servir.py` e `banco.py` contra o bloco `environment:`
+do compose.
+
+**O item 2 era mais fundo do que dizia.** "A tarefa agendada foi montada, não
+vista rodar" pressupõe que ela exista. Não existe: em 02/09 não há **nenhuma**
+tarefa com `DERVS` no nome registrada no Windows desta máquina
+(`schtasks /Query`). Reiniciar o computador não provaria nada, porque não há o
+que disparar. O passo que falta não é "reiniciar" — é parear esta máquina pelo
+conectador, o que só vale a pena depois de publicar.
+
+**O item 4 continua verdadeiro, e agora tem data.** Nada foi publicado até
+02/09. O caminho, porém, deixou de ser incógnita: o runner `servidor-ovh`
+existe e está ocioso, com as etiquetas que o workflow pede. O disparo é a
+única coisa que sobrou para a mão do dono — o classificador desta máquina
+recusa `gh workflow run` apontado para o servidor, por desenho.
+
+**E um defeito de produção apareceu por acidente**, caçando o
+`test_servir.py` que falhava 1 em 5. Não era o Windows e não era o teste: o
+servidor é HTTP/1.0 e fecha o soquete a cada resposta, e quem **recusa** um
+POST nunca lia o corpo do pedido — fechar com bytes por ler gera RST, e o RST
+descarta a resposta já entregue. De 405 pedidos com corpo de uma corrida, 189
+terminavam assim. Fora do teste, é o navegador de quem usa o painel levando
+"conexão perdida" no lugar do 401. Consertado em `handle_one_request`, onde
+passa todo verbo. Medido: 0 falhas em 25 corridas, contra 2 em 24.
+
+---
+
 ## 7. O QUE ESTES COMANDOS **NÃO** PROVAM
 
 Esta seção é a razão de o arquivo existir.
