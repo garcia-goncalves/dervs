@@ -293,8 +293,44 @@ jobs:
           chave_numa_linha=$(printf '%s\n' "${APP_KEY:-}" \
             | grep -v -- '-----' | tr -d '\r\n ' || true)
 
-          if [ -n "${APP_SLUG:-}" ] && [ -n "${APP_ID:-}" ] \
-             && [ -n "$chave_numa_linha" ]; then
+          # PRESENCA NAO E VALIDADE, e este arquivo ja foi LIDO PELO SHELL.
+          #
+          # Duas coisas, e a mesma linha fecha as duas. Achado da revisao de
+          # seguranca de 02/09/2026, que as reproduziu em bash de verdade:
+          #
+          #   1. Uma chave PEM CIFRADA (`Proc-Type: 4,ENCRYPTED`) nao tem
+          #      `-----` nessas linhas: elas escapam do `grep -v` e o `tr` as
+          #      cola no miolo. O resultado nao e vazio, entao o teste de
+          #      presenca passa, o deploy fica VERDE e diz "gravadas" -- e em
+          #      execucao `chave_de_pem` devolve None e TODA tentativa de
+          #      conectar termina em "nao deu para conferir". E exatamente a
+          #      meia configuracao que o `else` abaixo existe para impedir,
+          #      entrando por outra porta.
+          #   2. `DERVS_GITHUB_APP_SLUG=ab$(comando)cd`, escrito sem aspas e
+          #      lido adiante, EXECUTA o comando como o usuario do deploy,
+          #      dentro da VPS dos 26 containers. Quem escreve variavel do
+          #      repositorio ja pode editar este workflow, entao nao e escalada
+          #      para esse ator; e para quem administra variavel de organizacao
+          #      sem escrita aqui.
+          #
+          # As peneiras sao de FORMA, e casam o que cada valor pode ser: nome
+          # curto de app (letras, digitos, hifen), numero, base64. Elas
+          # recusam `$`, crase, aspas, espaco e nova linha de uma vez.
+          recusa=""
+          case "${APP_SLUG:-}" in
+            "") recusa="APP_SLUG vazio" ;;
+            *[!A-Za-z0-9-]*) recusa="APP_SLUG tem caractere fora de [A-Za-z0-9-]" ;;
+          esac
+          case "${APP_ID:-}" in
+            "") recusa="${recusa:-APP_ID vazio}" ;;
+            *[!0-9]*) recusa="${recusa:-APP_ID nao e um numero}" ;;
+          esac
+          case "${chave_numa_linha:-}" in
+            "") recusa="${recusa:-a chave veio vazia}" ;;
+            *[!A-Za-z0-9+/=]*) recusa="${recusa:-a chave nao e base64 puro (PEM cifrado? converta com openssl rsa)}" ;;
+          esac
+
+          if [ -z "$recusa" ]; then
             grep -v -e '^DERVS_GITHUB_APP_SLUG=' -e '^DERVS_GITHUB_APP_ID=' \
                     -e '^DERVS_GITHUB_APP_KEY=' .env > .env.novo || true
             echo "DERVS_GITHUB_APP_SLUG=$APP_SLUG"       >> .env.novo
@@ -304,14 +340,25 @@ jobs:
             chmod 600 .env
             echo "as tres do GitHub App gravadas no .env"
           else
-            # As TRES juntas, ou nenhuma. Meia configuracao e pior que nenhuma:
-            # a tela ofereceria o botao de instalar (que so olha o slug) e a
-            # volta falharia sempre na confirmacao, que precisa do id e da
-            # chave -- e o desfecho e "nao deu para conferir", indistinguivel
-            # de um cancelamento do dono.
-            echo "AVISO: sem DERVS_GITHUB_APP_SLUG/_ID/_KEY completos no"
-            echo "repositorio, a porta 2 (conectar a conta do GitHub) nao"
-            echo "aparece na tela. Ver docs/operacao/registrar-app-github.md."
+            # As TRES juntas E VALIDAS, ou nenhuma. Meia configuracao e pior
+            # que nenhuma: a tela ofereceria o botao de instalar (que so olha
+            # o slug) e a volta falharia sempre na confirmacao, que precisa do
+            # id e da chave -- e o desfecho e "nao deu para conferir",
+            # indistinguivel de um cancelamento do dono.
+            #
+            # ESTA MENSAGEM DIZ SO O QUE FOI VERIFICADO. A versao anterior
+            # afirmava que "a porta 2 nao aparece na tela", e isso podia ser
+            # falso: nada aqui apaga as linhas do `.env`, entao valores de uma
+            # publicacao anterior continuam de pe. Alguem que apagasse o
+            # segredo do repositorio para RETIRAR uma chave suspeita leria a
+            # mensagem antiga e acreditaria ter retirado -- com a chave viva
+            # no processo. E a lei 2 deste repositorio aplicada ao log da
+            # publicacao.
+            echo "AVISO: as tres do GitHub App nao foram gravadas ($recusa)."
+            echo "O QUE JA ESTIVER no arquivo de ambiente do servidor CONTINUA"
+            echo "VALENDO -- este passo nao apaga nada. Para retirar uma chave"
+            echo "de verdade, gere outra em github.com/settings/apps e apague a"
+            echo "linha la dentro, a mao. Ver docs/operacao/registrar-app-github.md."
           fi
 
           # O `trap` vem ANTES do login, e é o que torna verdadeira a frase "o
@@ -320,7 +367,11 @@ jobs:
           # `logout` — e a credencial ficaria gravada em `~/.docker/config.json`
           # justamente no caminho em que ninguém volta para conferir. Prometer
           # defesa que não existe é pior que não ter a defesa.
-          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          # O `.env.novo` entra aqui junto com o logout: se o roteiro morrer
+          # entre o `echo` e o `mv`, sobra um rascunho com a chave privada no
+          # disco. O `umask 077` o mantem 0600, entao nao e vazamento -- e um
+          # arquivo esquecido com uma chave dentro, que e o comeco de um.
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true; rm -f /opt/dervs/.env.novo' EXIT
           echo "$REGISTRO_TOKEN" | docker login ghcr.io -u "$REGISTRO_USUARIO" --password-stdin
           docker compose pull
           docker compose up -d --wait
@@ -386,10 +437,21 @@ jobs:
           # `cut` termina bem mesmo sem receber nada. O `|| echo` nunca
           # dispararia, a porta sairia vazia, e a conferência bateria em
           # `http://127.0.0.1:/robots.txt` — falha estranha, causa escondida.
-          set -a; . ./.env; set +a
-          porta="${DERVS_PORTA:-4877}"
+          # DUAS LINHAS, E NAO `. ./.env`. Sourcear o arquivo inteiro faz
+          # duas coisas que ninguem pediu: EXECUTA o que estiver escrito nele
+          # (um valor com `$(...)` vira comando), e exporta a chave privada e a
+          # chave do cofre para tudo o que rodar depois -- `curl`,
+          # `docker inspect`, `docker exec` --, onde ficam legiveis em
+          # `/proc/<pid>/environ`. Aqui so duas linhas interessam, e elas sao
+          # lidas como TEXTO. Achado da revisao de seguranca de 02/09/2026.
+          #
+          # `|| true` porque `pipefail` faria o `grep` sem resultado derrubar o
+          # roteiro; o valor ausente cai no padrao logo abaixo.
+          porta=$(grep -m1 '^DERVS_PORTA=' .env | cut -d= -f2- || true)
+          dominio=$(grep -m1 '^DERVS_DOMINIO=' .env | cut -d= -f2- || true)
+          porta="${porta:-4877}"
           codigo=$(curl -s -o /dev/null -w '%{http_code}' \
-            -H "Host: ${DERVS_DOMINIO}" \
+            -H "Host: ${dominio}" \
             "http://127.0.0.1:${porta}/robots.txt")
           echo "o container respondeu $codigo em 127.0.0.1:${porta}"
           [ "$codigo" = "200" ] || exit 1

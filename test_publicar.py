@@ -390,11 +390,124 @@ class AChaveDoAppChegaInteira(unittest.TestCase):
             "da instalacao falharia sempre, em silencio.")
 
     def test_a_chave_nao_viaja_pela_linha_de_comando(self):
+        """Presenca do jeito certo NAO exclui a presenca do jeito errado.
+
+        A primeira versao so cobrava que `printf 'APP_KEY=%q` existisse -- e
+        continuava verde com um `docker exec -e K="$APP_KEY"` acrescentado ao
+        lado, porque o `printf` seguia la. Guarda que nao pode reprovar o que o
+        nome dela promete. Achado da revisao de seguranca de 02/09/2026, pelo
+        criterio do proprio CLAUDE.md.
+
+        Agora a assercao e de AUSENCIA: as duas variaveis com material de chave
+        so podem aparecer nas linhas que as poem em STDIN ou as escrevem no
+        arquivo de ambiente. Qualquer outra mencao -- `docker exec -e`, um
+        `echo` de depuracao, um prefixo de ambiente no `ssh` -- reprova.
+        """
         self.assertIn(
             "printf 'APP_KEY=%q", self.passo,
             "a chave privada do App nao viaja por STDIN citado com %q; "
             "qualquer conta local desta VPS de 26 containers a leria em "
             "/proc/<pid>/cmdline durante a publicacao.")
+        # O bloco `env:` do passo entra aqui: e ele que traz o segredo do
+        # cofre do repositorio para o ambiente do runner, e sem ele nada
+        # funciona. O que esta guarda persegue e a chave em ARGV.
+        # O QUE ESTA GUARDA PERSEGUE E O VALOR EXPANDIDO, nao o nome.
+        # `grep -e '^DERVS_GITHUB_APP_KEY='` cita o nome e nao expande nada;
+        # `docker exec -e K="$APP_KEY"` poe o VALOR no argv, legivel em
+        # /proc/<pid>/cmdline por qualquer conta local desta VPS de 26
+        # containers. Sao coisas diferentes, e so a segunda vaza.
+        expansao = re.compile(r"\$\{?(APP_KEY|chave_numa_linha)\b")
+        #: Onde o valor PODE aparecer: no STDIN citado com %q, na escrita do
+        #: arquivo de ambiente, no achatamento que o produz, e na peneira de
+        #: forma (`case` e embutido do shell -- nao cria processo, nao tem
+        #: argv). Qualquer outro lugar reprova.
+        permitidas = (
+            "printf 'APP_KEY=%q",
+            'echo "DERVS_GITHUB_APP_KEY=$chave_numa_linha"',
+            "chave_numa_linha=$(printf",
+            'case "${chave_numa_linha:-}" in',
+        )
+        for linha in self.passo.splitlines():
+            if linha.lstrip().startswith("#") or not expansao.search(linha):
+                continue
+            self.assertTrue(
+                any(p in linha for p in permitidas),
+                "o VALOR da chave do App e expandido numa linha que nao e o "
+                "STDIN, a escrita no arquivo de ambiente, o achatamento nem a "
+                "peneira -- e por ai que ele vaza para /proc: %s"
+                % linha.strip())
+
+    def test_os_tres_valores_sao_peneirados_antes_de_serem_gravados(self):
+        """Presenca nao e validade, e o arquivo de ambiente e lido pelo shell.
+
+        Dois achados da revisao de seguranca de 02/09/2026, reproduzidos em
+        bash de verdade, e a mesma peneira fecha os dois:
+
+        1. Uma chave PEM CIFRADA (`Proc-Type: 4,ENCRYPTED`) nao tem `-----`
+           nessas linhas: elas escapam do `grep -v` e sao coladas no miolo. O
+           resultado NAO e vazio, entao um teste de presenca passa, a
+           publicacao fica verde dizendo "gravadas" -- e toda tentativa de
+           conectar termina em "nao deu para conferir".
+        2. `DERVS_GITHUB_APP_SLUG=ab$(comando)cd` executaria o comando dentro
+           do servidor.
+
+        Medido depois da correcao: dos nove casos, um aceito e oito recusados
+        pelo motivo certo, incluindo nova linha, espaco e ponto-e-virgula.
+        """
+        for peneira, alvo in (
+                ("*[!A-Za-z0-9-]*", "APP_SLUG"),
+                ("*[!0-9]*", "APP_ID"),
+                ("*[!A-Za-z0-9+/=]*", "a chave em base64")):
+            self.assertIn(
+                peneira, self.passo,
+                "falta a peneira de forma para %s. Sem ela, presenca passa "
+                "por validade -- e um valor com `$(...)` chega a ser lido "
+                "pelo shell do servidor." % alvo)
+
+    def test_o_aviso_nao_afirma_o_que_nao_foi_verificado(self):
+        """Nada aqui apaga linha do arquivo de ambiente do servidor.
+
+        A mensagem antiga dizia que "a porta 2 nao aparece na tela", e isso
+        podia ser FALSO: valores de uma publicacao anterior seguem de pe.
+        Alguem que apagasse o segredo do repositorio para retirar uma chave
+        suspeita leria aquilo e acreditaria ter retirado -- com a chave viva no
+        processo. Lei 2 deste repositorio, aplicada ao log da publicacao.
+        """
+        self.assertIn("CONTINUA", self.passo,
+                      "o aviso nao diz que o que ja esta no servidor continua "
+                      "valendo.")
+        self.assertNotIn("a porta 2 (conectar a conta do GitHub) nao",
+                         self.passo,
+                         "o aviso voltou a afirmar um estado do servidor que "
+                         "este passo nao verifica.")
+
+    def test_o_arquivo_de_ambiente_do_servidor_nao_e_executado(self):
+        """`. ./.env` EXECUTA o que estiver escrito la, e exporta tudo.
+
+        Duas consequencias: um valor com `$(...)` vira comando, e a chave
+        privada mais a chave do cofre passam a ser herdadas por todo processo
+        seguinte -- legiveis em /proc/<pid>/environ. Duas linhas de `grep`
+        resolvem, lendo como TEXTO.
+        """
+        # Linha de comentario nao executa nada -- e o comentario que explica
+        # a decisao cita justamente o comando proibido. Guarda que le texto
+        # cru reprovaria a propria explicacao.
+        executaveis = "\n".join(l for l in self.passo.splitlines()
+                                if not l.lstrip().startswith("#"))
+        self.assertNotIn(
+            ". ./.env", executaveis,
+            "o roteiro voltou a sourcear o arquivo de ambiente do servidor.")
+        self.assertIn("grep -m1 '^DERVS_PORTA=", self.passo,
+                      "a porta nao e mais lida como texto.")
+
+    def test_o_rascunho_do_env_e_apagado_se_o_roteiro_morrer(self):
+        """Sobra um arquivo com a chave privada dentro se ninguem limpar."""
+        trap = [l for l in self.passo.splitlines() if "trap " in l]
+        self.assertTrue(trap, "o roteiro perdeu o trap de saida.")
+        self.assertIn(".env.novo", trap[0],
+                      "o rascunho do arquivo de ambiente nao e apagado na "
+                      "saida: se o roteiro morrer entre a escrita e o `mv`, "
+                      "fica no disco um arquivo com a chave privada.")
 
     def test_as_tres_chegam_ao_env_do_servidor(self):
         for chave in ("DERVS_GITHUB_APP_SLUG=", "DERVS_GITHUB_APP_ID=",
