@@ -685,20 +685,23 @@ class ORoteiroChamaAsTelasPeloNomeDelas(unittest.TestCase):
         bloco = re.search(r"<nav.*?</nav>", html(), re.S)
         self.assertIsNotNone(bloco, "o menu sumiu do index.html")
         nomes = re.findall(r'data-tela="[^"]+"\s*>([^<]+)<', bloco.group(0))
-        self.assertEqual(len(nomes), 6, nomes)
+        self.assertEqual(len(nomes), 7, nomes)
         return nomes
 
-    def test_o_menu_tem_os_seis_nomes_esperados(self):
+    def test_o_menu_tem_os_sete_nomes_esperados(self):
         """Se o menu mudar de forma, o teste abaixo passa vazio e nao vigia.
 
         Eram quatro ate a Fatia 2. "Trabalho" e "Consumo" entraram junto com o
         braco: a primeira e onde o dono ve e aprova o que o DERVS faz, a
         segunda e o que torna a semana de observacao uma medicao em vez de uma
-        impressao.
+        impressao. "Auditoria" entrou na Fase 4 (02/09/2026), entre as duas —
+        e' a mesma familia de "o que o DERVS ja fez/esta fazendo" que
+        "Trabalho" representa para o conserto, so que para o que ele leu.
         """
         self.assertEqual(self.menu(),
-                         ["Painel", "Trabalho", "Consumo", "Conectar projeto",
-                          "Computadores", "Formas de entrar"])
+                         ["Painel", "Trabalho", "Auditoria", "Consumo",
+                          "Conectar projeto", "Computadores",
+                          "Formas de entrar"])
 
     def test_nenhum_roteiro_manda_clicar_num_botao_que_nao_existe(self):
         # O par: o nome errado que ja custou uma verificacao, e o certo.
@@ -834,6 +837,97 @@ class ATelaDeComputadoresCasaDosDoisLados(unittest.TestCase):
         self.assertNotIn("border-color", bloco.group(1),
                          "o contorno do `Remover` tem de continuar igual ao do "
                          "outro botao: e ele que diz onde o clique vale.")
+
+
+class ATelaDeAuditoriaCasaOsTresLados(unittest.TestCase):
+    """Etapa 6 do plano da Auditoria Profunda (02/09/2026).
+
+    A armadilha da sabotagem 6b: um guarda escrito como `assertIn("auditoria",
+    html())` NAO PODE REPROVAR, porque `id="tela-auditoria"` ja contem a
+    palavra. Por isso este caso casa as TRES ocorrencias -- a `<section id>`,
+    o `data-tela` da navegacao e o `case` do `navegar()` -- e nenhuma delas
+    sozinha basta.
+    """
+
+    def html_texto(self):
+        return HTML.read_text(encoding="utf-8")
+
+    def js_texto(self):
+        return PAINEL_JS.read_text(encoding="utf-8")
+
+    def test_a_secao_o_link_e_o_case_existem_e_casam_entre_si(self):
+        h = self.html_texto()
+        self.assertIn('id="tela-auditoria"', h,
+                      "a <section id=\"tela-auditoria\"> sumiu do index.html")
+        self.assertIn('data-tela="auditoria"', h,
+                      "o link da navegacao com data-tela=\"auditoria\" sumiu")
+        j = self.js_texto()
+        self.assertRegex(
+            j, r'case\s+"auditoria"\s*:',
+            "o case \"auditoria\": sumiu do switch de navegar() em painel.js")
+
+    def test_nenhum_achado_e_escrito_com_innerhtml(self):
+        """Sabotagem 6c: achado e' texto do repositorio auditado. Se algum dia
+        alguem trocar um `.textContent` por `.innerHTML` no desenho do achado,
+        este caso tem de acusar."""
+        j = self.js_texto()
+        i = j.index("function desenharListaDeAchados")
+        fim = j.index("\n}\n", i)
+        corpo = j[i:fim]
+        self.assertNotIn("innerHTML", corpo,
+                         "achado escrito com innerHTML — quarta barreira "
+                         "furada, texto do repositorio auditado pode virar "
+                         "marcacao")
+        self.assertIn("criterio(", corpo,
+                      "desenharListaDeAchados nao chama criterio() — a busca "
+                      "esta olhando para o lugar errado")
+
+    def test_os_tres_estados_de_dado_tem_frases_diferentes(self):
+        """Sabotagem 6d, e a lei 2: 'nunca auditado', 'auditoria falhou: '
+        e '0 achados' nao podem se confundir. Zero achados so vale quando a
+        corrida terminou 'ok' -- nunca quando ela falhou."""
+        j = self.js_texto()
+        i = j.index("async function pintarAuditoria")
+        fim = j.index("\nasync function pedirAuditoria", i)
+        corpo = j[i:fim]
+        nunca = "ainda não foi auditado"
+        falhou = "a auditoria falhou: "
+        zero = "0 achados"
+        for frase in (nunca, falhou):
+            self.assertIn(frase, corpo,
+                          "a frase %r sumiu de pintarAuditoria" % frase)
+        self.assertIn(zero, self.js_texto(),
+                      "a frase %r sumiu de desenharListaDeAchados" % zero)
+        # As tres tem de ser distintas — nenhuma pode conter as outras.
+        self.assertNotIn(nunca, falhou)
+        self.assertNotIn(falhou, zero)
+        self.assertNotIn(zero, nunca)
+        # A frase de erro so pode aparecer dentro do `if` que confere que a
+        # corrida NAO terminou 'ok' — nunca incondicionalmente.
+        i_erro = corpo.index(falhou)
+        antes = corpo[:i_erro]
+        self.assertIn('corrida.estado !== "ok"', antes,
+                      "a frase de erro nao esta guardada pela conferencia do "
+                      "estado da corrida — poderia aparecer com a corrida ok")
+
+    def test_nenhum_arquivo_novo_em_assets(self):
+        """Sabotagem 6e. A lista de estaticos nasce lendo `assets/` na SUBIDA
+        do servidor, e so `painel.js`/`painel.css` exigem sessao por caminho
+        EXATO. Um `assets/auditoria.js` nasceria aberto ao publico."""
+        nomes = sorted(p.name for p in (AQUI / "assets").iterdir()
+                       if p.is_file())
+        # A lista de hoje, e nao um numero magico: cresce so quando alguem
+        # revisa deliberadamente `servir.ESTATICOS_COM_SESSAO`, nunca de
+        # gancho num novo arquivo desta etapa.
+        self.assertEqual(
+            nomes,
+            ["CREDITOS.md", "cortina.css", "cortina.js", "dervs.css",
+             "favicon-180.png", "favicon.svg", "logo.svg", "painel.css",
+             "painel.js", "portas.js", "selos.svg"],
+            "assets/ ganhou ou perdeu arquivo — a tela de Auditoria nao "
+            "pode trazer nenhum novo (ver CLAUDE.md, caminho EXATO)")
+        self.assertIn("painel.js", nomes)
+        self.assertIn("painel.css", nomes)
 
 
 if __name__ == "__main__":
