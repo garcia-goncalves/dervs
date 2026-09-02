@@ -132,6 +132,7 @@ function navegar() {
     case "projeto":      mostrar("projeto"); pintarProjeto(alvo); break;
     case "alerta":       mostrar("alerta"); pintarAlerta(alvo); break;
     case "trabalho":     mostrar("trabalho"); pintarTrabalho(alvo); break;
+    case "auditoria":    mostrar("auditoria"); pintarAuditoria(alvo); break;
     case "consumo":      mostrar("consumo"); pintarConsumo(); break;
     /* A tela pinta PRIMEIRO, com o que ja se sabe, e depois pergunta. Assim
        ela nao fica em branco esperando a rede -- e "nao deu para conferir"
@@ -2000,6 +2001,202 @@ function ligarFluxo(id) {
   };
 }
 
+/* ================================================== 6.5. Auditoria ======= */
+/* A tela mora aqui, e nao em `assets/auditoria.js`: um arquivo novo em
+   `assets/` nasceria SEM exigir sessao, porque a lista de estaticos que
+   pedem sessao (`servir.ESTATICOS_COM_SESSAO`) casa por caminho EXATO contra
+   so `painel.js` e `painel.css`, e nasce lendo a pasta na SUBIDA do
+   servidor. Ver CLAUDE.md, "Os arquivos de assets/ sao permissao por
+   caminho EXATO". */
+
+/* As cinco categorias e as tres gravidades, rotuladas em portugues. Nao sao
+   token de cor novo: a gravidade REUSA os quatro estados do selo -- "grave"
+   e o mesmo vermelho de "quebrado", "atencao" e literal, "menor" e o mesmo
+   tracejado neutro de "sem dados" -- porque o significado ja e o mesmo:
+   "isto quer minha atencao com que urgencia". */
+const AUDIT_CATEGORIAS = { seguranca: "Segurança", bug: "Bug", teste: "Teste",
+                           doc: "Documentação", estilo: "Estilo" };
+const AUDIT_GRAVIDADE_SELO = { alta: "quebrado", media: "atencao", baixa: "sem_dados" };
+const AUDIT_GRAVIDADE_ROTULO = { alta: "grave", media: "atenção", baixa: "menor" };
+
+/* So os NOMES saem daqui -- nenhum numero, nenhum estado medido. E' por isso
+   que quem escreve as opcoes na tela (abaixo) nao precisa carimbar: um nome
+   de projeto nao envelhece do jeito que uma contagem envelhece. */
+function nomesDosProjetos() {
+  return (ESTADO && ESTADO.projetos || []).map(p => p.nome);
+}
+
+function popularSeletorDeAuditoria(alvo) {
+  const sel = $("#audit-projeto");
+  const nomes = nomesDosProjetos();
+  const atual = alvo || sel.value || nomes[0] || "";
+  const opcoes = nomes.map(nome => {
+    const op = document.createElement("option");
+    op.value = nome;
+    op.textContent = nome;
+    return op;
+  });
+  sel.replaceChildren(...opcoes);
+  if (atual) sel.value = atual;
+  return sel.value;
+}
+
+function desenharReguaDeAuditoria(achados) {
+  const regua = $("#audit-regua");
+  regua.textContent = "";
+  for (const [chave, rotulo] of Object.entries(AUDIT_CATEGORIAS)) {
+    const n = achados.filter(a => a.categoria === chave).length;
+    const span = document.createElement("span");
+    span.className = "categoria";
+    span.textContent = rotulo + ": " + n;
+    regua.append(span);
+  }
+}
+
+/* Zero achados so e um estado valido AQUI -- quando a corrida terminou 'ok'
+   com lista vazia. E' a lei 2: um "0" pelado se confundiria com "nao consegui
+   medir", entao a frase diz que RODOU e nao achou nada. */
+function desenharListaDeAchados(achados) {
+  const ul = $("#audit-lista");
+  ul.textContent = "";
+  if (!achados.length) {
+    ul.append(vazio(
+      "0 achados. A auditoria rodou até o fim e não encontrou nada que "
+      + "merecesse atenção.", null, null));
+    return;
+  }
+  const peso = { alta: 0, media: 1, baixa: 2 };
+  const ordenados = [...achados].sort((a, b) =>
+    (peso[a.gravidade] ?? 9) - (peso[b.gravidade] ?? 9));
+  for (const a of ordenados) {
+    const estadoSelo = AUDIT_GRAVIDADE_SELO[a.gravidade] || "sem_dados";
+    const rotuloGravidade = AUDIT_GRAVIDADE_ROTULO[a.gravidade] || "menor";
+    const categoria = AUDIT_CATEGORIAS[a.categoria] || a.categoria || "—";
+    const local = (a.arquivo || "sem arquivo") + (a.linha ? ":" + a.linha : "");
+    /* `criterio()` ja escreve cada campo com `.textContent` -- a mesma
+       barreira contra o texto do repositorio auditado virar marcacao,
+       reusada e nao reescrita. */
+    ul.append(criterio(a.frase || "(sem descrição)", estadoSelo, local,
+                       rotuloGravidade + " · " + categoria,
+                       a.o_que_fazer || a.trecho
+                       || "Sem detalhe guardado para este achado."));
+  }
+}
+
+/* Os TRES estados de dado da corrida (o quarto, "nunca auditado", e tratado
+   antes de chegar aqui). As frases sao DIFERENTES de proposito -- a lei 2 --
+   para "nao consegui" nunca se confundir com "rodei e nao achei nada". */
+async function pintarAuditoria(alvo) {
+  const faixa = $("#audit-faixa");
+  faixa.hidden = true;
+  const nome = popularSeletorDeAuditoria(alvo);
+  $("#audit-pedir").disabled = false;
+  $("#audit-pedir").textContent = "Auditar agora";
+
+  if (!nome) {
+    $("#audit-carimbo").textContent = "";
+    $("#audit-regua").textContent = "";
+    $("#audit-lista").textContent = "";
+    const v = $("#audit-vazio");
+    v.textContent = "";
+    v.hidden = false;
+    v.append(vazio("Você ainda não conectou nenhum projeto.", null, null));
+    return;
+  }
+
+  let dado = null;
+  try {
+    /* A rota devolve a camada de TODOS os projetos da conta de uma vez, e a
+       tela recorta o dela aqui. E de proposito: um caminho com o nome do
+       projeto dentro (`/api/auditoria/<nome>`) obrigaria o servidor a casar
+       rota por PREFIXO, e neste servidor a conferencia de acesso casa por
+       caminho EXATO -- trocar isso por prefixo e a forma classica de abrir um
+       furo sem ninguem perceber. Nao vale a pena por um recorte que o
+       navegador faz de graca. */
+    const r = await fetch("/api/auditoria");
+    if (!r.ok) throw new Error(r.status);
+    const todos = await r.json();
+    const meu = (todos.projetos || []).find((p) => p.projeto === nome);
+    /* Projeto que a rota nao conhece NAO vira "nunca auditado": isso seria
+       afirmar sobre um dado que nao veio. `undefined` cai no mesmo caminho de
+       "nao deu para perguntar" logo abaixo. */
+    if (!meu) throw new Error("projeto ausente na resposta");
+    dado = meu.auditoria;
+  } catch {
+    /* A rota pode ainda nao existir, ou a rede pode ter falhado -- as duas
+       coisas se parecem daqui. A tela NAO finge um dos tres estados de dado:
+       ela diz que nao deu para perguntar, e nao troca isso por "0 achados"
+       nem por "nunca foi auditado", que seriam afirmacoes sobre um dado que
+       ela nunca chegou a ler. */
+    faixa.hidden = false;
+    faixa.textContent =
+      "Não conseguimos falar com o servidor para buscar a auditoria.";
+    $("#audit-carimbo").textContent = "";
+    $("#audit-regua").textContent = "";
+    $("#audit-lista").textContent = "";
+    $("#audit-vazio").hidden = true;
+    return;
+  }
+
+  const corrida = dado && dado.corrida;
+  const achados = (dado && dado.achados) || [];
+  const v = $("#audit-vazio");
+
+  if (!corrida) {
+    // Estado "nunca auditado" -- nao e o mesmo que "sem dados": e "ainda nao
+    // pedimos", e o texto diz isso com todas as letras.
+    v.textContent = "";
+    v.hidden = false;
+    v.append(vazio(
+      "Este projeto ainda não foi auditado. A auditoria lê o código por "
+      + "dentro — não só o que está em volta dele — e aponta o que merece "
+      + "atenção, agrupado por gravidade.",
+      "Auditar agora", null, pedirAuditoria));
+    $("#audit-carimbo").textContent = "";
+    $("#audit-regua").textContent = "";
+    $("#audit-lista").textContent = "";
+    return;
+  }
+
+  v.hidden = true;
+
+  if (corrida.estado !== "ok") {
+    // Estado erro/sem dados: a lista e o carimbo DA ULTIMA CORRIDA BOA
+    // continuam na tela -- nunca sao apagados por uma corrida que falhou.
+    faixa.hidden = false;
+    faixa.textContent =
+      "a auditoria falhou: " + (corrida.motivo || "motivo não informado");
+  }
+
+  $("#audit-carimbo").textContent = corrida.medido_em
+    ? "Última auditoria: " + haQuanto(corrida.medido_em) + ", "
+      + (corrida.arquivos_n || 0) + " arquivo(s) lidos, custou R$ "
+      + Number(corrida.custo_usd || 0).toFixed(2).replace(".", ",")
+    : "";
+
+  desenharReguaDeAuditoria(achados);
+  desenharListaDeAchados(achados);
+}
+
+async function pedirAuditoria() {
+  const nome = $("#audit-projeto").value;
+  if (!nome) return;
+  const btn = $("#audit-pedir");
+  btn.disabled = true;
+  btn.textContent = "Auditando…";
+  const faixa = $("#audit-faixa");
+  faixa.hidden = false;
+  faixa.textContent = "Auditando " + nome + "… Isso pode levar alguns minutos.";
+  try {
+    const r = await escrever("/api/auditoria/pedir", { projeto: nome });
+    if (!r.ok) throw new Error(r.status);
+    recado("pedido de auditoria enviado.");
+  } catch {
+    recado("não conseguimos pedir a auditoria. Tente de novo.", true);
+  }
+  await pintarAuditoria(nome);
+}
+
 /* ================================================== 7. Consumo ========== */
 
 async function pintarConsumo() {
@@ -2180,5 +2377,9 @@ $("#conf-nao").addEventListener("click", () => $("#dlg-confirmar").close());
 
 $("#pd-cadastrar").addEventListener("click", pdCadastrar);
 $("#pd-gerar").addEventListener("click", pdGerar);
+
+$("#audit-projeto").addEventListener("change",
+  () => irPara("#/auditoria/" + $("#audit-projeto").value));
+$("#audit-pedir").addEventListener("click", pedirAuditoria);
 
 inicio();

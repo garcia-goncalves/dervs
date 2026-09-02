@@ -29,6 +29,7 @@ AQUI = Path(__file__).resolve().parent
 if str(AQUI.parent) not in sys.path:
     sys.path.insert(0, str(AQUI.parent))
 
+import auditoria  # noqa: E402
 import execucao   # noqa: E402
 import tarefas    # noqa: E402
 
@@ -178,6 +179,99 @@ class ExecutorClaude(Executor):
         }
 
 
+class ExecutorAuditor(Executor):
+    """O braco SO-LEITURA (Auditoria Profunda, 02/09/2026): le um repositorio
+    e devolve achados, nunca abre pull request.
+
+    Nada aqui monta comando nem clona repositorio: tudo isso e
+    `execucao.auditar`, a irma so-leitura de `execucao.iniciar`. O desfecho
+    sobe pelo contrato de `tarefas.CAMPOS_DO_DESFECHO` MAIS UM CAMPO,
+    `achados`, que carrega o JSON cru que o agente respondeu (o esquema pedido
+    por `--json-schema`). Quem valida aquele JSON e `auditoria.validar`, do
+    lado do servidor, nunca este arquivo.
+
+    O JSON NAO VAI NO `resumo`: `servir._resultado` corta o `resumo` em 4.000
+    caracteres, e um JSON cortado nao e um JSON menor, e lixo. O teto do campo
+    proprio e `auditoria.TETO_DOS_ACHADOS`.
+    """
+
+    nome = auditoria.EXECUTOR
+
+    SEGUNDOS_ENTRE_OLHADAS = 1.0
+    SEGUNDOS_DE_SESSAO = 1800
+
+    def disponivel(self) -> bool:
+        try:
+            return bool(execucao.montar_comando_de_auditoria())
+        except Exception:                      # noqa: BLE001 — falha fechada
+            return False
+
+    def rodar(self, tarefa: dict, teto_usd=None, ao_progredir=None,
+              gasto_usd=0.0, repinturas=None, maquina=None) -> dict:
+        recusa = self._recusar_se_nao_pode(tarefa, gasto_usd, repinturas,
+                                           maquina)
+        if recusa is not None:
+            return recusa
+
+        projeto = tarefa.get("projeto") or ""
+        caminho = tarefa.get("caminho") or tarefa.get("projeto_caminho") or ""
+        teto = tarefa.get("teto_usd") if teto_usd is None else teto_usd
+
+        decisao = execucao.auditar(projeto, caminho, teto_usd=teto)
+        if decisao != "iniciar":
+            return {
+                "tipo": "desfecho", "id": tarefa.get("id") or "",
+                "estado": "falha", "ramo": "", "resumo": "", "diff": "",
+                "pr_url": "", "rodadas": 0, "custo_usd": 0.0,
+                "erro": "ja ha uma sessao rodando nesta maquina",
+                "recusada": True,
+            }
+
+        return self._acompanhar(tarefa.get("id") or "", ao_progredir)
+
+    def _acompanhar(self, tarefa_id: str, ao_progredir) -> dict:
+        """Igual a `ExecutorClaude._acompanhar`, sobre o estado da auditoria."""
+        entregues = 0
+        fim = time.time() + self.SEGUNDOS_DE_SESSAO
+        while time.time() < fim:
+            retrato = execucao.estado_auditoria(entregues)
+            entregues = retrato.get("total_de_linhas", entregues)
+            if ao_progredir is not None:
+                try:
+                    if ao_progredir(retrato):
+                        execucao.parar_auditoria()
+                        break
+                except Exception:              # noqa: BLE001
+                    pass
+            if retrato.get("estado") in execucao.ESTADOS_TERMINAIS:
+                break
+            time.sleep(self.SEGUNDOS_ENTRE_OLHADAS)
+        else:
+            execucao.parar_auditoria()
+
+        final = execucao.estado_auditoria(entregues)
+        terminou_bem = final.get("estado") == "ok"
+        return {
+            "tipo": "desfecho",
+            "id": tarefa_id,
+            "estado": "ok" if terminou_bem else "falha",
+            "ramo": "", "diff": "", "pr_url": "",
+            "resumo": final.get("resumo") or "",
+            # O CAMPO QUE FECHA O FIO. Sem ele o desfecho subia sem `achados`,
+            # e o bloco de gravacao de `servir._resultado` — que so roda com
+            # essa chave — era INALCANCAVEL: a auditoria rodava, gastava o teto
+            # do dia e nao gravava nada. Vai separado do `resumo` de proposito:
+            # o `resumo` e cortado em 4.000 caracteres do outro lado, e isso
+            # destruiria o JSON de qualquer auditoria de verdade.
+            "achados": final.get("achados") or "",
+            "rodadas": int(final.get("rodadas") or 0),
+            "custo_usd": float(final.get("custo_usd") or 0.0),
+            "erro": "" if terminou_bem else (final.get("corpo") or
+                                             final.get("manchete") or
+                                             "a auditoria nao terminou bem"),
+        }
+
+
 class ExecutorCodex(Executor):
     """O segundo braco. Previsto, e desligado.
 
@@ -202,6 +296,7 @@ class ExecutorCodex(Executor):
 # `None`, e quem chama trata como recusa — nunca como "usa o padrao".
 EXECUTORES = {
     ExecutorClaude.nome: ExecutorClaude,
+    ExecutorAuditor.nome: ExecutorAuditor,
     ExecutorCodex.nome: ExecutorCodex,
 }
 

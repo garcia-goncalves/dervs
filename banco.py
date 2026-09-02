@@ -492,6 +492,58 @@ CREATE TABLE IF NOT EXISTS codigo_recuperacao (
 );
 CREATE INDEX IF NOT EXISTS ix_codigo_dono
     ON codigo_recuperacao (usuario_id, usado_em);
+
+-- A Auditoria Profunda (fase 4, 02/09/2026). `auditoria` e a CORRIDA;
+-- `achado` e o que ela achou. Duas tabelas, e nao uma, de proposito: sem a
+-- corrida, um projeto com zero linhas em `achado` e indistinguivel de um
+-- projeto nunca auditado, e o painel diria "0 achados" para quem nunca foi
+-- medido — a lei 2 deste repositorio.
+CREATE TABLE IF NOT EXISTS auditoria (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id   INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    projeto      TEXT    NOT NULL CHECK (length(trim(projeto)) > 0),
+    tarefa_id    TEXT,
+    estado       TEXT    NOT NULL CHECK (estado IN ('ok','falha','recusada')),
+    motivo       TEXT    NOT NULL DEFAULT '',
+    achados_n    INTEGER NOT NULL DEFAULT 0,
+    arquivos_n   INTEGER NOT NULL DEFAULT 0,
+    custo_usd    REAL    NOT NULL DEFAULT 0.0,
+    rodadas      INTEGER NOT NULL DEFAULT 0,
+    medido_em    TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_auditoria_projeto
+    ON auditoria (usuario_id, projeto, medido_em);
+
+-- `id` e TEXT (o id ESTAVEL da pendencia), e nao autoincremento: e por ele
+-- que um achado que reaparece faz `INSERT ... ON CONFLICT DO UPDATE` na
+-- MESMA linha, mantendo o `visto_em` mais antigo. Achado que nao voltou some
+-- marcando `fechado_em`, NUNCA com DELETE, para o historico nao mentir.
+--
+-- A CHAVE E (usuario_id, id), NUNCA `id` sozinho. `id` e
+-- `regra:projeto:sha256(arquivo,categoria,frase)[:12]` — deterministico e SEM
+-- o dono dentro. Duas contas que auditam o MESMO repositorio geram o MESMO id
+-- para o mesmo achado; com `id` como chave global, a segunda gravacao
+-- TRANSFERIA a linha de dono e o achado sumia do painel da primeira conta,
+-- sem erro e sem aviso. Achado da revisao de seguranca de 02/09/2026.
+CREATE TABLE IF NOT EXISTS achado (
+    id           TEXT    NOT NULL,
+    auditoria_id INTEGER NOT NULL REFERENCES auditoria(id) ON DELETE CASCADE,
+    usuario_id   INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    projeto      TEXT    NOT NULL DEFAULT '',
+    regra        TEXT    NOT NULL DEFAULT '',
+    categoria    TEXT    NOT NULL DEFAULT '',
+    arquivo      TEXT    NOT NULL DEFAULT '',
+    linha        INTEGER,
+    gravidade    TEXT    NOT NULL DEFAULT 'media',
+    frase        TEXT    NOT NULL DEFAULT '',
+    o_que_fazer  TEXT    NOT NULL DEFAULT '',
+    trecho       TEXT    NOT NULL DEFAULT '',
+    visto_em     TEXT    NOT NULL,
+    fechado_em   TEXT,
+    PRIMARY KEY (usuario_id, id)
+);
+CREATE INDEX IF NOT EXISTS ix_achado_aberto
+    ON achado (usuario_id, projeto, fechado_em);
 """
 
 
@@ -539,13 +591,16 @@ def migrar(con: sqlite3.Connection) -> None:
     _migrar_fila_semaforo(con)
     _migrar_endereco_producao(con)
     _migrar_instalacao_github(con)
+    _migrar_auditoria(con)
+    _migrar_achado_dono(con)
 
 
 # As tabelas que apontam para `usuario`. A migracao confere so estas: varrer o
 # banco inteiro faria um orfao antigo, de outra tabela, travar toda subida.
 FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento",
                      "chave_de_acesso", "codigo_recuperacao",
-                     "endereco_producao", "instalacao_github")
+                     "endereco_producao", "instalacao_github",
+                     "auditoria", "achado")
 
 
 # Fatia 2. Nome da coluna -> o pedaco de DDL do `ALTER TABLE`. A ordem e a do
@@ -1022,6 +1077,167 @@ def _migrar_instalacao_github(con: sqlite3.Connection) -> None:
         _religar_fk(con)
 
 
+# O mesmo arranjo de `_CREATE_INSTALACAO_GITHUB`: duas copias do mesmo CREATE
+# de proposito — a do ESQUEMA e a documentacao do banco de hoje, esta e a
+# ferramenta da migracao. Ha teste que cobra as duas terem a mesma forma.
+_CREATE_AUDITORIA = """CREATE TABLE IF NOT EXISTS auditoria (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id   INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    projeto      TEXT    NOT NULL CHECK (length(trim(projeto)) > 0),
+    tarefa_id    TEXT,
+    estado       TEXT    NOT NULL CHECK (estado IN ('ok','falha','recusada')),
+    motivo       TEXT    NOT NULL DEFAULT '',
+    achados_n    INTEGER NOT NULL DEFAULT 0,
+    arquivos_n   INTEGER NOT NULL DEFAULT 0,
+    custo_usd    REAL    NOT NULL DEFAULT 0.0,
+    rodadas      INTEGER NOT NULL DEFAULT 0,
+    medido_em    TEXT    NOT NULL
+)"""
+
+_CREATE_ACHADO = """CREATE TABLE IF NOT EXISTS achado (
+    id           TEXT    NOT NULL,
+    auditoria_id INTEGER NOT NULL REFERENCES auditoria(id) ON DELETE CASCADE,
+    usuario_id   INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    projeto      TEXT    NOT NULL DEFAULT '',
+    regra        TEXT    NOT NULL DEFAULT '',
+    categoria    TEXT    NOT NULL DEFAULT '',
+    arquivo      TEXT    NOT NULL DEFAULT '',
+    linha        INTEGER,
+    gravidade    TEXT    NOT NULL DEFAULT 'media',
+    frase        TEXT    NOT NULL DEFAULT '',
+    o_que_fazer  TEXT    NOT NULL DEFAULT '',
+    trecho       TEXT    NOT NULL DEFAULT '',
+    visto_em     TEXT    NOT NULL,
+    fechado_em   TEXT,
+    PRIMARY KEY (usuario_id, id)
+)"""
+
+
+def _migrar_auditoria(con: sqlite3.Connection) -> None:
+    """As duas tabelas da Auditoria Profunda nascem aqui, e nao so no ESQUEMA.
+
+    Mesmo motivo de `_migrar_instalacao_github`: as duas apontam para
+    `usuario`, e o `ESQUEMA` roda DEPOIS de toda a migracao. Criar aqui, no
+    fim, deixa as tabelas existirem para o `_orfaos` da proxima reconstrucao
+    de `usuario` — que e o motivo de as duas estarem em `FILHAS_DE_USUARIO`.
+
+    Nascem VAZIAS: nao ha dado antigo a converter, um hub.db de producao passa
+    por aqui sem uma linha ser tocada.
+
+    Nunca `executescript` aqui: ele da COMMIT implicito e desmontaria o
+    `BEGIN IMMEDIATE`, deixando duas subidas simultaneas migrarem juntas.
+    Licao paga em 26/08/2026.
+    """
+    presentes = {l[0] for l in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if "usuario" not in presentes:
+        return                        # banco novo: o ESQUEMA ja faz certo
+    if "auditoria" in presentes and "achado" in presentes:
+        return                        # ja migrado
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        # RELIDO DENTRO DA TRANSACAO — ver o comentario gemeo em
+        # `_migrar_instalacao_github`: a leitura la em cima aconteceu antes do
+        # lock, e duas subidas simultaneas leriam as duas "preciso migrar".
+        ja = {l[0] for l in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+            " AND name IN ('auditoria','achado')")}
+        if "auditoria" in ja and "achado" in ja:
+            con.rollback()
+            return
+        con.execute(_CREATE_AUDITORIA)
+        con.execute("CREATE INDEX IF NOT EXISTS ix_auditoria_projeto"
+                    " ON auditoria (usuario_id, projeto, medido_em)")
+        con.execute(_CREATE_ACHADO)
+        con.execute("CREATE INDEX IF NOT EXISTS ix_achado_aberto"
+                    " ON achado (usuario_id, projeto, fechado_em)")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        _religar_fk(con)
+
+
+def _migrar_achado_dono(con: sqlite3.Connection) -> None:
+    """`achado.id` nasceu como chave primaria GLOBAL — sem o dono dentro. O id
+    e `regra:projeto:sha256(arquivo,categoria,frase)[:12]`, deterministico: o
+    MESMO defeito, no MESMO arquivo, com a MESMA frase, gera o MESMO id em
+    duas contas que auditam o mesmo repositorio. Com `id` sozinho como chave,
+    a segunda gravacao fazia `ON CONFLICT` TRANSFERIR a linha para o segundo
+    dono — o achado sumia do painel do primeiro, sem erro e sem aviso. A
+    chave passa a ser `(usuario_id, id)`.
+
+    O SQLite nao sabe trocar chave primaria, entao a tabela e reconstruida —
+    mesmo molde de `_migrar_pendencia_estado`. O dado existente e preservado
+    com o mesmo dono que ja tinha.
+
+    Nunca `executescript` aqui: ele da COMMIT implicito e desmontaria o
+    `BEGIN IMMEDIATE`, deixando duas subidas simultaneas migrarem juntas.
+    Licao paga em 26/08/2026.
+    """
+    forma = list(con.execute("PRAGMA table_info(achado)"))
+    if not forma:
+        return                        # sem a tabela: o proximo passo cria certo
+    chave = [l[1] for l in sorted((l for l in forma if l[5]), key=lambda l: l[5])]
+    if chave == ["usuario_id", "id"]:
+        return                        # ja migrado
+    con.execute("PRAGMA foreign_keys=OFF")
+    try:
+        # TUDO OU NADA. `executescript` faria COMMIT implicito e rodaria os
+        # comandos como transacoes soltas: uma queda entre o DROP e o RENAME
+        # apagaria a tabela e deixaria a copia orfa.
+        con.execute("BEGIN IMMEDIATE")
+        # DE NOVO, E AGORA DENTRO DA TRANSACAO — mesmo motivo do gemeo em
+        # `_migrar_pendencia_estado`: a leitura la em cima aconteceu antes do
+        # lock, e duas subidas simultaneas leriam as duas "preciso migrar".
+        forma = list(con.execute("PRAGMA table_info(achado)"))
+        if not forma:
+            con.rollback()
+            return
+        chave = [l[1] for l in sorted((l for l in forma if l[5]),
+                                      key=lambda l: l[5])]
+        if chave == ["usuario_id", "id"]:
+            con.rollback()
+            return
+        con.execute("DROP TABLE IF EXISTS achado_nova")
+        con.execute("""CREATE TABLE achado_nova (
+                id           TEXT    NOT NULL,
+                auditoria_id INTEGER NOT NULL
+                             REFERENCES auditoria(id) ON DELETE CASCADE,
+                usuario_id   INTEGER NOT NULL
+                             REFERENCES usuario(id) ON DELETE CASCADE,
+                projeto      TEXT    NOT NULL DEFAULT '',
+                regra        TEXT    NOT NULL DEFAULT '',
+                categoria    TEXT    NOT NULL DEFAULT '',
+                arquivo      TEXT    NOT NULL DEFAULT '',
+                linha        INTEGER,
+                gravidade    TEXT    NOT NULL DEFAULT 'media',
+                frase        TEXT    NOT NULL DEFAULT '',
+                o_que_fazer  TEXT    NOT NULL DEFAULT '',
+                trecho       TEXT    NOT NULL DEFAULT '',
+                visto_em     TEXT    NOT NULL,
+                fechado_em   TEXT,
+                PRIMARY KEY (usuario_id, id))""")
+        con.execute(
+            "INSERT INTO achado_nova (id, auditoria_id, usuario_id, projeto,"
+            " regra, categoria, arquivo, linha, gravidade, frase,"
+            " o_que_fazer, trecho, visto_em, fechado_em)"
+            " SELECT id, auditoria_id, usuario_id, projeto, regra, categoria,"
+            " arquivo, linha, gravidade, frase, o_que_fazer, trecho,"
+            " visto_em, fechado_em FROM achado")
+        con.execute("DROP TABLE achado")
+        con.execute("ALTER TABLE achado_nova RENAME TO achado")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_achado_aberto"
+                    " ON achado (usuario_id, projeto, fechado_em)")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        _religar_fk(con)
+
+
 # --------------------------------------------------------------------------
 # O cofre: o que transforma segredo em coisa que pode morar numa tabela.
 # --------------------------------------------------------------------------
@@ -1289,6 +1505,25 @@ def montar_estado(con=None, *, usuario_id: int) -> dict:
                     p["medido_em"][extra] = camadas[extra]["medido_em"]
                 else:
                     p.setdefault(extra, None)
+            # A camada `auditoria` NAO mora em `medida`: vive nas tabelas
+            # dedicadas `auditoria`/`achado`, porque a CORRIDA precisa
+            # sobreviver mesmo quando ela nao acha nada. Projeto sem corrida
+            # recebe `None` — nunca `{}` nem `{"achados": []}`, que teriam a
+            # mesma cara de "auditei e nao achei nada". Lei 2 deste repositorio.
+            corrida = auditoria_do_projeto(usuario_id, nome, con=con)
+            if corrida:
+                p["auditoria"] = {
+                    "estado": corrida["estado"],
+                    "motivo": corrida["motivo"],
+                    "achados_n": corrida["achados_n"],
+                    "arquivos_n": corrida["arquivos_n"],
+                    "custo_usd": corrida["custo_usd"],
+                    "rodadas": corrida["rodadas"],
+                    "achados": achados_do_projeto(usuario_id, nome, con=con),
+                }
+                p["medido_em"]["auditoria"] = corrida["medido_em"]
+            else:
+                p.setdefault("auditoria", None)
             projetos.append(p)
         return {
             "projetos": projetos,
@@ -1374,10 +1609,10 @@ def enfileirar(pendencias: list, con=None) -> int:
         for p in pendencias or []:
             cur = con.execute(
                 "INSERT OR IGNORE INTO fila (id, projeto, regra, gravidade, risco,"
-                " trilho, criado_em) VALUES (?,?,?,?,?,?,?)",
+                " trilho, criado_em, executor) VALUES (?,?,?,?,?,?,?,?)",
                 (p.get("id") or "", p.get("projeto") or "", p.get("regra") or "",
                  p.get("gravidade") or "media", float(p.get("risco") or 0),
-                 p.get("trilho") or "", agora()))
+                 p.get("trilho") or "", agora(), p.get("executor") or "claude"))
             entraram += cur.rowcount or 0
         con.commit()
     finally:
@@ -1446,20 +1681,36 @@ def tarefa_para_maquina(maquina_id: int, con=None):
     con = con or conectar()
     try:
         m = con.execute(
-            "SELECT id, executa FROM maquina"
+            "SELECT id, executa, usuario_id FROM maquina"
             " WHERE id = ? AND revogada_em IS NULL", (maquina_id,)).fetchone()
         if not m or not int(m["executa"] or 0):
             return None
         marcas = ",".join("?" * len(_A_PEGAR))
+        # LEFT JOIN achado: o `detalhe` de uma tarefa nascida de um achado de
+        # auditoria vem do proprio achado, e nao so de `fila.erro` (que para
+        # uma tarefa nova e sempre vazio). So LEITURA — a funcao continua
+        # falhando fechada.
+        #
+        # `achado.usuario_id = ?` (o dono da MAQUINA) entra na condicao do
+        # JOIN, e nao no WHERE: um achado.id que colida entre duas contas (o
+        # id nao carrega o dono) nao pode entregar `frase`/`o_que_fazer`/
+        # `trecho`/`arquivo` — codigo-fonte privado — para a maquina de outra
+        # conta. Sem esta condicao, o JOIN casaria com qualquer dono.
         l = con.execute(
-            "SELECT * FROM fila"
-            " WHERE estado IN (%s)"
-            "   AND trilho <> ''"
-            "   AND parada_pedida_em IS NULL"
-            "   AND (maquina_id IS NULL OR maquina_id = ?)"
-            " ORDER BY (aprovado_em IS NULL), criado_em"
+            "SELECT fila.*, achado.frase AS achado_frase,"
+            " achado.o_que_fazer AS achado_o_que_fazer,"
+            " achado.trecho AS achado_trecho,"
+            " achado.arquivo AS achado_arquivo,"
+            " achado.linha AS achado_linha"
+            " FROM fila LEFT JOIN achado"
+            "   ON achado.id = fila.id AND achado.usuario_id = ?"
+            " WHERE fila.estado IN (%s)"
+            "   AND fila.trilho <> ''"
+            "   AND fila.parada_pedida_em IS NULL"
+            "   AND (fila.maquina_id IS NULL OR fila.maquina_id = ?)"
+            " ORDER BY (fila.aprovado_em IS NULL), fila.criado_em"
             " LIMIT 1" % marcas,
-            list(_A_PEGAR) + [maquina_id]).fetchone()
+            [m["usuario_id"]] + list(_A_PEGAR) + [maquina_id]).fetchone()
         return dict(l) if l else None
     finally:
         if fechar:
@@ -1570,6 +1821,184 @@ def registrar_desfecho(tarefa_id: str, maquina_id: int, estado: str,
              tarefa_id, maquina_id))
         con.commit()
         return cur.rowcount == 1
+    finally:
+        if fechar:
+            con.close()
+
+
+# ---------------------------------------------------------------------------
+# Fase 4 — A Auditoria Profunda. A corrida (`auditoria`) e o que ela achou
+# (`achado`). `banco.py` so guarda: quem monta o achado pronto (id, regra,
+# categoria...) e `servir.py`, depois de `auditoria.validar()` — este modulo
+# nao importa `auditoria`, de proposito (ver spec: quem importa e servir.py e
+# regras.py, nunca banco.py).
+# ---------------------------------------------------------------------------
+
+
+def gravar_auditoria(usuario_id: int, projeto: str, estado: str, achados: list,
+                     *, tarefa_id: str = "", motivo: str = "",
+                     custo_usd: float = 0.0, rodadas: int = 0,
+                     agora_iso: str = "", con=None) -> int:
+    """Grava a corrida e os achados NUMA UNICA TRANSACAO. Devolve o id da
+    auditoria.
+
+    Corrida `'ok'`: cada achado da lista e gravado — o que reaparece mantem o
+    `visto_em` mais antigo e perde o `fechado_em` se estava fechado — e todo
+    achado deste projeto que NAO esta na lista ganha `fechado_em`. NUNCA
+    `DELETE`: o historico nao pode mentir.
+
+    Corrida `'falha'` ou `'recusada'`: so a linha da corrida e gravada. Os
+    achados da corrida anterior continuam de pe, exatamente como estavam — uma
+    auditoria que falhou nao pode apagar o que a anterior encontrou.
+
+    TUDO OU NADA: se a gravacao de qualquer achado falhar no meio do laco, a
+    transacao inteira desfaz — nunca 39 de 60 achados na tabela.
+    """
+    if estado not in ("ok", "falha", "recusada"):
+        raise ValueError("estado de auditoria desconhecido: %r" % (estado,))
+    achados = achados or []
+    fechar = con is None
+    con = con or conectar()
+    quando = agora_iso or agora()
+    propria = not con.in_transaction
+    try:
+        if propria:
+            con.execute("BEGIN IMMEDIATE")
+        arquivos = {str(a.get("arquivo") or "") for a in achados}
+        cur = con.execute(
+            "INSERT INTO auditoria (usuario_id, projeto, tarefa_id, estado,"
+            " motivo, achados_n, arquivos_n, custo_usd, rodadas, medido_em)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (usuario_id, projeto, tarefa_id or None, estado, motivo or "",
+             len(achados), len(arquivos), float(custo_usd or 0.0),
+             int(rodadas or 0), quando))
+        auditoria_id = cur.lastrowid
+        presentes = []
+        for a in achados:
+            aid = str(a.get("id") or "")
+            if not aid:
+                # NAO pular em silencio. `achados_n` acima ja contou este
+                # achado; pular aqui gravaria uma corrida dizendo "3 achados"
+                # com zero linhas na tabela — o numero errado com cara de
+                # certo que a lei 2 deste repositorio proibe, e que na tela
+                # vira um contador que nao abre nada.
+                #
+                # Quem chama (`servir._resultado`) carimba o id com
+                # `auditoria.id_do_achado` antes de chegar aqui. Se um dia
+                # esquecer, isto tem de estourar dentro da transacao — e o
+                # `except` abaixo desfaz a corrida inteira.
+                raise ValueError(
+                    "achado sem id chegou a gravar_auditoria: %r" % (a,))
+            presentes.append(aid)
+            con.execute(
+                "INSERT INTO achado (id, auditoria_id, usuario_id, projeto,"
+                " regra, categoria, arquivo, linha, gravidade, frase,"
+                " o_que_fazer, trecho, visto_em, fechado_em)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)"
+                " ON CONFLICT(id, usuario_id) DO UPDATE SET"
+                "   auditoria_id = excluded.auditoria_id,"
+                "   projeto = excluded.projeto,"
+                "   regra = excluded.regra,"
+                "   categoria = excluded.categoria,"
+                "   arquivo = excluded.arquivo,"
+                "   linha = excluded.linha,"
+                "   gravidade = excluded.gravidade,"
+                "   frase = excluded.frase,"
+                "   o_que_fazer = excluded.o_que_fazer,"
+                "   trecho = excluded.trecho,"
+                "   fechado_em = NULL",
+                # `visto_em` NAO entra no SET do ON CONFLICT: e o que faz o
+                # achado que reaparece manter o carimbo mais antigo.
+                # `usuario_id` TAMBEM nao entra: a chave e (id, usuario_id),
+                # entao um upsert so casa dentro do MESMO dono — mas mesmo
+                # assim o dono nunca deve mudar por upsert, de proposito.
+                (aid, auditoria_id, usuario_id, projeto,
+                 str(a.get("regra") or ""), str(a.get("categoria") or ""),
+                 str(a.get("arquivo") or ""), a.get("linha"),
+                 str(a.get("gravidade") or "media"), str(a.get("frase") or ""),
+                 str(a.get("o_que_fazer") or ""), str(a.get("trecho") or ""),
+                 quando))
+        if estado == "ok":
+            _fechar_ausentes(con, usuario_id, projeto, presentes, quando)
+        if propria:
+            con.commit()
+        return auditoria_id
+    except Exception:
+        if propria:
+            con.rollback()
+        raise
+    finally:
+        if fechar:
+            con.close()
+
+
+def _fechar_ausentes(con, usuario_id, projeto, presentes, quando) -> int:
+    """O miolo de `fechar_achados_ausentes`, reusado por `gravar_auditoria`
+    para fechar dentro da MESMA transacao."""
+    if presentes:
+        marcas = ",".join("?" * len(presentes))
+        cur = con.execute(
+            "UPDATE achado SET fechado_em = ?"
+            " WHERE usuario_id = ? AND projeto = ? AND fechado_em IS NULL"
+            "   AND id NOT IN (%s)" % marcas,
+            [quando, usuario_id, projeto] + presentes)
+    else:
+        cur = con.execute(
+            "UPDATE achado SET fechado_em = ?"
+            " WHERE usuario_id = ? AND projeto = ? AND fechado_em IS NULL",
+            (quando, usuario_id, projeto))
+    return cur.rowcount or 0
+
+
+def fechar_achados_ausentes(usuario_id: int, projeto: str, presentes_ids: list,
+                            agora_iso: str = "", con=None) -> int:
+    """Marca `fechado_em` nos achados abertos deste projeto que NAO estao em
+    `presentes_ids`. NUNCA `DELETE` — devolve quantos fechou.
+
+    Funcao publica, para quem precisar fechar fora de `gravar_auditoria` (por
+    exemplo, um projeto desligado da auditoria). `gravar_auditoria` usa o
+    miolo `_fechar_ausentes` para ficar na MESMA transacao da gravacao.
+    """
+    fechar = con is None
+    con = con or conectar()
+    quando = agora_iso or agora()
+    try:
+        n = _fechar_ausentes(con, usuario_id, projeto, list(presentes_ids or []),
+                             quando)
+        con.commit()
+        return n
+    finally:
+        if fechar:
+            con.close()
+
+
+def auditoria_do_projeto(usuario_id: int, projeto: str, con=None):
+    """A corrida mais recente deste projeto, ou `None` se ele nunca foi
+    auditado. `None`, e nunca `{}` — lei 2 deste repositorio."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute(
+            "SELECT * FROM auditoria WHERE usuario_id = ? AND projeto = ?"
+            " ORDER BY medido_em DESC, id DESC LIMIT 1",
+            (usuario_id, projeto)).fetchone()
+        return dict(l) if l else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def achados_do_projeto(usuario_id: int, projeto: str, con=None,
+                       incluir_fechados: bool = False) -> list:
+    """Os achados deste projeto — so os abertos, salvo `incluir_fechados`."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        sql = "SELECT * FROM achado WHERE usuario_id = ? AND projeto = ?"
+        if not incluir_fechados:
+            sql += " AND fechado_em IS NULL"
+        sql += " ORDER BY visto_em DESC"
+        return [dict(l) for l in con.execute(sql, (usuario_id, projeto))]
     finally:
         if fechar:
             con.close()

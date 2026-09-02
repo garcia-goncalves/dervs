@@ -38,6 +38,7 @@ os.environ.setdefault("DERVS_AMBIENTE", "local")
 os.environ.setdefault("DERVS_COFRE",
                       "chave-de-teste-que-nao-e-segredo-nenhum-0123456789")
 
+import auditoria     # noqa: E402
 import autenticacao  # noqa: E402
 import banco         # noqa: E402
 # As ferramentas de montagem de resposta WebAuthn vivem em test_passkey.py.
@@ -46,6 +47,7 @@ import banco         # noqa: E402
 import test_passkey as tp  # noqa: E402
 import cortina       # noqa: E402
 import servir        # noqa: E402
+import tarefas       # noqa: E402
 
 
 class PortaDaLinhaDeComando(unittest.TestCase):
@@ -257,6 +259,58 @@ class BaseServidorDeVerdade(unittest.TestCase):
         finally:
             con.close()
         return cookies, servir.Hub._csrf_da_sessao(s)
+
+    # --------------------------------------------------------- o fio do agente
+    #
+    # As quatro subiram de `AsTarefasNoServidorDeVerdade` para ca (Etapa 5 da
+    # Auditoria Profunda): os testes de `/api/auditoria` precisam do MESMO
+    # fio (maquina pareada, tarefa na fila, POST com token) sem herdar a
+    # classe inteira e reexecutar os testes dela.
+
+    def maquina_com_token(self, nome="laptop", autorizada=True):
+        """Uma maquina pareada de verdade, e o token dela."""
+        codigo = banco.novo_codigo(6)
+        con = banco.conectar()
+        try:
+            banco.abrir_pareamento(self.uid, codigo, banco.prazo(600), con=con)
+            token = banco.usar_pareamento(codigo, nome, con=con)
+            m = banco.maquina_por_token(token, con=con)
+            if autorizada:
+                banco.ligar_execucao(m["id"], self.uid, True, con=con)
+        finally:
+            con.close()
+        return token, m["id"]
+
+    def enfileirar_tarefa(self, id_="d:1", regra="env_drift", verde=True,
+                          executor="claude"):
+        con = banco.conectar()
+        try:
+            con.execute(
+                "INSERT OR REPLACE INTO fila"
+                " (id, projeto, regra, trilho, executor, criado_em, estado)"
+                " VALUES (?, 'dervs', ?, 'claude', ?, ?, 'esperando')",
+                (id_, regra, executor, banco.agora()))
+            con.commit()
+            if verde:
+                banco.repintar_regra(regra, "verde", self.uid, con=con)
+        finally:
+            con.close()
+
+    def limpar_fila(self):
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM fila")
+            con.execute("DELETE FROM tarefa_linha")
+            con.execute("DELETE FROM cor_da_regra")
+            con.execute("DELETE FROM auditoria")
+            con.execute("DELETE FROM achado")
+            con.commit()
+        finally:
+            con.close()
+
+    def como_agente(self, token, caminho, corpo):
+        return self.pedir(caminho, "POST", corpo, com_origem=False,
+                          cabecalhos={"Authorization": "Token " + token})
 
 
 class ServidorDeVerdade(BaseServidorDeVerdade):
@@ -1373,51 +1427,14 @@ class AsTarefasNoServidorDeVerdade(BaseServidorDeVerdade):
     pedido sai pela rede e a resposta volta pela rede.
     """
 
-    def maquina_com_token(self, nome="laptop", autorizada=True):
-        """Uma maquina pareada de verdade, e o token dela."""
-        codigo = banco.novo_codigo(6)
-        con = banco.conectar()
-        try:
-            banco.abrir_pareamento(self.uid, codigo, banco.prazo(600), con=con)
-            token = banco.usar_pareamento(codigo, nome, con=con)
-            m = banco.maquina_por_token(token, con=con)
-            if autorizada:
-                banco.ligar_execucao(m["id"], self.uid, True, con=con)
-        finally:
-            con.close()
-        return token, m["id"]
-
-    def enfileirar_tarefa(self, id_="d:1", regra="env_drift", verde=True):
-        con = banco.conectar()
-        try:
-            con.execute(
-                "INSERT OR REPLACE INTO fila"
-                " (id, projeto, regra, trilho, criado_em, estado)"
-                " VALUES (?, 'dervs', ?, 'claude', ?, 'esperando')",
-                (id_, regra, banco.agora()))
-            con.commit()
-            if verde:
-                banco.repintar_regra(regra, "verde", self.uid, con=con)
-        finally:
-            con.close()
-
-    def limpar_fila(self):
-        con = banco.conectar()
-        try:
-            con.execute("DELETE FROM fila")
-            con.execute("DELETE FROM tarefa_linha")
-            con.execute("DELETE FROM cor_da_regra")
-            con.commit()
-        finally:
-            con.close()
+    # As quatro utilidades (`maquina_com_token`, `enfileirar_tarefa`,
+    # `limpar_fila`, `como_agente`) moraram aqui ate a Etapa 5 da Auditoria
+    # Profunda, quando subiram para `BaseServidorDeVerdade` — os testes de
+    # `/api/auditoria` precisam do mesmo fio sem herdar esta classe inteira.
 
     def setUp(self):
         super().setUp()
         self.addCleanup(self.limpar_fila)
-
-    def como_agente(self, token, caminho, corpo):
-        return self.pedir(caminho, "POST", corpo, com_origem=False,
-                          cabecalhos={"Authorization": "Token " + token})
 
     # ------------------------------------------------------ o fio descendo
 
@@ -2551,6 +2568,525 @@ class OCorpoDoPedidoEDrenado(unittest.TestCase):
         status, sobrou = self.pedir("/robots.txt", b"", metodo="GET")
         self.assertIn("200", status)
         self.assertEqual(0, sobrou)
+
+
+# ---------------------------------------------------------------------------
+# Etapa 5 da Auditoria Profunda — a fronteira. `/api/auditoria`,
+# `/api/auditoria/pedir`, e a validacao dentro de `_resultado` quando o
+# desfecho traz `achados`. As sete sabotagens obrigatorias (5a-5g) do plano
+# estao marcadas nos casos abaixo.
+# ---------------------------------------------------------------------------
+
+class AAuditoriaNoServidorDeVerdade(BaseServidorDeVerdade):
+    """As duas rotas novas, e a validacao dentro de `_resultado`."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.limpar_fila)
+
+    @staticmethod
+    def _achados_validos(n, offset=0):
+        """`n` achados que passam em `auditoria.validar` sem duvida."""
+        return [{"arquivo": "a%d.py" % i, "linha": 1, "categoria": "bug",
+                 "gravidade": "media",
+                 "frase": "um problema real numero %d, com detalhe" % i,
+                 "o_que_fazer": "corrigir o problema numero %d com calma "
+                                "e sem pressa nenhuma" % i}
+                for i in range(offset, offset + n)]
+
+    @staticmethod
+    def _achados_json(lista):
+        return json.dumps({"achados": lista})
+
+    # ------------------------------------------------------- GET /api/auditoria
+
+    def test_auditoria_sem_sessao_e_401(self):
+        self.assertEqual(self.pedir("/api/auditoria").status, 401)
+
+    def test_auditoria_e_acesso_dado_5a(self):
+        """Sabotagem 5a: trocar o acesso para "cortina" tem de reprovar isto."""
+        self.assertEqual(servir.ROTAS["/api/auditoria"].acesso, "dado")
+        self.assertEqual(servir.ROTAS["/api/auditoria/pedir"].acesso, "dado")
+
+    def test_com_sessao_projeto_nunca_auditado_devolve_none(self):
+        """Lei 2: nunca `{}` nem `{"achados": []}` para "nao sei"."""
+        con = banco.conectar()
+        try:
+            banco.gravar("dervs", "local", {"nome": "dervs"}, con=con,
+                        usuario_id=self.uid)
+            con.commit()
+        finally:
+            con.close()
+        corpo = json.loads(
+            self.pedir("/api/auditoria", cookies=self.com_sessao()).corpo)
+        alvo = [p for p in corpo["projetos"] if p["projeto"] == "dervs"]
+        self.assertEqual(len(alvo), 1)
+        self.assertIsNone(alvo[0]["auditoria"])
+
+    # ------------------------------- o estado geral nao carrega o que nao usa
+
+    def _projeto_com_achados(self, nome="dervs", n=3):
+        """Um projeto com uma corrida `ok` e `n` achados no banco."""
+        con = banco.conectar()
+        try:
+            banco.gravar(nome, "local", {"nome": nome}, con=con,
+                         usuario_id=self.uid)
+            con.commit()
+        finally:
+            con.close()
+        # O id e carimbado por quem chama, como `servir._resultado` faz.
+        achados = []
+        for a in self._achados_validos(n):
+            pronto = dict(a)
+            regra = auditoria.REGRAS[a["categoria"]]
+            pronto["regra"] = regra
+            pronto["id"] = auditoria.id_do_achado(regra, nome, a)
+            achados.append(pronto)
+        banco.gravar_auditoria(self.uid, nome, "ok", achados)
+
+    def test_o_estado_geral_nao_carrega_a_lista_de_achados(self):
+        """`/api/dados` e o poll de 60 segundos de TODA aba, inclusive as que
+        nao mostram achado nenhum.
+
+        A lista de achados carrega `frase`, `o_que_fazer` e `trecho` — ate 1.200
+        caracteres por achado. Mandar isso a cada minuto para desenhar uma tela
+        que nao usa o dado e peso puro, e o dado ja tem rota propria
+        (`/api/auditoria`), buscada so quando a tela de Auditoria abre.
+
+        O RESUMO fica: `achados_n` e o que o selo e o card precisam, e tira-lo
+        seria trocar um problema de peso por uma tela cega.
+
+        Achado da revisao de Python de 02/09/2026. O conserto que ela propos —
+        tirar os achados de `banco.montar_estado` — teria quebrado a entrega
+        inteira: e de `montar_estado` que `regras.avaliar` (`servir.py:816`) le
+        os achados para virar pendencia. A poda tem de ser DEPOIS do motor, na
+        saida da rota, e e isso que este caso trava.
+        """
+        self._projeto_com_achados()
+        corpo = json.loads(
+            self.pedir("/api/dados", cookies=self.com_sessao()).corpo)
+        alvo = [p for p in corpo["projetos"] if p.get("nome") == "dervs"]
+        self.assertEqual(len(alvo), 1, "o projeto tem de estar no estado")
+        camada = alvo[0]["auditoria"]
+        self.assertIsNotNone(camada, "a corrida existe; a camada nao pode sumir")
+        self.assertNotIn("achados", camada,
+                         "o poll de 60s nao carrega a lista de achados")
+        self.assertEqual(camada["achados_n"], 3,
+                         "mas o RESUMO fica: sem ele a tela ficaria cega")
+
+    def test_a_rota_dedicada_continua_trazendo_os_achados(self):
+        """A outra metade do caso acima, e a que impede o conserto de virar
+        uma tela de Auditoria vazia.
+
+        Sem este caso, podar os achados em `/api/dados` E em `/api/auditoria`
+        deixaria os dois testes verdes e a tela sem nada para mostrar.
+        """
+        self._projeto_com_achados()
+        corpo = json.loads(
+            self.pedir("/api/auditoria", cookies=self.com_sessao()).corpo)
+        alvo = [p for p in corpo["projetos"] if p["projeto"] == "dervs"][0]
+        self.assertEqual(len(alvo["auditoria"]["achados"]), 3)
+
+    def test_o_motor_de_regras_ainda_enxerga_os_achados(self):
+        """A terceira ponta: a poda e DEPOIS do motor, nunca antes.
+
+        Se alguem 'consertar' isto tirando os achados de `banco.montar_estado`,
+        o motor para de gerar pendencia de achado — em silencio, com os dois
+        testes acima verdes. Este caso le a mesma fonte que `servir._estado` le
+        e exige que os achados estejam la.
+        """
+        self._projeto_com_achados()
+        con = banco.conectar()
+        try:
+            estado = banco.montar_estado(con, usuario_id=self.uid)
+        finally:
+            con.close()
+        alvo = [p for p in estado["projetos"] if p.get("nome") == "dervs"][0]
+        self.assertEqual(len(alvo["auditoria"]["achados"]), 3,
+                         "o motor le daqui; podar aqui quebra a entrega")
+
+    # ------------------------------------------------- POST /api/auditoria/pedir
+
+    def test_pedir_sem_sessao_e_401(self):
+        self.assertEqual(
+            self.pedir("/api/auditoria/pedir", "POST", {"projeto": "dervs"}
+                      ).status, 401)
+
+    def test_pedir_sem_anti_csrf_e_403(self):
+        r = self.pedir("/api/auditoria/pedir", "POST", {"projeto": "dervs"},
+                       cookies=self.com_sessao())
+        self.assertEqual(r.status, 403)
+
+    def test_pedir_enfileira_com_trilho_claude_e_executor_auditor(self):
+        cookies, csrf = self.sessao_e_token()
+        r = self.pedir("/api/auditoria/pedir", "POST", {"projeto": "dervs"},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertEqual(r.status, 200)
+        con = banco.conectar()
+        try:
+            linha = con.execute(
+                "SELECT trilho, executor, regra FROM fila"
+                " WHERE projeto = 'dervs'").fetchone()
+        finally:
+            con.close()
+        self.assertIsNotNone(linha)
+        self.assertEqual(linha["trilho"], "claude")
+        self.assertEqual(linha["executor"], auditoria.EXECUTOR)
+        self.assertEqual(linha["regra"], auditoria.REGRA_DE_VENCIMENTO)
+
+    def test_pedir_o_mesmo_projeto_duas_vezes_nao_duplica(self):
+        cookies, csrf = self.sessao_e_token()
+        for _ in range(2):
+            self.pedir("/api/auditoria/pedir", "POST", {"projeto": "dervs"},
+                      cookies=cookies, cabecalhos={"X-Token": csrf})
+        con = banco.conectar()
+        try:
+            n = con.execute(
+                "SELECT COUNT(*) FROM fila WHERE projeto = 'dervs'"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual(n, 1)
+
+    def test_pedir_sem_projeto_e_400(self):
+        cookies, csrf = self.sessao_e_token()
+        r = self.pedir("/api/auditoria/pedir", "POST", {},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertEqual(r.status, 400)
+
+    def test_5f_o_balcao_de_pedir_tranca_no_teto(self):
+        """Sabotagem 5f: tirar `cortina.registrar_tentativa` daqui tem de
+        fazer este caso parar de reprovar (nao ha mais 429 nenhum)."""
+        cookies, csrf = self.sessao_e_token()
+        ultimo = None
+        for i in range(servir.Hub.TETO_DE_AUDITORIAS + 1):
+            ultimo = self.pedir(
+                "/api/auditoria/pedir", "POST", {"projeto": "projeto-%d" % i},
+                cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertEqual(ultimo.status, 429)
+
+    # --------------------------------------- a validacao dentro de _resultado
+
+    def test_5c_achados_malformados_gravam_corrida_falha_sem_achado_nenhum(self):
+        """Sabotagem 5c: gravar sem passar por `auditoria.validar`."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="a:1", regra=auditoria.REGRA_DE_VENCIMENTO,
+                               executor=auditoria.EXECUTOR)
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "a:1", "estado": "ok",
+             "achados": "isto nao e json valido nenhum"})
+        self.assertEqual(r.status, 200)
+        con = banco.conectar()
+        try:
+            corrida = banco.auditoria_do_projeto(self.uid, "dervs", con=con)
+            abertos = banco.achados_do_projeto(self.uid, "dervs", con=con)
+        finally:
+            con.close()
+        self.assertIsNotNone(corrida)
+        self.assertEqual(corrida["estado"], "falha")
+        self.assertTrue(corrida["motivo"])
+        self.assertEqual(abertos, [])
+
+    def test_achados_validos_gravam_a_corrida_ok(self):
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="a:1", regra=auditoria.REGRA_DE_VENCIMENTO,
+                               executor=auditoria.EXECUTOR)
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "a:1", "estado": "ok",
+             "achados": self._achados_json(self._achados_validos(3))})
+        self.assertEqual(r.status, 200)
+        con = banco.conectar()
+        try:
+            corrida = banco.auditoria_do_projeto(self.uid, "dervs", con=con)
+            abertos = banco.achados_do_projeto(self.uid, "dervs", con=con)
+        finally:
+            con.close()
+        self.assertEqual(corrida["estado"], "ok")
+        self.assertEqual(corrida["achados_n"], 3)
+        self.assertEqual(len(abertos), 3)
+
+    def test_5d_auditoria_que_falha_nao_fecha_os_achados_da_anterior(self):
+        """Sabotagem 5d: fazer a corrida invalida FECHAR os achados
+        anteriores."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="a:1", regra=auditoria.REGRA_DE_VENCIMENTO,
+                               executor=auditoria.EXECUTOR)
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "a:1", "estado": "ok",
+             "achados": self._achados_json(self._achados_validos(2))})
+        self.enfileirar_tarefa(id_="a:2", regra=auditoria.REGRA_DE_VENCIMENTO,
+                               executor=auditoria.EXECUTOR)
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "a:2", "estado": "ok",
+             "achados": "quebrado"})
+        con = banco.conectar()
+        try:
+            abertos = banco.achados_do_projeto(self.uid, "dervs", con=con)
+        finally:
+            con.close()
+        self.assertEqual(len(abertos), 2)
+
+    def test_5e_61_achados_validos_sao_recusados_inteiros(self):
+        """Sabotagem 5e, POR TAMANHO: cortar em 60 e aceitar."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="a:1", regra=auditoria.REGRA_DE_VENCIMENTO,
+                               executor=auditoria.EXECUTOR)
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "a:1", "estado": "ok",
+             "achados": self._achados_json(self._achados_validos(61))})
+        self.assertEqual(r.status, 200)
+        con = banco.conectar()
+        try:
+            corrida = banco.auditoria_do_projeto(self.uid, "dervs", con=con)
+            abertos = banco.achados_do_projeto(self.uid, "dervs", con=con)
+        finally:
+            con.close()
+        self.assertEqual(corrida["estado"], "falha")
+        self.assertEqual(abertos, [])
+
+    def test_desfecho_sem_achados_nao_mexe_na_auditoria(self):
+        """Tarefa comum (sem a chave `achados`) nao cria corrida nenhuma."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="d:1", regra="env_drift")
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "d:1", "estado": "ok"})
+        con = banco.conectar()
+        try:
+            corrida = banco.auditoria_do_projeto(self.uid, "dervs", con=con)
+        finally:
+            con.close()
+        self.assertIsNone(corrida)
+
+    def test_teto_usd_da_tarefa_de_auditoria_usa_teto_da_auditoria(self):
+        """Item 5 do plano: `teto_da_auditoria`, e nao `teto_da_sessao`,
+        quando o executor e o auditor."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="a:1", regra=auditoria.REGRA_DE_VENCIMENTO,
+                               executor=auditoria.EXECUTOR)
+        r = self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        tarefa = json.loads(r.corpo)["tarefa"]
+        self.assertEqual(tarefa["executor"], auditoria.EXECUTOR)
+        self.assertAlmostEqual(tarefa["teto_usd"],
+                               tarefas.teto_da_auditoria(0.0), places=6)
+        self.assertNotAlmostEqual(tarefa["teto_usd"],
+                                  tarefas.teto_da_sessao(0.0), places=6)
+
+
+# ---------------------------------------------------------------------------
+# Os quatro defeitos que a revisao de seguranca de 02/09/2026 achou na
+# Auditoria Profunda, com a suite inteira verde. Cada caso aqui reproduz o
+# CENARIO DE ATAQUE descrito na revisao, e nao uma versao simplificada dele.
+# ---------------------------------------------------------------------------
+
+class OPedidoDeAuditoriaERecusadoFechado(BaseServidorDeVerdade):
+    """Defeitos 2 e 3: quem pode pedir auditoria de qual projeto."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.limpar_fila)
+
+    def com_projeto(self, nome, usuario_id=None):
+        con = banco.conectar()
+        try:
+            banco.gravar(nome, "local", {"nome": nome}, con=con,
+                         usuario_id=usuario_id or self.uid)
+            con.commit()
+        finally:
+            con.close()
+
+    def outra_conta(self):
+        # O banco e' compartilhado por TODOS os testes da classe
+        # (`setUpClass` cria um so). Email fixo colidiria quando mais de um
+        # teste desta classe pede uma conta vizinha nova.
+        OPedidoDeAuditoriaERecusadoFechado._contador_vizinho = getattr(
+            OPedidoDeAuditoriaERecusadoFechado, "_contador_vizinho", 0) + 1
+        email = "vizinho%d@teste.local" % self._contador_vizinho
+        con = banco.conectar()
+        try:
+            uid = banco.criar_usuario(email, con=con)
+            con.commit()
+        finally:
+            con.close()
+        return uid
+
+    def pedir_auditoria(self, projeto):
+        cookies, csrf = self.sessao_e_token()
+        return self.pedir("/api/auditoria/pedir", "POST",
+                          {"projeto": projeto}, cookies=cookies,
+                          cabecalhos={"X-Token": csrf})
+
+    def na_fila(self, projeto):
+        con = banco.conectar()
+        try:
+            return con.execute("SELECT COUNT(*) FROM fila WHERE projeto = ?",
+                               (projeto,)).fetchone()[0]
+        finally:
+            con.close()
+
+    # ------------------------------------------------------------- defeito 2
+    def test_defeito2_projeto_bloqueado_nao_entra_na_fila_pela_rota(self):
+        """O cenario: uma conta com sessao manda
+        `{"projeto": "ajudei-saude"}`. Sem esta trava a tarefa entra elegivel,
+        e a maquina clona e roda uma sessao do Claude Code LENDO UM
+        REPOSITORIO DE PRONTUARIO SOB LGPD, excluido de proposito de
+        `execucao.PROJETOS_BLOQUEADOS`.
+
+        A rota escrevia `trilho: "claude"` a mao, pulando `fila.trilho_de` —
+        o unico lugar que aplicava a lista.
+        """
+        bloqueado = sorted(tarefas.PROJETOS_BLOQUEADOS)[0]
+        self.com_projeto(bloqueado)          # ele E um projeto desta conta
+        r = self.pedir_auditoria(bloqueado)
+        self.assertEqual(r.status, 403, r.corpo)
+        self.assertEqual(self.na_fila(bloqueado), 0,
+                         "o projeto bloqueado entrou na fila de auditoria")
+
+    def test_defeito2_o_bloqueio_nao_se_escapa_com_maiuscula(self):
+        """`fila.trilho_de` compara em minusculas. A rota tem de fazer o
+        mesmo, senao `Ajudei-Saude` atravessa."""
+        bloqueado = sorted(tarefas.PROJETOS_BLOQUEADOS)[0].upper()
+        self.com_projeto(bloqueado)
+        r = self.pedir_auditoria(bloqueado)
+        self.assertEqual(r.status, 403, r.corpo)
+        self.assertEqual(self.na_fila(bloqueado), 0)
+
+    # ------------------------------------------------------------- defeito 3
+    def test_defeito3_projeto_da_conta_vizinha_nao_entra_na_fila(self):
+        """O cenario: a conta A manda o nome de um projeto da conta B. A linha
+        aparece no painel de todas as contas e roda NA MAQUINA DE B, queimando
+        o teto diario de R$ 50, que e compartilhado."""
+        vizinho = self.outra_conta()
+        self.com_projeto("segredo-do-vizinho", usuario_id=vizinho)
+        r = self.pedir_auditoria("segredo-do-vizinho")
+        self.assertEqual(r.status, 404, r.corpo)
+        self.assertEqual(self.na_fila("segredo-do-vizinho"), 0,
+                         "a conta A enfileirou trabalho no projeto da conta B")
+
+    def test_defeito3_projeto_inexistente_e_alheio_tem_a_MESMA_resposta(self):
+        """Distinguir "nao existe" de "nao e seu" diria a quem tem sessao
+        quais projetos existem na conta do vizinho."""
+        vizinho = self.outra_conta()
+        self.com_projeto("so-do-vizinho", usuario_id=vizinho)
+        alheio = self.pedir_auditoria("so-do-vizinho")
+        inexistente = self.pedir_auditoria("nao-existe-em-conta-nenhuma")
+        self.assertEqual(alheio.status, inexistente.status)
+        self.assertEqual(alheio.corpo, inexistente.corpo)
+
+    def test_o_projeto_da_propria_conta_continua_entrando(self):
+        """A guarda da guarda: se a recusa passasse a valer para todo mundo,
+        os casos acima ficariam verdes com a funcionalidade morta."""
+        self.com_projeto("meu-projeto")
+        r = self.pedir_auditoria("meu-projeto")
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertEqual(self.na_fila("meu-projeto"), 1)
+
+
+class OResultadoDaAuditoriaNaoDerrubaARota(BaseServidorDeVerdade):
+    """Defeito 1 (o teto proprio dos achados) e o menor do `custo_usd`."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.limpar_fila)
+
+    def test_achados_acima_do_teto_proprio_sao_recusados_inteiros(self):
+        """O JSON dos achados NAO passa pelo corte de 4.000 do `resumo` — mas
+        tambem nao e um balde sem fundo. Acima de `auditoria.TETO_DOS_ACHADOS`
+        a corrida vira `falha` com motivo, e nunca uma lista truncada com cara
+        de completa (lei 2)."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="a:1", regra=auditoria.REGRA_DE_VENCIMENTO,
+                               executor=auditoria.EXECUTOR)
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        gigante = "x" * (auditoria.TETO_DOS_ACHADOS + 1)
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "a:1", "estado": "ok",
+             "achados": gigante})
+        self.assertEqual(r.status, 200, r.corpo)
+        con = banco.conectar()
+        try:
+            corrida = banco.auditoria_do_projeto(self.uid, "dervs", con=con)
+            abertos = banco.achados_do_projeto(self.uid, "dervs", con=con)
+        finally:
+            con.close()
+        self.assertEqual(corrida["estado"], "falha")
+        self.assertTrue(corrida["motivo"])
+        self.assertEqual(abertos, [])
+
+    def test_achados_acima_do_teto_e_recusado_MESMO_SENDO_JSON_VALIDO(self):
+        """A guarda da guarda: o caso acima ('x' * teto) nao e JSON valido de
+        jeito nenhum, entao passaria mesmo SEM nenhuma trava de tamanho em
+        `servir.py` — `auditoria.validar` ja recusa por `json.loads` quebrar.
+        Este caso pad com ESPACO em branco (JSON valido antes E depois de
+        qualquer token) para ficar grande e continuar parseavel, provando que
+        a trava e de TAMANHO, na fronteira do servidor, e nao so o parse."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="a:1", regra=auditoria.REGRA_DE_VENCIMENTO,
+                               executor=auditoria.EXECUTOR)
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        padding = " " * (auditoria.TETO_DOS_ACHADOS + 1)
+        grande_mas_valido = padding + json.dumps({"achados": []})
+        self.assertGreater(len(grande_mas_valido), auditoria.TETO_DOS_ACHADOS)
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "a:1", "estado": "ok",
+             "achados": grande_mas_valido})
+        self.assertEqual(r.status, 200, r.corpo)
+        con = banco.conectar()
+        try:
+            corrida = banco.auditoria_do_projeto(self.uid, "dervs", con=con)
+            abertos = banco.achados_do_projeto(self.uid, "dervs", con=con)
+        finally:
+            con.close()
+        self.assertEqual(corrida["estado"], "falha")
+        self.assertTrue(corrida["motivo"])
+        self.assertEqual(abertos, [])
+
+    def test_custo_usd_torto_recusa_fechado_e_nunca_derruba_em_500(self):
+        """O menor: uma maquina pareada mandando `custo_usd: {}` derrubava a
+        rota em 500 (`float({})` levanta `TypeError` fora do `try`)."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="a:1", regra=auditoria.REGRA_DE_VENCIMENTO,
+                               executor=auditoria.EXECUTOR)
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "a:1", "estado": "ok",
+             "custo_usd": {}, "achados": json.dumps({"achados": []})})
+        self.assertEqual(r.status, 400, r.corpo)
+
+    def test_rodadas_torto_tambem_recusa_fechado(self):
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="d:1", regra="env_drift")
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "desfecho", "id": "d:1", "estado": "ok",
+             "rodadas": ["nove"]})
+        self.assertEqual(r.status, 400, r.corpo)
+
+    def test_progresso_com_custo_torto_tambem_recusa_fechado(self):
+        """O mesmo campo, o mesmo `float`, o outro tipo de pedido."""
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="d:1", regra="env_drift")
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        r = self.como_agente(
+            token, "/agente/resultado",
+            {"tipo": "progresso", "id": "d:1", "custo_usd": {}})
+        self.assertEqual(r.status, 400, r.corpo)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=0)

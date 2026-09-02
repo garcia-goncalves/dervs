@@ -150,6 +150,57 @@ executa — foi o que quase aconteceu quando o dreno mudou de casa.
 ler, e a suíte caía em 2 de 24 corridas, em caso diferente a cada vez. **Não
 era o Windows, e não era o teste.**
 
+## As travas da Auditoria Profunda (02/09/2026)
+
+**O fio só existe se alguém provar o fio inteiro.** A auditoria foi construída em
+sete etapas, cada uma com teste próprio, e as **26 suítes ficaram verdes com a
+funcionalidade morta**: nada em lugar nenhum produzia a chave `achados` no
+desfecho, e o bloco que grava em `servir._resultado` era inalcançável. A
+auditoria rodaria, gastaria o teto do dia e não gravaria nada. Cada etapa provou
+a sua metade contra dublê; ninguém tinha escrito o caso que sobe um desfecho de
+verdade pelo fio do agente e termina com achado no banco. **Esse caso agora
+existe em `test_agente.py`, e é ele que não pode ser apagado.**
+
+**O JSON dos achados NÃO vai no `resumo`.** `servir._resultado` corta `resumo`
+em 4.000 caracteres, e um JSON cortado não é um JSON menor — é lixo. Ele sobe num
+campo próprio, com `auditoria.TETO_DOS_ACHADOS`, que é **derivado do esquema**
+(`MAX_ACHADOS * 4096`), nunca digitado.
+
+**A identidade de um achado inclui o dono.** `achado` tem `PRIMARY KEY
+(usuario_id, id)`, e o `ON CONFLICT` **nunca** escreve `usuario_id` no `SET`.
+Antes, o id era `regra:projeto:sha256(...)` — determinístico e sem o dono: duas
+contas auditando o mesmo repositório da mesma org geravam o mesmo id, e a segunda
+gravação **transferia a linha**, sumindo o achado do painel da primeira. Há um
+guarda de código-fonte cobrando a ausência daquela linha no `SET`, porque a chave
+composta tornou o defeito **código morto** — e teste de comportamento não acusa
+código que não roda.
+
+**`PROJETOS_BLOQUEADOS` mora em `tarefas.py`.** Mudou de casa porque
+`_auditoria_pedir` precisa dela e `servir.py` não pode importar `execucao`.
+`execucao.py` **reexporta o mesmo objeto**, e um teste cobra a identidade (`is`).
+A comparação é insensível a caixa — havia um teste provando que `Ajudei-Saude`
+escapava.
+
+**Quem pede auditoria só pede dos projetos da própria conta**, e "não existe" e
+"não é seu" devolvem **a mesma resposta**. A tabela `fila` não tem `usuario_id`:
+sem essa conferência, uma conta enfileirava trabalho na máquina da outra e
+queimava o teto de R$ 50, que é compartilhado.
+
+**`achados` sem id estoura, não é pulado.** `banco.gravar_auditoria` já contou o
+achado em `achados_n` antes do laço; pular em silêncio gravaria uma corrida
+dizendo "3 achados" com zero linhas na tabela — um contador que não abre nada.
+
+**A poda dos achados em `/api/dados` é DEPOIS do motor, nunca na origem.** É de
+`banco.montar_estado` que `regras.avaliar` lê os achados para virar pendência.
+Podar lá em cima deixa as rotas verdes e mata a entrega em silêncio; por isso há
+um terceiro teste que lê `montar_estado` direto e exige os achados lá.
+
+**Trabalho de executor paralelo mora em worktree — e worktree se apaga.** Duas
+perdas de trabalho em 02/09: um executor usou `git checkout -- <arquivo>` para
+desfazer uma sabotagem e apagou junto o trabalho não commitado do mesmo arquivo;
+e o coordenador removeu uma worktree já mesclada em que **outro** executor estava
+trabalhando. **Desfaça sabotagem editando de volta, e commite cedo.**
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em

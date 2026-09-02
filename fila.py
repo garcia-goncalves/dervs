@@ -11,6 +11,7 @@ e sugestao, nao trava.
 import re
 from datetime import datetime, timedelta, timezone
 
+import auditoria
 import banco
 import execucao
 import tarefas
@@ -23,10 +24,18 @@ import tarefas
 # `grafo_velho` parecia caber e NAO cabe: a acao dele hoje e copiar um texto
 # para o dono colar (regras.py:145). Reindexar acontece pelo MCP do grafo, que
 # o painel nao dirige — ele so serve a tela do grafo por procuracao.
+#
+# `auditoria_vencida` entra: e a decisao de RODAR a auditoria de novo, e o
+# executor que a atende (`auditoria.EXECUTOR`) e' carimbado por `elegiveis`,
+# nao por este mapa. As CINCO `auditoria_<categoria>` (o que a auditoria
+# ACHOU) ficam DE FORA de proposito — sao pendencia de CONSERTO, e so entram
+# aqui quando o dono autorizar consertar automaticamente o que a auditoria
+# aponta. Na duvida, fora e o estado seguro.
 REGRAS_MECANICAS = {
     "memoria_crlf":         "mecanico",
     "env_drift":            "claude",
     "dependencia_insegura": "claude",
+    "auditoria_vencida":    "claude",
 }
 
 # Mesma ordem de `regras.ORDEM`. Nao importamos de la para a fila nao depender
@@ -59,9 +68,12 @@ def trilho_de(pendencia: dict) -> str:
 
 
 def elegiveis(pendencias: list) -> list:
-    """As pendencias que a fila pode atacar, cada uma com `trilho` carimbado.
+    """As pendencias que a fila pode atacar, cada uma com `trilho` E
+    `executor` carimbados.
 
-    Devolve COPIAS: quem chamou continua dono da lista dele.
+    Devolve COPIAS: quem chamou continua dono da lista dele. O `executor` vem
+    de `auditoria.EXECUTOR_DA_REGRA` — regra fora desse mapa recebe "claude",
+    o mesmo padrao que `banco.enfileirar` usa no INSERT.
     """
     saida = []
     for p in pendencias or []:
@@ -69,6 +81,8 @@ def elegiveis(pendencias: list) -> list:
         if trilho:
             copia = dict(p)
             copia["trilho"] = trilho
+            copia["executor"] = auditoria.EXECUTOR_DA_REGRA.get(
+                (p.get("regra") or "").strip(), "claude")
             saida.append(copia)
     return saida
 # Duas tentativas, e o numero mora em `tarefas.py` desde a Fatia 2 — o

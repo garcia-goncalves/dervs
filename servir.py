@@ -91,6 +91,10 @@ import tarefas
 import memoria
 import passkey
 import regras
+# `auditoria.py` e puro (stdlib + `tarefas`, ver auditoria.py:4-10) e ENTRA NA
+# IMAGEM (`Dockerfile:62-74`) por causa desta linha. `servir.py` continua sem
+# importar `execucao` nem `fila` — `test_rotas.AMPUTADOS` cobra os dois nomes.
+import auditoria
 
 
 # A TELINHA PISCANDO NA TELA DO DONO (24/08/2026). O painel roda sob pythonw.exe,
@@ -838,6 +842,24 @@ class Hub(SimpleHTTPRequestHandler):
         for p in e["projetos"]:
             p["selo"] = regras.selo_do_projeto(p, pend)
             p["camadas"] = regras.camadas_do_selo(p)
+            # A LISTA de achados sai daqui, e o RESUMO fica.
+            #
+            # Esta rota e o poll de 60 segundos de TODA aba, inclusive as que
+            # nao mostram achado nenhum. Cada achado carrega `frase`,
+            # `o_que_fazer` e `trecho` — ate 1.200 caracteres. Mandar isso a
+            # cada minuto para desenhar tela que nao usa o dado e peso puro, e
+            # o dado tem rota propria (`/api/auditoria`), buscada so quando a
+            # tela de Auditoria abre.
+            #
+            # A poda e DEPOIS de `regras.avaliar` e de `selo_do_projeto`, e
+            # isso e o ponto inteiro: e de `banco.montar_estado` que o motor le
+            # os achados para virar pendencia. Podar la em cima — como a
+            # revisao de Python de 02/09/2026 chegou a propor — deixaria os
+            # dois testes de rota verdes e mataria a entrega em silencio.
+            camada = p.get("auditoria")
+            if isinstance(camada, dict):
+                p["auditoria"] = {k: v for k, v in camada.items()
+                                  if k != "achados"}
         return {
             "agora": agora_iso,
             "pendencias": pend,
@@ -1119,6 +1141,25 @@ class Hub(SimpleHTTPRequestHandler):
         if not isinstance(valor, str) or len(valor) > teto:
             return ""
         return valor
+
+    @staticmethod
+    def _numero_do_corpo(corpo, campo: str, conversor):
+        """Um campo numerico OPCIONAL do corpo, convertido com `conversor`
+        (`int` ou `float`). Ausente ou `None` -> `(True, None)`. Presente e
+        valido -> `(True, valor)`. Torto (`{}`, `[]`, texto nao numerico)
+        -> `(False, None)` — quem chama recusa fechado com 400, em vez de
+        deixar `float()`/`int()` estourar `TypeError` fora de um `try` e
+        derrubar a rota em 500 (achado da revisao de seguranca de
+        02/09/2026: uma maquina pareada mandando `custo_usd: {}`)."""
+        valor = (corpo or {}).get(campo)
+        if valor is None:
+            return True, None
+        if isinstance(valor, bool):
+            return False, None
+        try:
+            return True, conversor(valor)
+        except (TypeError, ValueError):
+            return False, None
 
     def _bytes_do_corpo(self, corpo, campo: str):
         """Um campo base64url do corpo, ja decodificado. None se torto."""
@@ -1909,15 +1950,24 @@ class Hub(SimpleHTTPRequestHandler):
             # Outra maquina levou entre a leitura e a reserva. Nao e erro: e a
             # resposta certa para "uma sessao por vez".
             return None
+        executor = candidata.get("executor") or "claude"
+        gasto = banco.gasto_entre(*janela)
+        # O TETO DA AUDITORIA E O DA SESSAO SAO CONTAS DIFERENTES (Etapa 5 da
+        # Auditoria Profunda). auditoria.EXECUTOR e a MESMA constante usada em
+        # `auditoria.py`, `banco.enfileirar` e `agente/executor.py` — um teste
+        # de identidade cobra isso, nao igualdade de string.
+        teto_usd = (tarefas.teto_da_auditoria(gasto)
+                   if executor == auditoria.EXECUTOR
+                   else tarefas.teto_da_sessao(gasto))
         return {
             "id": candidata["id"],
             "projeto": candidata.get("projeto") or "",
             "regra": candidata.get("regra") or "",
             "trilho": candidata.get("trilho") or "",
-            "executor": candidata.get("executor") or "claude",
+            "executor": executor,
             "detalhe": candidata.get("erro") or "",
             "cor": candidata.get("cor") or tarefas.VERMELHO,
-            "teto_usd": tarefas.teto_da_sessao(banco.gasto_entre(*janela)),
+            "teto_usd": teto_usd,
             "rodadas": int(candidata.get("rodadas") or 0),
         }
 
@@ -1972,25 +2022,79 @@ class Hub(SimpleHTTPRequestHandler):
 
         if tipo == "desfecho":
             estado = self._texto_do_corpo(corpo, "estado", teto=20)
+            rodadas_ok, rodadas = self._numero_do_corpo(corpo, "rodadas", int)
+            custo_ok, custo_usd = self._numero_do_corpo(corpo, "custo_usd",
+                                                         float)
+            if not (rodadas_ok and custo_ok):
+                return self._json(400, {"erro": "numero invalido"})
             ok = banco.registrar_desfecho(
                 tarefa_id, maquina["id"], estado,
                 ramo=self._texto_do_corpo(corpo, "ramo", teto=200),
                 resumo=self._texto_do_corpo(corpo, "resumo", teto=4000),
                 diff=self._recorte(corpo.get("diff"), 1024 * 1024),
                 pr_url=self._texto_do_corpo(corpo, "pr_url", teto=500),
-                rodadas=corpo.get("rodadas"),
-                custo_usd=corpo.get("custo_usd"),
+                rodadas=rodadas,
+                custo_usd=custo_usd,
                 erro=self._texto_do_corpo(corpo, "erro", teto=2000))
             if not ok:
                 # A tarefa nao e desta maquina, ou o estado nao existe. A mesma
                 # resposta para os dois: distinguir diria a quem tem um token
                 # quais ids existem na conta do vizinho.
                 return self._json(404, {"erro": "nao existe"})
+            # A FRONTEIRA DA AUDITORIA (Etapa 5). So roda quando o desfecho
+            # traz "achados" — a tarefa comum (env_drift, dependencia_insegura,
+            # ...) nao tem essa chave, e este bloco fica calado para ela. O
+            # texto QUE O AGENTE MANDOU e sempre uma STRING (o JSON cru que o
+            # `claude` escreveu): `auditoria.validar` faz o parse, e ele tem
+            # de rodar ANTES de qualquer gravacao — regra dura desta entrega.
+            #
+            # A checagem de `ok` ACIMA e o que garante que `tarefa_id` e desta
+            # maquina antes de eu ler o projeto dela: ler `banco.tarefa` ANTES
+            # dessa checagem vazaria o nome de um projeto de outra conta para
+            # quem so tem o token errado.
+            if "achados" in corpo:
+                # O teto e' de `auditoria.TETO_DOS_ACHADOS`, e nao do corpo
+                # inteiro (`TETO_DO_RESULTADO`, 2 MiB) — e' o proprio
+                # `auditoria.py` que documenta "quem cobra o teto e'
+                # servir.py, na fronteira". Sem esta linha, um texto acima do
+                # teto so' seria pego se tambem quebrasse o parse do JSON —
+                # padding em branco (JSON valido antes e depois de qualquer
+                # token) bastava para passar batido.
+                achados_brutos = self._texto_do_corpo(
+                    corpo, "achados", teto=auditoria.TETO_DOS_ACHADOS)
+                gravada = banco.tarefa(tarefa_id)
+                projeto = (gravada or {}).get("projeto") or ""
+                limpos, motivo = auditoria.validar(achados_brutos)
+                if limpos is None:
+                    # Saida invalida: grava a corrida `falha` com o motivo.
+                    # NAO fecha os achados anteriores — o projeto continua
+                    # com o carimbo da ultima auditoria boa (lei 2).
+                    banco.gravar_auditoria(maquina["usuario_id"], projeto,
+                                           "falha", [], tarefa_id=tarefa_id,
+                                           motivo=motivo)
+                else:
+                    prontos = []
+                    for item in limpos:
+                        regra = auditoria.REGRAS.get(item.get("categoria"), "")
+                        pronto = dict(item)
+                        pronto["regra"] = regra
+                        pronto["id"] = auditoria.id_do_achado(regra, projeto,
+                                                              item)
+                        prontos.append(pronto)
+                    banco.gravar_auditoria(
+                        maquina["usuario_id"], projeto, "ok", prontos,
+                        tarefa_id=tarefa_id,
+                        custo_usd=custo_usd or 0.0,
+                        rodadas=rodadas or 0)
             return self._json(200, {"ok": True, "pare": False})
 
         if tipo != "progresso":
             return self._json(400, {"erro": "tipo desconhecido"})
 
+        rodadas_ok, rodadas = self._numero_do_corpo(corpo, "rodadas", int)
+        custo_ok, custo_usd = self._numero_do_corpo(corpo, "custo_usd", float)
+        if not (rodadas_ok and custo_ok):
+            return self._json(400, {"erro": "numero invalido"})
         linhas = []
         cru = corpo.get("linhas")
         if isinstance(cru, list):
@@ -2003,8 +2107,8 @@ class Hub(SimpleHTTPRequestHandler):
         pare = banco.registrar_progresso(
             tarefa_id, maquina["id"],
             frase=self._texto_do_corpo(corpo, "frase", teto=500),
-            linhas=linhas, rodadas=corpo.get("rodadas"),
-            custo_usd=corpo.get("custo_usd"))
+            linhas=linhas, rodadas=rodadas,
+            custo_usd=custo_usd)
         return self._json(200, {"ok": True, "pare": bool(pare)})
 
     # ------------------------------------------------- as quatro rotas do dono
@@ -2258,6 +2362,91 @@ class Hub(SimpleHTTPRequestHandler):
                             "repinta" % regra})
             return self._json(400, {"erro": "cor invalida"})
         return self._json(200, {"ok": True, "cor": cor})
+
+    # ---------------------------------------------------- a auditoria (Etapa 5)
+    #
+    # Acesso `dado`, e nao `cortina`: um achado carrega caminho de arquivo,
+    # numero de linha e um trecho do codigo-fonte privado do dono — o dado
+    # mais sensivel que este painel ja guardou. `assets/painel.js`, que
+    # desenha a tela, ja exige sessao por caminho exato (`ESTATICOS_COM_SESSAO`
+    # mais abaixo); servir os achados com acesso menor seria abrir a porta ao
+    # lado da fechadura.
+
+    def _auditoria(self):
+        """A camada de auditoria de cada projeto desta conta.
+
+        Projeto sem corrida entra com `"auditoria": None` — nunca `{}` nem
+        `{"achados": []}`, que teriam a mesma cara de "auditei e nao achei
+        nada". `banco.montar_estado` ja faz essa distincao (lei 2); esta rota
+        so recorta o que a tela de auditoria precisa do estado inteiro.
+        """
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        con = banco.conectar()
+        try:
+            estado = banco.montar_estado(con, usuario_id=sessao["usuario_id"])
+        finally:
+            con.close()
+        projetos = [{"projeto": p.get("nome") or "", "auditoria": p.get("auditoria")}
+                    for p in estado["projetos"]]
+        return self._json(200, {"projetos": projetos})
+
+    # Auditoria e cara: um pedido em laco esvaziaria o teto do dia sozinho.
+    # Balcao PROPRIO (`auditoria`), reusando `cortina.registrar_tentativa` —
+    # o mesmo molde de `_maquina_parear` (:1438), `_conectador` (:1494 antes
+    # desta etapa), `_relatorio` (:1851) e `_resultado` (:1961). Dez por
+    # janela de 15 min e folga larga para pedir de verdade e curta o
+    # suficiente para nao virar torneira aberta na fila.
+    TETO_DE_AUDITORIAS = 10
+
+    def _auditoria_pedir(self):
+        """O dono pede uma auditoria avulsa deste projeto.
+
+        So ESCREVE na fila com `banco.enfileirar`, no molde da regra
+        `auditoria_vencida`: o `trilho` e `"claude"` (quem escolhe o braco
+        pelo `executor` e `agente/enviar.fazer_a_tarefa`) e o `executor` e
+        `auditoria.EXECUTOR` — a MESMA constante usada em `auditoria.py` e
+        `banco.enfileirar`, nunca a string escrita a mao duas vezes.
+
+        Duas travas antes de escrever, achadas na revisao de seguranca de
+        02/09/2026: o projeto tem de ser DESTA conta (`banco.montar_estado`),
+        e nao pode estar em `tarefas.PROJETOS_BLOQUEADOS` — a mesma lista que
+        `fila.trilho_de` aplica, comparada em minusculas para nao se escapar
+        com maiuscula. "Nao existe" e "nao e seu" devolvem a MESMA resposta:
+        distinguir diria a quem tem sessao quais projetos existem na conta do
+        vizinho.
+        """
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="auditoria",
+                                           teto=self.TETO_DE_AUDITORIAS):
+            return self._json(429, self.RECUSA)
+        projeto = self._texto_do_corpo(corpo, "projeto", teto=200)
+        if not projeto:
+            return self._json(400, {"erro": "faltou o projeto"})
+        con = banco.conectar()
+        try:
+            estado = banco.montar_estado(con, usuario_id=sessao["usuario_id"])
+        finally:
+            con.close()
+        nomes_da_conta = {(p.get("nome") or "").lower()
+                          for p in estado["projetos"]}
+        if projeto.lower() not in nomes_da_conta:
+            return self._json(404, {"erro": "projeto nao encontrado"})
+        if projeto.lower() in tarefas.PROJETOS_BLOQUEADOS:
+            return self._json(403, {"erro": "projeto bloqueado"})
+        entraram = banco.enfileirar([{
+            "id": "%s:%s" % (auditoria.REGRA_DE_VENCIMENTO, projeto),
+            "projeto": projeto,
+            "regra": auditoria.REGRA_DE_VENCIMENTO,
+            "gravidade": "baixa",
+            "trilho": "claude",
+            "executor": auditoria.EXECUTOR,
+        }])
+        return self._json(200, {"ok": True, "pedido": bool(entraram)})
 
     def _maquina_autorizar(self):
         """Liga ou desliga o direito desta maquina de trabalhar sozinha.
@@ -2560,6 +2749,12 @@ ROTAS = {
     "/api/tarefas/aprovar":     Rota("POST", Hub._tarefa_aprovar,  "dado"),
     "/api/tarefas/parar":       Rota("POST", Hub._tarefa_parar,    "dado"),
     "/api/tarefas/cor":         Rota("POST", Hub._tarefa_cor,      "dado"),
+
+    # A Auditoria Profunda (Etapa 5). As duas sao `dado`, e nao `cortina`: um
+    # achado carrega caminho de arquivo, numero de linha e trecho de
+    # codigo-fonte privado do dono.
+    "/api/auditoria":           Rota("GET",  Hub._auditoria,        "dado"),
+    "/api/auditoria/pedir":     Rota("POST", Hub._auditoria_pedir,  "dado"),
 }
 # A capa e servida a qualquer visitante, entao a folha de estilo e o teclado da
 # cortina precisam ser abertos. Estes dois nao: quem os carrega e o

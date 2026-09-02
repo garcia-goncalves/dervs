@@ -418,9 +418,16 @@ class MotorInteiro(unittest.TestCase):
                     pesado={"deps_inseguras": ["lodash"]},
                     github={"ci": {"conclusao": "failure", "url": "u", "quando": ""},
                             "prs": [{"numero": 1, "titulo": "t", "url": "u", "dias": 30}],
-                            "vulns": {"total": 1, "url": "v"}})
+                            "vulns": {"total": 1, "url": "v"}},
+                    auditoria_ligada=True,
+                    auditoria={"achados": [{
+                        "arquivo": "servir.py", "linha": 10, "categoria": "seguranca",
+                        "gravidade": "alta", "frase": "achado de teste com dez letras",
+                        "o_que_fazer": "conserte o achado de teste"}]})
         pend = regras.avaliar([p], quota={"pct": 99, "minutos": 1, "cota": 1, "url": "u"})
         self.assertTrue(pend)
+        self.assertIn("auditoria_seguranca", {i["regra"] for i in pend})
+        self.assertIn("auditoria_vencida", {i["regra"] for i in pend})
         for i in pend:
             self.assertIn(i["acao"]["tipo"], regras.ACOES, i["regra"])
             self.assertTrue(i["acao"]["rotulo"], i["regra"])
@@ -640,6 +647,139 @@ def medido(local=0, github=None, pesado=None):
     return c
 
 
+def _achado(arquivo="servir.py", categoria="seguranca", gravidade="alta",
+           frase="uma frase qualquer com mais de dez caracteres",
+           o_que_fazer="conserte o que foi encontrado", linha=1):
+    return {"arquivo": arquivo, "linha": linha, "categoria": categoria,
+            "gravidade": gravidade, "frase": frase, "o_que_fazer": o_que_fazer}
+
+
+class AchadoDeAuditoriaViraPendencia(unittest.TestCase):
+    """O achado deixa de ser dado e vira "o que precisa de mim agora?"."""
+
+    def test_achado_alto_vira_pendencia_da_categoria(self):
+        p = projeto(auditoria={"achados": [_achado(categoria="seguranca")]})
+        (item,) = so(regras.avaliar([p]), "auditoria_seguranca")
+        self.assertEqual(item["gravidade"], "alta")
+        self.assertEqual(item["acao"]["tipo"], "vscode")
+        self.assertIn("servir.py", item["acao"]["caminho"])
+
+    def test_cada_categoria_vira_a_regra_dela(self):
+        import auditoria as auditoria_mod
+        for categoria, regra in auditoria_mod.REGRAS.items():
+            with self.subTest(categoria=categoria):
+                p = projeto(auditoria={"achados": [_achado(categoria=categoria)]})
+                self.assertEqual(len(so(regras.avaliar([p]), regra)), 1)
+
+    def test_achado_media_nao_vira_pendencia(self):
+        p = projeto(auditoria={"achados": [_achado(gravidade="media")]})
+        self.assertEqual(so(regras.avaliar([p]), "auditoria_seguranca"), [])
+
+    def test_achado_baixa_nao_vira_pendencia(self):
+        p = projeto(auditoria={"achados": [_achado(gravidade="baixa")]})
+        self.assertEqual(so(regras.avaliar([p]), "auditoria_seguranca"), [])
+
+    def test_camada_ausente_nao_inventa_achado_nenhum(self):
+        """Invariante 2: nunca auditado != achado nenhum encontrado."""
+        import auditoria as auditoria_mod
+        p = projeto(auditoria=None)
+        nomes = {i["regra"] for i in regras.avaliar([p])}
+        self.assertEqual(nomes & set(auditoria_mod.REGRAS.values()), set())
+
+    def test_achado_com_caminho_recusado_nao_vira_pendencia(self):
+        """A mesma peneira de `auditoria.caminho_aceitavel`, aplicada aqui."""
+        p = projeto(auditoria={"achados": [
+            _achado(arquivo="../../.ssh/config")]})
+        self.assertEqual(so(regras.avaliar([p]), "auditoria_seguranca"), [])
+
+    def test_a_pendencia_do_achado_tem_acao_de_verdade(self):
+        p = projeto(auditoria={"achados": [_achado(categoria="bug")]})
+        item = so(regras.avaliar([p]), "auditoria_bug")[0]
+        self.assertIn(item["acao"]["tipo"], regras.ACOES)
+        self.assertTrue(item["acao"].get("caminho"))
+
+    def test_id_do_achado_e_estavel_entre_coletas(self):
+        """Invariante 3 — a mesma frase e arquivo tem de dar o mesmo id."""
+        a = so(regras.avaliar([projeto(auditoria={"achados": [_achado()]})]),
+               "auditoria_seguranca")
+        b = so(regras.avaliar([projeto(auditoria={"achados": [_achado()]})]),
+               "auditoria_seguranca")
+        self.assertEqual(a[0]["id"], b[0]["id"])
+
+    def test_dois_achados_do_mesmo_projeto_tem_ids_diferentes(self):
+        p = projeto(auditoria={"achados": [
+            _achado(arquivo="a.py", frase="primeira frase, dez caracteres"),
+            _achado(arquivo="b.py", frase="segunda frase, dez caracteres")]})
+        itens = so(regras.avaliar([p]), "auditoria_seguranca")
+        self.assertEqual(len(itens), 2)
+        self.assertNotEqual(itens[0]["id"], itens[1]["id"])
+
+    def test_doze_achados_altos_no_mesmo_projeto_nao_agrupam(self):
+        """Sabotagem por tamanho: com 2 o agrupamento nem dispara."""
+        achados = [_achado(arquivo="a%d.py" % i,
+                           frase="achado numero %d bem detalhado" % i)
+                  for i in range(12)]
+        p = projeto(auditoria={"achados": achados})
+        pend = so(regras.avaliar([p]), "auditoria_seguranca")
+        self.assertEqual(len(pend), 12)
+        grupos = regras.agrupar(pend)
+        self.assertEqual([g["tipo"] for g in grupos], ["item"] * 12)
+
+
+class AuditoriaVencida(unittest.TestCase):
+    """A regra 24 — a decisao de RODAR de novo, nunca um achado em si."""
+
+    def test_projeto_ligado_nunca_auditado_e_pendencia_baixa(self):
+        p = projeto(auditoria_ligada=True, auditoria=None)
+        (item,) = so(regras.avaliar([p]), "auditoria_vencida")
+        self.assertEqual(item["gravidade"], "baixa")
+        self.assertIn("nunca", item["texto"].lower())
+
+    def test_projeto_desligado_fica_calado_mesmo_nunca_auditado(self):
+        p = projeto(auditoria_ligada=False, auditoria=None)
+        self.assertEqual(so(regras.avaliar([p]), "auditoria_vencida"), [])
+
+    def test_auditoria_fresca_nao_e_pendencia(self):
+        p = projeto(auditoria_ligada=True, auditoria={"achados": []},
+                    medido_em=medido(github=60, pesado=3600))
+        # A camada 'auditoria' de `medido()` nao existe por padrao: acrescenta.
+        p["medido_em"]["auditoria"] = _iso(3600)
+        self.assertEqual(so(regras.avaliar([p]), "auditoria_vencida"), [])
+
+    def test_auditoria_velha_venceu(self):
+        p = projeto(auditoria_ligada=True, auditoria={"achados": []},
+                    medido_em=medido(github=60))
+        p["medido_em"]["auditoria"] = _iso(8 * 24 * 3600)
+        (item,) = so(regras.avaliar([p]), "auditoria_vencida")
+        self.assertNotIn("nunca", item["texto"].lower())
+        self.assertIn("venceu", item["texto"].lower())
+
+    def test_a_pendencia_tem_acao(self):
+        p = projeto(auditoria_ligada=True, auditoria=None)
+        item = so(regras.avaliar([p]), "auditoria_vencida")[0]
+        self.assertIn(item["acao"]["tipo"], regras.ACOES)
+        self.assertTrue(item["acao"].get("texto"))
+
+    def test_nao_pinta_o_selo(self):
+        """Sabotagem 3c/3d: so entra em CAMADA_DA_REGRA por nome EXATO."""
+        p = projeto(auditoria_ligada=True, auditoria=None,
+                    medido_em=medido(github=60, pesado=3600))
+        self.assertEqual(regras.selo_do_projeto(p), "saudavel")
+
+    def test_os_seis_nomes_exatos(self):
+        """A armadilha: `auditoria_nao_rodou` (dependencia) NAO e desta etapa,
+        e continua pintando o selo. Um guarda por `startswith` leria ela."""
+        seis = {"auditoria_seguranca", "auditoria_bug", "auditoria_teste",
+               "auditoria_doc", "auditoria_estilo", "auditoria_vencida"}
+        presentes_no_selo = seis & set(regras.CAMADA_DA_REGRA)
+        self.assertEqual(presentes_no_selo,
+                         {"auditoria_seguranca", "auditoria_bug",
+                          "auditoria_teste", "auditoria_doc",
+                          "auditoria_estilo"})
+        self.assertNotIn("auditoria_vencida", regras.CAMADA_DA_REGRA)
+        self.assertIn("auditoria_nao_rodou", regras.CAMADA_DA_REGRA)
+
+
 class OSeloNaoInventaSaude(unittest.TestCase):
     """O quarto estado e o motivo desta etapa existir.
 
@@ -700,7 +840,8 @@ class OSeloNaoInventaSaude(unittest.TestCase):
     def test_camadas_do_selo_diz_quais_valem(self):
         p = projeto(medido_em=medido(local=1200, github=60))
         self.assertEqual(regras.camadas_do_selo(p),
-                         {"local": False, "github": True, "pesado": False})
+                         {"local": False, "github": True, "pesado": False,
+                          "auditoria": False})
 
     # ------------------------------------- as quatro regras que saem do selo
     def test_as_quatro_regras_sem_acao_util_nao_alteram_o_selo(self):

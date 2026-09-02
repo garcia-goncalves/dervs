@@ -125,6 +125,19 @@ nav.mapa a[aria-current="page"] {
 .regua .selo { min-height: 44px; }
 .regua .selo[aria-pressed="true"] { outline: var(--foco-largura) solid var(--acao); }
 
+/* A régua de contagem da Auditoria — cinco categorias, sem cor de estado:
+   e' so texto, no mesmo molde da régua de estado acima. Alvo de toque de
+   44px, para casar com a regra do design em 360px. */
+.categoria {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--e3);
+  border: var(--traco) solid var(--borda);
+  border-radius: var(--raio);
+  font-size: var(--fs-etiqueta);
+}
+
 /* Lista de linha cheia, de borda a borda, com zero vão entre as linhas e um
    traço de 1px separando. O espaço generoso vive DENTRO de cada linha, nunca
    entre elas: o olho varre como sumário de jornal. */

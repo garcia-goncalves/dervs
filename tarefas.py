@@ -52,6 +52,26 @@ TETO_DIARIO_BRL = 50.00
 # consertado — e uma correcao que nao pega vira torneira aberta.
 MAX_TENTATIVAS = 2
 
+# Teto por auditoria, em dolar (Auditoria Profunda, 02/09/2026). Recomendado
+# pela spec: US$ 1,50 (~R$ 7,71) da para tres a quatro auditorias por dia sem
+# impedir a fila de consertar. Comeca apertado de proposito — afrouxar depois
+# e mais facil que o contrario (a mesma logica de TETO_DIARIO_BRL, acima).
+TETO_AUDITORIA_USD = 1.50
+
+# Decisao do dono no portao de risco: prontuario sob LGPD fica fora da entrega
+# 1. Comparacao sempre em minusculas. MUDOU DE CASA (revisao de seguranca de
+# 02/09/2026): `servir._auditoria_pedir` precisa desta lista para nao
+# enfileirar auditoria de um projeto bloqueado, e o servidor nao pode importar
+# `execucao` (`test_rotas.AMPUTADOS`). `execucao.py` reexporta o MESMO
+# objeto — nao ha uma segunda lista no repositorio.
+PROJETOS_BLOQUEADOS = {"ajudei-saude"}
+
+# Palpite, nao decisao: a spec nao fixa numero de turnos para auditoria. 60 e
+# o dobro de MAX_TURNOS porque ler um repositorio inteiro com Read/Grep/Glob
+# gasta turno rapido, e nenhum deles escreve nada — a primeira auditoria real
+# vira medicao, e o numero volta com dado em vez de chute.
+MAX_TURNOS_AUDITORIA = 60
+
 
 def em_reais(usd) -> str:
     """0.2256 -> "R$ 1,16". Virgula decimal, duas casas, sempre."""
@@ -127,6 +147,45 @@ def teto_da_sessao(gasto_usd) -> float:
     """
     falta_usd = quanto_falta(gasto_usd) / USD_BRL
     return max(0.0, min(float(TETO_USD), falta_usd))
+
+
+def teto_da_auditoria(gasto_usd) -> float:
+    """Quanto UMA auditoria pode gastar, em dolar. Nunca mais do que sobra hoje.
+
+    Mora aqui, e nao em `execucao.py`, porque o SERVIDOR precisa dele para
+    calcular o `teto_usd` que desce na tarefa (`servir.py:1918`), e o servidor
+    nao pode importar `execucao` nem `fila`. O molde e `teto_da_sessao`, acima
+    — o mesmo achado do revisor de 25/08/2026 vale aqui: o teto da auditoria
+    tem de ser limitado ao que sobra do dia, senao R$ 49 gastos ainda liberam
+    uma auditoria de R$ 7,71 inteira.
+    """
+    falta_usd = quanto_falta(gasto_usd) / USD_BRL
+    return max(0.0, min(float(TETO_AUDITORIA_USD), falta_usd))
+
+
+# ---------------------------------------------------------------------------
+# A peneira de texto para prompt. MUDOU DE CASA de `execucao.py` (Auditoria
+# Profunda, 02/09/2026): `execucao.py` NAO entra na imagem
+# (`test_imagem.PROIBIDOS`), mas `auditoria.py` entra — e `auditoria.py` usa
+# a MESMA peneira que `execucao.montar_prompt` ja usa. Uma segunda copia do
+# sanitizador e exatamente o defeito que o CLAUDE.md registra em "As tres
+# portas": "uma segunda copia dessa peneira ja matou o drift em silencio com
+# 926 testes verdes". `execucao.py` reexporta os MESMOS objetos, no molde de
+# `execucao.em_reais = tarefas.em_reais`.
+# ---------------------------------------------------------------------------
+
+# A etiqueta que separa dado de instrucao dentro do prompt. Se o proprio dado
+# trouxer essa etiqueta escrita, ele fecha o bloco antes da hora e o resto vira
+# instrucao — e exatamente o buraco que o bloco existe para tapar.
+FIM_DO_BLOCO = "</dados-coletados-nao-confiaveis>"
+
+
+def so_dado(texto) -> str:
+    """Tira do campo qualquer tentativa de fechar o bloco de dados na marra."""
+    limpo = str(texto or "")
+    for marca in (FIM_DO_BLOCO, FIM_DO_BLOCO.replace("/", "")):
+        limpo = limpo.replace(marca, "[etiqueta removida]")
+    return limpo
 
 
 # ---------------------------------------------------------------------------
