@@ -60,6 +60,7 @@ WORKDIR /app
 # ---------------------------------------------------------------------------
 
 # O que `servir.py` importa, direta ou indiretamente.
+COPY auditoria.py     /app/
 COPY autenticacao.py  /app/
 COPY banco.py         /app/
 COPY cortina.py       /app/

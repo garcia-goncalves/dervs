@@ -101,6 +101,14 @@ jobs:
       - name: O semáforo
         run: python test_tarefas.py
 
+      # A fundacao da Auditoria Profunda (02/09/2026): o esquema JSON dos
+      # achados, o gabarito fechado do prompt, o id estavel (linha fora do
+      # calculo, ordem embaralhada da os mesmos ids) e a validacao
+      # tudo-ou-nada — um achado invalido reprova a corrida inteira, nunca
+      # so ele. Modulo puro, sem estado, sem `execucao`/`fila`/`banco`.
+      - name: A auditoria profunda
+        run: python test_auditoria.py
+
       # As seis tabelas da etapa 8, mais o cofre. O que ele cobra alem de "a
       # tabela existe": nenhum segredo em claro, arquivar sem motivo recusado, e
       # o "x" de um usuario nao escondendo o alerta do outro.
