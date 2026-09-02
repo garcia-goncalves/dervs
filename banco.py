@@ -518,8 +518,15 @@ CREATE INDEX IF NOT EXISTS ix_auditoria_projeto
 -- que um achado que reaparece faz `INSERT ... ON CONFLICT DO UPDATE` na
 -- MESMA linha, mantendo o `visto_em` mais antigo. Achado que nao voltou some
 -- marcando `fechado_em`, NUNCA com DELETE, para o historico nao mentir.
+--
+-- A CHAVE E (usuario_id, id), NUNCA `id` sozinho. `id` e
+-- `regra:projeto:sha256(arquivo,categoria,frase)[:12]` — deterministico e SEM
+-- o dono dentro. Duas contas que auditam o MESMO repositorio geram o MESMO id
+-- para o mesmo achado; com `id` como chave global, a segunda gravacao
+-- TRANSFERIA a linha de dono e o achado sumia do painel da primeira conta,
+-- sem erro e sem aviso. Achado da revisao de seguranca de 02/09/2026.
 CREATE TABLE IF NOT EXISTS achado (
-    id           TEXT    PRIMARY KEY,
+    id           TEXT    NOT NULL,
     auditoria_id INTEGER NOT NULL REFERENCES auditoria(id) ON DELETE CASCADE,
     usuario_id   INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
     projeto      TEXT    NOT NULL DEFAULT '',
@@ -532,7 +539,8 @@ CREATE TABLE IF NOT EXISTS achado (
     o_que_fazer  TEXT    NOT NULL DEFAULT '',
     trecho       TEXT    NOT NULL DEFAULT '',
     visto_em     TEXT    NOT NULL,
-    fechado_em   TEXT
+    fechado_em   TEXT,
+    PRIMARY KEY (usuario_id, id)
 );
 CREATE INDEX IF NOT EXISTS ix_achado_aberto
     ON achado (usuario_id, projeto, fechado_em);
@@ -584,6 +592,7 @@ def migrar(con: sqlite3.Connection) -> None:
     _migrar_endereco_producao(con)
     _migrar_instalacao_github(con)
     _migrar_auditoria(con)
+    _migrar_achado_dono(con)
 
 
 # As tabelas que apontam para `usuario`. A migracao confere so estas: varrer o
@@ -1086,7 +1095,7 @@ _CREATE_AUDITORIA = """CREATE TABLE IF NOT EXISTS auditoria (
 )"""
 
 _CREATE_ACHADO = """CREATE TABLE IF NOT EXISTS achado (
-    id           TEXT    PRIMARY KEY,
+    id           TEXT    NOT NULL,
     auditoria_id INTEGER NOT NULL REFERENCES auditoria(id) ON DELETE CASCADE,
     usuario_id   INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
     projeto      TEXT    NOT NULL DEFAULT '',
@@ -1099,7 +1108,8 @@ _CREATE_ACHADO = """CREATE TABLE IF NOT EXISTS achado (
     o_que_fazer  TEXT    NOT NULL DEFAULT '',
     trecho       TEXT    NOT NULL DEFAULT '',
     visto_em     TEXT    NOT NULL,
-    fechado_em   TEXT
+    fechado_em   TEXT,
+    PRIMARY KEY (usuario_id, id)
 )"""
 
 
@@ -1139,6 +1149,85 @@ def _migrar_auditoria(con: sqlite3.Connection) -> None:
         con.execute("CREATE INDEX IF NOT EXISTS ix_auditoria_projeto"
                     " ON auditoria (usuario_id, projeto, medido_em)")
         con.execute(_CREATE_ACHADO)
+        con.execute("CREATE INDEX IF NOT EXISTS ix_achado_aberto"
+                    " ON achado (usuario_id, projeto, fechado_em)")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        _religar_fk(con)
+
+
+def _migrar_achado_dono(con: sqlite3.Connection) -> None:
+    """`achado.id` nasceu como chave primaria GLOBAL — sem o dono dentro. O id
+    e `regra:projeto:sha256(arquivo,categoria,frase)[:12]`, deterministico: o
+    MESMO defeito, no MESMO arquivo, com a MESMA frase, gera o MESMO id em
+    duas contas que auditam o mesmo repositorio. Com `id` sozinho como chave,
+    a segunda gravacao fazia `ON CONFLICT` TRANSFERIR a linha para o segundo
+    dono — o achado sumia do painel do primeiro, sem erro e sem aviso. A
+    chave passa a ser `(usuario_id, id)`.
+
+    O SQLite nao sabe trocar chave primaria, entao a tabela e reconstruida —
+    mesmo molde de `_migrar_pendencia_estado`. O dado existente e preservado
+    com o mesmo dono que ja tinha.
+
+    Nunca `executescript` aqui: ele da COMMIT implicito e desmontaria o
+    `BEGIN IMMEDIATE`, deixando duas subidas simultaneas migrarem juntas.
+    Licao paga em 26/08/2026.
+    """
+    forma = list(con.execute("PRAGMA table_info(achado)"))
+    if not forma:
+        return                        # sem a tabela: o proximo passo cria certo
+    chave = [l[1] for l in sorted((l for l in forma if l[5]), key=lambda l: l[5])]
+    if chave == ["usuario_id", "id"]:
+        return                        # ja migrado
+    con.execute("PRAGMA foreign_keys=OFF")
+    try:
+        # TUDO OU NADA. `executescript` faria COMMIT implicito e rodaria os
+        # comandos como transacoes soltas: uma queda entre o DROP e o RENAME
+        # apagaria a tabela e deixaria a copia orfa.
+        con.execute("BEGIN IMMEDIATE")
+        # DE NOVO, E AGORA DENTRO DA TRANSACAO — mesmo motivo do gemeo em
+        # `_migrar_pendencia_estado`: a leitura la em cima aconteceu antes do
+        # lock, e duas subidas simultaneas leriam as duas "preciso migrar".
+        forma = list(con.execute("PRAGMA table_info(achado)"))
+        if not forma:
+            con.rollback()
+            return
+        chave = [l[1] for l in sorted((l for l in forma if l[5]),
+                                      key=lambda l: l[5])]
+        if chave == ["usuario_id", "id"]:
+            con.rollback()
+            return
+        con.execute("DROP TABLE IF EXISTS achado_nova")
+        con.execute("""CREATE TABLE achado_nova (
+                id           TEXT    NOT NULL,
+                auditoria_id INTEGER NOT NULL
+                             REFERENCES auditoria(id) ON DELETE CASCADE,
+                usuario_id   INTEGER NOT NULL
+                             REFERENCES usuario(id) ON DELETE CASCADE,
+                projeto      TEXT    NOT NULL DEFAULT '',
+                regra        TEXT    NOT NULL DEFAULT '',
+                categoria    TEXT    NOT NULL DEFAULT '',
+                arquivo      TEXT    NOT NULL DEFAULT '',
+                linha        INTEGER,
+                gravidade    TEXT    NOT NULL DEFAULT 'media',
+                frase        TEXT    NOT NULL DEFAULT '',
+                o_que_fazer  TEXT    NOT NULL DEFAULT '',
+                trecho       TEXT    NOT NULL DEFAULT '',
+                visto_em     TEXT    NOT NULL,
+                fechado_em   TEXT,
+                PRIMARY KEY (usuario_id, id))""")
+        con.execute(
+            "INSERT INTO achado_nova (id, auditoria_id, usuario_id, projeto,"
+            " regra, categoria, arquivo, linha, gravidade, frase,"
+            " o_que_fazer, trecho, visto_em, fechado_em)"
+            " SELECT id, auditoria_id, usuario_id, projeto, regra, categoria,"
+            " arquivo, linha, gravidade, frase, o_que_fazer, trecho,"
+            " visto_em, fechado_em FROM achado")
+        con.execute("DROP TABLE achado")
+        con.execute("ALTER TABLE achado_nova RENAME TO achado")
         con.execute("CREATE INDEX IF NOT EXISTS ix_achado_aberto"
                     " ON achado (usuario_id, projeto, fechado_em)")
         con.commit()
@@ -1592,7 +1681,7 @@ def tarefa_para_maquina(maquina_id: int, con=None):
     con = con or conectar()
     try:
         m = con.execute(
-            "SELECT id, executa FROM maquina"
+            "SELECT id, executa, usuario_id FROM maquina"
             " WHERE id = ? AND revogada_em IS NULL", (maquina_id,)).fetchone()
         if not m or not int(m["executa"] or 0):
             return None
@@ -1601,20 +1690,27 @@ def tarefa_para_maquina(maquina_id: int, con=None):
         # auditoria vem do proprio achado, e nao so de `fila.erro` (que para
         # uma tarefa nova e sempre vazio). So LEITURA — a funcao continua
         # falhando fechada.
+        #
+        # `achado.usuario_id = ?` (o dono da MAQUINA) entra na condicao do
+        # JOIN, e nao no WHERE: um achado.id que colida entre duas contas (o
+        # id nao carrega o dono) nao pode entregar `frase`/`o_que_fazer`/
+        # `trecho`/`arquivo` — codigo-fonte privado — para a maquina de outra
+        # conta. Sem esta condicao, o JOIN casaria com qualquer dono.
         l = con.execute(
             "SELECT fila.*, achado.frase AS achado_frase,"
             " achado.o_que_fazer AS achado_o_que_fazer,"
             " achado.trecho AS achado_trecho,"
             " achado.arquivo AS achado_arquivo,"
             " achado.linha AS achado_linha"
-            " FROM fila LEFT JOIN achado ON achado.id = fila.id"
+            " FROM fila LEFT JOIN achado"
+            "   ON achado.id = fila.id AND achado.usuario_id = ?"
             " WHERE fila.estado IN (%s)"
             "   AND fila.trilho <> ''"
             "   AND fila.parada_pedida_em IS NULL"
             "   AND (fila.maquina_id IS NULL OR fila.maquina_id = ?)"
             " ORDER BY (fila.aprovado_em IS NULL), fila.criado_em"
             " LIMIT 1" % marcas,
-            list(_A_PEGAR) + [maquina_id]).fetchone()
+            [m["usuario_id"]] + list(_A_PEGAR) + [maquina_id]).fetchone()
         return dict(l) if l else None
     finally:
         if fechar:
@@ -1799,9 +1895,8 @@ def gravar_auditoria(usuario_id: int, projeto: str, estado: str, achados: list,
                 " regra, categoria, arquivo, linha, gravidade, frase,"
                 " o_que_fazer, trecho, visto_em, fechado_em)"
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)"
-                " ON CONFLICT(id) DO UPDATE SET"
+                " ON CONFLICT(id, usuario_id) DO UPDATE SET"
                 "   auditoria_id = excluded.auditoria_id,"
-                "   usuario_id = excluded.usuario_id,"
                 "   projeto = excluded.projeto,"
                 "   regra = excluded.regra,"
                 "   categoria = excluded.categoria,"
@@ -1814,6 +1909,9 @@ def gravar_auditoria(usuario_id: int, projeto: str, estado: str, achados: list,
                 "   fechado_em = NULL",
                 # `visto_em` NAO entra no SET do ON CONFLICT: e o que faz o
                 # achado que reaparece manter o carimbo mais antigo.
+                # `usuario_id` TAMBEM nao entra: a chave e (id, usuario_id),
+                # entao um upsert so casa dentro do MESMO dono — mas mesmo
+                # assim o dono nunca deve mudar por upsert, de proposito.
                 (aid, auditoria_id, usuario_id, projeto,
                  str(a.get("regra") or ""), str(a.get("categoria") or ""),
                  str(a.get("arquivo") or ""), a.get("linha"),
