@@ -255,7 +255,7 @@ Isto é tão parte do produto quanto o que ele faz.
 - **Nunca virar bot de WhatsApp.** A biblioteca disponível é uma sessão não oficial,
   frágil e contra os termos de uso. Descartado do produto, não adiado. Telegram fica.
 
-## 8. As telas — oito, e o porquê das duas novas
+## 8. As telas — nove, e o porquê das novas
 
 Direção visual escolhida: **Torre de Controle**. Preto, branco e verde.
 
@@ -332,6 +332,45 @@ manutenção eterna — exatamente o que mata este tipo de produto.
 
 **Fatia 4.** Depende de o login e a fronteira de segurança estarem provados: um painel que
 liga e desliga ferramenta do agente é uma superfície de ataque de primeira ordem.
+
+## 10.5. A Auditoria Profunda — o olho que faltava (02/09/2026)
+
+**O que ela resolve.** Até aqui o DERVS tinha 18 regras, e **as 18 olhavam de
+fora**: trabalho sem commit, PR parado, CI vermelha, cota estourada. Nenhuma
+abria um arquivo de código. Por isso o DERVS sabia dizer *"tem coisa parada"* e
+nunca *"este projeto está 100%"* — e por isso quem escrevia a tarefa continuava
+sendo o dono.
+
+**O que ela faz.** O agente dispara o binário `claude` **em modo só-leitura**
+sobre uma cópia isolada do projeto, com a lista de ferramentas fechada em
+`Read`, `Grep` e `Glob`, e devolve uma **lista estruturada de achados** —
+arquivo, linha, categoria, gravidade, a frase em português e o que fazer. Cada
+achado vira **pendência na fila**, com a cor do semáforo do §7.
+
+**Cinco categorias, não uma** — `seguranca`, `bug`, `teste`, `doc`, `estilo` —
+porque a cor do semáforo é **por regra**. Com uma categoria só, pintar de verde
+autorizaria a sessão a mexer sozinha num caminho de login e num erro de digitação
+com o mesmo clique.
+
+**O que ela NÃO faz, e é de propósito:**
+- **Não mede.** O §7 proíbe modelo de linguagem no caminho da medição, e isso não
+  mudou: a auditoria é uma camada **ao lado**, com carimbo próprio, que só existe
+  depois de a medição comum ter acontecido.
+- **Não conserta sozinha.** As cinco regras de achado ficam **fora** de
+  `fila.REGRAS_MECANICAS`. O achado vira pendência; o conserto segue o semáforo.
+- **Não roda em projeto bloqueado.** `PROJETOS_BLOQUEADOS` agora mora em
+  `tarefas.py` justamente para a rota de pedido poder aplicá-la.
+- **Não inventa estado.** Corrida que falha grava a falha com o motivo, **não
+  apaga** os achados da corrida boa anterior, e o projeto mantém o carimbo antigo.
+  Saída malformada vira **sem dados**, nunca "0 achados".
+
+**O teto de gasto.** `TETO_AUDITORIA_USD = 1,50` (≈ R$ 7,71), somado ao teto
+diário de R$ 50 que já existia — cabem ~6 auditorias por dia. Valor recomendado
+pela spec, escolhido apertado de propósito; subir é trocar uma linha.
+
+**O contrato completo** está em `docs/esteira/auditoria-profunda/` (briefing,
+pesquisa, spec, design) e o plano em
+`docs/superpowers/plans/dervs-auditoria-profunda.md`.
 
 ## 11. O caminho — o que está pronto, o que falta
 
