@@ -562,7 +562,89 @@ class Hub(SimpleHTTPRequestHandler):
         """So o caminho, sem a query. A tabela de rotas casa EXATO."""
         return self.path.split("?", 1)[0]
 
+    # ------------------------------------------------------- o dreno
+    #
+    # `protocol_version` e HTTP/1.0: o soquete fecha depois de TODA resposta.
+    # E quem recusa um POST (401, 403, 404, 500) responde antes de qualquer
+    # rota rodar -- e as rotas sao os unicos lugares que leem `rfile`. Recusa =
+    # corpo INTOCADO no buffer de recepcao.
+    #
+    # Fechar um soquete com bytes por ler faz o sistema mandar um RST em vez do
+    # FIN, e o RST DESCARTA a resposta que ja estava no buffer do outro lado. A
+    # resposta foi escrita, viajou, e morreu a um passo de ser lida.
+    #
+    # No teste isso aparecia como `WinError 10053` em caso DIFERENTE a cada
+    # corrida -- 2 em 24, medido em 02/09/2026, e havia quem chamasse de ruido
+    # do Windows. Nao e: dos 405 pedidos com corpo de uma corrida, 189
+    # terminavam com bytes por ler. Fora do teste, e o navegador de quem usa o
+    # painel levando "conexao perdida" no lugar do 401 -- e toda tela que
+    # trataria `401` mostrando "sua sessao venceu" mostra um erro de rede.
+    #
+    # AQUI E NAO EM CADA ROTA, pelo mesmo motivo de a classificacao de acesso
+    # viver na tabela: `if` escrito dentro da funcao nasce esquecido na rota
+    # seguinte. Rota nova ja nasce coberta.
+
+    #: Ate onde vale drenar. Acima do maior corpo aceito (`TETO_DO_RELATORIO`,
+    #: 4 MiB) e uma promessa que ninguem precisa cumprir: drenar um gigabyte
+    #: que o cliente inventou seria pagar a banda de quem ataca. Corpo maior
+    #: que isto continua levando RST, e isso e o certo.
+    TETO_A_DRENAR = 8 * 1024 * 1024
+
+    class _Contado:
+        """Envelope de `rfile` que so anota quanto a rota leu.
+
+        Sem contar nao da para saber quanto falta: cada rota tem um teto
+        proprio, e algumas nao leem nada.
+        """
+
+        def __init__(self, arquivo):
+            self._arquivo = arquivo
+            self.lido = 0
+
+        def read(self, k=-1):
+            d = self._arquivo.read(k)
+            self.lido += len(d)
+            return d
+
+        def readline(self, *a):
+            d = self._arquivo.readline(*a)
+            self.lido += len(d)
+            return d
+
+        def __getattr__(self, nome):
+            return getattr(self._arquivo, nome)
+
     def _despachar(self, metodo: str):
+        """Roteia e, ao fim, LE O CORPO QUE A ROTA NAO LEU."""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            # Cabecalho torto e problema do roteamento, nao do dreno.
+            n = 0
+        if n <= 0:
+            return self._rotear(metodo)
+
+        verdadeiro = self.rfile
+        contado = self._Contado(verdadeiro)
+        self.rfile = contado
+        try:
+            return self._rotear(metodo)
+        finally:
+            self.rfile = verdadeiro
+            falta = min(n, self.TETO_A_DRENAR) - contado.lido
+            while falta > 0:
+                try:
+                    pedaco = verdadeiro.read(min(falta, 65536))
+                except OSError:
+                    # O cliente ja foi embora. Nao ha o que drenar e nao ha
+                    # erro a relatar: a resposta dele ja nao interessa a
+                    # ninguem.
+                    break
+                if not pedaco:
+                    break          # fim do fluxo: prometeu mais do que mandou
+                falta -= len(pedaco)
+
+    def _rotear(self, metodo: str):
         if not self._host_confiavel():
             return self._json(403, {"erro": "host nao permitido"})
         rota = ROTAS.get(self._caminho())

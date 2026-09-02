@@ -255,11 +255,35 @@ def variaveis_do_compose():
 
 
 def variaveis_lidas(arquivo):
-    """Toda `os.environ[...]`/`os.environ.get(...)` de DERVS_* no arquivo."""
+    """Toda leitura de ambiente de um DERVS_* no arquivo.
+
+    Cobre `os.environ["X"]`, `os.environ.get("X")` e `os.getenv("X")` -- as
+    tres formas com o nome escrito por extenso.
+
+    O QUE ESCAPA, e de proposito: nome guardado numa variavel
+    (`os.environ.get(NOME)`), leitura montada por string, e qualquer atalho
+    novo. Achar essas exigiria interpretar o codigo, e uma guarda que erra
+    para os dois lados e pior que uma que erra so para um. Hoje as leituras
+    de `servir.py` e `banco.py` sao todas literais -- conferido em
+    02/09/2026 --, e o caso abaixo cobra que essa forma continue valendo.
+    """
     t = (AQUI / arquivo).read_text(encoding="utf-8")
-    nomes = set(re.findall(r'os\.environ(?:\.get)?[\(\[]"(DERVS_[A-Z_]+)"', t))
+    nomes = set(re.findall(
+        r'os\.(?:environ(?:\.get)?[\(\[]|getenv\()"(DERVS_[A-Z_]+)"', t))
     assert nomes, "nenhuma variavel encontrada em %s; a busca quebrou." % arquivo
     return nomes
+
+
+def leituras_indiretas(arquivo):
+    """Leituras de ambiente que a busca acima NAO enxerga.
+
+    `os.environ.get(NOME)` com o nome numa variavel passaria por baixo da
+    guarda em silencio -- justamente o desfecho que ela existe para impedir.
+    Melhor reprovar e obrigar quem escreveu a decidir.
+    """
+    t = (AQUI / arquivo).read_text(encoding="utf-8")
+    return [l.strip() for l in t.splitlines()
+            if re.search(r'os\.(?:environ(?:\.get)?[\(\[]|getenv\()\s*[A-Za-z_]', l)]
 
 
 class OContainerRecebeOQueOCodigoLe(unittest.TestCase):
@@ -288,6 +312,18 @@ class OContainerRecebeOQueOCodigoLe(unittest.TestCase):
             "em FORA_DO_COMPOSE_DE_PROPOSITO."
             % ", ".join("%s (%s)" % (n, "/".join(a))
                         for n, a in sorted(faltando.items())))
+
+    def test_toda_leitura_de_ambiente_tem_o_nome_por_extenso(self):
+        """Nome guardado em variavel cegaria a guarda sem que nada avisasse."""
+        for arquivo in self.NO_SERVIDOR:
+            indiretas = leituras_indiretas(arquivo)
+            self.assertFalse(
+                indiretas,
+                "%s le ambiente com o nome fora da chamada: %s. A guarda "
+                "acima nao enxerga essa forma, e a variavel poderia ficar "
+                "fora do compose sem ninguem notar. Escreva o nome por "
+                "extenso, ou ensine `variaveis_lidas` a achar esta forma."
+                % (arquivo, indiretas))
 
     def test_a_lista_de_excecoes_nao_guarda_nome_morto(self):
         """Excecao que ninguem le mais vira ruido que esconde a proxima."""
