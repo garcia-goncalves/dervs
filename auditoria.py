@@ -278,12 +278,19 @@ def _motivo_invalido(achado, indice: int) -> str:
     return ""
 
 
+# Um numero so no repositorio. `maxItems` no ESQUEMA e o que se PEDE ao
+# fornecedor; `MAX_ACHADOS` e o que se COBRA aqui, e os dois sao o mesmo
+# objeto de proposito — dois numeros divergem em silencio.
+MAX_ACHADOS = ESQUEMA["properties"]["achados"]["maxItems"]
+
+
 def validar(bruto):
     """A saida do agente -> (achados, "") ou (None, motivo em português).
 
     Tudo-ou-nada, refazendo em Python o que `--json-schema` so PROMETE:
-    tipo, faixa, enumeracao, tamanho e a peneira de caminho. `--json-schema` e
-    promessa do fornecedor; esta funcao e a nossa validacao — a que vale.
+    tipo, faixa, enumeracao, tamanho, QUANTIDADE e a peneira de caminho.
+    `--json-schema` e promessa do fornecedor; esta funcao e a nossa
+    validacao — a que vale.
     """
     texto = bruto.strip() if isinstance(bruto, str) else ""
     if not texto:
@@ -298,6 +305,11 @@ def validar(bruto):
     lista = dado.get("achados")
     if not isinstance(lista, list):
         return (None, "a resposta não trouxe a lista de achados")
+    if len(lista) > MAX_ACHADOS:
+        # Recusa INTEIRA, nunca um corte: truncar entregaria uma lista
+        # parcial com cara de completa, que e a mentira da lei 2.
+        return (None, "a auditoria devolveu %d achados, acima do limite de %d"
+                      % (len(lista), MAX_ACHADOS))
 
     limpos = []
     for indice, item in enumerate(lista):

@@ -388,5 +388,48 @@ class PurezaEIsolamento(unittest.TestCase):
                     self.assertNotIn(proibido, nu)
 
 
+class OTetoDeQuantidadeEConferidoEmPython(unittest.TestCase):
+    """`maxItems` no esquema e PROMESSA do fornecedor; esta e a conferencia.
+
+    Sem isto, uma corrida que devolvesse 5.000 achados entraria inteira no
+    banco e viraria 5.000 linhas na fila. O esquema pede 60; quem CObra os 60
+    tem de ser codigo nosso, como a propria docstring de `validar` promete
+    ("tipo, faixa, enumeracao, TAMANHO e a peneira de caminho").
+
+    E a recusa e INTEIRA, nunca um corte: truncar em 60 entregaria uma lista
+    parcial com cara de completa, que e exatamente a mentira que a lei 2
+    proibe.
+    """
+
+    def test_o_teto_vem_do_esquema_e_nao_de_um_segundo_numero(self):
+        """Um numero so no repositorio. Dois divergem em silencio."""
+        self.assertEqual(
+            auditoria.MAX_ACHADOS,
+            auditoria.ESQUEMA["properties"]["achados"]["maxItems"])
+
+    def test_no_teto_exato_passa(self):
+        bruto = json.dumps({"achados": [achado_valido()
+                                        for _ in range(auditoria.MAX_ACHADOS)]})
+        achados, motivo = auditoria.validar(bruto)
+        self.assertEqual(motivo, "")
+        self.assertEqual(len(achados), auditoria.MAX_ACHADOS)
+
+    def test_um_acima_do_teto_recusa_TUDO_e_nao_trunca(self):
+        quantos = auditoria.MAX_ACHADOS + 1
+        bruto = json.dumps({"achados": [achado_valido() for _ in range(quantos)]})
+        achados, motivo = auditoria.validar(bruto)
+        self.assertIsNone(achados, "recusa inteira; truncar seria mentir")
+        self.assertTrue(motivo)
+
+    def test_muito_acima_do_teto_tambem_recusa_inteiro(self):
+        """Sabota o conserto trocando a recusa por um corte: com 5.000 itens
+        um corte devolveria 60 achados e o teste acima ate passaria se
+        alguem invertesse a comparacao. Este exige None com folga."""
+        bruto = json.dumps({"achados": [achado_valido() for _ in range(5000)]})
+        achados, motivo = auditoria.validar(bruto)
+        self.assertIsNone(achados)
+        self.assertTrue(motivo)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
