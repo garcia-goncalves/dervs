@@ -67,6 +67,10 @@ from pathlib import Path
 import banco
 import tarefas
 
+# `auditoria` e puro (stdlib + tarefas) e nao importa `execucao` — sem ciclo.
+# E dele que vem o esquema JSON e o gabarito fechado da sessao so-leitura.
+import auditoria
+
 # MUDARAM DE CASA (Fatia 2, etapa 2): TETO_USD, USD_BRL, MAX_TURNOS e
 # `em_reais` agora moram em `tarefas.py`, que e o unico arquivo que o SERVIDOR
 # tambem pode importar. Os nomes continuam aqui de proposito — sao os MESMOS
@@ -98,6 +102,23 @@ FERRAMENTAS_OK = ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "TodoWrite"]
 # (custo sem teto) e nao navega na web (o prompt ja traz o contexto de que
 # precisa; buscar na web e superficie de injecao a mais).
 FERRAMENTAS_PROIBIDAS = ["Task", "WebFetch", "WebSearch"]
+
+# ---------------------------------------------------------------------------
+# A Auditoria Profunda (02/09/2026): a sessao SO-LEITURA. `FERRAMENTAS_OK`
+# fica INTOCADA de proposito — a auditoria nao herda nada dela, e sabotar uma
+# lista nunca pode afetar a outra sozinha.
+# ---------------------------------------------------------------------------
+
+# Lista branca da auditoria: so o que le. NADA que escreva ou rode comando.
+FERRAMENTAS_DE_LEITURA = ["Read", "Grep", "Glob"]
+
+# Lista negra da auditoria, PROPRIA (nao `FERRAMENTAS_PROIBIDAS`, que e so os
+# tres nomes do conserto): os oito nomes de escrita e rede/sessao-neta, na
+# mesma ordem de `spec.md` secao "4 — Como se prova o modo so-leitura".
+FERRAMENTAS_PROIBIDAS_NA_AUDITORIA = [
+    "Bash", "Edit", "Write", "MultiEdit", "NotebookEdit",
+    "Task", "WebFetch", "WebSearch",
+]
 
 # Decisao do dono no portao de risco: prontuario sob LGPD fica fora da entrega 1.
 # Comparacao sempre em minusculas.
@@ -188,6 +209,35 @@ def montar_comando(teto_usd: float = TETO_USD, turnos: int = MAX_TURNOS,
         "--max-turns", str(int(turnos)),
         "--allowedTools", ",".join(FERRAMENTAS_OK),
         "--disallowedTools", ",".join(FERRAMENTAS_PROIBIDAS),
+    ]
+
+
+def montar_comando_de_auditoria(teto_usd: float = tarefas.TETO_AUDITORIA_USD,
+                                turnos: int = tarefas.MAX_TURNOS_AUDITORIA,
+                                settings: str = "") -> list:
+    """O argv da sessao SO-LEITURA. Irma de `montar_comando` (acima) — mesma
+    forma, ferramentas diferentes. O PROMPT NAO ESTA AQUI (vai por stdin,
+    igual la). NUNCA `--bare` (ver medicao no topo do arquivo) e nunca modo
+    de permissao frouxo.
+
+    A ORDEM dos pares segue `docs/esteira/auditoria-profunda/spec.md`, secao
+    "4 — Como se prova o modo so-leitura", ao pe da letra — e por isso
+    `--json-schema` entra logo depois das duas listas de ferramenta, e nao no
+    fim.
+    """
+    return [
+        "claude", "-p",
+        "--allowedTools", ",".join(FERRAMENTAS_DE_LEITURA),
+        "--disallowedTools", ",".join(FERRAMENTAS_PROIBIDAS_NA_AUDITORIA),
+        "--json-schema", json.dumps(auditoria.ESQUEMA, ensure_ascii=True),
+        "--output-format", "stream-json",
+        "--verbose",
+        "--strict-mcp-config",
+        "--mcp-config", '{"mcpServers":{}}',
+        "--setting-sources", "",
+        "--settings", settings or settings_da_barreira(),
+        "--max-budget-usd", "%.2f" % float(teto_usd),
+        "--max-turns", str(int(turnos)),
     ]
 
 
@@ -1218,4 +1268,255 @@ def estado(desde=0) -> dict:
         "diff": _execucao.get("diff", ""),
         "manchete": _execucao.get("manchete", ""),
         "corpo": _execucao.get("corpo", ""),
+    }
+
+
+# ============================================================================
+# A Auditoria Profunda (02/09/2026) — `auditar()`, irma de `iniciar()`.
+#
+# Reusa `criar_copia`, `ambiente_da_filha` (via `montar_comando_de_auditoria`
+# -> `settings_da_barreira`), `interpretar_linha`, `custo_do_evento` e a
+# MESMA trava global `_trava`/`_proc` de cima — auditoria e conserto disputam
+# o mesmo recurso, e "uma sessao por vez" tem de valer para os dois, senao o
+# teto de R$ 50 do dia e conferido duas vezes contra o mesmo saldo.
+#
+# NAO passa por `_absorver` nem por `_fechar_com_pedido_de_alteracao`: uma
+# auditoria nunca abre pedido de alteracao, e reusar `iniciar()` inteiro
+# faria exatamente isso no fim. Por isso ela tem a propria thread leitora
+# (`_ler_auditoria`), o proprio estado (`_auditoria`) e o proprio `parar`.
+# ============================================================================
+
+
+def _zerada_auditoria() -> dict:
+    return {
+        "estado": "parada", "projeto": "", "custo_usd": 0.0, "linhas": [],
+        "resumo": "", "manchete": "", "corpo": "", "copia": "",
+        "projeto_caminho": "", "rodadas": 0,
+    }
+
+
+_auditoria = _zerada_auditoria()
+
+
+def _anotar_auditoria(texto: str) -> None:
+    _auditoria["linhas"].append(carimbar(texto))
+
+
+def auditar(projeto: str, caminho_do_projeto: str, teto_usd=None,
+           turnos=None) -> str:
+    """Comeca uma sessao SO-LEITURA. Devolve "iniciar" | "recusada".
+
+    Roda inteira sob a MESMA `_trava` de `iniciar()`, e le o MESMO `_proc`
+    antes de comecar: com um conserto (ou outra auditoria) vivo, `_proc.poll()`
+    devolve `None` e esta funcao recusa — nunca duas sessoes do Claude ao
+    mesmo tempo, nesta maquina, seja qual for o tipo.
+    """
+    global _proc
+    with _trava:
+        if _proc is not None and _proc.poll() is None:
+            return "recusada"
+        _proc = None
+
+        id_ = id_curto()
+        ramo = nome_do_ramo("auditoria", id_)
+        destino = caminho_da_copia(BASE_COPIAS, projeto, id_)
+
+        _auditoria.clear()
+        _auditoria.update(_zerada_auditoria())
+        _auditoria.update({
+            "estado": "rodando", "projeto": projeto,
+            "copia": str(destino), "projeto_caminho": str(caminho_do_projeto),
+        })
+        _anotar_auditoria("preparando uma cópia isolada de %s em %s"
+                          % (projeto, destino))
+
+        ok, saida = criar_copia(caminho_do_projeto, destino, ramo)
+        if not ok:
+            _anotar_auditoria(saida or "o git não explicou o erro")
+            remover_copia(caminho_do_projeto, destino)
+            _auditoria.update({
+                "estado": "falha",
+                "manchete": "Falhou: não consegui preparar a cópia isolada",
+                "corpo": "O `git clone` recusou criar a cópia em %s. Nada foi "
+                         "alterado no projeto original." % destino,
+            })
+            return "iniciar"
+
+        argv = montar_comando_de_auditoria(
+            teto_usd=tarefas.TETO_AUDITORIA_USD if teto_usd is None
+                     else max(0.0, float(teto_usd)),
+            turnos=tarefas.MAX_TURNOS_AUDITORIA if turnos is None
+                  else int(turnos))
+        argv[0] = shutil.which(argv[0]) or argv[0]
+        try:
+            _proc = subprocess.Popen(
+                argv, cwd=str(destino), stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                encoding="utf-8", errors="replace", bufsize=1,
+                env=ambiente_da_filha(),
+                creationflags=(SEM_JANELA | GRUPO_PROPRIO)
+                             if sys.platform.startswith("win") else 0,
+                start_new_session=not sys.platform.startswith("win"))
+        except OSError as e:
+            _anotar_auditoria("não consegui iniciar o Claude Code: %s" % e)
+            remover_copia(caminho_do_projeto, destino)
+            _auditoria.update({
+                "estado": "falha",
+                "manchete": "Falhou: não consegui iniciar o Claude Code",
+                "corpo": "O programa `claude` não pôde ser executado nesta "
+                         "máquina.",
+            })
+            return "iniciar"
+
+        # O prompt entra por stdin, igual em `iniciar()`. `montar_prompt` so
+        # interpola o nome do projeto — o gabarito e fechado (auditoria.py).
+        try:
+            _proc.stdin.write(auditoria.montar_prompt(projeto))
+            _proc.stdin.close()
+        except (OSError, ValueError) as e:
+            _anotar_auditoria("não consegui entregar o pedido à sessão: %s" % e)
+
+        threading.Thread(target=_ler_auditoria,
+                         args=(_proc, destino, str(caminho_do_projeto)),
+                         daemon=True).start()
+        return "iniciar"
+
+
+def _e_a_auditoria(destino) -> bool:
+    """Esta thread ainda fala da auditoria que a criou? (molde de `_e_a_sessao`)"""
+    return _auditoria.get("copia") == str(destino)
+
+
+def _ler_auditoria(proc, destino, projeto_caminho) -> None:
+    """A thread que le o filho linha a linha. Irma de `_ler` (acima), sem
+    `_absorver`: nao ha diff nem PR para fechar, so estado, log e custo."""
+    try:
+        for bruto in proc.stdout:
+            if not _e_a_auditoria(destino):
+                return
+            if _auditoria.get("estado") == "parada_pelo_dono":
+                break
+            evento = interpretar_linha(bruto)
+            if evento is None:
+                texto = (bruto or "").strip()
+                if texto:
+                    _anotar_auditoria(texto[:500])
+                continue
+
+            _auditoria["custo_usd"] = custo_do_evento(
+                evento, _auditoria.get("custo_usd", 0.0))
+            tipo = evento.get("type")
+            if tipo == "assistant":
+                _auditoria["rodadas"] = int(_auditoria.get("rodadas", 0)) + 1
+            elif tipo == "system" and evento.get("subtype") == "init":
+                _anotar_auditoria("sessão iniciada")
+
+            if tipo != "result":
+                continue
+
+            _auditoria["resumo"] = str(evento.get("result") or "")
+            if isinstance(evento.get("num_turns"), int) and evento["num_turns"] > 0:
+                _auditoria["rodadas"] = evento["num_turns"]
+            _auditoria["estado"] = avancar(_auditoria.get("estado", "rodando"),
+                                           evento)
+            _anotar_auditoria("auditoria encerrada: %s"
+                              % (evento.get("terminal_reason") or "sem motivo"))
+            if _auditoria["estado"] == "falha":
+                manchete, corpo = classificar_falha(evento)
+                _auditoria.update({"manchete": manchete, "corpo": corpo})
+        proc.stdout.close()
+        proc.wait(timeout=10)
+    except Exception as e:                                  # nunca derrubar
+        _matar_arvore(proc)
+        if not _e_a_auditoria(destino):
+            return
+        _anotar_auditoria("a leitura da auditoria parou com erro: %s" % e)
+        if _auditoria.get("estado") == "rodando":
+            _auditoria.update({
+                "estado": "falha",
+                "manchete": "Falhou: perdi contato com a sessão",
+                "corpo": "A leitura da saída do Claude Code parou antes do fim.",
+            })
+    finally:
+        if not _e_a_auditoria(destino):
+            return
+        if _auditoria.get("estado") == "rodando":
+            # O processo acabou sem mandar o evento `result` — falha, nunca
+            # "terminou" silencioso (a mentira mais cara da lei 2).
+            _auditoria.update({
+                "estado": "falha",
+                "manchete": "Falhou: a sessão terminou sem se explicar",
+                "corpo": "O Claude Code encerrou sem enviar o evento final.",
+            })
+        # So-leitura: a copia nunca tem nada para publicar, sucesso ou falha.
+        # Diferente do conserto, que preserva a copia para inspecao do diff.
+        remover_copia(projeto_caminho, destino)
+
+
+def parar_auditoria():
+    """Mata a auditoria e espera 5 s. Devolve True so se CONFIRMOU a morte.
+
+    Irma de `parar()` (acima): MESMA alca `_proc`, estado proprio (`_auditoria`)
+    — `parar()` olha `_execucao["estado"]` e nao veria uma auditoria rodando.
+    """
+    global _proc
+    with _trava:
+        proc = _proc
+        if proc is None or _auditoria.get("estado") != "rodando":
+            return True
+
+        _auditoria["estado"] = "parada_pelo_dono"
+        _anotar_auditoria("você pediu para parar")
+
+        argv = comando_para_matar(proc.pid)
+        if argv:
+            _rodar(argv, limite=10)
+        else:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (OSError, AttributeError, ProcessLookupError):
+                pass
+
+        try:
+            proc.wait(timeout=5)
+            confirmou = True
+        except subprocess.TimeoutExpired:
+            confirmou = False
+
+        if confirmou:
+            _auditoria.update({
+                "manchete": "Parada por você",
+                "corpo": "Você clicou em \"Parar\". A cópia isolada foi "
+                         "descartada.",
+            })
+            remover_copia(_auditoria.get("projeto_caminho"),
+                          _auditoria.get("copia"))
+            _anotar_auditoria("cópia isolada descartada")
+        else:
+            _auditoria.update({
+                "manchete": "Não consegui confirmar que parou",
+                "corpo": "Pedi para parar, mas o processo não respondeu em 5 "
+                         "segundos.",
+            })
+            _anotar_auditoria("o processo não confirmou a morte em 5 segundos")
+
+        if confirmou:
+            _proc = None
+        return confirmou
+
+
+def estado_auditoria(desde=0) -> dict:
+    """O retrato de uma auditoria em curso — molde de `estado()` (acima)."""
+    log = _auditoria.get("linhas", [])
+    return {
+        "estado": _auditoria.get("estado", "parada"),
+        "projeto": _auditoria.get("projeto", ""),
+        "custo_usd": round(float(_auditoria.get("custo_usd", 0.0)), 5),
+        "custo_brl": em_reais(_auditoria.get("custo_usd", 0.0)),
+        "linhas": linhas_desde(log, desde),
+        "total_de_linhas": len(log),
+        "rodadas": int(_auditoria.get("rodadas", 0)),
+        "resumo": _auditoria.get("resumo", ""),
+        "manchete": _auditoria.get("manchete", ""),
+        "corpo": _auditoria.get("corpo", ""),
     }

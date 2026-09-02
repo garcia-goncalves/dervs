@@ -811,5 +811,84 @@ class OSegredoNaoVaiJuntoComASessao(unittest.TestCase):
                                for k, v in execucao.ambiente_da_filha().items()})
 
 
+# =============================================================================
+# Etapa 4 — a Auditoria Profunda. `execucao.auditar()` e o braço só-leitura.
+# =============================================================================
+
+
+class MontagemDoComandoDeAuditoria(unittest.TestCase):
+    """As sabotagens 4a-4d, específicas de cada ferramenta, ficam em
+    `test_auditoria.OComandoEhSoLeitura` (é lá que a spec.md as nomeia). Aqui
+    vão os pedaços puramente de `execucao.py`: forma do argv e os números."""
+
+    def test_comeca_em_claude_com_p(self):
+        argv = execucao.montar_comando_de_auditoria()
+        self.assertEqual(argv[0], "claude")
+        self.assertEqual(argv[1], "-p")
+
+    def test_o_prompt_nao_entra_na_linha_de_comando(self):
+        argv = execucao.montar_comando_de_auditoria()
+        for pedaco in argv:
+            self.assertNotIn("Você está auditando", pedaco)
+
+    def test_teto_e_turnos_usam_os_padroes_da_auditoria(self):
+        import tarefas
+        argv = execucao.montar_comando_de_auditoria()
+        self.assertEqual(argv[argv.index("--max-budget-usd") + 1],
+                         "%.2f" % tarefas.TETO_AUDITORIA_USD)
+        self.assertEqual(argv[argv.index("--max-turns") + 1],
+                         str(tarefas.MAX_TURNOS_AUDITORIA))
+
+    def test_teto_e_turnos_customizados_entram_como_texto(self):
+        argv = execucao.montar_comando_de_auditoria(teto_usd=2.5, turnos=10)
+        self.assertEqual(argv[argv.index("--max-budget-usd") + 1], "2.50")
+        self.assertEqual(argv[argv.index("--max-turns") + 1], "10")
+
+
+class AAuditoriaEIrmaDoConserto(unittest.TestCase):
+    """`execucao.auditar` — sabotagens 4e e 4f.
+
+    4e: ela NÃO pode passar por `_absorver` nem por
+    `_fechar_com_pedido_de_alteracao` — auditoria não abre pedido de
+    alteração, e reusar `iniciar()` inteiro faria exatamente isso no fim.
+
+    4f: ela reusa a MESMA trava/`_proc` de `iniciar()`. Com um conserto vivo,
+    uma auditoria não pode começar — senão o teto do dia seria conferido duas
+    vezes contra o mesmo saldo.
+    """
+
+    def setUp(self):
+        self._proc_antigo = execucao._proc
+        self._auditoria_antiga = dict(execucao._auditoria)
+
+    def tearDown(self):
+        execucao._proc = self._proc_antigo
+        execucao._auditoria.clear()
+        execucao._auditoria.update(self._auditoria_antiga)
+
+    def test_4e_auditar_nao_chama_absorver_nem_fecha_pedido_de_alteracao(self):
+        import inspect
+        fonte = inspect.getsource(execucao.auditar)
+        self.assertNotIn("_absorver", fonte)
+        self.assertNotIn("_fechar_com_pedido_de_alteracao", fonte)
+
+    def test_4f_com_um_conserto_rodando_a_auditoria_e_recusada(self):
+        # Mesma alça `_proc` que `iniciar()` usa — um processo vivo aqui,
+        # de qualquer tipo, tem de bloquear a auditoria.
+        execucao._proc = ProcessoFalso(morre=False)
+        self.assertEqual(
+            execucao.auditar("medconsultoria-crm", "C:/qualquer"), "recusada")
+
+    def test_com_um_processo_ja_morto_a_auditoria_pode_comecar(self):
+        proc = ProcessoFalso(morre=False)
+        proc._codigo = 0                      # ja morreu por conta propria
+        execucao._proc = proc
+        with unittest.mock.patch.object(
+                execucao, "criar_copia", return_value=(False, "chega até aqui")):
+            self.assertNotEqual(
+                execucao.auditar("medconsultoria-crm", "C:/qualquer"),
+                "recusada")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
