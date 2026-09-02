@@ -29,7 +29,7 @@ endereço na barra do navegador e cair direto nela.
 | Painel | `#/painel` | a frase de resumo, a ação recomendada, e um selo por projeto |
 | Projeto | `#/projeto/<nome>` | a prova do selo, nas três colunas, mais os arquivados |
 | Alerta | `#/alerta/<id>` | o que houve, e as ações: adiar 24 h ou "isto está certo assim" |
-| Conectar projeto | `#/conectar` | por que os projetos chegam sozinhos, e o que falta |
+| Conectar projeto | `#/conectar` | as três portas: o seu computador, a sua conta do GitHub, o seu servidor |
 | Computadores | `#/computadores` | quem reporta, e o número de pareamento |
 | Formas de entrar | `#/entrada` | chaves de acesso e códigos do papel |
 
@@ -49,6 +49,28 @@ manda junto o cabeçalho `X-Robots-Tag: noindex, nofollow`.
 O grafo de código (`codebase-memory-mcp`, porta 9749) **não é mais dependência
 deste projeto**. O painel embutia a tela dele por procuração; esse proxy saiu na
 etapa 7. Ele continua existindo como ferramenta do Claude Code, à parte.
+
+## As três portas (01/09/2026)
+
+A tela **Conectar projeto** deixou de mandar você para outra tela. Cada porta
+mostra o estado dela — conectado, não conectado, ou **não deu para conferir** —
+e nenhuma promete o que ainda não faz.
+
+- **O seu computador.** Dois caminhos, lado a lado: **Baixar o conectador** (um
+  arquivo, dois cliques, sem terminal) e **Usar a linha de comando**. Os dois
+  valem o mesmo; o roteiro está em
+  [`operacao/conectar-uma-maquina.md`](operacao/conectar-uma-maquina.md).
+- **A sua conta do GitHub.** Um botão leva à instalação do aplicativo e volta
+  com a conta ligada. **Exige `DERVS_GITHUB_APP_SLUG`** no ambiente do
+  servidor; sem ela o botão fica desligado, com o motivo escrito.
+- **O seu servidor.** Um campo de endereço por projeto. Endereço de rede
+  interna é recusado de propósito, com a explicação na tela.
+
+**A pasta que o agente mede deixou de estar no código-fonte.** Ela vem, nesta
+ordem: da variável `DERVS_RAIZES` (vários caminhos separados por `;`), da chave
+`raizes` do arquivo `~/.dervs/agente.json`, e por último de
+`%USERPROFILE%\source\repos`. Raiz que não existe é **nomeada** nos avisos da
+medição — não vira "nenhum projeto pendente".
 
 **O que não existe, e por quê:**
 

@@ -160,6 +160,22 @@ Faltando uma variável do meio, ele **não reclama e não cai**: desce para o `g
 Isso é de propósito — na sua máquina a ausência é o normal, e um aviso a cada
 vinte minutos treinaria você a ignorar avisos.
 
+**Desde 01/09/2026 o número da instalação também pode vir do banco**, gravado
+pelo botão *Conectar a conta* da tela `Conectar projeto`. A ordem acima **não
+muda**: `DERVS_GITHUB_INSTALLATION_ID` continua vencendo, porque quem define uma
+variável de ambiente está depurando e quer que ela valha. O banco entra só
+quando ela não existe.
+
+Para o botão funcionar, o servidor precisa de mais uma variável:
+`DERVS_GITHUB_APP_SLUG` — o nome que aparece na URL de instalação
+(`github.com/apps/<slug>`). Ele é **público**, e por isso mora ao lado do Client
+ID e não junto dos segredos. Sem ele o botão responde "não existe": melhor não
+ter porta do que ter porta que leva a um endereço que não abre.
+
+**Uma dívida nomeada:** com várias contas, o coletor roda num processo só e não
+tem como saber de quem é a instalação daquela rodada. Hoje ele usa a da conta
+local. Com duas pessoas isso não dói; com dez, dói.
+
 ### A troca chave → token, que agora existe
 
 Um GitHub App não entrega um token: entrega uma chave privada. Com ela, o

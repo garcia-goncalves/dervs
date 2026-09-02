@@ -44,9 +44,125 @@ def _sem_console():
 
 SEM_JANELA = 0x08000000 if _sem_console() else 0
 
-RAIZ = Path(r"C:\Users\Desktop\source\repos")
 AQUI = Path(__file__).resolve().parent
 CASOS = AQUI / "casos.json"
+
+
+# --------------------------------------------------- as raizes que sao medidas
+#
+# Ate 01/09/2026 havia aqui uma linha so, com o caminho DESTA maquina escrito no
+# codigo-fonte. Em qualquer outro computador o coletor media zero projeto — e o
+# painel nao tinha como saber a diferenca entre "nao ha projeto" e "nao olhei".
+# Agora sao varias raizes, e nenhuma delas nasce escrita na mao.
+VAR_RAIZES = "DERVS_RAIZES"
+
+
+def arquivo_do_agente() -> Path:
+    """O mesmo arquivo em que `agente/enviar.py` guarda o token da maquina.
+
+    A leitura e reescrita AQUI, pequena e propria, em vez de importar
+    `agente.enviar`: aquele modulo faz `import coletar` na subida (enviar.py:36),
+    entao importa-lo daqui seria um ciclo.
+    """
+    bruto = os.environ.get("DERVS_AGENTE_ARQUIVO")
+    if bruto:
+        return Path(bruto).expanduser()
+    return Path.home() / ".dervs" / "agente.json"
+
+
+def _config_do_agente() -> dict:
+    """O conteudo do arquivo do agente, ou {}.
+
+    Arquivo ausente, JSON torto e conteudo que nao e um objeto caem todos no
+    mesmo lugar, sem levantar: cada um deles so quer dizer "ninguem disse", e
+    quem chama segue para o proximo degrau.
+    """
+    try:
+        dados = json.loads(arquivo_do_agente().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return dados if isinstance(dados, dict) else {}
+
+
+def raiz_de_ultimo_recurso() -> Path:
+    """O palpite de quando ninguem disse nada. DERIVADO de `Path.home()`.
+
+    Nunca escrito na mao: um caminho literal aqui e exatamente o defeito que
+    esta funcao existe para nao repetir.
+    """
+    return Path.home() / "source" / "repos"
+
+
+def raizes_configuradas() -> list:
+    """As pastas que este computador mede, do mais explicito ao ultimo recurso.
+
+    1. a variavel de ambiente `DERVS_RAIZES`, separada por `os.pathsep`;
+    2. a chave `raizes` do arquivo de configuracao do agente;
+    3. `Path.home()` mais `source/repos`.
+
+    Devolve sempre pelo menos uma raiz. Se ela existe de verdade nesta maquina
+    e outra pergunta, respondida por `avisos_das_raizes()`.
+    """
+    bruto = os.environ.get(VAR_RAIZES, "")
+    caminhos = [t for t in bruto.split(os.pathsep) if t.strip()]
+    if not caminhos:
+        do_arquivo = _config_do_agente().get("raizes")
+        if isinstance(do_arquivo, list):
+            caminhos = [t for t in do_arquivo if isinstance(t, str) and t.strip()]
+    if not caminhos:
+        return [raiz_de_ultimo_recurso()]
+    vistos, saida = set(), []
+    for texto in caminhos:
+        p = Path(texto.strip()).expanduser()
+        if str(p).lower() in vistos:
+            continue                       # a mesma raiz duas vezes mede uma vez
+        vistos.add(str(p).lower())
+        saida.append(p)
+    return saida
+
+
+def escrever_raizes(raizes) -> Path:
+    """Grava a chave `raizes` no arquivo do agente PRESERVANDO as outras chaves.
+
+    O token da maquina mora neste mesmo arquivo: reescrever o arquivo inteiro
+    com so a nossa chave desconectaria o agente em silencio.
+
+    O JEITO DE GRAVAR E COPIADO de `guardar_token` (agente/enviar.py:72), e as
+    razoes sao as de la: o temporario e criado com `O_EXCL` porque o modo do
+    `os.open` so vale para arquivo NOVO (e o `chmod` falha em silencio), e o
+    `os.replace` por cima e atomico — uma queda no meio da escrita nao leva
+    junto o token que ja estava gravado.
+    """
+    destino = arquivo_do_agente()
+    destino.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    dados = _config_do_agente()
+    dados["raizes"] = [str(Path(r)) for r in raizes]
+    texto = json.dumps(dados, ensure_ascii=False, indent=2)
+    passagem = destino.with_name(destino.name + ".novo")
+    try:
+        passagem.unlink()                  # sobra de uma queda anterior
+    except OSError:
+        pass
+    fd = os.open(passagem, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as arq:
+        arq.write(texto)
+    os.replace(passagem, destino)
+    return destino
+
+
+def avisos_das_raizes(raizes=None) -> list:
+    """Uma frase por raiz que NAO existe, nomeando cada uma delas.
+
+    Raiz que existe e esta vazia e caso DIFERENTE: ali "nenhum projeto" e uma
+    resposta verdadeira. Raiz que nao existe nao foi medida, e calar isso e o
+    painel mentindo com cara de boa noticia.
+    """
+    return ["a raiz %s nao existe nesta maquina; os projetos dela NAO foram"
+            " medidos — isto nao e 'nenhum projeto pendente'." % raiz
+            for raiz in (RAIZES if raizes is None else raizes) if not raiz.is_dir()]
+
+
+RAIZES = raizes_configuradas()
 
 # Ate 24/08/2026 o PROPRIO HUB morava fora de source\repos, e por isso nao se
 # vigiava: sapateiro de pe no chao. Listar a pasta aqui foi a correcao escolhida
@@ -57,8 +173,8 @@ CASOS = AQUI / "casos.json"
 #
 # Em 26/08/2026 o projeto virou o `dervs` e nasceu ja dentro de source\repos,
 # quando nao havia ainda memoria, indice nem processo amarrados ao caminho novo
-# — o custo de mover era quase zero, e so cresceria. Hoje RAIZ.iterdir() ja
-# encontra esta pasta sozinha, e a linha abaixo e DEDUPLICADA em
+# — o custo de mover era quase zero, e so cresceria. Hoje a varredura das
+# raizes ja encontra esta pasta sozinha, e a linha abaixo e DEDUPLICADA em
 # pastas_de_projeto(): ela nao mede nada duas vezes.
 #
 # A linha fica como rede: se alguem mover este projeto para fora de repos\ de
@@ -69,11 +185,26 @@ AVULSOS = [AQUI]
 
 
 def pastas_de_projeto():
-    """Toda pasta que o HUB mede: as filhas de source\\repos, mais as avulsas."""
-    achadas = [p for p in RAIZ.iterdir() if p.is_dir() and not p.name.startswith(".")] \
-        if RAIZ.is_dir() else []
-    vistas = {str(p).lower() for p in achadas}
-    achadas += [p for p in AVULSOS if p.is_dir() and str(p).lower() not in vistas]
+    """Toda pasta que o HUB mede: as filhas de CADA raiz, mais as avulsas.
+
+    A deduplicacao por caminho em minusculas ja existia para os AVULSOS; agora
+    ela vale tambem entre raizes, porque duas raizes podem se sobrepor (ou vir
+    repetidas com maiuscula diferente) e ninguem quer medir o mesmo projeto
+    duas vezes.
+    """
+    achadas, vistas = [], set()
+    for raiz in RAIZES:
+        if not raiz.is_dir():
+            continue
+        for p in raiz.iterdir():
+            if not p.is_dir() or p.name.startswith(".") or str(p).lower() in vistas:
+                continue
+            vistas.add(str(p).lower())
+            achadas.append(p)
+    for p in AVULSOS:
+        if p.is_dir() and str(p).lower() not in vistas:
+            vistas.add(str(p).lower())
+            achadas.append(p)
     return sorted(achadas, key=lambda p: p.name.lower())
 
 # Onde o grafo de codigo guarda um .db por projeto. A data de modificacao do
@@ -130,7 +261,7 @@ def abertos_no_editor():
 def nome_da_marca(repo) -> str:
     """O nome de arquivo que o vigia usa para este caminho.
 
-    C:\\Users\\Desktop\\source\\repos\\dents -> c-users-desktop-source-repos-dents
+    C:\\dev\\repos\\dents -> c-dev-repos-dents
     Comparamos o CAMINHO INTEIRO. Casar so o fim do nome daria "sophia" para o
     projeto "o-que-e-que-eu-faco-sophia".
     """
@@ -220,7 +351,7 @@ def idade_do_mais_antigo(repo: Path, sujos: list) -> int | None:
 def nome_do_db(caminho) -> str:
     """O nome de arquivo que o codebase-memory-mcp usa para este caminho.
 
-    C:\\Users\\Desktop\\source\\repos\\dents  ->  C-Users-Desktop-source-repos-dents
+    C:\\dev\\repos\\dents  ->  C-dev-repos-dents
     """
     return str(caminho).replace(":", "").replace("\\", "-").replace("/", "-")
 
@@ -528,6 +659,11 @@ CRITERIOS = [
 
     # So cobra publicacao de quem publica: tem endereco de producao declarado,
     # ou ja tem o workflow. Projeto de gaveta nao deve 2 pontos a ninguem.
+    #
+    # "DECLARADO" passou a incluir o endereco que a tela gravou (etapa B2), e
+    # nao so o do `casos.json`. Sem isto, digitar o endereco na tela nao fazia
+    # a regra enxergar nada, e a pessoa via o painel ignorar o que ela acabara
+    # de dizer — calado, que e a pior forma.
     ("deploy", "Workflow de deploy", 2,
      lambda c: tem_deploy(c["repo"]),
      lambda c: bool(c["caso"].get("url_prod")) or tem_deploy(c["repo"])),
@@ -857,6 +993,19 @@ def medir() -> dict:
     portas = portas_escutando()
     abertos = abertos_no_editor()
 
+    # Os enderecos que a tela gravou (etapa B2), lidos UMA vez. Falha fechada:
+    # banco sem a tabela, ou sem conta local, cai em vazio e o `casos.json`
+    # continua valendo — nunca um erro no meio da medicao.
+    try:
+        con_end = banco.conectar()
+        try:
+            enderecos_gravados = banco.enderecos_de_producao(
+                banco.conta_local(con_end), con=con_end)
+        finally:
+            con_end.close()
+    except Exception:                      # noqa: BLE001 — medir vale mais
+        enderecos_gravados = {}
+
     projetos = []
     for repo in pastas_de_projeto():
         g = coleta_git(repo)
@@ -864,6 +1013,12 @@ def medir() -> dict:
         # O caso vem ANTES da nota: e ele que diz se o projeto tem contêiner e
         # se publica, e sem isso a regua volta a cobrar de todos a mesma coisa.
         caso = casos.get(repo.name, {})
+        # O endereco gravado pela tela entra no `caso` ANTES das regras, e
+        # vence o do arquivo — a mesma ordem de `coletar_github`. Duas ordens
+        # diferentes para o mesmo dado sao duas verdades, e a que diverge e
+        # sempre a que ninguem le.
+        if enderecos_gravados.get(repo.name):
+            caso = dict(caso, url_prod=enderecos_gravados[repo.name])
         pr = coleta_prontidao(repo, g, arq, caso)
 
         alvos = [t.lower() for t in caso.get("containers", [])]
@@ -900,9 +1055,7 @@ def medir() -> dict:
                        for p in caso.get("portas", [])],
         })
 
-    avisos = []
-    if not RAIZ.is_dir():
-        avisos.append("a raiz %s nao existe nesta maquina; os projetos dela NAO foram medidos — isto nao e 'nenhum projeto pendente'." % RAIZ)
+    avisos = avisos_das_raizes()
     if portas is None:
         avisos.append("nao consegui listar as portas em uso; o 'no ar' de cada projeto saiu so da conexao direta.")
     if docker_mudo:

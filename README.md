@@ -124,15 +124,21 @@ Sem build, sem `npm install`, sem dependência externa. Precisa de Python 3.12,
 | `test_coletar_pesado.py` | 12 testes da auditoria de dependência. `python test_coletar_pesado.py`. |
 | `fila.py` | A fila desacompanhada. **Sem rota apontando para ela** desde a etapa 7 — fica no repositório de propósito. |
 | `test_fila.py` | 92 testes da fila. `python test_fila.py`. |
-| `casos.json` | Camada **curada**, escrita à mão. Nenhum coletor toca aqui. |
+| `casos.json` | Camada **curada**, escrita à mão. Nenhum coletor toca aqui — e desde 01/09/2026 o `url_prod` dele **perde** para o endereço que você digita na tela. |
+| `conectador.py` | O programa que roda **na máquina de quem baixa**, e não aqui: escolhe a pasta, pareia e registra a tarefa que mantém o relato ligado. Um arquivo, biblioteca padrão pura, e nenhum `import` deste repositório — ele roda onde o DERVS pode nem existir. O servidor o **lê** do disco e injeta o número; nunca o importa. |
+| `test_conectador.py` | 29 testes, todos por dublê: a CI não tem Windows, nem agendador, nem janela gráfica. O que eles cobram são as três leis do arquivo — um arquivo só de biblioteca padrão, fechar sem escolher não deixa lixo, e a pausa do fim não pendura a tarefa agendada. `python test_conectador.py`. |
 
 `hub.db` é descartável e não é versionado: apagar só custa uma coleta — e, desde
 25/08/2026, também zera a memória do tempo, que se reconstrói sozinha a partir da
 coleta seguinte.
 
-**519 testes no total**, todos em `unittest` da biblioteca padrão, e todos os dez
-arquivos rodam na CI — que agora **falha se um `test_*.py` novo ficar de fora da
-lista**, porque arquivo esquecido não fica vermelho, fica invisível.
+**1.449 testes no total** (01/09/2026), todos em `unittest` da biblioteca padrão,
+e os **25** arquivos rodam na CI — que **falha se um `test_*.py` novo ficar de
+fora da lista**, porque arquivo esquecido não fica vermelho, fica invisível.
+
+*As contagens por arquivo da tabela acima são de quando cada linha foi escrita e
+envelheceram sem avisar — este parágrafo é o número que vale. Contagem escrita à
+mão em dois lugares diverge, e a que diverge é sempre a que ninguém lê.*
 
 Passam em Windows e em Linux — verificado num contêiner
 `python:3.12-slim`, porque o núcleo vai rodar em Linux na VPS.

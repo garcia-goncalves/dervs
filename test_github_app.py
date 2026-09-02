@@ -342,5 +342,81 @@ class OQueARevisaoDeSegurancaPediu(unittest.TestCase):
         self.assertEqual(len(chamadas), 2)
 
 
+class ConfirmarInstalacaoContraAApi(unittest.TestCase):
+    """A peca da etapa C2, e o motivo dela em uma frase:
+
+        O `installation_id` chega pela QUERY STRING da setup URL, e a
+        documentacao do GitHub avisa que qualquer um pode bater ali com um
+        numero forjado. Perguntar ao GitHub e o que separa "o navegador disse"
+        de "o GitHub confirmou".
+
+    NENHUM CASO BATE NA REDE: `_pedir` e parametro do desenho, e nao concessao
+    ao teste. A CI nao tem credencial nenhuma.
+    """
+
+    def setUp(self):
+        self.chave = PEM_PKCS1
+
+    def test_confirma_quando_a_API_devolve_o_MESMO_id(self):
+        vistos = {}
+
+        def falso(url, jwt, teto, metodo="POST"):
+            vistos.update(url=url, metodo=metodo, jwt=jwt)
+            return {"id": 424242, "app_id": 7}
+
+        d = github_app.confirmar_instalacao("123", self.chave, "424242",
+                                            _pedir=falso)
+        self.assertEqual(424242, d["id"])
+        self.assertEqual("GET", vistos["metodo"],
+                         "trocar a instalacao por token e outra chamada")
+        self.assertIn("/app/installations/424242", vistos["url"])
+        self.assertNotIn("access_tokens", vistos["url"],
+                         "esta chamada NAO pede token: so confere")
+        self.assertTrue(vistos["jwt"], "sem JWT o GitHub nao responde")
+
+    def test_a_API_respondendo_sobre_OUTRA_instalacao_nao_confirma(self):
+        """200 com outro id e a API falando de outra coisa. Aceitar isso e
+        aceitar qualquer coisa."""
+        self.assertIsNone(github_app.confirmar_instalacao(
+            "123", self.chave, "424242",
+            _pedir=lambda *a, **k: {"id": 111}))
+
+    def test_falha_de_rede_devolve_None_e_NAO_LEVANTA(self):
+        """Lei 3: caminho de autenticacao falha fechado, sempre."""
+        def explodir(*a, **k):
+            raise OSError("a rede caiu")
+
+        self.assertIsNone(github_app.confirmar_instalacao(
+            "123", self.chave, "424242", _pedir=explodir))
+
+    def test_resposta_que_nao_e_objeto_nao_confirma(self):
+        self.assertIsNone(github_app.confirmar_instalacao(
+            "123", self.chave, "424242", _pedir=lambda *a, **k: ["nao sou dict"]))
+
+    def test_id_que_nao_e_numero_nao_chega_a_perguntar(self):
+        """Ele entra numa URL: `../` apontaria a requisicao — com o JWT junto —
+        para outro caminho da API."""
+        def explodir(*a, **k):
+            raise AssertionError("nao podia ter perguntado")
+
+        for torto in ("../user", "1;2", "", "42a", None, 42):
+            with self.subTest(id=torto):
+                self.assertIsNone(github_app.confirmar_instalacao(
+                    "123", self.chave, torto, _pedir=explodir))
+
+    def test_sem_chave_privada_nao_pergunta(self):
+        def explodir(*a, **k):
+            raise AssertionError("nao podia ter perguntado")
+
+        self.assertIsNone(github_app.confirmar_instalacao(
+            "123", "isto nao e uma chave", "424242", _pedir=explodir))
+
+    def test_o_redirecionamento_nunca_e_seguido(self):
+        """Um 302 levaria o cabecalho `Authorization` — o JWT — para o host que
+        o outro lado escolher."""
+        self.assertIsNone(github_app._SemRedirecionar().redirect_request(
+            None, None, 302, "", {}, "https://qualquer-um.invalido/"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -26,7 +26,9 @@ import os
 import re
 import tempfile
 import threading
+import time
 import unittest
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -1676,6 +1678,598 @@ class OConsumoDaSemana(BaseServidorDeVerdade):
         corpo = json.loads(self.pedir("/api/consumo?dias=abacaxi",
                                       cookies=self.com_sessao()).corpo)
         self.assertEqual(corpo["dias"], banco.DIAS_DE_CONSUMO)
+
+
+class OConectadorNoServidorDeVerdade(BaseServidorDeVerdade):
+    """A rota que entrega o `conectador.py` com o codigo dentro (etapa A3).
+
+    Ler a tabela de rotas nao basta e ja nao bastou aqui: a classificacao e a
+    trava real ja divergiram neste repositorio. Estes casos saem pelo soquete.
+    """
+
+    CAMINHO = "/api/conectador"
+
+    def test_sem_sessao_nao_sai_nada(self):
+        r = self.pedir(self.CAMINHO, "POST", {})
+        self.assertEqual(401, r.status)
+        self.assertNotIn("DERVS:CODIGO", r.corpo)
+        self.assertNotIn("schtasks", r.corpo)
+
+    def test_com_sessao_e_sem_anti_csrf_e_recusado(self):
+        """Um POST que CRIA codigo, acionavel de outro site, queima codigos."""
+        r = self.pedir(self.CAMINHO, "POST", {}, cookies=self.com_sessao())
+        self.assertEqual(403, r.status)
+
+    def test_com_sessao_e_sem_origem_e_recusado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.pedir(self.CAMINHO, "POST", {}, cookies=cookies,
+                       com_origem=False, cabecalhos={"X-Token": token})
+        self.assertEqual(403, r.status)
+
+    def _baixar(self):
+        cookies, token = self.sessao_e_token()
+        return self.pedir(self.CAMINHO, "POST", {}, cookies=cookies,
+                          cabecalhos={"X-Token": token})
+
+    def test_com_sessao_sai_o_arquivo_com_codigo_e_endereco(self):
+        r = self._baixar()
+        self.assertEqual(200, r.status)
+        achado = re.search(r'^CODIGO = "(\d{6})"', r.corpo, re.M)
+        self.assertIsNotNone(achado, "o codigo de seis digitos nao foi injetado")
+        alvo = re.search(r'^ALVO = "([^"]+)"', r.corpo, re.M)
+        self.assertIsNotNone(alvo, "o endereco do painel nao foi injetado")
+        self.assertEqual("http://127.0.0.1:%d" % self.porta, alvo.group(1))
+
+    def test_o_que_sai_e_python_valido(self):
+        """Injecao que quebra o arquivo entrega um erro de sintaxe ao dono."""
+        import ast
+        ast.parse(self._baixar().corpo)
+
+    def test_o_navegador_nao_renderiza_o_arquivo(self):
+        r = self._baixar()
+        tipo = (r.cabecalhos.get("Content-Type") or "").lower()
+        self.assertNotIn("text/html", tipo)
+        self.assertIn("attachment", (r.cabecalhos.get("Content-Disposition") or ""))
+
+    def test_o_codigo_foi_aberto_PARA_QUEM_PEDIU(self):
+        """Um codigo aberto na conta errada poe a maquina de um no painel do outro."""
+        r = self._baixar()
+        codigo = re.search(r'^CODIGO = "(\d{6})"', r.corpo, re.M).group(1)
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("outra@teste.local", con=con)
+            linhas = con.execute(
+                "SELECT usuario_id FROM pareamento WHERE usado_em IS NULL"
+            ).fetchall()
+        finally:
+            con.close()
+        donos = {l[0] for l in linhas}
+        self.assertIn(self.uid, donos)
+        self.assertNotIn(outro, donos)
+        # E o codigo vale de verdade: quem o digita vira maquina DESTA conta.
+        self.assertTrue(banco.usar_pareamento(codigo, "pc-de-teste"))
+
+    def test_dois_pedidos_dao_codigos_diferentes(self):
+        um = re.search(r'^CODIGO = "(\d{6})"', self._baixar().corpo, re.M).group(1)
+        dois = re.search(r'^CODIGO = "(\d{6})"', self._baixar().corpo, re.M).group(1)
+        self.assertNotEqual(um, dois)
+
+    def test_o_servidor_nao_ganhou_atributo_conectador(self):
+        """Importar o conectador arrastaria `tkinter` para dentro do servidor."""
+        self.assertFalse(hasattr(servir, "conectador"))
+        self.assertNotIn("conectador", getattr(servir, "__dict__", {}))
+
+
+class OEnderecoDoServidorNoServidorDeVerdade(BaseServidorDeVerdade):
+    """A porta 3: o painel passa a BUSCAR uma URL que o usuario digitou.
+
+    E a superficie classica de pedir ao servidor que bata em endereco interno,
+    entao cada faixa e provada UMA A UMA. Nada aqui bate na internet: a peneira
+    recusa antes, e o unico caso que chegaria a rede usa um duble de
+    `mede_site`.
+    """
+
+    GUARDAR = "/api/enderecos/guardar"
+    LER = "/api/enderecos"
+
+    def setUp(self):
+        super().setUp()
+        # `mede_site` bate na rede de verdade. A CI nao tem internet garantida,
+        # e um teste que depende dela falha por motivo errado — e teste que
+        # falha por motivo errado e desligado em duas semanas.
+        self._medir = servir.coletar_github.mede_site
+        servir.coletar_github.mede_site = lambda url: {
+            "url": url, "ok": True, "codigo": 200, "erro": "", "ms": 12,
+            "tentativas": 1}
+        self.addCleanup(setattr, servir.coletar_github, "mede_site", self._medir)
+        # `host_publico` faz DNS DE VERDADE. Aqui ele so pode dizer sim: os
+        # casos que provam a recusa por resolucao trocam este duble sozinhos, e
+        # os vinte enderecos internos sao barrados por `url_segura`, que e pura
+        # e nao toca na rede.
+        self._resolver = servir.coletar_github.host_publico
+        servir.coletar_github.host_publico = lambda h: True
+        self.addCleanup(setattr, servir.coletar_github, "host_publico",
+                        self._resolver)
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM endereco_producao")
+            con.commit()
+        finally:
+            con.close()
+
+    def guardar(self, projeto, url, cookies=None, token=None, com_origem=True):
+        if cookies is None:
+            cookies, token = self.sessao_e_token()
+        cab = {} if token is None else {"X-Token": token}
+        return self.pedir(self.GUARDAR, "POST", {"projeto": projeto, "url": url},
+                          cookies=cookies, com_origem=com_origem, cabecalhos=cab)
+
+    # ------------------------------------------------------------ as travas
+    def test_sem_sessao_nao_grava_e_nao_le(self):
+        self.assertEqual(401, self.pedir(self.GUARDAR, "POST",
+                                         {"projeto": "x", "url": "https://a.com"}).status)
+        self.assertEqual(401, self.pedir(self.LER).status)
+
+    def test_com_sessao_e_sem_anti_csrf_e_recusado(self):
+        cookies = self.com_sessao()
+        r = self.pedir(self.GUARDAR, "POST", {"projeto": "x", "url": "https://a.com"},
+                       cookies=cookies)
+        self.assertEqual(403, r.status)
+
+    def test_sem_origem_e_recusado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("x", "https://exemplo.com.br", cookies, token,
+                         com_origem=False)
+        self.assertEqual(403, r.status)
+
+    # ---------------------------------------------------- a peneira, faixa a faixa
+    #
+    # Cada uma destas ja foi um SSRF de verdade em algum projeto. A faixa CGNAT
+    # (100.64/10) esteve aberta NESTE repositorio ate 29/08/2026, com a suite
+    # inteira verde: ela nao e um caso a mais, e o caso que prova que a lista
+    # sem teste envelhece.
+    INTERNOS = [
+        "http://localhost/",
+        "http://localhost:8080/",
+        "http://127.0.0.1/",
+        "http://127.1.2.3/",
+        "http://10.0.0.5/",
+        "http://172.16.9.9/",
+        "http://172.31.255.254/",
+        "http://192.168.1.10/",
+        "http://169.254.169.254/",          # o metadado da nuvem
+        "http://[::1]/",
+        "http://100.64.5.5/",               # CGNAT
+        "http://100.127.255.254/",          # CGNAT, a outra ponta
+        "http://[::ffff:10.0.0.1]/",        # IPv4 mapeado em IPv6
+        "http://[::ffff:100.64.5.5]/",      # CGNAT mapeado
+        "http://0.0.0.0/",
+        "http://meu-pc.local/",
+        "http://algo.localhost/",
+        "ftp://exemplo.com.br/",            # nem http nem https
+        "file:///etc/passwd",
+        "https://",                         # sem host nenhum
+    ]
+
+    def test_cada_faixa_interna_e_recusada_uma_a_uma(self):
+        cookies, token = self.sessao_e_token()
+        for url in self.INTERNOS:
+            with self.subTest(url=url):
+                r = self.guardar("projeto-x", url, cookies, token)
+                self.assertEqual(400, r.status, url)
+                self.assertIn("rede privada", r.corpo)
+                # E NADA foi gravado: recusar depois de gravar e gravar.
+                corpo = self.pedir(self.LER, cookies=cookies).corpo
+                self.assertEqual({}, json.loads(corpo)["enderecos"], url)
+
+    def test_a_peneira_usada_e_a_do_coletor_e_nao_uma_copia(self):
+        """Uma segunda copia dessa peneira ja matou o drift em silencio, com
+        926 testes verdes. Este caso amarra a identidade: sabotar a do coletor
+        tem de derrubar a rota."""
+        import coletar_github
+        self.assertIs(servir.coletar_github, coletar_github)
+        antes = coletar_github.url_segura
+        coletar_github.url_segura = lambda u: False
+        self.addCleanup(setattr, coletar_github, "url_segura", antes)
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("projeto-x", "https://exemplo.com.br", cookies, token)
+        self.assertEqual(400, r.status,
+                         "a rota nao esta usando a peneira do coletor")
+
+    def test_nome_que_resolve_para_dentro_e_recusado(self):
+        """`url_segura` nao faz DNS de proposito. Quem resolve e `host_publico`,
+        e um nome publico apontando para 127.0.0.1 e o SSRF classico."""
+        import coletar_github
+        antes = coletar_github.host_publico
+        coletar_github.host_publico = lambda h: False
+        self.addCleanup(setattr, coletar_github, "host_publico", antes)
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("projeto-x", "https://parece-publico.com.br", cookies, token)
+        self.assertEqual(400, r.status)
+        corpo = self.pedir(self.LER, cookies=cookies).corpo
+        self.assertEqual({}, json.loads(corpo)["enderecos"])
+
+    def test_o_redirecionamento_nunca_e_seguido(self):
+        """A defesa mais forte possivel contra o pulo de publico para interno:
+        nao seguir nenhum. A prova e estrutural — o abridor de `mede_site` monta
+        `_SemRedirecionar`, e ela devolve None."""
+        import coletar_github
+        self.assertIsNone(
+            coletar_github._SemRedirecionar().redirect_request(
+                None, None, 302, "", {}, "http://10.0.0.1/"))
+
+    # ------------------------------------------------------- o caminho feliz
+    def test_endereco_publico_e_gravado_e_medido(self):
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("loja", "https://exemplo.com.br", cookies, token)
+        self.assertEqual(200, r.status, r.corpo)
+        d = json.loads(r.corpo)
+        self.assertTrue(d["guardado"])
+        self.assertIs(True, d["ok"])
+        self.assertTrue(d["medido_em"], "todo numero medido leva carimbo")
+        corpo = self.pedir(self.LER, cookies=cookies).corpo
+        self.assertEqual({"loja": "https://exemplo.com.br"},
+                         json.loads(corpo)["enderecos"])
+
+    def test_nao_deu_para_medir_NAO_e_fora_do_ar(self):
+        """A invariante do proprio `mede_site`: `ok` como None e o quarto
+        estado, e apagar essa diferenca e o defeito que este painel existe para
+        nao ter."""
+        servir.coletar_github.mede_site = lambda url: {
+            "url": url, "ok": None, "codigo": 0, "erro": "nao_resolveu",
+            "ms": 0, "tentativas": 0}
+        cookies, token = self.sessao_e_token()
+        d = json.loads(self.guardar("loja", "https://exemplo.com.br",
+                                    cookies, token).corpo)
+        self.assertIsNone(d["ok"])
+        self.assertIsNot(False, d["ok"], "None nao pode virar False no caminho")
+        self.assertTrue(d["guardado"], "nao medir nao desfaz a gravacao")
+
+    def test_apagar_o_endereco_nao_bate_em_lugar_nenhum(self):
+        def explodir(url):
+            raise AssertionError("apagar nao pode medir nada")
+
+        cookies, token = self.sessao_e_token()
+        self.guardar("loja", "https://exemplo.com.br", cookies, token)
+        servir.coletar_github.mede_site = explodir
+        r = self.guardar("loja", "", cookies, token)
+        self.assertEqual(200, r.status, r.corpo)
+        corpo = self.pedir(self.LER, cookies=cookies).corpo
+        self.assertEqual({}, json.loads(corpo)["enderecos"])
+
+    def test_projeto_vazio_e_recusado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("   ", "https://exemplo.com.br", cookies, token)
+        self.assertEqual(400, r.status)
+
+    def test_o_endereco_de_outra_conta_nao_e_legivel(self):
+        cookies, token = self.sessao_e_token()
+        self.guardar("loja", "https://minha.com.br", cookies, token)
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("vizinho@teste.local", con=con)
+            banco.guardar_endereco_de_producao(outro, "loja",
+                                               "https://do-vizinho.com.br", con=con)
+        finally:
+            con.close()
+        corpo = self.pedir(self.LER, cookies=cookies).corpo
+        self.assertEqual({"loja": "https://minha.com.br"},
+                         json.loads(corpo)["enderecos"],
+                         "o endereco do vizinho vazou para esta sessao")
+
+    def test_o_teto_por_origem_tem_balcao_PROPRIO(self):
+        """Misturar balcoes tranca a maquina legitima, e isso ja aconteceu duas
+        vezes nesta casa. Gastar o teto do endereco nao pode fechar a cortina."""
+        cookies, token = self.sessao_e_token()
+        for _ in range(servir.Hub.TETO_DE_ENDERECOS + 2):
+            self.guardar("loja", "https://exemplo.com.br", cookies, token)
+        r = self.guardar("loja", "https://exemplo.com.br", cookies, token)
+        self.assertEqual(429, r.status, "o teto do endereco nao segurou")
+        # E a cortina continua de pe para quem chega.
+        self.assertEqual(204, self.pedir("/entrada", "POST",
+                                 {"combinacao": self.combinacao}).status)
+
+
+class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
+    """A porta 2. O caso que da nome a esta classe e um so:
+
+        O `installation_id` chega pela QUERY STRING, e a documentacao do GitHub
+        avisa que qualquer um pode bater na setup URL com um numero forjado.
+        Aceita-lo por ter vindo na URL e gravar o que o visitante escreveu.
+
+    Nada aqui bate no GitHub: a CI nao tem credencial nenhuma, e um teste que
+    dependesse disso ficaria vermelho por motivo errado.
+    """
+
+    IDA = "/api/github/instalar"
+    VOLTA = "/github/instalado"
+    ESTADO = "/api/github"
+
+    def setUp(self):
+        super().setUp()
+        self._slug = servir.APP_DO_GITHUB
+        servir.APP_DO_GITHUB = "dervs-de-teste"
+        self.addCleanup(setattr, servir, "APP_DO_GITHUB", self._slug)
+        self._confirmar = servir.github_app.confirmar_instalacao
+        self.addCleanup(setattr, servir.github_app, "confirmar_instalacao",
+                        self._confirmar)
+        # Por padrao o GitHub CONFIRMA. Cada caso que precisa do contrario
+        # troca este duble, e o que ele devolve nunca carrega segredo.
+        # O duble devolve o `account` porque e ELE que prova a posse: a conta
+        # de teste esta amarrada ao id "4242" do GitHub (ver o andaime).
+        servir.github_app.confirmar_instalacao = \
+            lambda app_id, chave, inst, **k: {"id": int(inst), "app_id": 1,
+                                              "account": {"id": 4242,
+                                                          "login": "dono"}}
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM instalacao_github")
+            con.commit()
+        finally:
+            con.close()
+
+    def gravada(self, usuario_id=None):
+        return banco.instalacao_do_github(
+            self.uid if usuario_id is None else usuario_id)
+
+    def selo(self, usuario_id=None, minutos=30):
+        ate = int(time.time()) + minutos * 60
+        return servir.Hub._selo_da_instalacao(
+            self.uid if usuario_id is None else usuario_id, ate)
+
+    def voltar(self, selo, instalacao):
+        """A volta do GitHub, com o cookie da cortina junto.
+
+        A rota e `cortina`, e o navegador que volta do GitHub carrega esse
+        cookie: e um salto de pagina de primeiro nivel, e o cookie e
+        `SameSite=Lax`. Sem ele a rota responde 404 — a MESMA resposta de rota
+        inexistente, de proposito: quem nao passou pela cortina nao pode nem
+        descobrir que esta porta existe.
+        """
+        return self.pedir("%s?state=%s&installation_id=%s"
+                          % (self.VOLTA, urllib.parse.quote(selo), instalacao),
+                          cookies=self.abrir_cortina())
+
+    def test_a_volta_sem_a_cortina_e_indistinguivel_de_rota_inexistente(self):
+        r = self.pedir("%s?state=%s&installation_id=424242"
+                       % (self.VOLTA, urllib.parse.quote(self.selo())))
+        self.assertEqual(404, r.status)
+        self.assertIsNone(self.gravada(), "gravou sem passar pela cortina")
+
+    # ------------------------------------------------------------ a ida
+    def test_a_ida_sem_sessao_e_recusada(self):
+        self.assertEqual(401, self.pedir(self.IDA, "POST", {}).status)
+
+    def test_a_ida_sem_anti_csrf_e_recusada(self):
+        r = self.pedir(self.IDA, "POST", {}, cookies=self.com_sessao())
+        self.assertEqual(403, r.status)
+
+    def test_a_ida_devolve_o_endereco_com_o_selo(self):
+        cookies, token = self.sessao_e_token()
+        r = self.pedir(self.IDA, "POST", {}, cookies=cookies,
+                       cabecalhos={"X-Token": token})
+        self.assertEqual(200, r.status, r.corpo)
+        url = json.loads(r.corpo)["url"]
+        self.assertIn("github.com/apps/dervs-de-teste/installations/new", url)
+        self.assertIn("state=", url)
+        selo = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["state"][0]
+        self.assertEqual(self.uid, servir.Hub._dono_do_selo(selo))
+
+    def test_sem_app_registrado_a_porta_diz_que_nao_existe(self):
+        """Falha FECHADA: melhor nao ter porta do que ter porta que leva a um
+        endereco que nao abre."""
+        servir.APP_DO_GITHUB = ""
+        cookies, token = self.sessao_e_token()
+        r = self.pedir(self.IDA, "POST", {}, cookies=cookies,
+                       cabecalhos={"X-Token": token})
+        self.assertEqual(404, r.status)
+
+    # ---------------------------------------------------------- a volta
+    def test_installation_id_na_query_SEM_selo_valido_nao_grava_nada(self):
+        """O caso central. O numero na URL nao e prova de coisa nenhuma."""
+        r = self.voltar("mentira.999.abcdef", "12345")
+        self.assertEqual(302, r.status)
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada())
+
+    def test_selo_sem_assinatura_nao_grava(self):
+        self.assertIsNone(self.gravada())
+        r = self.voltar("%d.%d." % (self.uid, int(time.time()) + 600), "12345")
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada())
+
+    def test_selo_de_OUTRO_usuario_nao_grava_na_minha_conta(self):
+        """O selo diz DE QUEM e a volta, e ele nao pode escrever na conta ao
+        lado. Para o caso ficar completo, a outra conta tem GitHub proprio: sem
+        isso a conferencia de posse recusaria por outro motivo, e o teste
+        provaria a trava errada."""
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("outro-c2@teste.local", con=con)
+            banco.ligar_github(outro, "8888", con=con)
+            con.commit()
+        finally:
+            con.close()
+        servir.github_app.confirmar_instalacao =             lambda app_id, chave, inst, **k: {"id": int(inst), "app_id": 1,
+                                              "account": {"id": 8888,
+                                                          "login": "outro"}}
+        self.voltar(self.selo(outro), "777")
+        self.assertIsNone(self.gravada(self.uid),
+                          "a instalacao caiu na conta errada")
+        self.assertEqual("777", self.gravada(outro))
+
+    def test_selo_vencido_nao_grava(self):
+        r = self.voltar(self.selo(minutos=-1), "12345")
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada())
+
+    def test_selo_valido_mas_a_API_nao_confirma_NAO_GRAVA(self):
+        """Este e o unico caso que prova que o parametro da URL nao e a prova.
+
+        Sem ele, um selo valido do proprio dono bastaria para gravar qualquer
+        numero — inclusive a instalacao de outra pessoa, colada na URL.
+        """
+        servir.github_app.confirmar_instalacao = lambda *a, **k: None
+        r = self.voltar(self.selo(), "999999")
+        self.assertEqual(302, r.status)
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada())
+
+    def test_selo_valido_E_API_confirma_grava_PARA_AQUELE_usuario(self):
+        r = self.voltar(self.selo(), "424242")
+        self.assertEqual(302, r.status)
+        self.assertIn("ligado", r.cabecalhos.get("Location"))
+        self.assertEqual("424242", self.gravada())
+
+    def test_o_recado_da_volta_vai_ANTES_do_fragmento(self):
+        """`/#/conectar?github=x` poe o parametro DENTRO do fragmento, e
+        `location.search` sai vazio: a tela nunca le o recado. O 302 fica
+        certo e a tela fica muda — achado clicando, nao lendo."""
+        for selo, esperado in ((self.selo(), "ligado"),
+                               ("forjado.1.abc", "nao-deu")):
+            with self.subTest(esperado=esperado):
+                destino = self.voltar(selo, "424242").cabecalhos.get("Location")
+                self.assertIn("?github=" + esperado, destino)
+                self.assertLess(destino.index("?"), destino.index("#"),
+                                "a query ficou depois do # e a tela nao le: "
+                                + destino)
+
+    # ------------------------------------------------ a POSSE da instalacao
+    #
+    # O achado das duas revisoes de 01/09/2026, e o mais grave da esteira:
+    # `confirmar_instalacao` prova que a instalacao EXISTE e que e deste App.
+    # NAO prova que ela e SUA. O `installation_id` e publico e sequencial.
+
+    def test_instalacao_de_OUTRA_pessoa_nao_gruda_na_minha_conta(self):
+        """O ataque inteiro, escrito: peco o MEU selo, e chamo a volta com o
+        numero DA OUTRA PESSOA, iterando ate acertar."""
+        servir.github_app.confirmar_instalacao = \
+            lambda app_id, chave, inst, **k: {"id": int(inst), "app_id": 1,
+                                              "account": {"id": 9999,
+                                                          "login": "outra-pessoa"}}
+        r = self.voltar(self.selo(), "555555")
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada(),
+                          "gravou a instalacao de outra pessoa na minha conta")
+
+    def test_instalacao_sem_account_nao_grava(self):
+        """Falha fechada: sem saber de quem e, nao e de ninguem."""
+        servir.github_app.confirmar_instalacao = \
+            lambda *a, **k: {"id": 424242, "app_id": 1}
+        self.voltar(self.selo(), "424242")
+        self.assertIsNone(self.gravada())
+
+    def test_instalacao_de_ORGANIZACAO_e_recusada_e_isso_e_deliberado(self):
+        """Divida NOMEADA, e nao esquecimento: provar que alguem e membro de uma
+        organizacao exige o fluxo de token DO USUARIO, que e outra etapa.
+
+        Recusar quem tem direito e um incomodo; aceitar quem nao tem e uma
+        porta. Este caso existe para que a escolha nao seja redescoberta como
+        se fosse um defeito.
+        """
+        servir.github_app.confirmar_instalacao = \
+            lambda *a, **k: {"id": 424242, "app_id": 1,
+                             "account": {"id": 777, "login": "minha-org",
+                                         "type": "Organization"}}
+        self.voltar(self.selo(), "424242")
+        self.assertIsNone(self.gravada())
+
+    def test_numero_ja_gravado_por_outra_conta_nao_e_roubado(self):
+        """A segunda tranca, no banco. A primeira e a conferencia do dono."""
+        con = banco.conectar()
+        try:
+            vizinho = banco.criar_usuario("vizinho-posse@teste.local", con=con)
+            banco.guardar_instalacao_do_github(vizinho, "313131", con=con)
+            con.commit()
+        finally:
+            con.close()
+        r = self.voltar(self.selo(), "313131")
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada(self.uid))
+        self.assertEqual("313131", self.gravada(vizinho))
+
+    # ------------------------------------------------------- a leitura
+    def test_o_estado_sem_sessao_e_recusado(self):
+        self.assertEqual(401, self.pedir(self.ESTADO).status)
+
+    def test_uma_conta_nao_le_a_instalacao_da_outra(self):
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("vizinho-c2@teste.local", con=con)
+            banco.guardar_instalacao_do_github(outro, "999888", con=con)
+        finally:
+            con.close()
+        cookies = self.com_sessao()
+        d = json.loads(self.pedir(self.ESTADO, cookies=cookies).corpo)
+        self.assertEqual("", d["instalacao"],
+                         "a instalacao do vizinho vazou para esta sessao")
+        self.assertTrue(d["lido_em"], "toda leitura leva carimbo")
+
+    def test_nenhuma_resposta_desta_porta_carrega_segredo(self):
+        """Chave privada e token nunca saem por HTTP. A guarda e por forma."""
+        cookies, token = self.sessao_e_token()
+        corpos = [self.pedir(self.ESTADO, cookies=cookies).corpo,
+                  self.pedir(self.IDA, "POST", {}, cookies=cookies,
+                             cabecalhos={"X-Token": token}).corpo,
+                  self.voltar(self.selo(), "424242").corpo]
+        for corpo in corpos:
+            for proibido in ("BEGIN", "PRIVATE KEY", "ghs_", "ghp_",
+                             "DERVS_COFRE", "DERVS_GITHUB_APP_KEY"):
+                self.assertNotIn(proibido, corpo, proibido)
+
+
+class OEspacoDosCodigosNaoSeEnche(BaseServidorDeVerdade):
+    """`codigo_hash` e PRIMARY KEY GLOBAL, e nada era apagado nunca.
+
+    Duas travas nasceram do achado da revisao de seguranca de 01/09/2026: um
+    teto de CRIACAO por origem, com balcao proprio, e a limpeza do vencido
+    antes de sortear. Sem elas, quem gerasse codigos em laco enchia um espaco de
+    um milhao compartilhado por todas as contas — e trancava o dono junto.
+    """
+
+    def test_o_teto_de_criacao_vale_para_as_DUAS_portas(self):
+        """O conectador e o botao 'Gerar o numero' criam o mesmo tipo de
+        estado. Um teto so numa delas e uma porta aberta ao lado da fechada."""
+        cookies, token = self.sessao_e_token()
+        cab = {"X-Token": token}
+        for _ in range(servir.Hub.TETO_DE_CODIGOS + 2):
+            self.pedir("/api/maquinas/parear", "POST", {}, cookies=cookies,
+                       cabecalhos=cab)
+        self.assertEqual(503, self.pedir("/api/maquinas/parear", "POST", {},
+                                         cookies=cookies, cabecalhos=cab).status)
+        self.assertEqual(503, self.pedir("/api/conectador", "POST", {},
+                                         cookies=cookies, cabecalhos=cab).status)
+
+    def test_gastar_o_teto_de_codigos_NAO_tranca_a_cortina(self):
+        """Balcao proprio. Misturar balcoes tranca o dono, e isso ja aconteceu
+        duas vezes nesta casa."""
+        cookies, token = self.sessao_e_token()
+        for _ in range(servir.Hub.TETO_DE_CODIGOS + 2):
+            self.pedir("/api/maquinas/parear", "POST", {}, cookies=cookies,
+                       cabecalhos={"X-Token": token})
+        self.assertEqual(204, self.pedir("/entrada", "POST",
+                                         {"combinacao": self.combinacao}).status)
+
+    def test_o_codigo_vencido_e_apagado_antes_de_sortear(self):
+        cookies, token = self.sessao_e_token()
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM pareamento")
+            con.commit()
+            banco.abrir_pareamento(self.uid, "111111", banco.prazo(-60), con=con)
+            con.commit()
+        finally:
+            con.close()
+        self.pedir("/api/maquinas/parear", "POST", {}, cookies=cookies,
+                   cabecalhos={"X-Token": token})
+        con = banco.conectar()
+        try:
+            vencidos = con.execute(
+                "SELECT COUNT(*) FROM pareamento WHERE expira_em < ?",
+                (banco.agora(),)).fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual(0, vencidos, "o codigo vencido continuou ocupando vaga")
 
 
 if __name__ == "__main__":

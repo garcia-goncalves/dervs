@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import tempfile
+import textwrap
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -123,7 +124,7 @@ class Esquema(unittest.TestCase):
             "SELECT name FROM sqlite_master WHERE type='table' "
             "AND name NOT LIKE 'sqlite_%'"))
 
-    def test_as_dezoito_tabelas_existem(self):
+    def test_as_vinte_tabelas_existem(self):
         """A lista e escrita a mao de proposito: tabela nova reprova a suite.
 
         Nao e cerimonia. Uma tabela que aparece sem ninguem notar e uma tabela
@@ -132,7 +133,8 @@ class Esquema(unittest.TestCase):
         """
         self.assertEqual(self.tabelas(), [
             "chave_de_acesso", "codigo_recuperacao", "cor_da_regra",
-            "credencial", "fila", "gasto", "historico", "instalacao",
+            "credencial", "endereco_producao", "fila", "gasto",
+            "historico", "instalacao", "instalacao_github",
             "maquina", "medida", "pareamento", "pendencia_arquivada",
             "pendencia_estado", "pendencia_vida", "projeto_conectado",
             "sessao", "tarefa_linha", "usuario"])
@@ -1981,6 +1983,592 @@ class Consumo(unittest.TestCase):
         fora = banco.consumo(desde_iso=daqui(days=-1), ate_iso=daqui(days=1),
                              agora_iso=daqui(), con=self.con)
         self.assertEqual(fora["total"]["segundos"], 0)
+
+
+class EnderecoDeProducaoNoBancoVelho(unittest.TestCase):
+    """Um hub.db do dia 26/08 abre com a tabela nova e sem perder linha."""
+
+    def setUp(self):
+        self.pasta = tempfile.TemporaryDirectory()
+        self.caminho = Path(self.pasta.name) / "velho.db"
+        velho = sqlite3.connect(self.caminho)
+        velho.executescript(ESQUEMA_VELHO)
+        velho.execute("INSERT INTO medida VALUES"
+                      " ('dervs','local','2026-08-26T10:00:00+00:00','{}')")
+        velho.commit()
+        velho.close()
+
+    def tearDown(self):
+        self.pasta.cleanup()
+
+    def test_a_tabela_nova_existe_depois_de_migrar(self):
+        con = banco.conectar(self.caminho)
+        try:
+            presentes = {l[0] for l in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertIn("endereco_producao", presentes)
+            colunas = {l[1] for l in con.execute(
+                "PRAGMA table_info(endereco_producao)")}
+            self.assertIn("usuario_id", colunas)
+        finally:
+            con.close()
+
+    def test_a_linha_antiga_sobrevive(self):
+        con = banco.conectar(self.caminho)
+        try:
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM medida").fetchone()[0], 1)
+        finally:
+            con.close()
+
+    def test_o_projeto_antigo_acorda_sem_endereco(self):
+        """O padrao de quem nunca declarou nada e a AUSENCIA de endereco —
+        `None`, e nao string vazia. Inventar um endereco para linha antiga seria
+        o painel mentindo sobre um servidor que ninguem informou."""
+        con = banco.conectar(self.caminho)
+        try:
+            uid = banco.criar_usuario("dono@teste.local", "teste1234", con=con)
+            self.assertIsNone(banco.endereco_de_producao(uid, "dervs", con=con))
+        finally:
+            con.close()
+
+    def test_abrir_duas_vezes_nao_quebra(self):
+        """A migracao roda em toda conexao: tem de ser inofensiva na segunda."""
+        banco.conectar(self.caminho).close()
+        con = banco.conectar(self.caminho)
+        try:
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM medida").fetchone()[0], 1)
+        finally:
+            con.close()
+
+    def test_o_banco_que_ja_tem_usuario_e_nao_tem_a_tabela_migra(self):
+        """O caminho de verdade da migracao — o `BEGIN IMMEDIATE`.
+
+        Sem este caso, o `ESQUEMA` criaria a tabela sozinho e a funcao de
+        migracao podia estar vazia sem ninguem notar: o teste ficaria verde por
+        nao poder dar errado."""
+        con = banco.conectar(self.caminho)
+        uid = banco.criar_usuario("dono@teste.local", "teste1234", con=con)
+        con.execute("DROP TABLE endereco_producao")
+        con.commit()
+        con.close()
+
+        con = sqlite3.connect(self.caminho)
+        con.row_factory = sqlite3.Row
+        try:
+            banco._migrar_endereco_producao(con)       # so a migracao, sem ESQUEMA
+            presentes = {l[0] for l in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertIn("endereco_producao", presentes)
+            self.assertFalse(con.in_transaction,
+                             "a conexao nao pode sair daqui com transacao aberta:"
+                             " `PRAGMA foreign_keys` seria NO-OP silencioso")
+            con.execute("INSERT INTO endereco_producao"
+                        " (usuario_id, projeto, url, criado_em, atualizado_em)"
+                        " VALUES (?,?,?,?,?)",
+                        (uid, "dervs", "https://dervs.com.br", daqui(), daqui()))
+            con.commit()
+            self.assertEqual(con.execute(
+                "SELECT url FROM endereco_producao").fetchone()["url"],
+                "https://dervs.com.br")
+        finally:
+            con.close()
+
+    def test_a_migracao_nao_usa_executescript(self):
+        """`executescript` da COMMIT implicito e desmonta o `BEGIN IMMEDIATE`:
+        duas subidas simultaneas migrariam juntas. A prova le a FONTE, porque
+        rodar a migracao nao distingue as duas formas quando nada concorre.
+
+        A busca e por ARVORE, e nao por texto: a propria docstring da funcao
+        contem a palavra `executescript` (ela avisa para nao usar), e um
+        `assertNotIn` no texto reprovaria a funcao correta — ou, pior, seria
+        contornado apagando o aviso."""
+        import ast
+        import inspect
+        fonte = inspect.getsource(banco._migrar_endereco_producao)
+        arvore = ast.parse(textwrap.dedent(fonte))
+        chamadas = [n.func.attr for n in ast.walk(arvore)
+                    if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute)]
+        self.assertNotIn("executescript", chamadas)
+        self.assertIn("execute", chamadas)
+        self.assertIn("BEGIN IMMEDIATE", fonte)
+        self.assertIn("_religar_fk", fonte)
+        # E ela precisa estar LIGADA: funcao perfeita que ninguem chama e
+        # migracao que nunca roda.
+        self.assertIn("_migrar_endereco_producao", inspect.getsource(banco.migrar))
+
+
+class EnderecoDeProducaoTemDono(unittest.TestCase):
+    """A porta 3 e dado de conta, nao configuracao da maquina."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.a = banco.criar_usuario("a@teste.local", "teste1234", con=self.con)
+        self.b = banco.criar_usuario("b@teste.local", "teste1234", con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_grava_e_le_de_volta(self):
+        banco.guardar_endereco_de_producao(self.a, "dervs", "https://dervs.com.br",
+                                           con=self.con)
+        self.assertEqual(banco.endereco_de_producao(self.a, "dervs", con=self.con),
+                         "https://dervs.com.br")
+
+    def test_duas_contas_o_mesmo_projeto_e_uma_nao_le_a_da_outra(self):
+        """O criterio do briefing ao pe da letra. Nome de projeto e escolha de
+        quem o criou: dois donos podem ter um `dervs` cada, em servidores
+        diferentes."""
+        banco.guardar_endereco_de_producao(self.a, "dervs", "https://a.example.com",
+                                           con=self.con)
+        banco.guardar_endereco_de_producao(self.b, "dervs", "https://b.example.com",
+                                           con=self.con)
+        self.assertEqual(banco.endereco_de_producao(self.a, "dervs", con=self.con),
+                         "https://a.example.com")
+        self.assertEqual(banco.endereco_de_producao(self.b, "dervs", con=self.con),
+                         "https://b.example.com")
+
+    def test_o_mapa_de_uma_conta_nao_traz_o_da_outra(self):
+        banco.guardar_endereco_de_producao(self.a, "dervs", "https://a.example.com",
+                                           con=self.con)
+        banco.guardar_endereco_de_producao(self.b, "dervs", "https://b.example.com",
+                                           con=self.con)
+        banco.guardar_endereco_de_producao(self.b, "outro", "https://b2.example.com",
+                                           con=self.con)
+        self.assertEqual(banco.enderecos_de_producao(self.a, con=self.con),
+                         {"dervs": "https://a.example.com"})
+        self.assertEqual(banco.enderecos_de_producao(self.b, con=self.con),
+                         {"dervs": "https://b.example.com",
+                          "outro": "https://b2.example.com"})
+
+    def test_quem_nao_gravou_nada_le_none_e_mapa_vazio(self):
+        self.assertIsNone(banco.endereco_de_producao(self.a, "dervs", con=self.con))
+        self.assertEqual(banco.enderecos_de_producao(self.a, con=self.con), {})
+
+    def test_o_dono_e_obrigatorio_e_posicional(self):
+        """Assinatura com padrao para `usuario_id` e o caminho pronto para uma
+        rota esquecer o dono e ler o endereco alheio."""
+        import inspect
+        for f in (banco.endereco_de_producao, banco.enderecos_de_producao,
+                  banco.guardar_endereco_de_producao):
+            p = inspect.signature(f).parameters["usuario_id"]
+            self.assertIs(p.default, inspect.Parameter.empty,
+                          "%s tem padrao para usuario_id" % f.__name__)
+            self.assertIs(p.kind, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+
+    def test_url_vazia_ou_none_apaga_o_endereco(self):
+        for apagador in ("", "   ", None):
+            banco.guardar_endereco_de_producao(self.a, "dervs",
+                                               "https://a.example.com", con=self.con)
+            banco.guardar_endereco_de_producao(self.a, "dervs", apagador,
+                                               con=self.con)
+            self.assertIsNone(banco.endereco_de_producao(self.a, "dervs",
+                                                         con=self.con))
+            self.assertEqual(self.con.execute(
+                "SELECT COUNT(*) FROM endereco_producao").fetchone()[0], 0,
+                "apagar tem de tirar a LINHA, e nao gravar string vazia")
+
+    def test_regravar_troca_a_url_sem_duplicar_nem_perder_o_criado_em(self):
+        banco.guardar_endereco_de_producao(self.a, "dervs", "https://velho.example.com",
+                                           con=self.con)
+        antes = self.con.execute("SELECT criado_em FROM endereco_producao"
+                                 " WHERE usuario_id = ?", (self.a,)).fetchone()[0]
+        banco.guardar_endereco_de_producao(self.a, "dervs", "https://novo.example.com",
+                                           con=self.con)
+        linhas = list(self.con.execute("SELECT * FROM endereco_producao"
+                                       " WHERE usuario_id = ?", (self.a,)))
+        self.assertEqual(len(linhas), 1)
+        self.assertEqual(linhas[0]["url"], "https://novo.example.com")
+        self.assertEqual(linhas[0]["criado_em"], antes)
+
+    def test_apagar_a_conta_apaga_o_endereco_dela_e_so_o_dela(self):
+        """`ON DELETE CASCADE` so vale com `PRAGMA foreign_keys=ON` ligado NESTA
+        conexao — e e por isso que `_religar_fk` existe."""
+        banco.guardar_endereco_de_producao(self.a, "dervs", "https://a.example.com",
+                                           con=self.con)
+        banco.guardar_endereco_de_producao(self.b, "dervs", "https://b.example.com",
+                                           con=self.con)
+        self.con.execute("DELETE FROM usuario WHERE id = ?", (self.a,))
+        self.con.commit()
+        self.assertEqual(self.con.execute(
+            "SELECT COUNT(*) FROM endereco_producao").fetchone()[0], 1)
+        self.assertEqual(banco.endereco_de_producao(self.b, "dervs", con=self.con),
+                         "https://b.example.com")
+
+    def test_a_tabela_recusa_projeto_e_url_em_branco(self):
+        """O CHECK vive no banco, e nao so no Python: hoje ha um escritor, e
+        daqui a uma etapa ha tres."""
+        for projeto, url in (("  ", "https://a.example.com"), ("dervs", "   ")):
+            with self.assertRaises(sqlite3.IntegrityError):
+                self.con.execute(
+                    "INSERT INTO endereco_producao"
+                    " (usuario_id, projeto, url, criado_em, atualizado_em)"
+                    " VALUES (?,?,?,?,?)",
+                    (self.a, projeto, url, daqui(), daqui()))
+            self.con.rollback()
+
+    def test_o_esquema_e_a_migracao_criam_a_mesma_tabela(self):
+        """Duas copias do mesmo CREATE. Se uma mudar sozinha, um hub.db velho e
+        um novo ficam com formas diferentes — e isso nao aparece em uso."""
+        do_esquema = {(l[1], l[2], l[3]) for l in
+                      self.con.execute("PRAGMA table_info(endereco_producao)")}
+        outra = sqlite3.connect(":memory:")
+        outra.execute(banco._CREATE_ENDERECO_PRODUCAO)
+        da_migracao = {(l[1], l[2], l[3]) for l in
+                       outra.execute("PRAGMA table_info(endereco_producao)")}
+        outra.close()
+        self.assertEqual(do_esquema, da_migracao)
+
+
+class InstalacaoDoGithubNoBancoVelho(unittest.TestCase):
+    """Um hub.db anterior a esta fatia abre com a tabela nova e sem perder linha."""
+
+    def setUp(self):
+        self.pasta = tempfile.TemporaryDirectory()
+        self.caminho = Path(self.pasta.name) / "velho.db"
+        velho = sqlite3.connect(self.caminho)
+        velho.executescript(ESQUEMA_VELHO)
+        velho.execute("INSERT INTO medida VALUES"
+                      " ('dervs','local','2026-08-26T10:00:00+00:00','{}')")
+        velho.commit()
+        velho.close()
+
+    def tearDown(self):
+        self.pasta.cleanup()
+
+    def test_a_tabela_nova_existe_depois_de_migrar(self):
+        con = banco.conectar(self.caminho)
+        try:
+            presentes = {l[0] for l in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertIn("instalacao_github", presentes)
+            colunas = {l[1] for l in con.execute(
+                "PRAGMA table_info(instalacao_github)")}
+            self.assertIn("usuario_id", colunas)
+            self.assertIn("installation_id", colunas)
+        finally:
+            con.close()
+
+    def test_migrar_duas_vezes_e_a_linha_antiga_continua_intacta(self):
+        """A migracao roda em TODA conexao: tem de ser inofensiva na segunda."""
+        banco.conectar(self.caminho).close()
+        con = banco.conectar(self.caminho)
+        try:
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM medida").fetchone()[0], 1)
+            self.assertEqual(con.execute(
+                "SELECT dados FROM medida").fetchone()["dados"], "{}")
+        finally:
+            con.close()
+
+    def test_a_conta_antiga_acorda_sem_instalacao(self):
+        """Ninguem herda o `DERVS_GITHUB_INSTALLATION_ID` do ambiente. Escolher
+        uma conta para herda-lo seria o banco inventando um dono."""
+        con = banco.conectar(self.caminho)
+        try:
+            uid = banco.criar_usuario("dono@teste.local", "teste1234", con=con)
+            self.assertIsNone(banco.instalacao_do_github(uid, con=con))
+            self.assertEqual(banco.instalacoes_do_github(con=con), {})
+        finally:
+            con.close()
+
+    def test_o_banco_que_ja_tem_usuario_e_nao_tem_a_tabela_migra(self):
+        """O caminho de verdade da migracao — o `BEGIN IMMEDIATE`.
+
+        Sem este caso, o `ESQUEMA` criaria a tabela sozinho e a funcao de
+        migracao podia estar vazia sem ninguem notar: o teste ficaria verde por
+        nao poder dar errado."""
+        con = banco.conectar(self.caminho)
+        uid = banco.criar_usuario("dono@teste.local", "teste1234", con=con)
+        con.execute("DROP TABLE instalacao_github")
+        con.commit()
+        con.close()
+
+        con = sqlite3.connect(self.caminho)
+        con.row_factory = sqlite3.Row
+        try:
+            banco._migrar_instalacao_github(con)       # so a migracao, sem ESQUEMA
+            presentes = {l[0] for l in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertIn("instalacao_github", presentes)
+            self.assertFalse(con.in_transaction,
+                             "a conexao nao pode sair daqui com transacao aberta:"
+                             " `PRAGMA foreign_keys` seria NO-OP silencioso")
+            con.execute("INSERT INTO instalacao_github"
+                        " (usuario_id, installation_id, criado_em, atualizado_em)"
+                        " VALUES (?,?,?,?)", (uid, "12345678", daqui(), daqui()))
+            con.commit()
+            self.assertEqual(con.execute(
+                "SELECT installation_id FROM instalacao_github"
+                ).fetchone()["installation_id"], "12345678")
+        finally:
+            con.close()
+
+    def test_a_migracao_nao_usa_executescript(self):
+        """`executescript` da COMMIT implicito e desmonta o `BEGIN IMMEDIATE`:
+        duas subidas simultaneas migrariam juntas. A prova le a FONTE, porque
+        rodar a migracao nao distingue as duas formas quando nada concorre.
+
+        A busca e por ARVORE, e nao por texto: a propria docstring da funcao
+        contem a palavra `executescript` (ela avisa para nao usar), e um
+        `assertNotIn` no texto reprovaria a funcao correta — ou, pior, seria
+        contornado apagando o aviso."""
+        import ast
+        import inspect
+        fonte = inspect.getsource(banco._migrar_instalacao_github)
+        arvore = ast.parse(textwrap.dedent(fonte))
+        chamadas = [n.func.attr for n in ast.walk(arvore)
+                    if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute)]
+        self.assertNotIn("executescript", chamadas)
+        self.assertIn("execute", chamadas)
+        self.assertIn("BEGIN IMMEDIATE", fonte)
+        self.assertIn("_religar_fk", fonte)
+        # E ela precisa estar LIGADA: funcao perfeita que ninguem chama e
+        # migracao que nunca roda.
+        self.assertIn("_migrar_instalacao_github", inspect.getsource(banco.migrar))
+
+    def test_o_esquema_e_a_migracao_criam_a_mesma_tabela(self):
+        """Duas copias do mesmo CREATE. Se uma mudar sozinha, um hub.db velho e
+        um novo ficam com formas diferentes — e isso nao aparece em uso."""
+        con = banco.conectar(":memory:")
+        do_esquema = {(l[1], l[2], l[3]) for l in
+                      con.execute("PRAGMA table_info(instalacao_github)")}
+        con.close()
+        outra = sqlite3.connect(":memory:")
+        outra.execute(banco._CREATE_INSTALACAO_GITHUB)
+        da_migracao = {(l[1], l[2], l[3]) for l in
+                       outra.execute("PRAGMA table_info(instalacao_github)")}
+        outra.close()
+        self.assertEqual(do_esquema, da_migracao)
+
+
+class InstalacaoDoGithubTemDono(unittest.TestCase):
+    """A porta 1 e dado de conta, e nao configuracao do processo inteiro."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.a = banco.criar_usuario("a@teste.local", "teste1234", con=self.con)
+        self.b = banco.criar_usuario("b@teste.local", "teste1234", con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_grava_e_le_de_volta(self):
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        self.assertEqual(banco.instalacao_do_github(self.a, con=self.con), "111")
+
+    def test_duas_contas_guardam_instalacoes_diferentes_e_uma_nao_le_a_da_outra(self):
+        """O criterio do briefing ao pe da letra. Ate esta etapa havia UMA
+        instalacao para o processo inteiro; a partir daqui, cada conta tem a
+        sua, e a leitura de uma nao alcanca a da outra."""
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        banco.guardar_instalacao_do_github(self.b, "222", con=self.con)
+        self.assertEqual(banco.instalacao_do_github(self.a, con=self.con), "111")
+        self.assertEqual(banco.instalacao_do_github(self.b, con=self.con), "222")
+        self.assertNotEqual(banco.instalacao_do_github(self.a, con=self.con),
+                            banco.instalacao_do_github(self.b, con=self.con))
+
+    def test_quem_nunca_conectou_le_none(self):
+        banco.guardar_instalacao_do_github(self.b, "222", con=self.con)
+        self.assertIsNone(banco.instalacao_do_github(self.a, con=self.con))
+
+    def test_uma_conta_nao_pode_ter_duas_instalacoes(self):
+        """A unicidade vive no BANCO, e nao so no `ON CONFLICT` do Python: duas
+        linhas para o mesmo dono deixariam o coletor escolhendo em silencio qual
+        instalacao usar — e a escolha mudaria com a ordem das linhas."""
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.con.execute(
+                "INSERT INTO instalacao_github"
+                " (usuario_id, installation_id, criado_em, atualizado_em)"
+                " VALUES (?,?,?,?)", (self.a, "999", daqui(), daqui()))
+        self.con.rollback()
+        # E regravar pela funcao TROCA, nao acumula.
+        banco.guardar_instalacao_do_github(self.a, "999", con=self.con)
+        self.assertEqual(self.con.execute(
+            "SELECT COUNT(*) FROM instalacao_github"
+            " WHERE usuario_id = ?", (self.a,)).fetchone()[0], 1)
+        self.assertEqual(banco.instalacao_do_github(self.a, con=self.con), "999")
+
+    def test_regravar_nao_reescreve_o_criado_em(self):
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        antes = self.con.execute("SELECT criado_em FROM instalacao_github"
+                                 " WHERE usuario_id = ?", (self.a,)).fetchone()[0]
+        banco.guardar_instalacao_do_github(self.a, "222", con=self.con)
+        linha = self.con.execute("SELECT * FROM instalacao_github"
+                                 " WHERE usuario_id = ?", (self.a,)).fetchone()
+        self.assertEqual(linha["criado_em"], antes)
+        self.assertEqual(linha["installation_id"], "222")
+
+    def test_desconectar_apaga_a_daquele_usuario_e_so_a_dele(self):
+        """Sem o `usuario_id` no `WHERE`, um clique em "desconectar" derrubaria
+        o GitHub de todas as contas do servidor."""
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        banco.guardar_instalacao_do_github(self.b, "222", con=self.con)
+        banco.desconectar_do_github(self.a, con=self.con)
+        self.assertIsNone(banco.instalacao_do_github(self.a, con=self.con))
+        self.assertEqual(banco.instalacao_do_github(self.b, con=self.con), "222")
+        self.assertEqual(self.con.execute(
+            "SELECT COUNT(*) FROM instalacao_github").fetchone()[0], 1)
+
+    def test_desconectar_duas_vezes_nao_e_erro(self):
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        banco.desconectar_do_github(self.a, con=self.con)
+        banco.desconectar_do_github(self.a, con=self.con)
+        self.assertIsNone(banco.instalacao_do_github(self.a, con=self.con))
+
+    def test_o_mapa_de_todas_traz_uma_linha_por_conta(self):
+        """A unica leitura sem dono, e de proposito: o coletor roda sem sessao."""
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        banco.guardar_instalacao_do_github(self.b, "222", con=self.con)
+        self.assertEqual(banco.instalacoes_do_github(con=self.con),
+                         {self.a: "111", self.b: "222"})
+
+    def test_o_dono_e_obrigatorio_e_posicional(self):
+        """Assinatura com padrao para `usuario_id` e o caminho pronto para uma
+        rota esquecer o dono e agir com a instalacao alheia."""
+        import inspect
+        for f in (banco.instalacao_do_github, banco.guardar_instalacao_do_github,
+                  banco.desconectar_do_github):
+            p = inspect.signature(f).parameters["usuario_id"]
+            self.assertIs(p.default, inspect.Parameter.empty,
+                          "%s tem padrao para usuario_id" % f.__name__)
+            self.assertIs(p.kind, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+
+    def test_instalacao_vazia_e_erro_e_nao_apaga(self):
+        """Vazio aqui vem do fluxo de instalar ter quebrado, e nao de um campo
+        limpo pelo dono. Gravar silencio deixaria a conta "conectada" a lugar
+        nenhum; apagar esconderia o defeito."""
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        for vazio in ("", "   ", None):
+            with self.assertRaises(ValueError):
+                banco.guardar_instalacao_do_github(self.a, vazio, con=self.con)
+        self.assertEqual(banco.instalacao_do_github(self.a, con=self.con), "111")
+
+    def test_a_tabela_recusa_installation_id_em_branco(self):
+        """O CHECK vive no banco, e nao so no Python: hoje ha um escritor, e
+        daqui a uma etapa ha tres."""
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.con.execute(
+                "INSERT INTO instalacao_github"
+                " (usuario_id, installation_id, criado_em, atualizado_em)"
+                " VALUES (?,?,?,?)", (self.a, "   ", daqui(), daqui()))
+        self.con.rollback()
+
+    def test_apagar_a_conta_apaga_a_instalacao_dela_e_so_a_dela(self):
+        """`ON DELETE CASCADE` so vale com `PRAGMA foreign_keys=ON` ligado NESTA
+        conexao — e e por isso que `_religar_fk` existe."""
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        banco.guardar_instalacao_do_github(self.b, "222", con=self.con)
+        self.con.execute("DELETE FROM usuario WHERE id = ?", (self.a,))
+        self.con.commit()
+        self.assertEqual(self.con.execute(
+            "SELECT COUNT(*) FROM instalacao_github").fetchone()[0], 1)
+        self.assertEqual(banco.instalacao_do_github(self.b, con=self.con), "222")
+
+
+class UmaInstalacaoPertenceAUmaContaSo(unittest.TestCase):
+    """O achado das DUAS revisoes de 01/09/2026.
+
+    Perguntar ao GitHub prova que a instalacao EXISTE — para qualquer numero
+    deste App, inclusive o de outra pessoa. O `installation_id` e publico e
+    sequencial. Sem esta trava, duas contas gravavam o mesmo numero e a segunda
+    ficava amarrada a instalacao da primeira.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.antes = banco.BANCO
+        banco.BANCO = Path(self.dir.name) / "hub.db"
+        self.addCleanup(setattr, banco, "BANCO", self.antes)
+        con = banco.conectar()
+        try:
+            self.a = banco.criar_usuario("a@teste.local", con=con)
+            self.b = banco.criar_usuario("b@teste.local", con=con)
+            con.commit()
+        finally:
+            con.close()
+
+    def test_a_segunda_conta_nao_grava_o_numero_da_primeira(self):
+        banco.guardar_instalacao_do_github(self.a, "424242")
+        with self.assertRaises(ValueError):
+            banco.guardar_instalacao_do_github(self.b, "424242")
+        self.assertEqual("424242", banco.instalacao_do_github(self.a))
+        self.assertIsNone(banco.instalacao_do_github(self.b))
+
+    def test_a_mesma_conta_pode_regravar_o_proprio_numero(self):
+        """Reinstalar o App na propria conta nao pode virar recusa."""
+        banco.guardar_instalacao_do_github(self.a, "424242")
+        banco.guardar_instalacao_do_github(self.a, "424242")
+        self.assertEqual("424242", banco.instalacao_do_github(self.a))
+
+    def test_a_conta_pode_trocar_de_instalacao(self):
+        banco.guardar_instalacao_do_github(self.a, "111")
+        banco.guardar_instalacao_do_github(self.a, "222")
+        self.assertEqual("222", banco.instalacao_do_github(self.a))
+        # E o numero antigo fica livre para quem o tiver de verdade.
+        banco.guardar_instalacao_do_github(self.b, "111")
+        self.assertEqual("111", banco.instalacao_do_github(self.b))
+
+    def test_o_unique_do_numero_existe_no_esquema_E_na_migracao(self):
+        """As duas definicoes tem de andar juntas: a que diverge e sempre a que
+        ninguem le."""
+        self.assertIn("UNIQUE (installation_id)", banco.ESQUEMA)
+        self.assertIn("UNIQUE (installation_id)", banco._CREATE_INSTALACAO_GITHUB)
+
+
+class OsCodigosVencidosSaoAPAGADOS(unittest.TestCase):
+    """`codigo_hash` e PRIMARY KEY GLOBAL, e ate 01/09/2026 nada era apagado.
+
+    Seis digitos sao um milhao de vagas para TODAS as contas juntas: quem
+    gerasse codigos em laco enchia o espaco, e o laco de cinco tentativas de
+    todo mundo — inclusive o do dono — passava a colidir para sempre. E o
+    "teto compartilhado tranca o dono" pela terceira vez nesta casa, agora pelo
+    ESPACO em vez do contador.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.antes = banco.BANCO
+        banco.BANCO = Path(self.dir.name) / "hub.db"
+        self.addCleanup(setattr, banco, "BANCO", self.antes)
+        con = banco.conectar()
+        try:
+            self.uid = banco.criar_usuario("dono@teste.local", con=con)
+            con.commit()
+        finally:
+            con.close()
+
+    def test_apaga_o_vencido_e_deixa_o_vivo(self):
+        banco.abrir_pareamento(self.uid, "111111", banco.prazo(-60))
+        banco.abrir_pareamento(self.uid, "222222", banco.prazo(600))
+        self.assertEqual(1, banco.limpar_pareamentos_vencidos())
+        con = banco.conectar()
+        try:
+            sobraram = con.execute("SELECT COUNT(*) FROM pareamento").fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual(1, sobraram)
+        # E o que sobrou e o que ainda vale.
+        self.assertTrue(banco.usar_pareamento("222222", "pc"))
+
+    def test_a_vaga_do_vencido_volta_a_ficar_livre(self):
+        """O ponto inteiro: o numero apagado pode ser sorteado de novo."""
+        banco.abrir_pareamento(self.uid, "111111", banco.prazo(-60))
+        with self.assertRaises(sqlite3.IntegrityError):
+            banco.abrir_pareamento(self.uid, "111111", banco.prazo(600))
+        banco.limpar_pareamentos_vencidos()
+        banco.abrir_pareamento(self.uid, "111111", banco.prazo(600))
+        self.assertTrue(banco.usar_pareamento("111111", "pc"))
+
+    def test_sem_nada_vencido_nao_apaga_nada(self):
+        banco.abrir_pareamento(self.uid, "333333", banco.prazo(600))
+        self.assertEqual(0, banco.limpar_pareamentos_vencidos())
 
 
 if __name__ == "__main__":

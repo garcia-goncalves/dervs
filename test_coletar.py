@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
+import ssl
 import tempfile
 import time
 import unittest
@@ -91,11 +94,162 @@ class PastasDeProjeto(unittest.TestCase):
         porque source/repos existe NESTA maquina. A CI pegou: no servidor do
         GitHub essa pasta nao existe. Teste que depende da maquina nao e teste.
         """
-        original = coletar.RAIZ
-        coletar.RAIZ = Path(r"C:\pasta\que\nao\existe")
-        self.addCleanup(setattr, coletar, "RAIZ", original)
+        self.trocar_raizes([Path(r"C:\pasta\que\nao\existe")])
         nomes = {p.name for p in coletar.pastas_de_projeto()}
         self.assertEqual(nomes, {coletar.AQUI.name})
+
+    def trocar_raizes(self, raizes):
+        """Troca `coletar.RAIZES` so pelo tempo deste teste."""
+        original = coletar.RAIZES
+        coletar.RAIZES = list(raizes)
+        self.addCleanup(setattr, coletar, "RAIZES", original)
+
+    def raiz_com_projeto(self, nome):
+        """Uma raiz de mentira em tempfile, com um projeto dentro."""
+        raiz = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, raiz, True)
+        (raiz / nome).mkdir()
+        return raiz
+
+    def test_varre_todas_as_raizes(self):
+        """Duas raizes, um projeto em cada: os DOIS aparecem."""
+        a = self.raiz_com_projeto("projeto-a")
+        b = self.raiz_com_projeto("projeto-b")
+        self.trocar_raizes([a, b])
+        nomes = {p.name for p in coletar.pastas_de_projeto()}
+        self.assertIn("projeto-a", nomes)
+        self.assertIn("projeto-b", nomes)
+
+    def test_raiz_repetida_mede_uma_vez(self):
+        """A mesma pasta duas vezes na lista nao pode dobrar a contagem."""
+        a = self.raiz_com_projeto("projeto-a")
+        self.trocar_raizes([a, a])
+        achados = [p for p in coletar.pastas_de_projeto() if p.name == "projeto-a"]
+        self.assertEqual(len(achados), 1)
+
+
+class RaizesConfiguradas(unittest.TestCase):
+    """A ordem de decisao: ambiente, arquivo do agente, ultimo recurso."""
+
+    def setUp(self):
+        self.pasta = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.pasta, True)
+        self.arquivo = self.pasta / "agente.json"
+        self.ambiente("DERVS_AGENTE_ARQUIVO", str(self.arquivo))
+        self.ambiente(coletar.VAR_RAIZES, None)
+
+    def ambiente(self, nome, valor):
+        antes = os.environ.get(nome)
+        self.addCleanup(lambda: os.environ.__setitem__(nome, antes)
+                        if antes is not None else os.environ.pop(nome, None))
+        if valor is None:
+            os.environ.pop(nome, None)
+        else:
+            os.environ[nome] = valor
+
+    def escrever(self, texto):
+        self.arquivo.write_text(texto, encoding="utf-8")
+
+    def test_o_ambiente_vence_o_arquivo(self):
+        self.escrever(json.dumps({"raizes": [str(self.pasta / "do-arquivo")]}))
+        self.ambiente(coletar.VAR_RAIZES,
+                      os.pathsep.join([str(self.pasta / "do-ambiente")]))
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [self.pasta / "do-ambiente"])
+
+    def test_o_ambiente_aceita_varias_separadas_por_pathsep(self):
+        self.ambiente(coletar.VAR_RAIZES,
+                      os.pathsep.join([str(self.pasta / "uma"), str(self.pasta / "outra")]))
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [self.pasta / "uma", self.pasta / "outra"])
+
+    def test_le_a_chave_do_arquivo_do_agente(self):
+        self.escrever(json.dumps({"raizes": [str(self.pasta / "do-arquivo")]}))
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [self.pasta / "do-arquivo"])
+
+    def test_arquivo_sem_a_chave_cai_no_ultimo_recurso(self):
+        """O arquivo existe e tem o token, mas ninguem escolheu raiz ainda."""
+        self.escrever(json.dumps({"http://x": {"token": "abc"}}))
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [coletar.raiz_de_ultimo_recurso()])
+
+    def test_json_torto_cai_no_ultimo_recurso_sem_levantar(self):
+        self.escrever("{isto nao e json")
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [coletar.raiz_de_ultimo_recurso()])
+
+    def test_arquivo_ausente_cai_no_ultimo_recurso(self):
+        self.assertFalse(self.arquivo.exists())
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [coletar.raiz_de_ultimo_recurso()])
+
+    def test_o_ultimo_recurso_sai_de_home(self):
+        """Derivado de Path.home(), nunca escrito na mao."""
+        self.assertEqual(coletar.raiz_de_ultimo_recurso(),
+                         Path.home() / "source" / "repos")
+
+    def test_escrever_raizes_nao_apaga_o_token(self):
+        """O token mora no MESMO arquivo. Gravar a raiz nao pode desconectar."""
+        self.escrever(json.dumps({"http://x": {"token": "segredinho"}}))
+        coletar.escrever_raizes([self.pasta / "escolhida"])
+        de_volta = json.loads(self.arquivo.read_text(encoding="utf-8"))
+        self.assertEqual(de_volta["http://x"]["token"], "segredinho")
+        self.assertEqual(de_volta["raizes"], [str(self.pasta / "escolhida")])
+
+    def test_escrever_raizes_e_relido_por_raizes_configuradas(self):
+        coletar.escrever_raizes([self.pasta / "escolhida"])
+        self.assertEqual(coletar.raizes_configuradas(),
+                         [self.pasta / "escolhida"])
+
+
+class AvisosDasRaizes(unittest.TestCase):
+    """Lei nº 2: raiz nao medida tem de aparecer NOMEADA."""
+
+    def test_nomeia_cada_raiz_que_nao_existe(self):
+        sumida_a = Path(tempfile.gettempdir()) / "dervs-raiz-que-nao-existe-a"
+        sumida_b = Path(tempfile.gettempdir()) / "dervs-raiz-que-nao-existe-b"
+        existente = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, existente, True)
+        avisos = coletar.avisos_das_raizes([sumida_a, existente, sumida_b])
+        self.assertEqual(len(avisos), 2)
+        self.assertIn(str(sumida_a), avisos[0])
+        self.assertIn(str(sumida_b), avisos[1])
+        for aviso in avisos:
+            self.assertIn("nenhum projeto pendente", aviso)
+            self.assertNotIn(str(existente), aviso)
+
+    def test_raiz_vazia_nao_e_raiz_ausente(self):
+        """Raiz que existe e esta vazia responde 'nenhum projeto' de verdade."""
+        vazia = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, vazia, True)
+        self.assertEqual(coletar.avisos_das_raizes([vazia]), [])
+
+
+class SemCaminhoDestaMaquina(unittest.TestCase):
+    """`coletar.py` nao pode trazer o caminho de UM computador no codigo-fonte.
+
+    Ate 01/09/2026 ele trazia, e por isso o agente media zero projeto em
+    qualquer outra maquina.
+    """
+
+    PADRAO = re.compile(r"[A-Za-z]:[\\/]{1,2}Users", re.IGNORECASE)
+
+    def test_o_padrao_pega_o_caminho_antigo(self):
+        """SABOTAGEM: sem isto o caso abaixo pode estar verde por nao poder
+        reprovar. O padrao e aplicado ao caminho que existia de verdade em
+        coletar.py:47 ate 01/09/2026, e TEM de casar."""
+        antigo = "RAIZ = Path(r\"C:" + chr(92) + "Users" + chr(92) + "Desktop" \
+            + chr(92) + "source" + chr(92) + "repos\")"
+        self.assertTrue(self.PADRAO.search(antigo), antigo)
+        self.assertTrue(self.PADRAO.search("caminho c:/users/alguem"))
+        self.assertFalse(self.PADRAO.search("Path.home() / 'source' / 'repos'"))
+
+    def test_coletar_nao_tem_caminho_de_usuario(self):
+        fonte = (Path(coletar.__file__).read_text(encoding="utf-8"))
+        achado = self.PADRAO.search(fonte)
+        self.assertIsNone(achado, "caminho desta maquina em coletar.py: %s"
+                          % (achado.group(0) if achado else ""))
 
 
 class NomeDaMarca(unittest.TestCase):
@@ -504,6 +658,49 @@ class UrlSegura(unittest.TestCase):
         self.assertTrue(coletar_github.url_segura(
             "https://este-dominio-nao-existe-mesmo-987654.invalid"))
 
+    def test_recusa_a_faixa_cgnat(self):
+        """100.64.0.0/10 (RFC 6598) e rede de operadora, NAO e internet publica.
+
+        O `ipaddress` da biblioteca padrao devolve is_private=False para essa
+        faixa, por decisao de desenho do CPython (python/cpython#119812) — e o
+        mesmo buraco ja virou SSRF real em outro projeto (bentoml#5644). Como
+        `_ip_privado` era so a soma dos atributos do modulo, 100.64.5.5 saia
+        daqui igualzinho a 8.8.8.8.
+
+        Achado em 29/08/2026 pela lente de pesquisa da esteira das tres portas,
+        e conferido rodando o filtro: nao e teoria, o endereco passava.
+
+        Importa porque a Porta 3 vai alimentar esta peneira com URL DIGITADA
+        pelo usuario. E importa antes disso: e uma faixa que alcanca a rede
+        interna de operadora e de nuvem, e ja estava aberta em producao.
+        """
+        for dentro in ("100.64.0.0", "100.64.5.5", "100.127.255.255"):
+            self.assertTrue(coletar_github._ip_privado(dentro), dentro)
+            self.assertFalse(coletar_github.url_segura("http://%s/" % dentro),
+                             dentro)
+
+    def test_recusa_a_faixa_cgnat_tambem_mapeada_em_ipv6(self):
+        """`::ffff:100.64.5.5` e o MESMO endereco escrito de outro jeito.
+
+        Fechar so a forma decimal deixaria a porta encostada: basta escrever o
+        endereco na forma mapeada para atravessar. Vale a mesma logica que o
+        modulo ja aplica sozinho a `::ffff:10.0.0.1`.
+        """
+        self.assertTrue(coletar_github._ip_privado("::ffff:100.64.5.5"))
+        self.assertFalse(coletar_github.url_segura("http://[::ffff:100.64.5.5]/"))
+
+    def test_nao_confisca_o_vizinho_da_faixa_cgnat(self):
+        """A guarda tem de ACUSAR quando quebrada, e so quando quebrada.
+
+        100.63.255.255 e 100.128.0.1 sao os enderecos publicos imediatamente
+        antes e depois do /10. Um `100.` generico, ou uma mascara larga demais,
+        passaria nos dois testes de cima e reprovaria aqui — que e exatamente o
+        erro que este caso existe para pegar.
+        """
+        for fora in ("100.63.255.255", "100.128.0.1"):
+            self.assertFalse(coletar_github._ip_privado(fora), fora)
+            self.assertTrue(coletar_github.url_segura("http://%s/" % fora), fora)
+
 
 class HostPublico(unittest.TestCase):
     def test_nome_que_nao_resolve_nao_e_publico(self):
@@ -572,13 +769,21 @@ class MedeSite(unittest.TestCase):
 
         srv = http.server.HTTPServer(("127.0.0.1", 0), Mao)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
-        antes = (coletar_github.url_segura, coletar_github.host_publico)
+        # `enderecos_publicos` entrou na lista de dubles em 01/09/2026: desde a
+        # correcao do rebinding e ELA quem decide para onde a batida vai, e nao
+        # mais `host_publico`. Sem troca-la aqui, `mede_site` recusava o proprio
+        # servidor de mentira em 127.0.0.1 e os quatro casos abaixo passavam a
+        # medir "nao deu para conferir" em vez do codigo devolvido.
+        antes = (coletar_github.url_segura, coletar_github.host_publico,
+                 coletar_github.enderecos_publicos)
         coletar_github.url_segura = lambda u: True
         coletar_github.host_publico = lambda h: True
+        coletar_github.enderecos_publicos = lambda h: ["127.0.0.1"]
         try:
             return coletar_github.mede_site("http://127.0.0.1:%d/" % srv.server_port)
         finally:
-            coletar_github.url_segura, coletar_github.host_publico = antes
+            (coletar_github.url_segura, coletar_github.host_publico,
+             coletar_github.enderecos_publicos) = antes
             srv.shutdown()
 
     def test_200_e_site_no_ar(self):
@@ -1728,6 +1933,286 @@ class OColetorTrocaAChavePorToken(unittest.TestCase):
         finally:
             coletar_github.urllib.request.OpenerDirector.open = original
         self.assertEqual(vistos, ["Bearer ghs-mentira"])
+
+
+class OEnderecoDoBancoVenceOArquivo(unittest.TestCase):
+    """Etapa B2. Duas fontes para o mesmo dado, e uma ordem so.
+
+    O `casos.json` e arquivo versionado, escrito a mao e igual para todo mundo.
+    O banco e a escolha que AQUELA conta fez pela tela. Se o arquivo vencesse,
+    a tela aceitaria a digitacao e nao mudaria nada — calada, que e a pior
+    forma de nao funcionar.
+
+    A AUSENCIA DOS DOIS continua sendo SILENCIO, e nao "fora do ar": projeto
+    sem endereco declarado nao tem site para estar fora do ar, e inventar um
+    veredito ali seria a lei 2 quebrada.
+    """
+
+    def monta(self, do_arquivo, do_banco):
+        """A mesma expressao que o coletor usa, com as duas fontes na mao."""
+        local = {"url_prod": do_arquivo} if do_arquivo else {}
+        enderecos = {"projeto": do_banco} if do_banco else {}
+        return enderecos.get("projeto") or local.get("url_prod") or ""
+
+    def test_com_os_dois_o_banco_vence(self):
+        self.assertEqual("https://do-banco.com.br",
+                         self.monta("https://do-arquivo.com.br",
+                                    "https://do-banco.com.br"))
+
+    def test_so_o_arquivo_continua_valendo(self):
+        self.assertEqual("https://do-arquivo.com.br",
+                         self.monta("https://do-arquivo.com.br", ""))
+
+    def test_so_o_banco_vale(self):
+        self.assertEqual("https://do-banco.com.br",
+                         self.monta("", "https://do-banco.com.br"))
+
+    def test_sem_nenhum_dos_dois_e_silencio(self):
+        self.assertEqual("", self.monta("", ""),
+                         "endereco ausente nao pode virar medicao nenhuma")
+
+    def test_a_regra_de_deploy_enxerga_o_endereco_da_tela(self):
+        """A regra de deploy, CHAMADA, com e sem endereco.
+
+        `caso["url_prod"]` passa a carregar o endereco gravado pela tela. Sem
+        isto, digitar o endereco nao fazia a regua cobrar publicacao — e a
+        pessoa via o painel ignorar, calado, o que ela acabara de dizer.
+        """
+        regra = next(r for r in coletar.CRITERIOS if r[0] == "deploy")
+        cobra = regra[4]
+        sem = {"repo": Path(tempfile.gettempdir()) / "nao-existe-mesmo",
+               "caso": {}}
+        self.assertFalse(cobra(sem), "projeto de gaveta nao deve 2 pontos")
+        com = dict(sem, caso={"url_prod": "https://do-banco.exemplo"})
+        self.assertTrue(cobra(com),
+                        "com endereco declarado, a publicacao passa a ser cobrada")
+
+
+class OColetorLEOEnderecoDoBancoDeVerdade(unittest.TestCase):
+    """A prova que os guardas de TEXTO nao davam.
+
+    Os dois primeiros casais desta etapa casavam a linha do fonte, e a linha
+    continuava la depois de qualquer sabotagem que a contornasse: trocar o corpo
+    da leitura por `enderecos = {}` desligava a etapa inteira e a suite ficava
+    VERDE. Achado pela revisao de Python de 01/09/2026, que sabotou e provou.
+
+    Aqui o coletor RODA, com o banco e a rede de mentira, e o que se confere e
+    qual endereco chegou em `mede_site`.
+    """
+
+    def _rodar(self, url_no_banco, url_no_arquivo):
+        import banco
+        medidos = []
+        enderecos = {"projeto": url_no_banco} if url_no_banco else {}
+        local = {"git": {"remoto_slug": "dono/repo"}}
+        if url_no_arquivo:
+            local["url_prod"] = url_no_arquivo
+        for alvo, nome, valor in (
+                (banco, "ler_tudo", lambda **k: {"projeto": {
+                    "local": {"dados": local}}}),
+                (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
+                (banco, "conta_local", lambda *a, **k: 1),
+                (banco, "enderecos_de_producao", lambda uid, con=None: enderecos),
+                (banco, "gravar", lambda *a, **k: None),
+                (coletar_github, "mede_deploy", lambda *a, **k: {}),
+                (coletar_github, "mede_site",
+                 lambda u: medidos.append(u) or {"url": u, "ok": True,
+                                                 "codigo": 200, "erro": "",
+                                                 "ms": 1, "tentativas": 1}),
+                (coletar_github, "_gh_graphql", lambda q: (
+                    {"r0": {"nameWithOwner": "dono/repo",
+                            "url": "https://github.com/dono/repo",
+                            "defaultBranchRef": {"name": "main", "target": {}}}},
+                    None))):
+            self.addCleanup(setattr, alvo, nome, getattr(alvo, nome))
+            setattr(alvo, nome, valor)
+        coletar_github.main()
+        return medidos
+
+    def test_com_os_dois_o_coletor_mede_o_do_BANCO(self):
+        self.assertEqual(["https://do-banco.exemplo"],
+                         self._rodar("https://do-banco.exemplo",
+                                     "https://do-arquivo.exemplo"))
+
+    def test_so_com_o_arquivo_ele_continua_valendo(self):
+        self.assertEqual(["https://do-arquivo.exemplo"],
+                         self._rodar("", "https://do-arquivo.exemplo"))
+
+    def test_so_com_o_banco_ele_vale(self):
+        self.assertEqual(["https://do-banco.exemplo"],
+                         self._rodar("https://do-banco.exemplo", ""))
+
+    def test_sem_nenhum_dos_dois_nao_mede_NADA(self):
+        """Projeto sem endereco declarado nao tem site para estar fora do ar.
+        Medir alguma coisa aqui seria inventar um veredito."""
+        self.assertEqual([], self._rodar("", ""))
+
+    def _medir_com(self, do_banco, do_arquivo):
+        """`coletar.medir()` rodando de verdade sobre uma raiz de mentira.
+
+        SO ASSIM se prova a linha que junta o endereco ao `caso`. O teste que
+        chamava a regra de deploy direto, com um `caso` montado a mao, deixava
+        passar `if False and enderecos_gravados...` — a sabotagem exata que a
+        revisao de Python usou.
+        """
+        import banco
+        casa = tempfile.TemporaryDirectory()
+        self.addCleanup(casa.cleanup)
+        projeto = Path(casa.name) / "projeto-x"
+        projeto.mkdir()
+        (projeto / "README.md").write_text("# x", encoding="utf-8")
+
+        enderecos = {"projeto-x": do_banco} if do_banco else {}
+        arquivo_casos = Path(casa.name) / "casos.json"
+        arquivo_casos.write_text(
+            json.dumps({"projeto-x": {"url_prod": do_arquivo}} if do_arquivo else {}),
+            encoding="utf-8")
+        for alvo, nome, valor in (
+                (coletar, "CASOS", arquivo_casos),
+                (coletar, "pastas_de_projeto", lambda: [projeto]),
+                (coletar, "coleta_docker", lambda: []),
+                (coletar, "portas_escutando", lambda: set()),
+                (coletar, "abertos_no_editor", lambda: set()),
+                (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
+                (banco, "conta_local", lambda *a, **k: 1),
+                (banco, "enderecos_de_producao", lambda uid, con=None: enderecos)):
+            self.addCleanup(setattr, alvo, nome, getattr(alvo, nome))
+            setattr(alvo, nome, valor)
+        return coletar.medir()["projetos"][0]
+
+    def test_medir_poe_o_endereco_do_BANCO_no_projeto(self):
+        p = self._medir_com("https://do-banco.exemplo", "https://do-arquivo.exemplo")
+        self.assertEqual("https://do-banco.exemplo", p["url_prod"])
+
+    def test_medir_sem_endereco_no_banco_usa_o_do_arquivo(self):
+        p = self._medir_com("", "https://do-arquivo.exemplo")
+        self.assertEqual("https://do-arquivo.exemplo", p["url_prod"])
+
+    def test_o_endereco_da_tela_faz_a_regua_COBRAR_publicacao(self):
+        """A outra ponta da mesma linha: sem isto, digitar o endereco na tela
+        nao mudava nada na nota, e o painel ignorava, calado, o que a pessoa
+        acabara de dizer."""
+        sem = self._medir_com("", "")
+        com = self._medir_com("https://do-banco.exemplo", "")
+        de = lambda p: next(i for i in p["prontidao"]["itens"]
+                            if i["chave"] == "deploy")
+        self.assertFalse(de(sem)["aplica"],
+                         "projeto de gaveta nao deve 2 pontos a ninguem")
+        self.assertTrue(de(com)["aplica"],
+                        "com endereco gravado, a publicacao passa a ser cobrada")
+
+
+class OIpEFIXADOEntreAPeneiraEAConexao(unittest.TestCase):
+    """O achado bloqueante da revisao de seguranca de 01/09/2026.
+
+    Ate ali `host_publico` resolvia o nome e aprovava; depois `mede_site`
+    resolvia de novo, e o `urlopen` uma terceira vez. SO A ULTIMA decidia para
+    onde o pacote ia. Um nome com TTL zero, alternando entre um IP publico e
+    172.17.0.x, passava pela peneira e conectava dentro da rede — e a VPS deste
+    projeto tem 26 conteineres sem nenhuma outra porta de entrada.
+
+    Nenhum caso aqui bate na rede: o que se prova e PARA ONDE o soquete e
+    aberto, e isso se le no `create_connection`.
+    """
+
+    def setUp(self):
+        self.abertos = []
+
+        class SoqueteDeMentira:
+            def close(self_):
+                pass
+
+            def settimeout(self_, *a):
+                pass
+
+            def sendall(self_, *a):
+                pass
+
+            def makefile(self_, *a, **k):
+                import io
+                return io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+
+        def falso(endereco, timeout=None, *a, **k):
+            self.abertos.append(endereco)
+            return SoqueteDeMentira()
+
+        self.antes = coletar_github.socket.create_connection
+        coletar_github.socket.create_connection = falso
+        self.addCleanup(setattr, coletar_github.socket, "create_connection",
+                        self.antes)
+
+    def test_a_conexao_vai_para_o_IP_CONFERIDO_e_nao_para_o_nome(self):
+        """Se o soquete abrisse pelo nome, o resolvedor decidiria de novo."""
+        coletar_github._uma_batida("http://exemplo.com.br/x", "203.0.113.7")
+        self.assertEqual([("203.0.113.7", 80)], self.abertos)
+
+    def test_o_Host_e_o_SNI_continuam_sendo_o_NOME(self):
+        """Fixar o IP nao pode quebrar site com varios dominios no mesmo IP,
+        nem a conferencia do certificado — que e contra o nome."""
+        con = coletar_github._Fixado("exemplo.com.br", "203.0.113.7", 443, 8)
+        self.assertEqual("exemplo.com.br", con.host)
+        self.assertEqual("203.0.113.7", con._ip)
+        self.assertEqual(443, con.port)
+
+    def test_o_https_fixado_confere_certificado(self):
+        """Contexto padrao do `http.client` = verificacao ligada. Desligar isso
+        para "funcionar" transformaria a medicao num teatro."""
+        con = coletar_github._Fixado("exemplo.com.br", "203.0.113.7", 443, 8)
+        self.assertIsNotNone(con._context)
+        self.assertTrue(con._context.check_hostname)
+        self.assertEqual(ssl.CERT_REQUIRED, con._context.verify_mode)
+
+    def test_mede_site_resolve_UMA_vez(self):
+        """Cada resolucao a mais e uma chance de o outro lado trocar a resposta."""
+        vezes = []
+
+        def resolver(host):
+            vezes.append(host)
+            return ["203.0.113.7"]
+
+        antes = coletar_github.enderecos_publicos
+        coletar_github.enderecos_publicos = resolver
+        self.addCleanup(setattr, coletar_github, "enderecos_publicos", antes)
+        coletar_github.mede_site("http://exemplo.com.br/")
+        self.assertEqual(1, len(vezes), "resolveu %d vezes" % len(vezes))
+        self.assertTrue(self.abertos, "nem chegou a conectar")
+        for endereco in self.abertos:
+            self.assertEqual("203.0.113.7", endereco[0])
+
+    def test_nome_com_UMA_resposta_interna_e_recusado_INTEIRO(self):
+        """Falha fechada por CONJUNTO, e nao por amostra: aceitar "algum e
+        publico" e deixar a sorte escolher qual sera usado."""
+        antes = coletar_github.socket.getaddrinfo
+        coletar_github.socket.getaddrinfo = lambda *a, **k: [
+            (2, 1, 6, "", ("8.8.8.8", 0)),
+            (2, 1, 6, "", ("172.17.0.5", 0)),
+        ]
+        self.addCleanup(setattr, coletar_github.socket, "getaddrinfo", antes)
+        self.assertEqual([], coletar_github.enderecos_publicos("meio-a-meio.tld"))
+        self.assertFalse(coletar_github.host_publico("meio-a-meio.tld"))
+        d = coletar_github.mede_site("http://meio-a-meio.tld/")
+        self.assertIsNone(d["ok"], "nao medir NAO e estar fora do ar")
+        self.assertEqual("nao_resolveu", d["erro"])
+        self.assertEqual([], self.abertos, "conectou mesmo com a peneira barrando")
+
+    def test_a_resolucao_tem_PRAZO(self):
+        """`getaddrinfo` nao aceita prazo, e o padrao do sistema passa de 20 s.
+        Uma thread presa por pedido e o jeito mais barato de derrubar o painel."""
+        vistos = {}
+
+        def espiar(quanto):
+            vistos.setdefault("posto", quanto)
+
+        antes_set = coletar_github.socket.setdefaulttimeout
+        antes_get = coletar_github.socket.getaddrinfo
+        coletar_github.socket.setdefaulttimeout = espiar
+        coletar_github.socket.getaddrinfo = lambda *a, **k: [
+            (2, 1, 6, "", ("8.8.8.8", 0))]
+        self.addCleanup(setattr, coletar_github.socket, "setdefaulttimeout",
+                        antes_set)
+        self.addCleanup(setattr, coletar_github.socket, "getaddrinfo", antes_get)
+        coletar_github.enderecos_publicos("exemplo.com.br")
+        self.assertEqual(coletar_github.PRAZO_DO_DNS, vistos.get("posto"))
 
 
 if __name__ == "__main__":

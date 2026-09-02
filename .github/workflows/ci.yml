@@ -196,6 +196,15 @@ jobs:
       - name: Conectar um computador, de ponta a ponta
         run: python test_conectar_ponta_a_ponta.py
 
+      # O conectador roda FORA deste servidor, na maquina de quem baixa: ele
+      # mexe com tkinter, com a rede e com o agendador do Windows. Esta CI e
+      # Linux, sem agendador, sem janela grafica e sem painel — entao TUDO ali
+      # e por duble. O que este passo cobra de verdade sao as tres leis do
+      # arquivo: um arquivo so de biblioteca padrao, fechar sem escolher nao
+      # deixa lixo, e a pausa do fim nao pendura a tarefa agendada.
+      - name: O conectador
+        run: python test_conectador.py
+
       # ETAPA 15 — os oito itens verificaveis do design.md viram verificacao.
       # Cor literal solta num componente, token de estado pintando um botao,
       # "loading" numa tela: nada disso quebra nada, nada disso aparece numa

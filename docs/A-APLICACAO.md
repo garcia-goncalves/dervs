@@ -136,18 +136,39 @@ Este é o caso em que a maioria das ferramentas mente. O DERVS não:
 
 ### 5.1. As três conexões
 
-Tudo pela tela, nunca editando arquivo.
+Tudo pela tela, nunca editando arquivo. **Construídas em 01/09/2026**, na esteira
+"Conectar em três portas" — a tela `Conectar projeto` tem as três, e cada uma diz o
+estado dela: conectado, não conectado, ou **não deu para conferir**.
 
 **a) A pasta do seu computador.** Você escolhe a pasta; o DERVS varre e descobre sozinho
 os projetos que estão lá — tipo (Node, Python, .NET), endereço do git, containers, portas.
-O padrão sugerido é `source/repos`, mas a escolha é sua. *Hoje isso é um arquivo escrito à
-mão. Deixa de ser.*
+O padrão sugerido é `source/repos`, mas a escolha é sua, e **ela deixou de estar escrita
+no código-fonte**: até esta esteira, o caminho da máquina do dono estava cravado em
+`coletar.py`, e qualquer outro computador media quase nada — mostrando isso como "nenhum
+projeto pendente".
 
-**b) A sua conta do GitHub.** Já construído: aplicativo do GitHub com token de vida curta
-(uma hora). O que fica guardado no banco é o número da instalação, que **não é segredo**.
+Dois caminhos, lado a lado e **como iguais**:
 
-**c) O seu servidor.** **Sem chave SSH.** O DERVS observa por HTTPS e publica acionando o
-próprio GitHub. Nunca guarda a chave da sua casa.
+- **O conectador** — um arquivo que você baixa pela tela e abre com dois cliques. Ele
+  pergunta a pasta, conecta sozinho e registra a tarefa que mantém o relato ligado. Não
+  pede terminal nenhum, e é o caminho para o seu computador de trabalho.
+- **A linha de comando** — para um servidor sem tela, e para quem prefere terminal. Ela
+  roda **de qualquer pasta**; o único pedaço a trocar é `<CAMINHO DO DERVS>`, porque o
+  painel não pode saber onde o repositório está na sua máquina, e inventar seria ele
+  mentindo.
+
+**b) A sua conta do GitHub.** Aplicativo do GitHub com token de vida curta (uma hora). O
+que fica guardado no banco é o número da instalação, que **não é segredo**. O botão leva à
+instalação e volta com a conta ligada — sem você ver, copiar ou colar segredo nenhum. O
+número que volta na URL **não é aceito por ter vindo na URL**: o DERVS pergunta ao GitHub
+se aquela instalação existe e se ela é sua, e só então grava. Desconectar acontece em
+github.com, e a tela diz isso.
+
+**c) O seu servidor.** **Sem chave SSH, agora e sempre.** Você informa o endereço público
+do site, por projeto; o DERVS bate nele e conta o que respondeu. Endereço de rede interna
+é recusado de propósito — o painel roda num servidor, e um endereço interno faria dele uma
+ferramenta de varredura. A recusa vem explicada em português, porque ela é o
+comportamento certo e não um defeito.
 
 ### 5.2. O botão consertar — com aprovação de um clique, nunca sozinho
 
@@ -474,6 +495,24 @@ Decisões travadas. Mudar qualquer uma exige um motivo novo, escrito.
   chega.
 
 ## 13. Dívidas conhecidas, ainda abertas
+
+- **A porta 2 nunca falou com o GitHub de verdade.** Toda a lógica está provada contra
+  dublês — o selo assinado, a recusa, a posse, o "não deu para conferir" —, mas não existe
+  aplicativo registrado com a *setup URL* apontando para `/github/instalado`. Criá-lo
+  **exige a mão do dono** em github.com. Ver `docs/esteira/conectar-tres-portas/`
+  `verificacao.md`.
+- **A tarefa agendada foi montada, não vista rodar.** A CI não tem Windows nem agendador.
+  Ninguém reiniciou o Windows para ver a máquina voltar a reportar; enquanto isso,
+  "sempre atualizado" é promessa.
+- **Instalação do GitHub em organização é recusada.** É decisão: provar que alguém é
+  membro de uma organização exige o fluxo de token do usuário, que é outra etapa. Aceitar
+  sem provar seria deixar qualquer conta amarrar a instalação alheia.
+- **Com várias contas, o coletor não sabe de quem é a instalação nem o endereço.** Ele
+  roda num processo só e lê os da conta local. Com duas pessoas não dói; com dez, dói.
+- **A máquina sem o repositório clonado continua sem reportar.** O conectador é um
+  arquivo de biblioteca padrão pura, e uma medição precisa de ~4.600 linhas do repositório
+  na máquina. Ele pareia assim mesmo e **diz** isso — falha honesta, e não uma tarefa
+  agendada que morre calada.
 
 - **Pendência #10** — peneirar o nome do repositório na entrada, e não na hora de montar a
   consulta. Defeito que já existia.

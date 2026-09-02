@@ -125,12 +125,21 @@ function mostrar(tela) {
 
 function navegar() {
   const { tela, alvo } = rota();
+  /* Sair da tela encerra a espera da máquina nova. Repintar a MESMA tela não —
+     esse caso é tratado por `reencontrarEspera`. */
+  if (ESPERA.t && ESPERA.tela !== tela) pararDeEsperar();
   switch (tela) {
     case "projeto":      mostrar("projeto"); pintarProjeto(alvo); break;
     case "alerta":       mostrar("alerta"); pintarAlerta(alvo); break;
     case "trabalho":     mostrar("trabalho"); pintarTrabalho(alvo); break;
     case "consumo":      mostrar("consumo"); pintarConsumo(); break;
-    case "conectar":     mostrar("conectar"); pintarConectar(); break;
+    /* A tela pinta PRIMEIRO, com o que ja se sabe, e depois pergunta. Assim
+       ela nao fica em branco esperando a rede -- e "nao deu para conferir"
+       fica reservado para a pergunta que falhou, e nao para a que nunca foi
+       feita. As duas coisas se parecem na tela e nao sao a mesma. */
+    case "conectar":     mostrar("conectar"); pintarConectar();
+                         olharOsComputadores(); olharOsEnderecos();
+                         olharOGithub(); break;
     case "computadores": mostrar("computadores"); carregarComputadores(); break;
     case "entrada":      mostrar("entrada"); pdCarregar(); break;
     default:             mostrar("painel"); pintarPainel(); break;
@@ -714,70 +723,598 @@ async function desarquivar(id) {
 
 /* ================================================== 4. Conectar ========== */
 
+/* AS TRES PORTAS (etapa A5).
+
+   A tela antiga mandava o dono para outra tela e escrevia na cara dele que
+   conectar a conta do GitHub e conectar o servidor "ficaram para a fatia 2".
+   Agora as tres portas moram aqui, e cada uma diz o estado dela em vez de
+   prometer.
+
+   TRES ESTADOS, e o terceiro e de primeira classe: conectado, nao conectado e
+   NAO DEU PARA CONFERIR. Zerar o que nao deu para reler apaga um problema
+   real, e essa e a lei 2 deste produto. */
+
+const ESTADO_DA_PORTA = {
+  conectado:   { cor: "verde",    glifo: "[OK]",  rotulo: "conectado" },
+  desconectado:{ cor: "vermelho", glifo: "[X]",   rotulo: "não conectado" },
+  sem_dados:   { cor: "neutro",   glifo: "[···]", rotulo: "não deu para conferir" }
+};
+
+/* QUATRO SINAIS, como o selo dos projetos: cor (o fundo), forma (a borda),
+   glifo (o caractere) e rótulo escrito. Cor sozinha some no preto e branco e
+   não existe para quem não distingue verde de vermelho. */
+function marcaDaPorta(estado) {
+  const e = ESTADO_DA_PORTA[estado] ? estado : "sem_dados";
+  const d = ESTADO_DA_PORTA[e];
+  const span = document.createElement("span");
+  span.className = "marca";
+  span.dataset.cor = d.cor;
+  const g = document.createElement("span");
+  g.className = "marca__glifo";
+  g.setAttribute("aria-hidden", "true");
+  g.textContent = d.glifo;
+  const r = document.createElement("span");
+  r.textContent = d.rotulo;
+  span.append(g, r);
+  return span;
+}
+
+/* Um cartão de porta, montado por uma função só. Duas montagens divergem, e a
+   que divergir é sempre a que esquece o rótulo escrito. */
+function porta({ titulo, estado, resumo, carimbo, caminhos = [], nota = "",
+                depois = "" }) {
+  const cartao = document.createElement("div");
+  cartao.className = "cartao porta";
+
+  const cabeca = document.createElement("div");
+  cabeca.className = "porta__cabeca";
+  const h = document.createElement("h2");
+  h.textContent = titulo;
+  cabeca.append(h, marcaDaPorta(estado));
+
+  const p = document.createElement("p");
+  p.textContent = resumo;
+  cartao.append(cabeca, p);
+
+  if (carimbo) {
+    const c = document.createElement("p");
+    c.className = "carimbo";
+    c.textContent = carimbo;
+    cartao.append(c);
+  }
+
+  /* Os botões vão dentro de `.acoes` — é lá que mora o `min-height: 44px`.
+     Soltos no cartão eles ficam com ~36px, abaixo do alvo de toque que este
+     projeto adotou, e isso já foi corrigido uma vez aqui. */
+  if (caminhos.length) {
+    const acoes = document.createElement("div");
+    acoes.className = "acoes";
+    for (const c of caminhos) {
+      const b = document.createElement("button");
+      b.className = "botao" + (c.secundario ? " botao--secundario" : "");
+      b.type = "button";
+      b.textContent = c.rotulo;
+      if (c.desligado) {
+        b.disabled = true;
+        b.title = c.porque || "";
+      } else {
+        b.addEventListener("click", c.aoClicar);
+      }
+      acoes.append(b);
+    }
+    cartao.append(acoes);
+  }
+
+  /* O lugar onde a confirmação da etapa A6 é pintada. Nasce vazio: cartão que
+     abre com uma caixa de espera vazia parece que já está esperando alguma
+     coisa. */
+  if (depois) {
+    const caixa = document.createElement("div");
+    caixa.className = "espera";
+    caixa.id = depois;
+    cartao.append(caixa);
+  }
+
+  if (nota) {
+    const n = document.createElement("p");
+    n.className = "mole";
+    n.textContent = nota;
+    cartao.append(n);
+  }
+  return cartao;
+}
+
+async function baixarConectador() {
+  const r = await escrever("/api/conectador");
+  if (!r.ok) {
+    recado("não conseguimos preparar o conectador agora. Tente de novo.", true);
+    return;
+  }
+  /* O arquivo sai com um número de dez minutos dentro. A espera começa aqui,
+     e não quando a pessoa abre o arquivo — é justamente o intervalo entre uma
+     coisa e outra que ela passa sem saber se deu certo. */
+  const caixa = $("#espera-maquina");
+  if (caixa) esperarMaquinaNova(caixa, 10);
+  /* `Blob` mais `<a download>`: a rota é POST, então não dá para apontar um
+     link direto para ela — e POST é o certo aqui, porque este pedido CRIA o
+     número de seis dígitos que vai dentro do arquivo. */
+  const texto = await r.text();
+  const url = URL.createObjectURL(new Blob([texto], { type: "text/plain" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "conectar-dervs.py";
+  document.body.append(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  recado("baixado. Abra o arquivo com dois cliques — o número já vai dentro.");
+}
+
+/* ------------------------------------------------- a espera da máquina nova
+   O terceiro dos três acertos que o Tailscale, o runner de verificação e o
+   Netdata têm e o DERVS não tinha: CONFIRMAÇÃO IMEDIATA de que o aparelho
+   apareceu. Os outros dois — um passo só, e número de curta duração gerado
+   pelo painel — já estavam de pé.
+
+   NENHUMA ROTA NOVA. `/api/maquinas` já existe, já exige sessão e já é
+   consumida por `carregarComputadores()`. Reusá-la é o que permite esta parte
+   existir sem tocar no servidor.
+
+   TRÊS ESTADOS, e o terceiro é de primeira classe:
+     apareceu · ainda não apareceu, com o relógio correndo · NÃO DEU PARA
+     CONFERIR, quando a consulta falhou. O terceiro nunca se pinta como o
+     segundo: "ainda não" é uma afirmação sobre a máquina, "não deu" é uma
+     afirmação sobre a consulta.
+
+   E APARECER NÃO É ESTAR NA LISTA. A máquina só apareceu quando ela tem
+   `visto_em`: parear sem relatório deixa uma linha na tabela que nunca deu
+   notícia, e chamar isso de conectado é o painel mentindo. */
+
+/* Os enderecos de producao gravados por esta conta, e o carimbo de quando
+   foram lidos. Vazio NAO e a mesma coisa que "nao li": por isso o carimbo mora
+   ao lado, e a porta 3 se pinta de "nao deu para conferir" enquanto ele nao
+   existe. */
+/* A instalacao do GitHub desta conta, e o carimbo de quando foi lida. `null`
+   e "nao li"; string vazia e "li, e nao ha". Sao coisas diferentes. */
+let GITHUB = null;
+let GITHUB_LIDO_EM = "";
+
+let ENDERECOS = null;
+let ENDERECOS_LIDO_EM = "";
+/* O resultado da ultima medicao feita pela tela, por projeto. Ele NAO vem da
+   leitura: `/api/enderecos` diz o que esta gravado, e nao se responde. */
+let MEDIDAS = {};
+
+const ESPERA = {
+  t: null,           /* o relógio da sondagem */
+  ate: 0,            /* quando o número vence, em ms */
+  antes: null,       /* os ids que já existiam quando a espera começou */
+  onde: null,        /* o elemento que ela pinta */
+  caixa: "",         /* o id desse elemento, para reencontrá-lo */
+  tela: "",          /* a tela em que ela nasceu */
+  viu: 0,            /* quando a máquina apareceu, em ms */
+  ultimo: null       /* o último estado pintado, para repintar igual */
+};
+
+function pararDeEsperar() {
+  clearInterval(ESPERA.t);
+  ESPERA.t = null;
+  ESPERA.onde = null;
+  ESPERA.ultimo = null;
+  ESPERA.tela = "";
+}
+
+/* A TELA SE REPINTA SOZINHA A CADA MINUTO, e o repintar jogava fora o elemento
+   em que a espera escrevia — a confirmação que a pessoa está justamente
+   esperando sumia da tela sem aviso, e a espera continuava girando contra um
+   elemento órfão. Conferido clicando, não lendo: a contagem subia de 2 para 3
+   e o bloco desaparecia.
+
+   Agora a espera se reencontra pelo id, e repinta o último estado. Quem a
+   encerra é a saída da tela, e só ela. */
+function reencontrarEspera() {
+  if (!ESPERA.t || rota().tela !== ESPERA.tela) return;
+  const caixa = document.getElementById(ESPERA.caixa);
+  if (!caixa) return;
+  ESPERA.onde = caixa;
+  if (ESPERA.ultimo) pintarEspera(ESPERA.ultimo);
+}
+
+function esperarMaquinaNova(onde, minutos) {
+  pararDeEsperar();
+  if (!onde) return;
+  ESPERA.onde = onde;
+  ESPERA.caixa = onde.id;
+  ESPERA.tela = rota().tela;
+  ESPERA.ate = Date.now() + Math.max(1, minutos || 10) * 60000;
+  ESPERA.viu = 0;
+  ESPERA.antes = new Set((COMPUTADORES || [])
+    .filter(m => m.visto_em).map(m => m.id));
+  pintarEspera({ estado: "esperando" });
+  ESPERA.t = setInterval(sondarMaquinaNova, 5000);
+  sondarMaquinaNova();
+}
+
+async function sondarMaquinaNova() {
+  /* A sondagem PARA quando o número vence ou quando a tela sai. Relógio
+     girando para sempre numa aba esquecida é pedido de graça para o servidor,
+     e ninguém está lendo o resultado. */
+  /* A tela saiu: nada de relógio girando para sempre numa aba esquecida. */
+  if (rota().tela !== ESPERA.tela) return pararDeEsperar();
+  if (!ESPERA.onde || !ESPERA.onde.isConnected) reencontrarEspera();
+  if (!ESPERA.onde) return;
+  if (Date.now() > ESPERA.ate) {
+    pintarEspera({ estado: "vencido" });
+    return pararDeEsperar();
+  }
+  let d;
+  try {
+    const r = await fetch("/api/maquinas");
+    if (!r.ok) throw new Error("recusado");
+    d = await r.json();
+  } catch {
+    /* NÃO é "ainda não apareceu". É "não olhei". */
+    pintarEspera({ estado: "sem_dados" });
+    return;
+  }
+  COMPUTADORES = d.maquinas || [];
+  COMPUTADORES_LIDO_EM = new Date().toISOString();
+  const nova = COMPUTADORES.find(m => m.visto_em && !ESPERA.antes.has(m.id));
+  if (nova) {
+    pintarEspera({ estado: "apareceu", maquina: nova });
+    /* NAO PARE NO PRIMEIRO SIM, e este foi um numero errado com cara de certo,
+       pego clicando: a maquina nasce no pareamento e a primeira medicao chega
+       alguns segundos depois. Quem parasse aqui escreveria "apareceu, com 0
+       projeto(s)" para uma maquina que tinha acabado de mandar tres.
+
+       Entao a espera continua enquanto a contagem for zero, ate meio minuto
+       depois de a maquina aparecer. Passado isso, zero e zero de verdade — e
+       a frase diz isso com todas as letras, em vez de fingir um numero. */
+    ESPERA.viu = ESPERA.viu || Date.now();
+    if (nova.projetos > 0 || Date.now() - ESPERA.viu > 30000) pararDeEsperar();
+    return;
+  }
+  pintarEspera({ estado: "esperando" });
+}
+
+function pintarEspera({ estado, maquina }) {
+  const onde = ESPERA.onde;
+  if (!onde) return;
+  /* Guardado para o repintar da tela — ver `reencontrarEspera`. */
+  ESPERA.ultimo = { estado, maquina };
+  onde.textContent = "";
+  onde.dataset.estado = estado;
+
+  const linha = document.createElement("p");
+  linha.className = "espera__linha";
+
+  if (estado === "apareceu") {
+    linha.append(marcaDaPorta("conectado"));
+    const txt = document.createElement("span");
+    const nome = "“" + (maquina.nome || "o computador") + "”";
+    /* Zero projetos NAO se escreve como numero: "com 0 projeto(s)" se le como
+       uma medicao que deu zero, e nesses primeiros segundos ela ainda nao
+       aconteceu. Duas frases diferentes para duas coisas diferentes. */
+    txt.textContent = maquina.projetos > 0
+      ? nome + " apareceu, com " + maquina.projetos + " projeto(s)."
+      : nome + " apareceu, e ainda não mandou a primeira medição.";
+    linha.append(txt);
+    onde.append(linha);
+    const c = document.createElement("p");
+    c.className = "carimbo";
+    /* O carimbo é o `visto_em` DELA, e não a hora desta tela: o que interessa
+       é quando a máquina deu notícia, não quando o navegador perguntou. */
+    c.textContent = "deu notícia " + haQuanto(maquina.visto_em);
+    onde.append(c);
+    return;
+  }
+
+  if (estado === "sem_dados") {
+    linha.append(marcaDaPorta("sem_dados"));
+    const txt = document.createElement("span");
+    txt.textContent = "Não consegui perguntar ao painel agora. Isso não quer "
+                    + "dizer que o computador não apareceu — quer dizer que "
+                    + "não olhei. Vou tentar de novo em segundos.";
+    linha.append(txt);
+    onde.append(linha);
+    return;
+  }
+
+  if (estado === "vencido") {
+    linha.append(marcaDaPorta("desconectado"));
+    const txt = document.createElement("span");
+    txt.textContent = "O número venceu e nenhum computador apareceu. Gere "
+                    + "outro e tente de novo.";
+    linha.append(txt);
+    onde.append(linha);
+    return;
+  }
+
+  const ponto = document.createElement("span");
+  ponto.className = "freio__ponto";
+  ponto.setAttribute("aria-hidden", "true");
+  linha.append(ponto);
+  const txt = document.createElement("span");
+  const faltam = Math.max(0, Math.round((ESPERA.ate - Date.now()) / 60000));
+  txt.textContent = "Esperando o computador dar a primeira notícia. O número "
+                  + "vale por mais " + faltam + " minuto(s).";
+  linha.append(txt);
+  onde.setAttribute("aria-live", "polite");
+  onde.append(linha);
+}
+
+/* Perguntar `/api/maquinas` sem depender da tela de Computadores estar
+   aberta. `carregarComputadores()` nao serve aqui: ela pinta a lista e o
+   carimbo daquela outra tela, e chama-la daqui escreveria numa tela que
+   ninguem esta vendo. */
+async function olharOGithub() {
+  try {
+    const r = await fetch("/api/github");
+    if (!r.ok) throw new Error("recusado");
+    GITHUB = await r.json();
+    GITHUB_LIDO_EM = new Date().toISOString();
+  } catch {
+    return;                 /* sem carimbo: a porta 2 dirá que não olhou */
+  }
+  if (rota().tela === "conectar") pintarConectar();
+}
+
+async function ligarOGithub() {
+  const r = await escrever("/api/github/instalar");
+  if (!r.ok) {
+    recado("não conseguimos abrir a instalação agora. Tente de novo.", true);
+    return;
+  }
+  const d = await r.json();
+  /* Salto de página inteiro, e não uma aba nova: a volta do GitHub cai numa
+     rota nossa que precisa do cookie da cortina, e aba nova aberta por script
+     é o que os navegadores bloqueiam primeiro. */
+  location.href = d.url;
+}
+
+async function olharOsEnderecos() {
+  try {
+    const r = await fetch("/api/enderecos");
+    if (!r.ok) throw new Error("recusado");
+    const d = await r.json();
+    ENDERECOS = d.enderecos || {};
+    ENDERECOS_LIDO_EM = new Date().toISOString();
+  } catch {
+    return;                 /* sem carimbo: a porta 3 dirá que não olhou */
+  }
+  if (rota().tela === "conectar") pintarConectar();
+}
+
+async function guardarEndereco(projeto, url) {
+  const r = await escrever("/api/enderecos/guardar", { projeto, url });
+  let d = {};
+  try { d = await r.json(); } catch { d = {}; }
+  if (!r.ok) {
+    /* A RECUSA DA PENEIRA NÃO É UM DEFEITO, e a tela não a pinta como um:
+       endereço interno recusado é o comportamento certo, e a frase que o
+       servidor manda já explica por quê, em português. */
+    recado(d.erro || "não conseguimos guardar esse endereço.", true);
+    return;
+  }
+  if (!url) {
+    delete MEDIDAS[projeto];
+    recado("endereço apagado. Esse projeto volta a não ter site medido.");
+  } else {
+    MEDIDAS[projeto] = { ok: d.ok, codigo: d.codigo, erro: d.erro,
+                         medido_em: d.medido_em };
+    recado("endereço guardado.");
+  }
+  await olharOsEnderecos();
+  if (rota().tela === "conectar") pintarConectar();
+}
+
+async function olharOsComputadores() {
+  try {
+    const r = await fetch("/api/maquinas");
+    if (!r.ok) throw new Error("recusado");
+    const d = await r.json();
+    COMPUTADORES = d.maquinas || [];
+    COMPUTADORES_LIDO_EM = new Date().toISOString();
+  } catch {
+    /* Deixa como estava: sem carimbo, a porta 1 se pinta de "nao deu para
+       conferir", que e exatamente o que aconteceu. */
+    return;
+  }
+  if (rota().tela === "conectar") pintarConectar();
+}
+
 function pintarConectar() {
   const onde = $("#conectar-corpo");
   onde.textContent = "";
 
-  const cartao = document.createElement("div");
-  cartao.className = "cartao";
-  const h = document.createElement("h2");
-  const passo = document.createElement("p");
+  /* PORTA 1 — o seu computador. `COMPUTADORES` vem de `/api/maquinas`; quando
+     a leitura falhou, `COMPUTADORES_LIDO_EM` fica vazio e o estado é "não deu
+     para conferir" — nunca "nenhum computador", que é outra coisa. */
+  const ligados = COMPUTADORES ? COMPUTADORES.length : 0;
+  const leu = !!COMPUTADORES_LIDO_EM;
+  onde.append(porta({
+    titulo: "O seu computador",
+    estado: !leu ? "sem_dados" : (ligados ? "conectado" : "desconectado"),
+    resumo: !leu
+      ? "Não consegui ler a lista de computadores desta conta. Isso não quer "
+        + "dizer que nenhum está conectado — quer dizer que não olhei."
+      : (ligados
+         ? "Há " + ligados + " computador(es) reportando para esta conta. O "
+           + "agente varre as pastas com Git e manda o que achou; não há nada "
+           + "para escolher aqui."
+         : "Nenhum computador reporta para esta conta ainda. Sem um deles, o "
+           + "painel só enxerga o que está no GitHub."),
+    carimbo: leu ? "contagem lida " + haQuanto(COMPUTADORES_LIDO_EM) : "",
+    /* OS DOIS CAMINHOS LADO A LADO, e como IGUAIS. Não é principal e plano B:
+       o conectador serve a máquina de trabalho, a linha serve o servidor sem
+       tela e quem prefere terminal. */
+    caminhos: [
+      { rotulo: "Baixar o conectador", aoClicar: baixarConectador },
+      { rotulo: "Usar a linha de comando", secundario: true,
+        aoClicar: () => irPara("#/computadores") }
+    ],
+    depois: "espera-maquina",
+    nota: "O conectador é um arquivo que você abre com dois cliques: ele "
+        + "pergunta a pasta dos seus projetos e conecta sozinho. A tela azul "
+        + "de proteção do Windows não aparece — ela vigia por extensão, e a "
+        + "deste arquivo não está na lista dela. O que pode aparecer é o aviso "
+        + "de arquivo baixado da internet, e o Windows vai abri-lo com o "
+        + "programa associado a essa extensão na sua máquina."
+  }));
 
-  if (COMPUTADORES && COMPUTADORES.length) {
-    h.textContent = "Os projetos vêm sozinhos";
-    passo.textContent =
-      "Você já tem " + COMPUTADORES.length + " computador(es) conectado(s). O "
-      + "agente varre as pastas com Git e reporta o que achou — não há nada "
-      + "para escolher aqui: o que ele mede aparece no painel na medição "
-      + "seguinte.";
-    const b = document.createElement("button");
-    b.className = "botao";
-    b.type = "button";
-    b.textContent = "Ver o painel";
-    b.addEventListener("click", () => irPara("#/painel"));
-    /* A contagem é um número, e número nesta tela leva carimbo como qualquer
-       outro. Achado do teste do item 8: a frase dizia "você já tem 2" sem
-       nunca dizer de quando era esse 2 — e ele vem da última visita à tela de
-       computadores, que pode ter sido ontem. */
-    const c = document.createElement("p");
-    c.className = "carimbo";
-    /* "contagem lida", e não só "lido": aqui o carimbo flutua num cartão cujo
-       número está no meio de um parágrafo, e "lido" sozinho se lê como
-       "quando esta tela foi lida". */
-    c.textContent = "contagem lida " + haQuanto(COMPUTADORES_LIDO_EM);
-    /* O botão vai dentro de `.acoes` — é lá que mora o `min-height: 44px`.
-       Solto no cartão ele fica com ~36px de altura, abaixo do alvo de toque
-       que este projeto adotou. De quebra o `.acoes` separa o carimbo do
-       botão, que sem isso ficava equidistante entre o texto e a ação, sem
-       dizer a que grupo pertence. */
+  /* PORTA 2 — a conta do GitHub (etapa C3).
+
+     QUEM CANCELOU NO MEIO vê "não deu para conferir", com o caminho de tentar
+     de novo — nunca um erro vermelho, e nunca "conectado". Cancelar não é
+     defeito: é o quarto estado, e ele é de primeira classe aqui. */
+  const leuGh = !!GITHUB_LIDO_EM;
+  const ligado = leuGh && !!GITHUB.instalacao;
+  const voltou = new URLSearchParams(location.search).get("github");
+  const caminhos2 = [];
+  if (leuGh && !GITHUB.da_para_instalar) {
+    caminhos2.push({ rotulo: "Conectar a conta", desligado: true,
+                     porque: "o aplicativo do GitHub ainda não foi registrado "
+                           + "neste servidor" });
+  } else {
+    caminhos2.push({ rotulo: ligado ? "Instalar em mais repositórios"
+                                    : "Conectar a conta",
+                     aoClicar: ligarOGithub });
+  }
+  onde.append(porta({
+    titulo: "A sua conta do GitHub",
+    estado: !leuGh ? "sem_dados"
+          : (ligado ? "conectado"
+                    : (voltou === "nao-deu" ? "sem_dados" : "desconectado")),
+    resumo: !leuGh
+      ? "Não consegui ler o estado desta conta. Isso não quer dizer que ela "
+        + "não está conectada — quer dizer que não olhei."
+      : (ligado
+         ? "Conectada. O DERVS traz sozinho os pedidos de alteração, a "
+           + "verificação automática e os alertas de segurança dos "
+           + "repositórios que você liberou."
+         : (voltou === "nao-deu"
+            ? "Não deu para confirmar a instalação. Se você fechou a página do "
+              + "GitHub no meio, é isso mesmo e não é erro: é só tentar de "
+              + "novo. O DERVS só liga a conta depois que o GitHub confirma."
+            : "Conectada, ela traz sozinha os pedidos de alteração, a "
+              + "verificação automática e os alertas de segurança dos seus "
+              + "repositórios — sem você colar chave nenhuma.")),
+    carimbo: leuGh ? "estado lido " + haQuanto(GITHUB_LIDO_EM) : "",
+    caminhos: caminhos2,
+    /* DESCONECTAR ACONTECE EM github.com, e a tela DIZ isso. Foi cortado do
+       escopo de propósito, e esconder o corte é mentir por omissão. */
+    nota: ligado
+      ? "Para desconectar, remova o aplicativo em github.com → Settings → "
+        + "Applications. Não fazemos isso por aqui de propósito: revogar o "
+        + "acesso é decisão que tem de morar do lado de quem dá o acesso."
+      : "Você escolhe no GitHub quais repositórios liberar, e pode mudar "
+        + "depois. Nenhuma chave é digitada aqui."
+  }));
+
+  /* PORTA 3 — o servidor (etapa B3). */
+  const leuEnd = !!ENDERECOS_LIDO_EM;
+  const quantos = leuEnd ? Object.keys(ENDERECOS).length : 0;
+  const cartao3 = porta({
+    titulo: "O seu servidor",
+    estado: !leuEnd ? "sem_dados" : (quantos ? "conectado" : "desconectado"),
+    resumo: !leuEnd
+      ? "Não consegui ler os endereços desta conta. Isso não quer dizer que "
+        + "nenhum está gravado — quer dizer que não olhei."
+      : (quantos
+         ? "Há " + quantos + " projeto(s) com endereço gravado. A coluna No ar "
+           + "deles sai de uma medição de verdade, e não de um arquivo escrito "
+           + "à mão."
+         : "Sem endereço gravado, a coluna No ar sai de um arquivo escrito à "
+           + "mão. Com ele, o DERVS bate no seu site e conta o que respondeu."),
+    carimbo: leuEnd ? "endereços lidos " + haQuanto(ENDERECOS_LIDO_EM) : "",
+    nota: "Nunca pedimos chave de acesso ao servidor, e não vamos pedir: o "
+        + "endereço público basta para conferir se ele responde. Endereço de "
+        + "rede interna é recusado de propósito — o painel roda num servidor, "
+        + "e um endereço interno faria dele uma ferramenta de varredura."
+  });
+  if (leuEnd) cartao3.append(formularioDeEndereco());
+  onde.append(cartao3);
+
+  reencontrarEspera();
+}
+
+/* O campo de endereço, mais a lista do que já está gravado. Um formulário de
+   verdade: quem digita e aperta Enter espera que funcione, e um `<div>` com
+   botão não dá isso ao teclado nem ao leitor de tela. */
+function formularioDeEndereco() {
+  const caixa = document.createElement("div");
+  caixa.className = "enderecos";
+
+  for (const [projeto, url] of Object.entries(ENDERECOS || {})) {
+    const li = document.createElement("div");
+    li.className = "endereco";
+
+    const dizeres = document.createElement("div");
+    dizeres.className = "endereco__dizeres";
+    const nome = document.createElement("strong");
+    nome.textContent = projeto;
+    const link = document.createElement("span");
+    link.className = "endereco__url";
+    link.textContent = url;
+    dizeres.append(nome, link);
+
+    /* OS TRÊS ESTADOS, e o terceiro é de primeira classe: no ar · fora do ar ·
+       NÃO DEU PARA CONFERIR. `ok` como `null` é o quarto estado do selo, e
+       pintá-lo de "fora do ar" apagaria a diferença entre um site caído e uma
+       medição que não aconteceu. */
+    const m = MEDIDAS[projeto];
+    if (m) {
+      dizeres.append(marcaDaPorta(m.ok === true ? "conectado"
+                                : m.ok === false ? "desconectado" : "sem_dados"));
+      const c = document.createElement("p");
+      c.className = "carimbo";
+      c.textContent = m.ok === null || m.ok === undefined
+        ? "não deu para medir (" + (m.erro || "sem motivo") + ") · "
+          + haQuanto(m.medido_em)
+        : "respondeu " + m.codigo + " · medido " + haQuanto(m.medido_em);
+      dizeres.append(c);
+    }
+
+    const tirar = document.createElement("button");
+    tirar.className = "botao botao--secundario";
+    tirar.type = "button";
+    tirar.textContent = "Apagar";
+    tirar.addEventListener("click", () => guardarEndereco(projeto, ""));
     const acoes = document.createElement("div");
     acoes.className = "acoes";
-    acoes.append(b);
-    cartao.append(h, passo, c, acoes);
-  } else {
-    h.textContent = "Falta conectar um computador";
-    passo.textContent =
-      "Esta tela não abre sem isso: quem lista as pastas com Git é o agente, e "
-      + "hoje nenhum computador está conectado a esta conta.";
-    const b = document.createElement("button");
-    b.className = "botao";
-    b.type = "button";
-    b.textContent = "Conectar um computador";
-    b.addEventListener("click", () => irPara("#/computadores"));
-    cartao.append(h, passo, b);
-  }
-  onde.append(cartao);
+    acoes.append(tirar);
 
-  /* O limite honesto, escrito na tela em vez de escondido: escolher a pasta
-     pela tela é da Fatia 2, e prometer o contrário aqui seria a mesma mentira
-     que este produto existe para não contar. */
-  const nota = document.createElement("p");
-  nota.className = "mole";
-  nota.textContent =
-    "Escolher pasta por pasta pela tela, conectar a conta do GitHub e conectar "
-    + "o servidor ficaram para a fatia 2 — as duas últimas guardam segredo de "
-    + "terceiro, e o cofre vem antes da gaveta.";
-  onde.append(nota);
+    li.append(dizeres, acoes);
+    caixa.append(li);
+  }
+
+  const form = document.createElement("form");
+  form.className = "endereco endereco--novo";
+  const projeto = document.createElement("input");
+  projeto.type = "text";
+  projeto.required = true;
+  projeto.placeholder = "nome do projeto";
+  projeto.setAttribute("aria-label", "Nome do projeto");
+  const url = document.createElement("input");
+  url.type = "url";
+  url.required = true;
+  url.placeholder = "https://o-seu-site.com.br";
+  url.setAttribute("aria-label", "Endereço público do site");
+  const salvar = document.createElement("button");
+  salvar.className = "botao";
+  salvar.type = "submit";
+  salvar.textContent = "Guardar o endereço";
+  form.addEventListener("submit", ev => {
+    ev.preventDefault();
+    guardarEndereco(projeto.value.trim(), url.value.trim());
+    projeto.value = url.value = "";
+  });
+  const acoes = document.createElement("div");
+  acoes.className = "acoes";
+  acoes.append(salvar);
+  form.append(projeto, url, acoes);
+  caixa.append(form);
+  return caixa;
 }
 
 /* ================================================== 5. Computadores ====== */
@@ -892,9 +1429,32 @@ async function gerarNumero() {
   $("#numero-pareamento").classList.remove("vencido");
   $("#numero-prazo").textContent = "vale por " + d.minutos + " minutos, e para "
                                  + "um computador só";
+  /* A LINHA POR CAMINHO DE ARQUIVO, e não mais pelo nome do módulo.
+     O `-m` só acha o pacote quando o terminal já está DENTRO da pasta do
+     DERVS; colada de `C:\WINDOWS\system32` ela responde `No module named`,
+     em inglês, antes de o programa começar — e quem lê acha que o número de
+     seis dígitos quebrou. Aconteceu três vezes com o dono em 29/08/2026.
+     Rodar o arquivo direto funciona de qualquer pasta porque `enviar.py` põe
+     a raiz do repositório no caminho de busca sozinho, antes de importar.
+
+     `<CAMINHO DO DERVS>` fica como espaço reservado de propósito: o painel
+     NÃO pode saber onde o repositório está na máquina de quem lê, e inventar
+     um caminho seria o painel mentindo. Quem não quer trocar nada usa o
+     conectador, que é o outro caminho desta mesma porta.
+
+     BARRA NORMAL, E NÃO A INVERTIDA DO WINDOWS. O Python aceita `/` em caminho
+     nos três sistemas, inclusive no Windows; a barra invertida só funciona num.
+     Este painel serve a máquina do dono (Windows) E o servidor (Linux), e uma
+     linha que só roda num deles é uma linha errada para metade de quem lê.
+     Achado pela verificação automática, que roda em Linux — verde na máquina de
+     quem escreve não bastava, e não bastou. */
   $("#comando-pareamento").textContent =
-    "python -m agente.enviar --alvo " + location.origin + " --codigo " + d.codigo;
+    "python \"<CAMINHO DO DERVS>/agente/enviar.py\" --alvo " + location.origin + " --codigo " + d.codigo;
   $("#pareamento").hidden = false;
+  /* A MESMA espera da porta 1, aqui. Quem cola a linha de comando merece a
+     mesma confirmação de quem usa o conectador — os dois caminhos são iguais,
+     e o que os igualava até aqui era só o texto da tela. */
+  esperarMaquinaNova($("#espera-pareamento"), d.minutos);
   /* Quando vence, o número fica riscado — não some. Número antigo na tela é
      número que a pessoa digita e não funciona, sem entender por quê. */
   clearTimeout(gerarNumero.t);
