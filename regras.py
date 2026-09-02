@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Motor de pendencias do HUB — as 18 regras.
+"""Motor de pendencias do HUB — as 19 regras.
 
 O HUB responde uma pergunta so: "o que precisa de mim agora?". Este arquivo e
 onde essa pergunta vira lista.
@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import auditoria
+
 # Os quatro tipos de acao que a tela sabe executar.
 #   abrir_url — o navegador abre o link (CI, PR, alerta de seguranca)
 #   vscode    — abre o VS Code na pasta ou no arquivo
@@ -38,16 +40,26 @@ DIAS_GRAFO = 7         # indice do grafo velho
 DIAS_ABANDONO = 30     # projeto sem commit
 PCT_COTA = 80          # cota de minutos do Actions
 
+# Rotulo de categoria da auditoria profunda, so para compor o TEXTO da
+# pendencia. A fonte unica das categorias e `auditoria.CATEGORIAS`.
+_ROTULO_CATEGORIA = {"seguranca": "segurança", "bug": "bug", "teste": "teste",
+                     "doc": "documentação", "estilo": "estilo"}
 
-def _p(regra, gravidade, projeto, texto, acao, detalhe="", risco=0):
+
+def _p(regra, gravidade, projeto, texto, acao, detalhe="", risco=0, sufixo=""):
     """`risco` desempata DENTRO da gravidade; nunca atravessa gravidades.
 
     Regra que nao sabe medir risco deixa em zero e ordena pelo nome, como
     sempre. So a de alerta de seguranca preenche hoje, e por um motivo medido:
     ver `risco_alerta`.
+
+    `sufixo`, quando presente, faz o id virar "regra:projeto:sufixo" — e o
+    que da a cada ACHADO da auditoria um id proprio, em vez de todos os
+    achados alta de um projeto colidirem no mesmo "regra:projeto".
     """
+    id_ = "%s:%s:%s" % (regra, projeto, sufixo) if sufixo else "%s:%s" % (regra, projeto)
     return {
-        "id": "%s:%s" % (regra, projeto),
+        "id": id_,
         "regra": regra,
         "gravidade": gravidade,
         "projeto": projeto,
@@ -58,7 +70,8 @@ def _p(regra, gravidade, projeto, texto, acao, detalhe="", risco=0):
     }
 
 
-def _do_projeto(p: dict) -> list:
+def _do_projeto(p: dict, agora=None) -> list:
+    agora = agora or datetime.now(timezone.utc)
     nome = p["nome"]
     caminho = p.get("caminho", "")
     g = p.get("git") or {}
@@ -263,6 +276,59 @@ def _do_projeto(p: dict) -> list:
              "texto": " | ".join(partes)},
             detalhe=" | ".join(partes)))
 
+    # ------------------------------------------------------------- auditoria
+    # 19-23. Achado da auditoria profunda, um por CATEGORIA.
+    #
+    # So gravidade ALTA vira pendencia — media e baixa continuam so no banco,
+    # ate a Etapa 6 decidir como mostra-las. So o achado que passa na peneira
+    # `auditoria.caminho_aceitavel` vira pendencia: sem arquivo valido nao ha
+    # onde abrir (invariante 1). `aud is None` = a camada nunca foi coletada
+    # (invariante 2) — o laco abaixo simplesmente nao roda, nunca "0 achados".
+    aud = p.get("auditoria")
+    for achado in (aud or {}).get("achados") or []:
+        if achado.get("gravidade") != "alta":
+            continue
+        arquivo = achado.get("arquivo")
+        if not auditoria.caminho_aceitavel(arquivo):
+            continue
+        categoria = achado.get("categoria")
+        regra = auditoria.REGRAS.get(categoria)
+        if regra is None:
+            continue
+        sufixo = auditoria.impressao(arquivo, categoria, achado.get("frase"))
+        itens.append(_p(
+            regra, "alta", nome,
+            "O %s tem um achado de %s em %s: %s"
+            % (nome, _ROTULO_CATEGORIA.get(categoria, categoria), arquivo,
+               achado.get("frase") or ""),
+            {"tipo": "vscode", "rotulo": "Abrir o arquivo",
+             "caminho": "%s/%s" % (caminho, arquivo)},
+            detalhe=achado.get("o_que_fazer", ""),
+            sufixo=sufixo))
+
+    # 24. A auditoria venceu, ou o projeto quer ser auditado e nunca foi.
+    #
+    # So fala quando o dono LIGOU a auditoria para este projeto
+    # (`auditoria_ligada`) — invariante 2 outra vez: projeto que nao pediu
+    # auditoria fica calado, nao vira alarme. A validade vem do MESMO numero
+    # que pinta o selo (`VALIDADE["auditoria"]`), para nao existir um segundo
+    # prazo divergente no repositorio.
+    if p.get("auditoria_ligada"):
+        idade = _idade((p.get("medido_em") or {}).get("auditoria"), agora)
+        vencida = idade is None or idade > VALIDADE["auditoria"]
+        if vencida:
+            texto = (
+                "O %s está marcado para auditoria e nunca foi auditado." % nome
+                if aud is None else
+                "A auditoria profunda do %s venceu — hora de rodar de novo." % nome)
+            # Literal, e nao `auditoria.REGRA_DE_VENCIMENTO`: todo `_p(...)`
+            # deste arquivo usa o nome literal (o guarda de documentacao le a
+            # fonte por regex); um teste cobra que os dois nomes coincidam.
+            itens.append(_p(
+                "auditoria_vencida", "baixa", nome, texto,
+                {"tipo": "copiar", "rotulo": "Copiar o pedido",
+                 "texto": "audite o %s agora" % nome}))
+
     # ------------------------------------------------------------------ baixas
     # 12. Sem commit ha mais de 30 dias
     if versionado and (g.get("dias_parado") or 0) > DIAS_ABANDONO:
@@ -419,11 +485,12 @@ def detalhe_alerta(v: dict) -> str:
 
 
 def avaliar(projetos, quota=None, silenciadas=None,
-            arquivadas=None) -> list:
+            arquivadas=None, agora=None) -> list:
     """Retrato dos projetos -> lista de pendencias, mais grave primeiro."""
+    agora = agora or datetime.now(timezone.utc)
     itens = []
     for p in projetos:
-        itens.extend(_do_projeto(p))
+        itens.extend(_do_projeto(p, agora))
 
     # 7. Cota de minutos do Actions — e da conta inteira, nao de um projeto.
     # Projeto "" e proposital: a pendencia nao pertence a repositorio nenhum.
@@ -455,7 +522,8 @@ def avaliar(projetos, quota=None, silenciadas=None,
 # partir de quando ele deixa de servir para AFIRMAR alguma coisa. A cadencia de
 # coleta e local 60 s, github 20 min, pesado 24 h; cada validade aqui e algumas
 # cadencias, para que uma coleta que falhou uma vez nao apague o selo inteiro.
-VALIDADE = {"local": 10 * 60, "github": 2 * 3600, "pesado": 48 * 3600}
+VALIDADE = {"local": 10 * 60, "github": 2 * 3600, "pesado": 48 * 3600,
+           "auditoria": 7 * 24 * 3600}
 
 # De qual camada cada regra depende. Regra que nao esta neste mapa NAO pinta o
 # selo, e isso e decisao, nao esquecimento: `abandonado` e `caso_vazio` sao
@@ -477,6 +545,14 @@ CAMADA_DA_REGRA = {
     "nao_publicado": "github",
     "dependencia_insegura": "pesado",
     "auditoria_nao_rodou": "pesado",
+    # As cinco categorias da auditoria PROFUNDA (nao confundir com a acima,
+    # que e sobre dependencia — ver premissa 2 do plano). `auditoria_vencida`
+    # fica DE FORA de proposito: "nao medi" e sem_dados, nunca quebrado.
+    "auditoria_seguranca": "auditoria",
+    "auditoria_bug": "auditoria",
+    "auditoria_teste": "auditoria",
+    "auditoria_doc": "auditoria",
+    "auditoria_estilo": "auditoria",
 }
 
 
@@ -531,7 +607,7 @@ def selo_do_projeto(p: dict, pendencias=None, agora=None) -> str:
 
     nome = p.get("nome")
     if pendencias is None:
-        pendencias = _do_projeto(p)
+        pendencias = _do_projeto(p, agora)
 
     pior = None
     for i in pendencias:
@@ -563,7 +639,8 @@ MIN_GRUPO = 3             # abaixo disso, repetir e mais claro que resumir
 # Isto e o mesmo defeito que a coleta por severidade consertou um andar abaixo,
 # reaparecendo aqui em cima. O ganho do agrupamento (31 pendencias -> 11 linhas)
 # cai para 14 linhas, e vale a troca.
-NAO_AGRUPAR = {"vulnerabilidade"}
+NAO_AGRUPAR = {"vulnerabilidade", "auditoria_seguranca", "auditoria_bug",
+              "auditoria_teste", "auditoria_doc", "auditoria_estilo"}
 
 # Rotulo curto por regra, para a linha do grupo. Sem isto o grupo diria
 # "10 x grafo_velho", que e nome de variavel, nao portugues.
@@ -586,6 +663,12 @@ ROTULO_REGRA = {
     "nao_publicado": "com trabalho pronto e não publicado",
     "auditoria_nao_rodou": "cujas dependências não consegui auditar",
     "git_nao_medido": "cujo git não consegui ler",
+    "auditoria_seguranca": "com achado de segurança na auditoria profunda",
+    "auditoria_bug": "com achado de bug na auditoria profunda",
+    "auditoria_teste": "com achado de teste na auditoria profunda",
+    "auditoria_doc": "com achado de documentação na auditoria profunda",
+    "auditoria_estilo": "com achado de estilo na auditoria profunda",
+    "auditoria_vencida": "com a auditoria profunda vencida",
 }
 
 

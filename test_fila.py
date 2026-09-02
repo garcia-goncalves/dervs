@@ -130,6 +130,39 @@ class Elegibilidade(unittest.TestCase):
         fila.elegiveis(entrada)
         self.assertNotIn("trilho", entrada[0])
 
+    def test_auditoria_vencida_vai_pelo_claude(self):
+        self.assertEqual(fila.trilho_de(self._p("auditoria_vencida")), "claude")
+
+    def test_achado_de_auditoria_fica_de_fora_por_enquanto(self):
+        """As cinco `auditoria_<categoria>` sao pendencia de CONSERTO — nao
+        entram na fila mecanica ate o dono autorizar. Fora e' o estado seguro."""
+        for regra in ("auditoria_seguranca", "auditoria_bug", "auditoria_teste",
+                      "auditoria_doc", "auditoria_estilo"):
+            with self.subTest(regra=regra):
+                self.assertEqual(fila.trilho_de(self._p(regra)), "")
+
+    def test_elegiveis_carimba_o_executor_do_auditor(self):
+        saida = fila.elegiveis([self._p("auditoria_vencida")])
+        self.assertEqual(len(saida), 1)
+        self.assertEqual(saida[0]["executor"], "auditor")
+
+    def test_elegiveis_carimba_claude_para_regra_comum(self):
+        saida = fila.elegiveis([self._p("memoria_crlf")])
+        self.assertEqual(saida[0]["executor"], "claude")
+
+
+class RiscoDaAuditoriaTocandoPublicacao(unittest.TestCase):
+    """Risco 1 do briefing: o `o_que_fazer` de um achado pode mandar mexer
+    em `.github/workflows/ci.yml`. A trava que impede publicacao automatica
+    tem de continuar pegando isso, mesmo vindo de uma regra nova."""
+
+    def test_diff_que_toca_o_ci_e_reprovado_para_regra_de_auditoria(self):
+        diff = ("--- a/.github/workflows/ci.yml\n"
+                "+++ b/.github/workflows/ci.yml\n"
+                "@@\n+besteira\n")
+        motivo = fila.reprovar(diff, "auditoria_seguranca")
+        self.assertTrue(motivo)
+
 
 class TetoDiario(unittest.TestCase):
 
