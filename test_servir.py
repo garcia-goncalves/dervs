@@ -2412,8 +2412,10 @@ class OCorpoDoPedidoEDrenado(unittest.TestCase):
 
         Isso nao e exposicao nova. Toda rota que le corpo ja faz
         `read(min(n, teto))` sobre o mesmo soquete e ja fica presa do mesmo
-        jeito; o dreno le no maximo o que a rota leria. O teto de 4 MiB do
-        `TETO_A_DRENAR` limita o volume, nao a espera.
+        jeito; o dreno le no maximo o que a rota leria. `TETO_A_DRENAR`
+        (8 MiB) limita o VOLUME, e `SEGUNDOS_PARA_DRENAR` (5) limita a ESPERA
+        -- o prazo vale so para o dreno, e por isso nao toca `/api/eventos`,
+        que a essa altura ja terminou.
         """
         pronto = threading.Event()
 

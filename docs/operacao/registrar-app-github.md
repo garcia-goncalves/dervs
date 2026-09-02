@@ -125,10 +125,19 @@ Depois da proxima publicacao, entre em <https://dervs.com.br>, va em
 - **Depois:** ele aparece, leva ao GitHub, e ao voltar a tela mostra a
   instalacao ligada.
 
-Se o botao continuar sumido depois de publicar, o motivo e sempre o mesmo:
-`DERVS_GITHUB_APP_SLUG` nao chegou ao servidor. O registro da publicacao diz
-qual dos dois casos e — `as tres do GitHub App gravadas no .env` ou
-`AVISO: sem DERVS_GITHUB_APP_SLUG/_ID/_KEY completos`.
+Se o botao continuar sumido depois de publicar, o registro da publicacao
+diz por que, e ha tres desfechos possiveis:
+
+| No registro da publicacao | O que aconteceu |
+|---|---|
+| `as tres do GitHub App gravadas no .env` | deu certo |
+| `AVISO: as tres do GitHub App nao foram gravadas (<motivo>)` | faltou uma, ou uma nao passou na peneira; **o que ja estava no servidor continua valendo** |
+| `A CHAVE DO GITHUB APP NAO SERVE` | as tres chegaram, mas o servidor nao consegue ler a chave — quase sempre ela esta protegida por senha |
+
+A ultima linha e a publicacao **falhando de proposito**. O site continua no ar
+e tudo o mais funciona; so a porta 2 esta morta, e sem essa conferencia ela
+morreria em silencio, dizendo apenas "nao deu para conferir" — que e a mesma
+frase de quando voce cancela no meio.
 
 ---
 

@@ -426,6 +426,10 @@ class AChaveDoAppChegaInteira(unittest.TestCase):
             'echo "DERVS_GITHUB_APP_KEY=$chave_numa_linha"',
             "chave_numa_linha=$(printf",
             'case "${chave_numa_linha:-}" in',
+            # A peneira da chave CRUA, que procura a marca de cifrada na
+            # armadura -- o achatamento come a armadura, entao ela so pode ser
+            # olhada aqui.
+            'case "${APP_KEY:-}" in',
         )
         for linha in self.passo.splitlines():
             if linha.lstrip().startswith("#") or not expansao.search(linha):
@@ -464,6 +468,46 @@ class AChaveDoAppChegaInteira(unittest.TestCase):
                 "por validade -- e um valor com `$(...)` chega a ser lido "
                 "pelo shell do servidor." % alvo)
 
+    def test_a_chave_cifrada_no_formato_moderno_e_recusada(self):
+        """A peneira de base64 nao ve a chave cifrada do formato novo.
+
+        O formato legado (`Proc-Type: 4,ENCRYPTED`) tem a marca DENTRO do
+        miolo, e a peneira de base64 a pega. O moderno --
+        `BEGIN ENCRYPTED PRIVATE KEY` (escrito sem os tracos de proposito: o varredor de segredo barra o bloco literal, e com razao), o que `openssl pkcs8 -topk8`
+        produz por padrao -- tem miolo em base64 PURO: atravessa o `grep -v` e
+        a peneira sem uma marca. Na proxima troca da chave do App, a
+        publicacao sairia VERDE dizendo "gravadas" e toda volta de instalacao
+        terminaria em "nao deu para conferir".
+
+        A marca vive na ARMADURA, e o achatamento come a armadura -- por isso
+        o teste tem de ser sobre `APP_KEY` cru, antes dele.
+        """
+        self.assertIn(
+            "*ENCRYPTED*", self.passo,
+            "nada recusa a chave cifrada no formato moderno. Ela passa por "
+            "base64 puro, e a publicacao fica verde com a porta 2 morta.")
+        self.assertIn(
+            'case "${APP_KEY:-}" in', self.passo,
+            "a marca de cifrada e procurada depois do achatamento, que ja "
+            "comeu a armadura onde ela mora: o teste nunca casaria.")
+
+    def test_a_chave_e_conferida_pelo_codigo_que_vai_usa_la(self):
+        """Peneira de forma diz "parece"; so o codigo diz "serve".
+
+        Toda vez que este arquivo acreditou na forma, alguma coisa saiu verde
+        e morta. A conferencia roda DENTRO do container, com `chave_de_pem` --
+        o mesmo desenho da conferencia do gateway, e pelo mesmo motivo: nao e
+        uma segunda implementacao da mesma regra.
+        """
+        self.assertIn(
+            "github_app.chave_de_pem(", self.passo,
+            "a publicacao nao pergunta ao servidor se a chave serve. Sem "
+            "isso, uma chave que passa na peneira e o codigo nao le deixa a "
+            "porta 2 morta em silencio.")
+        self.assertIn(
+            "A CHAVE DO GITHUB APP NAO SERVE", self.passo,
+            "a conferencia existe mas nao diz nada quando falha.")
+
     def test_o_aviso_nao_afirma_o_que_nao_foi_verificado(self):
         """Nada aqui apaga linha do arquivo de ambiente do servidor.
 
@@ -497,17 +541,32 @@ class AChaveDoAppChegaInteira(unittest.TestCase):
         self.assertNotIn(
             ". ./.env", executaveis,
             "o roteiro voltou a sourcear o arquivo de ambiente do servidor.")
-        self.assertIn("grep -m1 '^DERVS_PORTA=", self.passo,
+        self.assertIn("grep '^DERVS_PORTA=", self.passo,
                       "a porta nao e mais lida como texto.")
+        # `tail -n1`, e nao a primeira: com a chave repetida no arquivo o
+        # docker compose usa a ULTIMA. Divergir dele faz a conferencia bater
+        # numa porta que nao e a que subiu.
+        self.assertIn("tail -n1", self.passo,
+                      "a leitura pega a primeira ocorrencia, e o compose usa "
+                      "a ultima: as duas discordariam em silencio.")
 
     def test_o_rascunho_do_env_e_apagado_se_o_roteiro_morrer(self):
         """Sobra um arquivo com a chave privada dentro se ninguem limpar."""
-        trap = [l for l in self.passo.splitlines() if "trap " in l]
-        self.assertTrue(trap, "o roteiro perdeu o trap de saida.")
-        self.assertIn(".env.novo", trap[0],
+        linhas = [l for l in self.passo.splitlines() if "trap " in l]
+        self.assertTrue(linhas, "o roteiro perdeu o trap de saida.")
+        self.assertIn(".env.novo", linhas[0],
                       "o rascunho do arquivo de ambiente nao e apagado na "
                       "saida: se o roteiro morrer entre a escrita e o `mv`, "
                       "fica no disco um arquivo com a chave privada.")
+        # A POSICAO, E NAO SO A PRESENCA. O trap ja existiu armado DEPOIS de
+        # todos os `mv` -- ou seja, depois do unico instante em que o rascunho
+        # existe: o `rm -f` era sempre no-op, e este teste passava verde sobre
+        # a defesa desligada. "Guarda que so podia passar", pela terceira vez
+        # neste repositorio. Achado na revisao final de 02/09/2026.
+        self.assertLess(
+            self.passo.index("trap "), self.passo.index("> .env.novo"),
+            "o trap e armado DEPOIS do primeiro rascunho: ele nunca chega a "
+            "apagar nada, e a linha acima vira enfeite.")
 
     def test_as_tres_chegam_ao_env_do_servidor(self):
         for chave in ("DERVS_GITHUB_APP_SLUG=", "DERVS_GITHUB_APP_ID=",

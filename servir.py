@@ -671,6 +671,12 @@ class Hub(SimpleHTTPRequestHandler):
         cabecalhos = getattr(self, "headers", None)
         if cabecalhos is None:
             return              # o pedido nem chegou a ser entendido
+        # `Transfer-Encoding: chunked` sem `Content-Length` nao e drenado, e
+        # isso e deliberado: o corpo em pedacos nao diz de antemao quanto e, e
+        # adivinhar seria ler o inicio de outra coisa. Em producao o nginx
+        # normaliza chunked em `Content-Length` antes de repassar, entao o
+        # caminho nao existe la; um cliente que fale direto com a porta leva o
+        # RST, e o preco e dele.
         try:
             n = int(cabecalhos.get("Content-Length") or 0)
         except (TypeError, ValueError):

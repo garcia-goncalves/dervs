@@ -243,6 +243,23 @@ jobs:
           # Ele nunca passa por este workflow, por commit, por log ou por chat.
           test -f .env || { echo "/opt/dervs/.env não existe. Ver docs/operacao/publicar-no-servidor.md"; exit 1; }
 
+          # O TRAP VEM AQUI, E A POSICAO E O CONSERTO.
+          #
+          # Ele ja existia, armado la embaixo, depois de todos os `mv` -- ou
+          # seja, DEPOIS do unico instante em que o rascunho existe. O `rm -f`
+          # era sempre no-op, e o comentario dele descrevia uma protecao que
+          # nao acontecia. O teste que o cobrava so olhava se a palavra
+          # `.env.novo` aparecia na linha do `trap`: verde sobre a defesa
+          # desligada, o padrao "guarda que so podia passar" que este
+          # repositorio ja pagou duas vezes. Achado na revisao final de
+          # 02/09/2026, reproduzido em bash.
+          #
+          # Duas coisas, e as duas precisam ser as PRIMEIRAS: apagar o rascunho
+          # do arquivo de ambiente (que carrega a chave privada entre o `echo`
+          # e o `mv`), e sair do registro de imagens. `docker logout` sem login
+          # anterior e inocuo, e ja tem `|| true`.
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true; rm -f /opt/dervs/.env.novo' EXIT
+
           # A imagem desta publicação, gravada no .env para que o compose e um
           # `docker compose up` feito à mão amanhã usem exatamente a mesma.
           grep -v '^DERVS_IMAGEM=' .env > .env.novo || true
@@ -327,7 +344,22 @@ jobs:
           esac
           case "${chave_numa_linha:-}" in
             "") recusa="${recusa:-a chave veio vazia}" ;;
-            *[!A-Za-z0-9+/=]*) recusa="${recusa:-a chave nao e base64 puro (PEM cifrado? converta com openssl rsa)}" ;;
+            *[!A-Za-z0-9+/=]*) recusa="${recusa:-a chave nao e base64 puro}" ;;
+          esac
+          # A CHAVE CIFRADA NO FORMATO MODERNO PASSAVA PELA PENEIRA ACIMA.
+          #
+          # O formato legado (`Proc-Type: 4,ENCRYPTED`) tem a marca DENTRO do
+          # miolo e e pega pela peneira de base64. O moderno --
+          # `BEGIN ENCRYPTED PRIVATE KEY` (escrito sem os tracos de proposito: o varredor de segredo barra o bloco literal, e com razao), que e o que
+          # `openssl pkcs8 -topk8` produz POR PADRAO -- tem miolo em base64
+          # puro: atravessa o `grep -v` e a peneira sem uma marca. Na proxima
+          # troca da chave do App, a publicacao sairia VERDE dizendo
+          # "gravadas" e toda volta de instalacao terminaria em "nao deu para
+          # conferir". Achado com chave de verdade na revisao final de
+          # 02/09/2026, e a marca esta na ARMADURA, que o achatamento come --
+          # por isso o teste e sobre `APP_KEY` cru.
+          case "${APP_KEY:-}" in
+            *ENCRYPTED*) recusa="${recusa:-a chave esta cifrada; gere uma nova em github.com/settings/apps ou converta com: openssl rsa -in chave.pem -out chave-sem-senha.pem}" ;;
           esac
 
           if [ -z "$recusa" ]; then
@@ -367,11 +399,6 @@ jobs:
           # `logout` — e a credencial ficaria gravada em `~/.docker/config.json`
           # justamente no caminho em que ninguém volta para conferir. Prometer
           # defesa que não existe é pior que não ter a defesa.
-          # O `.env.novo` entra aqui junto com o logout: se o roteiro morrer
-          # entre o `echo` e o `mv`, sobra um rascunho com a chave privada no
-          # disco. O `umask 077` o mantem 0600, entao nao e vazamento -- e um
-          # arquivo esquecido com uma chave dentro, que e o comeco de um.
-          trap 'docker logout ghcr.io >/dev/null 2>&1 || true; rm -f /opt/dervs/.env.novo' EXIT
           echo "$REGISTRO_TOKEN" | docker login ghcr.io -u "$REGISTRO_USUARIO" --password-stdin
           docker compose pull
           docker compose up -d --wait
@@ -447,8 +474,13 @@ jobs:
           #
           # `|| true` porque `pipefail` faria o `grep` sem resultado derrubar o
           # roteiro; o valor ausente cai no padrao logo abaixo.
-          porta=$(grep -m1 '^DERVS_PORTA=' .env | cut -d= -f2- || true)
-          dominio=$(grep -m1 '^DERVS_DOMINIO=' .env | cut -d= -f2- || true)
+          # `tail -n1` e nao `-m1`, e as aspas saem: com a chave repetida no
+          # arquivo o compose usa a ULTIMA, e `DERVS_PORTA="4877"` o compose
+          # desaspa. Divergir dele faria a conferencia bater em
+          # `http://127.0.0.1:"4877"/robots.txt` -- publicacao vermelha DEPOIS
+          # de ter dado certo, que e o pior desfecho deste arquivo.
+          porta=$(grep '^DERVS_PORTA=' .env | tail -n1 | cut -d= -f2- | tr -d "\"'" || true)
+          dominio=$(grep '^DERVS_DOMINIO=' .env | tail -n1 | cut -d= -f2- | tr -d "\"'" || true)
           porta="${porta:-4877}"
           codigo=$(curl -s -o /dev/null -w '%{http_code}' \
             -H "Host: ${dominio}" \
@@ -484,6 +516,31 @@ jobs:
             exit 1
           fi
           echo "o gateway está dentro da faixa confiável"
+
+          # A CHAVE DO APP, CONFERIDA PELO CODIGO QUE VAI USA-LA.
+          #
+          # Peneira de forma responde "parece uma chave"; so `chave_de_pem`
+          # responde "e uma chave que este servidor consegue usar". Toda vez
+          # que este arquivo acreditou na forma, alguma coisa saiu verde e
+          # morta -- e a lei 2 deste repositorio vale para o registro da
+          # publicacao tambem. Mesmo desenho da conferencia do gateway logo
+          # acima: roda DENTRO do container, com o codigo de verdade.
+          #
+          # A chave sai do ambiente do processo de dentro do container; nao
+          # passa por argv, nao aparece em `ps` e nao e impressa.
+          if grep -q '^DERVS_GITHUB_APP_KEY=.' .env; then
+            if docker exec dervs python -c 'import os, sys, github_app; sys.exit(0 if github_app.chave_de_pem(os.environ.get("DERVS_GITHUB_APP_KEY") or "") else 1)'; then
+              echo "a chave do GitHub App foi lida pelo servidor"
+            else
+              echo "A CHAVE DO GITHUB APP NAO SERVE. O site esta NO AR e tudo"
+              echo "o mais funciona; so a porta 2 (conectar a conta do GitHub)"
+              echo "esta morta, e ela falharia em silencio, dizendo apenas"
+              echo "'nao deu para conferir'. Gere uma chave nova em"
+              echo "github.com/settings/apps/dervs-coletor e grave em"
+              echo "DERVS_GITHUB_APP_KEY. Ver docs/operacao/registrar-app-github.md."
+              exit 1
+            fi
+          fi
 
           # Imagens antigas do DERVS acumulam disco numa VPS que serve outros 8
           # sistemas. Só as sem uso, e só as deste projeto.
