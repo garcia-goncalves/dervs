@@ -212,6 +212,9 @@ jobs:
           OAUTH_SECRET: ${{ secrets.DERVS_GITHUB_SECRET }}
           CORTINA: ${{ secrets.DERVS_CORTINA }}
           DONOS: ${{ vars.DERVS_DONOS }}
+          APP_SLUG: ${{ vars.DERVS_GITHUB_APP_SLUG }}
+          APP_ID: ${{ vars.DERVS_GITHUB_APP_ID }}
+          APP_KEY: ${{ secrets.DERVS_GITHUB_APP_KEY }}
         run: |
           # NADA DE SEGREDO NA LINHA DE COMANDO DO `ssh`.
           #
@@ -269,6 +272,46 @@ jobs:
             echo "AVISO: sem DERVS_GITHUB_ID/DERVS_GITHUB_SECRET no"
             echo "repositorio, a entrada por GitHub responde 404 -- e em"
             echo "producao nao ha outra porta. Ver docs/operacao/registrar-app-github.md."
+          fi
+
+          # AS TRES DO GITHUB APP -- a porta 2, conectar a conta do GitHub.
+          #
+          # Aplicativo DIFERENTE do OAuth App de cima. Aquele diz quem voce e;
+          # este le os repositorios. `servir.py` le `DERVS_GITHUB_APP_SLUG`
+          # para decidir se oferece a instalacao, e o `docker-compose.yml`
+          # passa as tres para dentro do container -- as duas metades precisam
+          # existir, e ate 02/09/2026 nenhuma existia.
+          #
+          # A CHAVE PRIVADA VIRA UMA LINHA, E A ARMADURA SAI ANTES.
+          # Arquivo de ambiente nao guarda texto de varias linhas.
+          # `github_app.chave_de_pem` ignora as linhas `-----BEGIN`/`-----END`
+          # e junta o resto, entao uma linha unica de base64 puro e aceita e
+          # produz a MESMA chave (medido nos dois formatos). O jeito ingenuo --
+          # `tr -d '\n'` sobre o arquivo inteiro -- nao funciona: a armadura
+          # gruda no miolo, a linha passa a comecar com `-----`, o filtro a
+          # descarta INTEIRA e a chave sai vazia. Dai a linha de `grep -v`.
+          chave_numa_linha=$(printf '%s\n' "${APP_KEY:-}" \
+            | grep -v -- '-----' | tr -d '\r\n ' || true)
+
+          if [ -n "${APP_SLUG:-}" ] && [ -n "${APP_ID:-}" ] \
+             && [ -n "$chave_numa_linha" ]; then
+            grep -v -e '^DERVS_GITHUB_APP_SLUG=' -e '^DERVS_GITHUB_APP_ID=' \
+                    -e '^DERVS_GITHUB_APP_KEY=' .env > .env.novo || true
+            echo "DERVS_GITHUB_APP_SLUG=$APP_SLUG"       >> .env.novo
+            echo "DERVS_GITHUB_APP_ID=$APP_ID"           >> .env.novo
+            echo "DERVS_GITHUB_APP_KEY=$chave_numa_linha" >> .env.novo
+            mv .env.novo .env
+            chmod 600 .env
+            echo "as tres do GitHub App gravadas no .env"
+          else
+            # As TRES juntas, ou nenhuma. Meia configuracao e pior que nenhuma:
+            # a tela ofereceria o botao de instalar (que so olha o slug) e a
+            # volta falharia sempre na confirmacao, que precisa do id e da
+            # chave -- e o desfecho e "nao deu para conferir", indistinguivel
+            # de um cancelamento do dono.
+            echo "AVISO: sem DERVS_GITHUB_APP_SLUG/_ID/_KEY completos no"
+            echo "repositorio, a porta 2 (conectar a conta do GitHub) nao"
+            echo "aparece na tela. Ver docs/operacao/registrar-app-github.md."
           fi
 
           # O `trap` vem ANTES do login, e é o que torna verdadeira a frase "o
@@ -396,6 +439,9 @@ jobs:
             printf 'OAUTH_SECRET=%q\n'     "${OAUTH_SECRET:-}"
             printf 'CORTINA=%q\n'          "${CORTINA:-}"
             printf 'DONOS=%q\n'            "${DONOS:-}"
+            printf 'APP_SLUG=%q\n'         "${APP_SLUG:-}"
+            printf 'APP_ID=%q\n'           "${APP_ID:-}"
+            printf 'APP_KEY=%q\n'          "${APP_KEY:-}"
             cat roteiro.sh
           } | ssh -i ~/.ssh/id_deploy -p "$PORTA_SSH" "$ALVO" 'bash -s'
 

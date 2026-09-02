@@ -200,5 +200,167 @@ class PublicarContinuaSendoDecisaoDeGente(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", texto())
 
 
+
+# ---------------------------------------------------------------------------
+# A SEGUNDA METADE DO MESMO DEFEITO DE 28/08.
+#
+# Aquele dia ensinou "o workflow tem de LEVAR a variavel ao /opt/dervs/.env".
+# Faltava o degrau seguinte, e ele mordeu em 02/09/2026: estar no `.env` do
+# servidor nao poe a variavel DENTRO do container. Quem faz isso e o bloco
+# `environment:` do `docker-compose.yml`, um arquivo diferente, mantido por
+# outra mao, e que ninguem compara com o codigo.
+#
+# `servir.py` le `DERVS_GITHUB_APP_SLUG` para decidir se oferece a instalacao
+# do GitHub App (`da_para_instalar`, e o 404 de `/api/github/instalar`). O
+# compose nao passava nenhuma das tres variaveis do App. A porta 2 inteira
+# — conectar a conta do GitHub — estava morta em producao POR CONSTRUCAO:
+# registrar o app no github.com e escrever os valores no servidor nao mudaria
+# nada, porque o processo nunca os enxergaria. Falha fechada, silenciosa, e
+# indistinguivel de "o dono ainda nao registrou o app".
+#
+# A guarda abaixo nao decora as tres: ela compara AS DUAS LISTAS. Variavel
+# nova lida pelo servidor sem entrada no compose reprova, e quem quiser
+# deixa-la de fora escreve o motivo em FORA_DO_COMPOSE_DE_PROPOSITO.
+# ---------------------------------------------------------------------------
+
+COMPOSE = AQUI / "docker-compose.yml"
+
+#: Lido pelo servidor e AUSENTE do compose de proposito, com o porque.
+#: Entrar aqui e uma decisao que se escreve; nao e um lugar para calar teste.
+FORA_DO_COMPOSE_DE_PROPOSITO = {
+    "DERVS_AMBIENTE":
+        "ausencia deliberada: com `local` o servidor aceitaria conta de teste, "
+        "semente de dado falso e /entrar/local sem senha. O proprio compose "
+        "explica isso em comentario.",
+    "DERVS_COFRE_ARQUIVO":
+        "so existe nesta maquina, onde a chave mora em arquivo. No servidor a "
+        "chave chega por DERVS_COFRE, que esta no compose.",
+}
+
+
+def variaveis_do_compose():
+    """Os nomes do bloco `environment:` do servico, como o Docker os entrega."""
+    t = COMPOSE.read_text(encoding="utf-8")
+    i = t.index("    environment:")
+    j = t.index("\n    volumes:", i)
+    bloco = t[i:j]
+    nomes = set(re.findall(r"^\s{6}(DERVS_[A-Z_]+):", bloco, re.M))
+    # A guarda da guarda. Se o recorte quebrar (o servico mudar de nome, o
+    # bloco mudar de indentacao), `nomes` sai vazio e TODO caso abaixo
+    # reprovaria por motivo errado — ou, pior, um `issubset` de vazio passaria.
+    assert len(nomes) >= 6, (
+        "o bloco environment: do compose saiu com %d nomes; o recorte "
+        "quebrou." % len(nomes))
+    return nomes
+
+
+def variaveis_lidas(arquivo):
+    """Toda `os.environ[...]`/`os.environ.get(...)` de DERVS_* no arquivo."""
+    t = (AQUI / arquivo).read_text(encoding="utf-8")
+    nomes = set(re.findall(r'os\.environ(?:\.get)?[\(\[]"(DERVS_[A-Z_]+)"', t))
+    assert nomes, "nenhuma variavel encontrada em %s; a busca quebrou." % arquivo
+    return nomes
+
+
+class OContainerRecebeOQueOCodigoLe(unittest.TestCase):
+    """Estar no .env do servidor nao basta: tem de entrar no container."""
+
+    #: Os dois modulos que rodam DENTRO da imagem e leem ambiente.
+    #: `coletar.py`, `conectador.py` e `agente/enviar.py` ficam de fora porque
+    #: rodam na maquina de quem le o painel, nao no servidor.
+    NO_SERVIDOR = ("servir.py", "banco.py")
+
+    def test_toda_variavel_lida_pelo_servidor_chega_ao_container(self):
+        do_compose = variaveis_do_compose()
+        faltando = {}
+        for arquivo in self.NO_SERVIDOR:
+            for nome in sorted(variaveis_lidas(arquivo)):
+                if nome in do_compose or nome in FORA_DO_COMPOSE_DE_PROPOSITO:
+                    continue
+                faltando.setdefault(nome, []).append(arquivo)
+        self.assertFalse(
+            faltando,
+            "estas variaveis sao lidas pelo servidor e o docker-compose.yml "
+            "nao as passa para dentro do container: %s. Quem le nunca as ve, e "
+            "a funcionalidade morre em silencio em producao (falha fechada, "
+            "indistinguivel de 'ainda nao configurado'). Passe-as no bloco "
+            "`environment:` com `${NOME:-}`, ou escreva o motivo da ausencia "
+            "em FORA_DO_COMPOSE_DE_PROPOSITO."
+            % ", ".join("%s (%s)" % (n, "/".join(a))
+                        for n, a in sorted(faltando.items())))
+
+    def test_a_lista_de_excecoes_nao_guarda_nome_morto(self):
+        """Excecao que ninguem le mais vira ruido que esconde a proxima."""
+        lidas = set()
+        for arquivo in self.NO_SERVIDOR:
+            lidas |= variaveis_lidas(arquivo)
+        mortas = sorted(set(FORA_DO_COMPOSE_DE_PROPOSITO) - lidas)
+        self.assertFalse(
+            mortas,
+            "FORA_DO_COMPOSE_DE_PROPOSITO fala de %s, que o servidor nao le "
+            "mais. Apague a entrada." % ", ".join(mortas))
+
+    def test_as_tres_do_github_app_estao_no_compose(self):
+        """O caso concreto de 02/09, cravado para nao voltar por descuido."""
+        do_compose = variaveis_do_compose()
+        for nome in ("DERVS_GITHUB_APP_SLUG", "DERVS_GITHUB_APP_ID",
+                     "DERVS_GITHUB_APP_KEY"):
+            self.assertIn(
+                nome, do_compose,
+                "%s fora do compose: a porta 2 (conectar a conta do GitHub) "
+                "nao funciona em producao, e a tela diz apenas que o app nao "
+                "esta registrado." % nome)
+
+    def test_as_tres_do_github_app_nao_derrubam_o_site_se_faltarem(self):
+        """`${X:?}` mata o container; estas tres tem de ser opcionais.
+
+        O painel serve para muito mais que a porta 2. Exigi-las na subida
+        trocaria uma funcionalidade ausente por um site fora do ar.
+        """
+        t = COMPOSE.read_text(encoding="utf-8")
+        for nome in ("DERVS_GITHUB_APP_SLUG", "DERVS_GITHUB_APP_ID",
+                     "DERVS_GITHUB_APP_KEY"):
+            self.assertNotRegex(
+                t, r"\$\{%s:\?" % nome,
+                "%s com `:?` derruba o container inteiro quando falta." % nome)
+
+
+class AChaveDoAppChegaInteira(unittest.TestCase):
+    """A chave privada tem varias linhas, e arquivo de ambiente nao tem.
+
+    `github_app.chave_de_pem` ignora as linhas de armadura e junta o resto, o
+    que faz uma UNICA linha de base64 puro funcionar — medido nos dois formatos
+    em 02/09/2026. O que NAO funciona e o jeito ingenuo, `tr -d '\n'` sobre o
+    arquivo inteiro: a armadura gruda no miolo, vira uma linha so comecando com
+    `-----`, o filtro a descarta inteira e a chave sai vazia. A diferenca entre
+    os dois e uma linha de `grep`, e ela e a razao desta classe existir.
+    """
+
+    def setUp(self):
+        self.passo = passo_do_servidor()
+
+    def test_a_armadura_sai_antes_de_a_chave_virar_uma_linha(self):
+        self.assertRegex(
+            self.passo, r"grep -v[^\n]*-----",
+            "a chave e achatada sem tirar as linhas -----BEGIN/-----END "
+            "antes; o resultado e uma linha unica que comeca com '-----', que "
+            "chave_de_pem descarta INTEIRA. A chave chegaria vazia e a volta "
+            "da instalacao falharia sempre, em silencio.")
+
+    def test_a_chave_nao_viaja_pela_linha_de_comando(self):
+        self.assertIn(
+            "printf 'APP_KEY=%q", self.passo,
+            "a chave privada do App nao viaja por STDIN citado com %q; "
+            "qualquer conta local desta VPS de 26 containers a leria em "
+            "/proc/<pid>/cmdline durante a publicacao.")
+
+    def test_as_tres_chegam_ao_env_do_servidor(self):
+        for chave in ("DERVS_GITHUB_APP_SLUG=", "DERVS_GITHUB_APP_ID=",
+                      "DERVS_GITHUB_APP_KEY="):
+            self.assertIn(
+                'echo "%s' % chave, self.passo,
+                "%s nao e escrita no /opt/dervs/.env. Sem ela no arquivo, o "
+                "compose passa vazio para o container." % chave)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

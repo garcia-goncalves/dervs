@@ -1566,7 +1566,6 @@ class Hub(SimpleHTTPRequestHandler):
                 # O numero ja e de outra conta. Mesmo desfecho de todo o resto
                 # que nao deu: nao gravou, e nao e um erro vermelho.
                 return self._ir_para("/?github=nao-deu#/conectar")
-            return self._ir_para("/?github=ligado#/conectar")
             # A QUERY VAI ANTES DO `#`, e nao depois. `/#/conectar?github=x`
             # poe o parametro DENTRO do fragmento, e `location.search` sai
             # vazio — a tela nunca leria o recado. Achado clicando, nao lendo:
