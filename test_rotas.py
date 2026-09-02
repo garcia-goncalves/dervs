@@ -297,9 +297,30 @@ class TodaRotaDeclaraAcesso(unittest.TestCase):
 
     def test_a_classe_maquina_e_conferida_no_despacho(self):
         """Rotulo que ninguem le e pior que rotulo nenhum: da a impressao de
-        haver guarda. O despacho tem de citar a classe e o token."""
+        haver guarda. O despacho tem de citar a classe e o token.
+
+        O DESPACHO SAO DUAS FUNCOES desde 02/09/2026: `_despachar` virou o
+        envelope que drena o corpo do pedido, e a decisao de acesso mudou para
+        `_rotear`. Este caso ficou vermelho na CI por isso -- lendo so
+        `_despachar`, ele achou o dreno e nao achou o guarda. Nao foi um falso
+        alarme: com a leitura antiga, mover a conferencia para uma funcao
+        vizinha e ESQUECE-LA la passaria despercebido.
+
+        Por isso as duas sao lidas, e as duas tem de existir: se uma sumir num
+        rename futuro, `getattr` abaixo reprova em vez de reduzir a busca em
+        silencio -- que e como este guarda ficaria verde sobre um servidor sem
+        guarda nenhum.
+        """
         import inspect
-        fonte = inspect.getsource(servir.Hub._despachar)
+        fonte = ""
+        for nome in ("_despachar", "_rotear"):
+            metodo = getattr(servir.Hub, nome, None)
+            self.assertIsNotNone(
+                metodo,
+                "servir.Hub nao tem mais %s. O caminho do despacho foi "
+                "renomeado: aponte este guarda para os nomes novos, em vez de "
+                "deixar a busca encolher sozinha." % nome)
+            fonte += inspect.getsource(metodo)
         self.assertIn('rota.acesso == "maquina"', fonte)
         self.assertIn("maquina_por_token", fonte)
 
