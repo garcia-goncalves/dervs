@@ -3170,11 +3170,52 @@ class OQueOServidorEntregaSatisfazAChecagemDoAgente(unittest.TestCase):
         self.assertTrue(pode, "o agente recusaria o que o servidor entregou:"
                               " %s" % motivo)
 
-    def test_tarefa_vermelha_SEM_aprovacao_nao_e_entregue(self):
-        """A outra metade: o conserto nao pode virar um passe livre.
+    def test_o_aprovado_em_entregue_e_o_DO_BANCO_e_nao_um_inventado(self):
+        """O campo entregue e o da COLUNA, e nao um valor montado na entrega.
 
-        Sem esta, "sempre entregar aprovado_em preenchido" passaria no caso de
-        cima e abriria a porta que o clique do dono existe para fechar.
+        PROVA: trocar a linha por um carimbo constante ou pelo `aprovado_em` de
+        outra coluna reprova aqui — o caso compara valor com valor.
+
+        NAO PROVA, e isto esta escrito para ninguem confiar demais nele: nao
+        pega `candidata.get("aprovado_em") or banco.agora()`. Foi sabotado
+        assim em 03/09/2026 e ficou verde, porque aqui a coluna TEM valor e o
+        `or` nunca dispara. O caso em que ela e nula e inobservavel por fora:
+        `_tarefa_pendente` recusa na propria checagem sobre a linha do banco,
+        antes de montar o dicionario, entao nao ha dicionario para inspecionar.
+
+        Ou seja: o "passe livre" que uma versao anterior deste docstring dizia
+        guardar e impossivel POR CONSTRUCAO, nao por causa de um teste. Quem o
+        impede e a ordem dentro de `_tarefa_pendente` — checar antes de montar.
+        Se algum dia a montagem passar a vir antes da checagem, este arquivo
+        precisa de um caso novo, e ele nao existe hoje.
+
+        Historico: a primeira versao deste caso enfileirava sem aprovar e
+        exigia `None`; uma revisao de Python mostrou que ela ficava verde mesmo
+        desfazendo a correcao inteira. Aquela versao continua logo abaixo, com
+        o nome certo e sem alegar cobrir este commit.
+        """
+        tarefa_id = "z:dervs"
+        banco.enfileirar([{"id": tarefa_id, "projeto": "dervs", "regra": "z",
+                           "gravidade": "media", "risco": 0.0,
+                           "trilho": "claude"}], con=self.con)
+        carimbo = "2026-01-02T03:04:05+00:00"
+        self.con.execute("UPDATE fila SET aprovado_em = ? WHERE id = ?",
+                         (carimbo, tarefa_id))
+        self.con.commit()
+
+        entregue = self._entregar()
+        self.assertIsNotNone(entregue)
+        self.assertEqual(entregue.get("aprovado_em"), carimbo,
+                         "o campo entregue tem de ser o da coluna, nao um"
+                         " carimbo inventado na hora da entrega")
+
+    def test_tarefa_vermelha_SEM_aprovacao_nao_e_entregue(self):
+        """O portao de sempre, que ja existia antes desta correcao.
+
+        Fica porque e a garantia que importa para o dono — mas ele NAO cobre
+        este commit: a recusa acontece na checagem que `_tarefa_pendente` faz
+        sobre a linha do banco, antes de montar o dicionario. Quem cobre o
+        commit e o caso acima.
         """
         banco.enfileirar([{"id": "x:dervs", "projeto": "dervs", "regra": "x",
                            "gravidade": "media", "risco": 0.0,
