@@ -109,12 +109,26 @@ um guarda que lê o código-fonte.
 
 # O QUE ISTO NÃO PROVA
 
-**1. Nenhuma auditoria de verdade jamais rodou.** Nem uma. Todo o fio é provado
-com script de mentira cuspindo `stream-json`, porque nenhum teste pode chamar o
-binário `claude` (a CI não tem login, e cada corrida gastaria a assinatura do
-dono). O que está provado é que **o fio conduz**; o que não está é que o Claude
-Code, apontado para um repositório de verdade, devolve achados úteis dentro do
-esquema.
+**1. ~~Nenhuma auditoria de verdade jamais rodou.~~ RODOU em 03/09/2026 — e
+falhou antes de chegar ao modelo.** O dono pediu a auditoria do próprio `dervs`
+pelo painel publicado, aprovou, e o agente pegou a tarefa. Ela **não** chegou a
+chamar o binário `claude`: morreu na conferência de autorização do próprio
+agente, que recusou uma tarefa aprovada 93 segundos antes (ver o defeito no
+`CLAUDE.md`, "As duas travas da Fatia 2"). Custou **US$ 0,00**.
+
+Então o que mudou e o que não mudou:
+
+- **Provado agora:** a tela existe e funciona, o pedido entra na fila, o painel
+  pede a aprovação, o agente recebe a tarefa — e a checagem dupla realmente
+  barra. O fio conduz até a porta do modelo.
+- **Continua NÃO provado:** que o Claude Code, apontado para um repositório de
+  verdade, devolve achados úteis dentro do esquema. Nenhum token foi gasto com
+  o modelo. Isto só se responde repetindo a auditoria depois de publicar a
+  correção — e a publicação está **bloqueada** (ver item 13).
+
+Todo o resto do fio continua provado com script de mentira cuspindo
+`stream-json`, porque nenhum teste pode chamar o binário `claude` (a CI não tem
+login, e cada corrida gastaria a assinatura do dono).
 
 **2. `--json-schema` é promessa do fornecedor, não fato medido.** Se a versão
 instalada do binário não tiver essa opção, ou não a respeitar, os testes continuam
@@ -162,5 +176,19 @@ isso é decisão do dono, não conserto de executor.
 A colisão de dono é provada por teste com dois `usuario_id` no mesmo banco de
 teste — não por duas máquinas reais em concorrência.
 
-**12. O DERVS nunca auditou a si mesmo.** Seria o primeiro teste honesto do
-produto, e ele depende do item 1.
+**12. ~~O DERVS nunca auditou a si mesmo.~~ Tentou em 03/09/2026, e o teste
+honesto reprovou o produto.** Era para ser um relatório; foi a descoberta de que
+o braço executor nunca havia rodado uma única tarefa aprovada, com 1.635 testes
+verdes. Para um sistema cuja primeira lei é "o painel não pode mentir", esse foi
+o resultado mais valioso possível. A auditoria de conteúdo — a que lê o código e
+devolve achados — continua devendo, e depende do item 13.
+
+**13. A PUBLICAÇÃO ESTÁ BLOQUEADA, e isto é novo em 03/09/2026.** A correção do
+braço executor está na `main` e **não** no ar. Ela está certa, mas **acorda**
+quatro furos de autorização que hoje só são inofensivos porque o agente recusa
+toda tarefa. A raiz é uma só: a tabela `fila` não tem coluna de dono, e por isso
+`banco.aprovar_tarefa`, `servir._tarefa_parar`, `banco.tarefa_para_maquina` e
+`banco.tarefas_do_usuario` não filtram por conta. Publicar antes de fechar isso
+transforma quatro defeitos dormentes em quatro portas abertas — inclusive
+disparar uma sessão de IA na máquina de outra conta. **O que está no ar hoje é
+seguro justamente por ser o código velho.**
