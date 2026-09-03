@@ -68,7 +68,7 @@ Ele **ja existe**, criado em 27/08/2026:
 | Nome curto na URL (`DERVS_GITHUB_APP_SLUG`) | `dervs-coletor` |
 | **App ID** (`DERVS_GITHUB_APP_ID`) | `4739197` |
 | Chave privada (`DERVS_GITHUB_APP_KEY`) | no cofre do repositorio |
-| Onde administrar | <https://github.com/settings/apps/dervs-coletor> |
+| Onde administrar | <https://github.com/organizations/garcia-goncalves/settings/apps/dervs-coletor> |
 
 As tres ja estao gravadas no repositorio e, desde 02/09/2026, chegam ao
 `/opt/dervs/.env` e **entram no container** a cada publicacao. Ate essa data as
@@ -77,17 +77,26 @@ dentro do processo, e a porta 2 estava morta em producao sem que nada
 avisasse. O teste `test_publicar.OContainerRecebeOQueOCodigoLe` existe para que
 isso nao volte — e ele vale para qualquer variavel nova, nao so para estas.
 
-### O unico passo que falta, e ele exige a sua mao
+### O Setup URL — FEITO em 03/09/2026
+
+> **Ja esta configurado.** O campo abaixo foi preenchido e salvo em
+> 03/09/2026, e o valor foi conferido recarregando a pagina. O roteiro
+> fica aqui para o caso de precisar refazer, ou para um app novo.
+
+**Atencao ao endereco:** o app pertence a ORGANIZACAO `garcia-goncalves`,
+nao a conta pessoal. Em <https://github.com/settings/apps> a lista aparece
+**vazia** — nao e sinal de que o app sumiu, e o lugar errado.
 
 O GitHub precisa saber **para onde mandar a pessoa de volta** depois que ela
 autoriza a instalacao. Sem isso ela termina numa pagina do proprio GitHub, o
 DERVS nunca fica sabendo, e a tela continua dizendo "nao deu para conferir".
 
-**1.** Abra <https://github.com/settings/apps/dervs-coletor>.
+**1.** Abra <https://github.com/organizations/garcia-goncalves/settings/apps/dervs-coletor>.
 
-> O GitHub vai pedir a sua identidade de novo (digital, PIN ou chave). Isso
-> chama-se *sudo mode* e nao tem como evitar: e biometria, ninguem faz por
-> voce.
+> O GitHub **pode** pedir a sua identidade de novo (digital, PIN ou chave).
+> Isso chama-se *sudo mode*. Em 03/09/2026 ele nao pediu, porque a sessao do
+> navegador ja estava autenticada havia pouco; quando pede, e biometria e
+> ninguem faz por voce.
 
 **2.** Na aba **General**, ache o bloco **Identifying and authorizing users**.
 
