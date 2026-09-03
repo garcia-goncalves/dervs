@@ -66,6 +66,24 @@ antes de disparar — e as duas respostas vêm do mesmo código. Ele **não impo
 provar. Se importasse `execucao`, o `Dockerfile` teria de levar `execucao.py`, e
 `test_imagem.PROIBIDOS` reprova.
 
+**Mesmo código não basta: as duas chamadas precisam dos mesmos FATOS.** Medido
+em produção em 03/09/2026, com as 26 suítes verdes. `servir._tarefa_pendente`
+avaliava a **linha do banco** (que tem `aprovado_em`) e entregava ao agente um
+dicionário **montado à mão, sem esse campo**. O agente refazia a mesma pergunta,
+no mesmo `tarefas.pode_rodar`, e recusava: *"esta tarefa esta vermelha e espera
+o seu clique"* — para uma tarefa aprovada 93 segundos antes. Como **toda regra
+nasce vermelha**, nenhuma tarefa aprovada pelo dono jamais rodou: o braço
+executor estava morto desde que existe. `tentativas` tinha o mesmo defeito, e
+por isso o teto de tentativas só valia do lado do servidor.
+
+Nenhum teste pegou porque **não havia nenhum sobre `_tarefa_pendente`**, e o
+caso ponta a ponta de `test_agente.py` monta o dicionário da tarefa **à mão**,
+em vez de pedi-lo ao servidor — provava o executor, nunca a entrega. O guarda
+que fecha isso é `test_servir.OQueOServidorEntregaSatisfazAChecagemDoAgente`:
+ele pega o que `_tarefa_pendente` devolve e passa em `pode_rodar`. **Campo novo
+que `pode_rodar` consulte tem de entrar naquele dicionário, e esse teste é quem
+cobra.**
+
 Os tetos (`TETO_USD`, `USD_BRL`, `TETO_DIARIO_BRL`, `MAX_TURNOS`,
 `MAX_TENTATIVAS`) **mudaram de casa para lá**. `fila.py` e `execucao.py`
 reexportam os mesmos objetos, e um teste cobra a identidade — não há um segundo

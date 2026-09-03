@@ -1969,6 +1969,24 @@ class Hub(SimpleHTTPRequestHandler):
             "cor": candidata.get("cor") or tarefas.VERMELHO,
             "teto_usd": teto_usd,
             "rodadas": int(candidata.get("rodadas") or 0),
+            # OS TRES CAMPOS ABAIXO SAO A METADE QUE FALTAVA DA MESMA PERGUNTA.
+            #
+            # `pode_rodar` e chamado duas vezes de proposito: aqui, sobre a
+            # LINHA DO BANCO, e do outro lado pelo agente, sobre ESTE
+            # dicionario. Compartilhar a funcao nao basta — as duas chamadas
+            # precisam dos mesmos FATOS. Ate 03/09/2026 nao estavam aqui, e o
+            # efeito foi medido em producao: o dono aprovou uma auditoria
+            # (`aprovado_em` gravado), o servidor entregou, e o agente recusou
+            # com "esta tarefa esta vermelha e espera o seu clique". Como toda
+            # regra nasce vermelha, NENHUMA tarefa aprovada rodava.
+            #
+            # `tentativas` some 1 porque `entregar_tarefa`, chamado logo acima,
+            # ja incrementou a coluna: `candidata` foi lida ANTES disso, e
+            # mandar o numero velho faria o agente contar uma tentativa a menos
+            # que o banco em toda entrega.
+            "aprovado_em": candidata.get("aprovado_em") or "",
+            "tentativas": int(candidata.get("tentativas") or 0) + 1,
+            "parada_pedida_em": candidata.get("parada_pedida_em") or "",
         }
 
     # O progresso chega a cada 5 s (`tarefas.SEGUNDOS_ENTRE_PROGRESSOS`), e o

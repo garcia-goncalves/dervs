@@ -3086,6 +3086,122 @@ class OResultadoDaAuditoriaNaoDerrubaARota(BaseServidorDeVerdade):
             token, "/agente/resultado",
             {"tipo": "progresso", "id": "d:1", "custo_usd": {}})
         self.assertEqual(r.status, 400, r.corpo)
+class OQueOServidorEntregaSatisfazAChecagemDoAgente(unittest.TestCase):
+    """A pergunta "pode rodar agora?" e feita DUAS vezes, e as duas tem de ver
+    os MESMOS FATOS.
+
+    MEDIDO EM PRODUCAO, 03/09/2026, com a suite inteira verde. O dono aprovou
+    uma auditoria do proprio `dervs` (`aprovado_em` gravado as 12:12:03); o
+    servidor avaliou a LINHA DO BANCO, disse que podia e entregou; o agente
+    refez a mesma pergunta, no mesmo `tarefas.pode_rodar`, sobre o dicionario
+    que o servidor montou — e recusou com "esta tarefa esta vermelha e espera
+    o seu clique". `_tarefa_pendente` nao copiava `aprovado_em`.
+
+    O ESTRAGO ERA O PRODUTO INTEIRO: "toda regra nasce vermelha", entao toda
+    tarefa que o dono aprovava era recusada pelo agente. O braco executor
+    nunca rodou um trabalho aprovado.
+
+    POR QUE NENHUM TESTE PEGOU: nao havia nenhum sobre `_tarefa_pendente`, e o
+    caso ponta a ponta de `test_agente.py` monta o dicionario da tarefa A MAO,
+    em vez de pedi-lo ao servidor. Codigo compartilhado nao basta quando cada
+    lado recebe uma entrada diferente.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.TemporaryDirectory()
+        cls._banco_antigo = banco.BANCO
+        banco.BANCO = Path(cls.dir.name) / "hub.db"
+        con = banco.conectar()
+        cls.uid = banco.criar_usuario("dono@teste.local", con=con)
+        con.execute(
+            "INSERT INTO maquina (usuario_id, nome, token_hash, criado_em,"
+            "                     executa)"
+            " VALUES (?, 'teste', 'hash-de-teste', ?, 1)",
+            (cls.uid, banco.agora()))
+        con.commit()
+        cls.maquina_id = con.execute(
+            "SELECT id FROM maquina").fetchone()["id"]
+        con.close()
+
+    @classmethod
+    def tearDownClass(cls):
+        banco.BANCO = cls._banco_antigo
+        cls.dir.cleanup()
+
+    def setUp(self):
+        con = banco.conectar()
+        self.addCleanup(con.close)
+        con.execute("DELETE FROM fila")
+        con.commit()
+        self.con = con
+
+    def _entregar(self):
+        """Chama `_tarefa_pendente` sem subir servidor.
+
+        Ele so usa `self._varrer_mudas()`; um duble com esse metodo basta, e
+        assim o teste mede a MONTAGEM da tarefa, nao o HTTP.
+        """
+        class _Duble:
+            def _varrer_mudas(self):
+                return None
+        maquina = {"id": self.maquina_id, "executa": 1,
+                   "usuario_id": self.uid}
+        return servir.Hub._tarefa_pendente(_Duble(), maquina)
+
+    def test_tarefa_vermelha_APROVADA_e_entregue_com_a_aprovacao_dentro(self):
+        """O caso que quebrou em producao."""
+        tarefa_id = "auditoria_vencida:dervs"
+        banco.enfileirar([{"id": tarefa_id, "projeto": "dervs",
+                           "regra": "auditoria_vencida", "gravidade": "baixa",
+                           "risco": 0.0, "trilho": "claude",
+                           "executor": auditoria.EXECUTOR}], con=self.con)
+        self.con.execute("UPDATE fila SET aprovado_em = ? WHERE id = ?",
+                         (banco.agora(), tarefa_id))
+        self.con.commit()
+
+        entregue = self._entregar()
+        self.assertIsNotNone(entregue, "o servidor nem entregou a tarefa")
+
+        # A MESMA pergunta que o agente faz, com a mesma maquina.
+        pode, motivo = tarefas.pode_rodar(
+            entregue, 0.0, banco.agora(), banco.cores_das_regras(),
+            {"id": self.maquina_id, "executa": 1})
+        self.assertTrue(pode, "o agente recusaria o que o servidor entregou:"
+                              " %s" % motivo)
+
+    def test_tarefa_vermelha_SEM_aprovacao_nao_e_entregue(self):
+        """A outra metade: o conserto nao pode virar um passe livre.
+
+        Sem esta, "sempre entregar aprovado_em preenchido" passaria no caso de
+        cima e abriria a porta que o clique do dono existe para fechar.
+        """
+        banco.enfileirar([{"id": "x:dervs", "projeto": "dervs", "regra": "x",
+                           "gravidade": "media", "risco": 0.0,
+                           "trilho": "claude"}], con=self.con)
+        self.assertIsNone(self._entregar())
+
+    def test_o_agente_ve_as_tentativas_que_o_banco_conta(self):
+        """`pode_rodar` recusa em `MAX_TENTATIVAS`, e essa conta vive no banco.
+
+        Sem `tentativas` no dicionario, o agente ve sempre 0 e o teto de
+        tentativas so existe do lado do servidor — outra divergencia calada
+        entre as duas metades da mesma pergunta.
+        """
+        tarefa_id = "y:dervs"
+        banco.enfileirar([{"id": tarefa_id, "projeto": "dervs", "regra": "y",
+                           "gravidade": "media", "risco": 0.0,
+                           "trilho": "claude"}], con=self.con)
+        self.con.execute(
+            "UPDATE fila SET aprovado_em = ?, tentativas = ? WHERE id = ?",
+            (banco.agora(), tarefas.MAX_TENTATIVAS - 1, tarefa_id))
+        self.con.commit()
+
+        entregue = self._entregar()
+        self.assertIsNotNone(entregue)
+        self.assertEqual(int(entregue.get("tentativas") or 0),
+                         tarefas.MAX_TENTATIVAS,
+                         "entregar_tarefa soma 1; o agente tem de ver o total")
 
 
 if __name__ == "__main__":
