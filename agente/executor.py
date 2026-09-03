@@ -16,8 +16,20 @@ estourou. Este arquivo o EMBRULHA: `iniciar`, `estado`, `parar` e
 
 **A segunda camada do teto.** `Executor.rodar` chama `tarefas.pode_rodar` ANTES
 de montar qualquer comando. O servidor ja recusou entregar a tarefa que nao
-cabe; aqui ele recusa de novo. Duas camadas para a mesma regra e de proposito:
-a de fora depende de o painel estar certo, e esta nao depende de nada.
+cabe; aqui ele recusa de novo.
+
+O QUE ESTA CAMADA E, COM HONESTIDADE (corrigido em 03/09/2026): ela NAO e
+independente. Uma versao anterior deste texto dizia que "a de fora depende de o
+painel estar certo, e esta nao depende de nada" — e falso, e uma revisao de
+seguranca derrubou. `agente/enviar.py` chama `rodar` sem `repinturas` e sem
+`maquina`, entao aqui `cabe_no_teto` e sempre verdadeiro e a conferencia de
+`executa` nem roda; e `aprovado_em`, `tentativas` e `parada_pedida_em` sao
+exatamente os numeros que o painel mandou. Ela e um ECO dos fatos do painel,
+util contra bug de entrega — e foi assim que o defeito de 03/09/2026 apareceu —
+e inutil contra um painel mentiroso.
+
+Prometer defesa que nao existe e pior que nao ter a defesa: faz a proxima
+pessoa parar de olhar para o lado que realmente decide, que e o servidor.
 """
 from __future__ import annotations
 

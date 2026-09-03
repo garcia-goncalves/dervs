@@ -1980,12 +1980,18 @@ class Hub(SimpleHTTPRequestHandler):
             # com "esta tarefa esta vermelha e espera o seu clique". Como toda
             # regra nasce vermelha, NENHUMA tarefa aprovada rodava.
             #
-            # `tentativas` some 1 porque `entregar_tarefa`, chamado logo acima,
-            # ja incrementou a coluna: `candidata` foi lida ANTES disso, e
-            # mandar o numero velho faria o agente contar uma tentativa a menos
-            # que o banco em toda entrega.
+            # `tentativas` VAI CRU, sem somar 1. Errei isso na primeira versao
+            # e uma revisao de seguranca derrubou em 03/09/2026: `pode_rodar`
+            # foi escrita sobre o significado "tentativas ja feitas ANTES
+            # desta", e e assim que o servidor a avalia, sobre `candidata`,
+            # lida antes de `entregar_tarefa` incrementar a coluna. Somar 1
+            # aqui daria ao agente um significado diferente do mesmo nome, e
+            # com MAX_TENTATIVAS = 2 a SEGUNDA tentativa morria: o servidor
+            # entregava e o agente recusava com "ja foram 2 tentativas".
+            # Trocar o sentido de um numero entre as duas pontas e a mesma
+            # classe de defeito que este bloco existe para fechar.
             "aprovado_em": candidata.get("aprovado_em") or "",
-            "tentativas": int(candidata.get("tentativas") or 0) + 1,
+            "tentativas": int(candidata.get("tentativas") or 0),
             "parada_pedida_em": candidata.get("parada_pedida_em") or "",
         }
 

@@ -255,7 +255,16 @@ def pode_repintar(regra: str, cor: str) -> bool:
 #      "detalhe": "...",       # o texto do pedido
 #      "cor": "verde",         # ja resolvida pelo painel
 #      "teto_usd": 3.0,        # o que SOBRA hoje, nao o teto cheio
-#      "rodadas": 0}           # quantas ja foram, para retomada de contagem
+#      "rodadas": 0,           # quantas ja foram, para retomada de contagem
+#      "aprovado_em": "...",   # o carimbo do clique do dono, "" se nao houve
+#      "tentativas": 1,        # quantas ANTES desta; nunca inclui a atual
+#      "parada_pedida_em": ""} # o freio; "" quando ninguem pediu para parar
+#
+# OS TRES ULTIMOS SAO OS FATOS QUE `pode_rodar` CONSULTA, e por isso descem.
+# Ate 03/09/2026 nao desciam, o agente recusava toda tarefa aprovada, e o braco
+# executor nunca rodou nada. Campo novo que `pode_rodar` passe a ler entra aqui
+# E na montagem de `servir._tarefa_pendente` — as duas pontas so concordam sem
+# se ler se este bloco for a verdade.
 #
 # SOBE (POST /agente/resultado). Dois tipos no mesmo balcao, distinguidos pela
 # chave "tipo" — um balcao so porque o teto de chamadas e por balcao, e o
@@ -275,7 +284,8 @@ def pode_repintar(regra: str, cor: str) -> bool:
 # ---------------------------------------------------------------------------
 
 CAMPOS_DA_TAREFA = ("id", "projeto", "regra", "trilho", "executor", "detalhe",
-                    "cor", "teto_usd", "rodadas")
+                    "cor", "teto_usd", "rodadas", "aprovado_em", "tentativas",
+                    "parada_pedida_em")
 CAMPOS_DO_PROGRESSO = ("tipo", "id", "frase", "linhas", "rodadas", "custo_usd")
 CAMPOS_DO_DESFECHO = ("tipo", "id", "estado", "ramo", "resumo", "diff",
                       "pr_url", "rodadas", "custo_usd", "erro")

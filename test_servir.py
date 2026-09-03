@@ -3222,12 +3222,19 @@ class OQueOServidorEntregaSatisfazAChecagemDoAgente(unittest.TestCase):
                            "trilho": "claude"}], con=self.con)
         self.assertIsNone(self._entregar())
 
-    def test_o_agente_ve_as_tentativas_que_o_banco_conta(self):
-        """`pode_rodar` recusa em `MAX_TENTATIVAS`, e essa conta vive no banco.
+    def test_a_ULTIMA_tentativa_permitida_ainda_roda_no_agente(self):
+        """O numero entregue tem de ter o MESMO significado dos dois lados.
 
-        Sem `tentativas` no dicionario, o agente ve sempre 0 e o teto de
-        tentativas so existe do lado do servidor — outra divergencia calada
-        entre as duas metades da mesma pergunta.
+        A primeira versao deste caso media o NUMERO (`== MAX_TENTATIVAS`) e
+        ficava verde com a segunda tentativa morta — uma revisao de seguranca
+        derrubou em 03/09/2026. Agora ele mede o COMPORTAMENTO: passa o
+        dicionario entregue por `pode_rodar`, que e o que o agente faz.
+
+        `tentativas` significa "quantas ANTES desta". Com MAX_TENTATIVAS = 2 e
+        uma tentativa ja feita, esta e a ultima permitida e TEM de rodar. Se
+        alguem somar 1 na entrega (foi o meu erro), o servidor entrega e o
+        agente recusa dizendo "ja foram 2 tentativas" — e o dono ve uma falha
+        cujo texto mente sobre o motivo.
         """
         tarefa_id = "y:dervs"
         banco.enfileirar([{"id": tarefa_id, "projeto": "dervs", "regra": "y",
@@ -3240,9 +3247,11 @@ class OQueOServidorEntregaSatisfazAChecagemDoAgente(unittest.TestCase):
 
         entregue = self._entregar()
         self.assertIsNotNone(entregue)
-        self.assertEqual(int(entregue.get("tentativas") or 0),
-                         tarefas.MAX_TENTATIVAS,
-                         "entregar_tarefa soma 1; o agente tem de ver o total")
+        pode, motivo = tarefas.pode_rodar(
+            entregue, 0.0, banco.agora(), banco.cores_das_regras(),
+            {"id": self.maquina_id, "executa": 1})
+        self.assertTrue(pode, "a ultima tentativa permitida foi recusada pelo"
+                              " agente: %s" % motivo)
 
 
 if __name__ == "__main__":
