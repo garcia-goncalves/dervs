@@ -2147,14 +2147,14 @@ class Hub(SimpleHTTPRequestHandler):
             urllib.parse.urlsplit(self.path).query)
         pedido = (consulta.get("id") or [""])[0][:200]
         if pedido:
-            uma = banco.tarefa(pedido)
+            uma = banco.tarefa(pedido, usuario_id=sessao["usuario_id"])
             if uma is None:
                 return self._json(404, {"erro": "nao existe"})
             uma["frases_do_diff"] = tarefas.frases_do_diff(uma.get("diff") or "")
             return self._json(200, {"tarefa": uma,
                                     "medido_em": banco.agora()})
         return self._json(200, {
-            "tarefas": banco.tarefas_do_painel(),
+            "tarefas": banco.tarefas_do_painel(sessao["usuario_id"]),
             "cores": banco.cores_das_regras(),
             "nunca_verde": sorted(tarefas.NUNCA_VERDE),
             "medido_em": banco.agora()})
@@ -2234,15 +2234,23 @@ class Hub(SimpleHTTPRequestHandler):
             self.send_header("Connection", "close")
             # Nenhum Content-Length: o tamanho nao existe ainda.
             self.end_headers()
-            self._empurrar(alvo, desde)
+            self._empurrar(alvo, desde, chave)
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError,
                 OSError):
             pass                        # a aba fechou. Nao e erro.
         finally:
             self._sair_do_fluxo(chave)
 
-    def _empurrar(self, alvo: str, desde: int) -> None:
-        """O laco. Le o banco, manda o que ha de novo, respira."""
+    def _empurrar(self, alvo: str, desde: int, usuario_id: int) -> None:
+        """O laco. Le o banco, manda o que ha de novo, respira.
+
+        `usuario_id` entra em CADA leitura de `alvo`, nao so na abertura:
+        sem ele, uma sessao passando o id de outra conta acompanhava ao vivo
+        as linhas, o custo e o diff de uma tarefa alheia — mesma familia do
+        achado da auditoria de 03/09/2026. "Nao existe" e "nao e sua" chegam
+        ao mesmo lugar: `banco.tarefa` devolve `None` para os dois, e a busca
+        de linhas so roda quando a tarefa E confirmada desta conta.
+        """
         fim = time.time() + self.SEGUNDOS_DE_VIDA
         ultimo_ping = time.time()
         # `object()` e nao `None`: `None` e um estado POSSIVEL (tarefa que nao
@@ -2253,14 +2261,15 @@ class Hub(SimpleHTTPRequestHandler):
         ultimo_estado = object()
         while time.time() < fim:
             if alvo:
-                for linha in banco.linhas_da_tarefa(alvo, desde):
-                    desde = max(desde, int(linha["n"]))
-                    self._evento("linha", {"n": linha["n"],
-                                           "texto": linha["texto"],
-                                           "quando": linha["quando"]},
-                                 ident=linha["n"])
-                    ultimo_ping = time.time()
-                atual = banco.tarefa(alvo)
+                atual = banco.tarefa(alvo, usuario_id=usuario_id)
+                if atual is not None:
+                    for linha in banco.linhas_da_tarefa(alvo, desde):
+                        desde = max(desde, int(linha["n"]))
+                        self._evento("linha", {"n": linha["n"],
+                                               "texto": linha["texto"],
+                                               "quando": linha["quando"]},
+                                     ident=linha["n"])
+                        ultimo_ping = time.time()
                 marca = None if atual is None else (
                     atual["estado"], atual["frase"], atual["rodadas"])
                 if marca != ultimo_estado:
@@ -2359,13 +2368,13 @@ class Hub(SimpleHTTPRequestHandler):
         agente confirmar seria exatamente o numero errado com cara de certo que
         a lei 2 proibe — `parar()` devolve False quando nao confirmou a morte.
         """
-        corpo, _sessao = self._guarda_de_escrita()
+        corpo, sessao = self._guarda_de_escrita()
         if corpo is None:
             return
         alvo = self._texto_do_corpo(corpo, "id", teto=200)
         if not alvo:
             return self._json(400, {"erro": "faltou o id da tarefa"})
-        if not banco.pedir_parada(alvo):
+        if not banco.pedir_parada(alvo, sessao["usuario_id"]):
             return self._json(409, {"erro": "essa tarefa ja nao esta rodando"})
         return self._json(200, {"ok": True, "pedido": True,
                                 "segundos": tarefas.SEGUNDOS_ENTRE_PROGRESSOS})
@@ -2464,6 +2473,7 @@ class Hub(SimpleHTTPRequestHandler):
             return self._json(403, {"erro": "projeto bloqueado"})
         entraram = banco.enfileirar([{
             "id": "%s:%s" % (auditoria.REGRA_DE_VENCIMENTO, projeto),
+            "usuario_id": sessao["usuario_id"],
             "projeto": projeto,
             "regra": auditoria.REGRA_DE_VENCIMENTO,
             "gravidade": "baixa",

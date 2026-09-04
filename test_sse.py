@@ -170,9 +170,11 @@ class OFluxoAoVivo(unittest.TestCase):
         con = banco.conectar()
         try:
             con.execute("INSERT OR REPLACE INTO fila"
-                        " (id, projeto, regra, trilho, criado_em, estado)"
-                        " VALUES ('d:vivo','dervs','env_drift','claude',?, 'rodando')",
-                        (banco.agora(),))
+                        " (id, usuario_id, projeto, regra, trilho, criado_em,"
+                        "  estado)"
+                        " VALUES ('d:vivo',?,'dervs','env_drift','claude',?,"
+                        "         'rodando')",
+                        (self.uid, banco.agora()))
             con.commit()
         finally:
             con.close()

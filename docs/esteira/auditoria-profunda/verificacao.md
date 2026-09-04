@@ -183,12 +183,14 @@ verdes. Para um sistema cuja primeira lei é "o painel não pode mentir", esse f
 o resultado mais valioso possível. A auditoria de conteúdo — a que lê o código e
 devolve achados — continua devendo, e depende do item 13.
 
-**13. A PUBLICAÇÃO ESTÁ BLOQUEADA, e isto é novo em 03/09/2026.** A correção do
-braço executor está na `main` e **não** no ar. Ela está certa, mas **acorda**
-quatro furos de autorização que hoje só são inofensivos porque o agente recusa
-toda tarefa. A raiz é uma só: a tabela `fila` não tem coluna de dono, e por isso
-`banco.aprovar_tarefa`, `servir._tarefa_parar`, `banco.tarefa_para_maquina` e
-`banco.tarefas_do_usuario` não filtram por conta. Publicar antes de fechar isso
-transforma quatro defeitos dormentes em quatro portas abertas — inclusive
-disparar uma sessão de IA na máquina de outra conta. **O que está no ar hoje é
-seguro justamente por ser o código velho.**
+**13. As quatro portas fecharam em 04/09/2026 — a publicação segue bloqueada
+só pelo sinal do dono.** A `fila` ganhou `usuario_id` (migração de esquema,
+preenchida por `enfileirar` e por `servir._auditoria_pedir`), e as seis rotas
+que faltavam filtram por conta: `banco.aprovar_tarefa`, `banco.pedir_parada`
+(chamada por `servir._tarefa_parar`, que passou a receber o usuário),
+`banco.tarefa_para_maquina`, `banco.tarefas_do_painel` — mais duas achadas
+relendo o mesmo código, fora da lista original: `banco.tarefa()` pelo `?id=`
+de `/api/tarefas`, e o fluxo ao vivo `/api/eventos`. Provado sabotando de
+propósito uma das condições e vendo o teste novo acusar. Suíte inteira: 1647
+testes verdes, 6 deles cruzando duas contas de verdade. **O que falta não é
+código — é o mesmo sinal do dono que toda publicação exige.**

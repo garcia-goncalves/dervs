@@ -287,9 +287,10 @@ class BaseServidorDeVerdade(unittest.TestCase):
         try:
             con.execute(
                 "INSERT OR REPLACE INTO fila"
-                " (id, projeto, regra, trilho, executor, criado_em, estado)"
-                " VALUES (?, 'dervs', ?, 'claude', ?, ?, 'esperando')",
-                (id_, regra, executor, banco.agora()))
+                " (id, usuario_id, projeto, regra, trilho, executor,"
+                "  criado_em, estado)"
+                " VALUES (?, ?, 'dervs', ?, 'claude', ?, ?, 'esperando')",
+                (id_, self.uid, regra, executor, banco.agora()))
             con.commit()
             if verde:
                 banco.repintar_regra(regra, "verde", self.uid, con=con)
@@ -1577,6 +1578,62 @@ class AsTarefasNoServidorDeVerdade(BaseServidorDeVerdade):
         depois = self.como_agente(token, "/agente/relatorio", {"projetos": []})
         self.assertIsNotNone(json.loads(depois.corpo)["tarefa"])
 
+    def _sessao_e_token_de_outra_conta(self):
+        """Uma SEGUNDA conta, logada. E o que faltava para provar que a fila
+        tem dono: ate 03/09/2026 as quatro rotas de tarefa nao conferiam a
+        conta contra a linha do banco, so contra a propria sessao."""
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario(
+                "vizinho-%s@teste.local" % banco.novo_token()[:8], con=con)
+            cookie = banco.novo_token()
+            banco.abrir_sessao(outro, cookie, banco.prazo(3600), con=con)
+            final = banco.confirmar_segundo_fator(cookie, banco.novo_token(),
+                                                  con=con)
+            s = banco.sessao_valida(final, con=con)
+        finally:
+            con.close()
+        return {"sessao": final}, servir.Hub._csrf_da_sessao(s)
+
+    def test_aprovar_a_tarefa_de_outra_conta_e_recusado(self):
+        """Achado da auditoria de 03/09/2026: o id e previsivel
+        (`regra:projeto`), e sem o dono no WHERE qualquer conta logada
+        aprovava — e disparava uma sessao de IA — na fila de outra."""
+        token, _ = self.maquina_com_token()
+        self.enfileirar_tarefa(verde=False)
+        cookies, csrf = self._sessao_e_token_de_outra_conta()
+        r = self.pedir("/api/tarefas/aprovar", "POST", {"id": "d:1"},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertEqual(r.status, 409)
+        depois = self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        self.assertIsNone(json.loads(depois.corpo)["tarefa"],
+                          "a tarefa vermelha desceu sem o clique DO DONO")
+
+    def test_parar_a_tarefa_de_outra_conta_e_recusado(self):
+        token, _ = self.maquina_com_token()
+        self.enfileirar_tarefa()
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        cookies, csrf = self._sessao_e_token_de_outra_conta()
+        r = self.pedir("/api/tarefas/parar", "POST", {"id": "d:1"},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertEqual(r.status, 409)
+        resultado = self.como_agente(token, "/agente/resultado",
+                                     {"tipo": "progresso", "id": "d:1"})
+        self.assertFalse(json.loads(resultado.corpo)["pare"],
+                         "o botao Parar de uma conta parou a sessao da outra")
+
+    def test_a_lista_de_uma_conta_nao_mostra_a_tarefa_da_outra(self):
+        self.enfileirar_tarefa()
+        cookies, _csrf = self._sessao_e_token_de_outra_conta()
+        lista = json.loads(self.pedir("/api/tarefas", cookies=cookies).corpo)
+        self.assertEqual(lista["tarefas"], [])
+
+    def test_pedir_a_tarefa_da_outra_conta_pelo_id_devolve_nao_existe(self):
+        self.enfileirar_tarefa()
+        cookies, _csrf = self._sessao_e_token_de_outra_conta()
+        r = self.pedir("/api/tarefas?id=d:1", cookies=cookies)
+        self.assertEqual(r.status, 404)
+
     def test_repintar_publicar_de_verde_e_recusado_com_frase_em_portugues(self):
         cookies, csrf = self.sessao_e_token()
         r = self.pedir("/api/tarefas/cor", "POST",
@@ -2725,7 +2782,7 @@ class AAuditoriaNoServidorDeVerdade(BaseServidorDeVerdade):
         con = banco.conectar()
         try:
             linha = con.execute(
-                "SELECT trilho, executor, regra FROM fila"
+                "SELECT trilho, executor, regra, usuario_id FROM fila"
                 " WHERE projeto = 'dervs'").fetchone()
         finally:
             con.close()
@@ -2733,6 +2790,10 @@ class AAuditoriaNoServidorDeVerdade(BaseServidorDeVerdade):
         self.assertEqual(linha["trilho"], "claude")
         self.assertEqual(linha["executor"], auditoria.EXECUTOR)
         self.assertEqual(linha["regra"], auditoria.REGRA_DE_VENCIMENTO)
+        # O DONO da fila e a sessao que pediu, e nao o padrao (`DONO_LOCAL`).
+        # Sem isto a maquina de OUTRA conta podia receber esta auditoria —
+        # achado da auditoria de 03/09/2026.
+        self.assertEqual(linha["usuario_id"], self.uid)
 
     def test_pedir_o_mesmo_projeto_duas_vezes_nao_duplica(self):
         cookies, csrf = self.sessao_e_token()
@@ -3152,7 +3213,8 @@ class OQueOServidorEntregaSatisfazAChecagemDoAgente(unittest.TestCase):
     def test_tarefa_vermelha_APROVADA_e_entregue_com_a_aprovacao_dentro(self):
         """O caso que quebrou em producao."""
         tarefa_id = "auditoria_vencida:dervs"
-        banco.enfileirar([{"id": tarefa_id, "projeto": "dervs",
+        banco.enfileirar([{"id": tarefa_id, "usuario_id": self.uid,
+                           "projeto": "dervs",
                            "regra": "auditoria_vencida", "gravidade": "baixa",
                            "risco": 0.0, "trilho": "claude",
                            "executor": auditoria.EXECUTOR}], con=self.con)
@@ -3195,7 +3257,8 @@ class OQueOServidorEntregaSatisfazAChecagemDoAgente(unittest.TestCase):
         o nome certo e sem alegar cobrir este commit.
         """
         tarefa_id = "z:dervs"
-        banco.enfileirar([{"id": tarefa_id, "projeto": "dervs", "regra": "z",
+        banco.enfileirar([{"id": tarefa_id, "usuario_id": self.uid,
+                           "projeto": "dervs", "regra": "z",
                            "gravidade": "media", "risco": 0.0,
                            "trilho": "claude"}], con=self.con)
         carimbo = "2026-01-02T03:04:05+00:00"
@@ -3217,7 +3280,8 @@ class OQueOServidorEntregaSatisfazAChecagemDoAgente(unittest.TestCase):
         sobre a linha do banco, antes de montar o dicionario. Quem cobre o
         commit e o caso acima.
         """
-        banco.enfileirar([{"id": "x:dervs", "projeto": "dervs", "regra": "x",
+        banco.enfileirar([{"id": "x:dervs", "usuario_id": self.uid,
+                           "projeto": "dervs", "regra": "x",
                            "gravidade": "media", "risco": 0.0,
                            "trilho": "claude"}], con=self.con)
         self.assertIsNone(self._entregar())
@@ -3237,7 +3301,8 @@ class OQueOServidorEntregaSatisfazAChecagemDoAgente(unittest.TestCase):
         cujo texto mente sobre o motivo.
         """
         tarefa_id = "y:dervs"
-        banco.enfileirar([{"id": tarefa_id, "projeto": "dervs", "regra": "y",
+        banco.enfileirar([{"id": tarefa_id, "usuario_id": self.uid,
+                           "projeto": "dervs", "regra": "y",
                            "gravidade": "media", "risco": 0.0,
                            "trilho": "claude"}], con=self.con)
         self.con.execute(

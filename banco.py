@@ -165,6 +165,11 @@ CREATE INDEX IF NOT EXISTS ix_vida_aberta ON pendencia_vida (fechada_em, visto_e
 -- o teto zeraria tres horas cedo e ninguem entenderia por que.
 CREATE TABLE IF NOT EXISTS fila (
     id           TEXT PRIMARY KEY,
+    -- O DONO. Zero (`DONO_LOCAL`) e o pedido do laco local, sem sessao web —
+    -- o mesmo padrao que `pendencia_estado` e `achado` usam para a mesma
+    -- situacao. Toda escrita que nasce de uma sessao (`_auditoria_pedir`) leva
+    -- o `usuario_id` daquela sessao, nunca zero.
+    usuario_id   INTEGER NOT NULL DEFAULT 0,
     projeto      TEXT NOT NULL DEFAULT '',
     regra        TEXT NOT NULL DEFAULT '',
     gravidade    TEXT NOT NULL DEFAULT 'media',
@@ -196,6 +201,7 @@ CREATE TABLE IF NOT EXISTS fila (
 );
 CREATE INDEX IF NOT EXISTS ix_fila_dia ON fila (terminado_em);
 CREATE INDEX IF NOT EXISTS ix_fila_maquina ON fila (maquina_id, estado);
+CREATE INDEX IF NOT EXISTS ix_fila_dono ON fila (usuario_id, estado);
 
 -- O que a sessao foi dizendo, linha a linha. A numeracao `n` vem do agente
 -- (`execucao.estado` ja devolve `total_de_linhas`), e a chave composta faz
@@ -607,6 +613,7 @@ FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento",
 # esquema, e o valor padrao de `cor` e o coracao do semaforo: uma linha antiga,
 # que nasceu antes de existir semaforo, acorda VERMELHA.
 _COLUNAS_SEMAFORO = (
+    ("usuario_id",       "INTEGER NOT NULL DEFAULT 0"),
     ("cor",              "TEXT NOT NULL DEFAULT 'vermelho'"),
     ("aprovado_por",     "INTEGER"),
     ("aprovado_em",      "TEXT"),
@@ -1608,9 +1615,11 @@ def enfileirar(pendencias: list, con=None) -> int:
     try:
         for p in pendencias or []:
             cur = con.execute(
-                "INSERT OR IGNORE INTO fila (id, projeto, regra, gravidade, risco,"
-                " trilho, criado_em, executor) VALUES (?,?,?,?,?,?,?,?)",
-                (p.get("id") or "", p.get("projeto") or "", p.get("regra") or "",
+                "INSERT OR IGNORE INTO fila (id, usuario_id, projeto, regra,"
+                " gravidade, risco, trilho, criado_em, executor)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                (p.get("id") or "", int(p.get("usuario_id") or 0),
+                 p.get("projeto") or "", p.get("regra") or "",
                  p.get("gravidade") or "media", float(p.get("risco") or 0),
                  p.get("trilho") or "", agora(), p.get("executor") or "claude"))
             entraram += cur.rowcount or 0
@@ -1704,13 +1713,15 @@ def tarefa_para_maquina(maquina_id: int, con=None):
             " achado.linha AS achado_linha"
             " FROM fila LEFT JOIN achado"
             "   ON achado.id = fila.id AND achado.usuario_id = ?"
-            " WHERE fila.estado IN (%s)"
+            " WHERE fila.usuario_id = ?"
+            "   AND fila.estado IN (%s)"
             "   AND fila.trilho <> ''"
             "   AND fila.parada_pedida_em IS NULL"
             "   AND (fila.maquina_id IS NULL OR fila.maquina_id = ?)"
             " ORDER BY (fila.aprovado_em IS NULL), fila.criado_em"
             " LIMIT 1" % marcas,
-            [m["usuario_id"]] + list(_A_PEGAR) + [maquina_id]).fetchone()
+            [m["usuario_id"], m["usuario_id"]] + list(_A_PEGAR)
+            + [maquina_id]).fetchone()
         return dict(l) if l else None
     finally:
         if fechar:
@@ -2010,6 +2021,11 @@ def aprovar_tarefa(tarefa_id: str, usuario_id: int, agora_iso: str = "",
 
     Aprovar duas vezes devolve `False` na segunda — nao e erro, e a resposta
     honesta: nada mudou. E tarefa que ja terminou nao se aprova.
+
+    `usuario_id` entra TAMBEM no WHERE, e nao so no `SET aprovado_por`: sem
+    essa condicao, qualquer conta logada que adivinhasse o id (previsivel,
+    `regra:projeto`) aprovava a tarefa vermelha de outra conta e disparava
+    uma sessao de IA na maquina dela.
     """
     fechar = con is None
     con = con or conectar()
@@ -2018,9 +2034,9 @@ def aprovar_tarefa(tarefa_id: str, usuario_id: int, agora_iso: str = "",
         cur = con.execute(
             "UPDATE fila SET aprovado_por = ?, aprovado_em = ?,"
             "   estado = 'esperando'"
-            " WHERE id = ? AND aprovado_em IS NULL"
+            " WHERE id = ? AND usuario_id = ? AND aprovado_em IS NULL"
             "   AND estado IN ('esperando', 'aguardando_aprovacao')",
-            (usuario_id, quando, tarefa_id))
+            (usuario_id, quando, tarefa_id, usuario_id))
         con.commit()
         return cur.rowcount == 1
     finally:
@@ -2028,12 +2044,16 @@ def aprovar_tarefa(tarefa_id: str, usuario_id: int, agora_iso: str = "",
             con.close()
 
 
-def pedir_parada(tarefa_id: str, agora_iso: str = "", con=None) -> bool:
+def pedir_parada(tarefa_id: str, usuario_id: int, agora_iso: str = "",
+                 con=None) -> bool:
     """Marca o pedido de parada. `True` se havia o que parar.
 
     Isto NAO para nada sozinho: so escreve o pedido. Quem para e o agente,
     quando ler a resposta do proximo progresso — ate 5 segundos depois, mais o
     tempo de matar a arvore de processos. A tela tem de dizer isso.
+
+    `usuario_id` no WHERE: sem ele, `_tarefa_parar` nem recebia o usuario, e
+    qualquer conta logada parava a sessao de qualquer outra.
     """
     fechar = con is None
     con = con or conectar()
@@ -2041,9 +2061,9 @@ def pedir_parada(tarefa_id: str, agora_iso: str = "", con=None) -> bool:
     try:
         cur = con.execute(
             "UPDATE fila SET parada_pedida_em = ?"
-            " WHERE id = ? AND parada_pedida_em IS NULL"
+            " WHERE id = ? AND usuario_id = ? AND parada_pedida_em IS NULL"
             "   AND estado IN ('esperando', 'aguardando_aprovacao', 'rodando')",
-            (quando, tarefa_id))
+            (quando, tarefa_id, usuario_id))
         con.commit()
         return cur.rowcount == 1
     finally:
@@ -2145,11 +2165,14 @@ def tarefas_sem_noticia(limite_min: int, agora_iso: str = "", con=None) -> list:
             con.close()
 
 
-def tarefas_do_painel(limite: int = 50, con=None) -> list:
-    """O que a tela mostra: as tarefas mais recentes, novas primeiro.
+def tarefas_do_painel(usuario_id: int, limite: int = 50, con=None) -> list:
+    """O que a tela mostra: as tarefas mais recentes DESTA CONTA, novas primeiro.
 
     Sem o `diff` cru — ele pode ter dezenas de milhares de caracteres e a lista
     e carregada a cada abertura de tela. Quem quer o diff pede a tarefa.
+
+    Sem o filtro por `usuario_id`, a lista do painel mostrava a fila inteira,
+    de todas as contas — achado da auditoria de 03/09/2026.
     """
     fechar = con is None
     con = con or conectar()
@@ -2159,21 +2182,34 @@ def tarefas_do_painel(limite: int = 50, con=None) -> list:
             "       tentativas, criado_em, iniciado_em, terminado_em,"
             "       custo_usd, rodadas, ramo, resumo, frase, visto_em,"
             "       aprovado_em, parada_pedida_em, maquina_id, executor, erro"
-            "  FROM fila ORDER BY criado_em DESC LIMIT ?",
-            (int(limite),)).fetchall()
+            "  FROM fila WHERE usuario_id = ? ORDER BY criado_em DESC LIMIT ?",
+            (int(usuario_id), int(limite))).fetchall()
         return [dict(l) for l in linhas]
     finally:
         if fechar:
             con.close()
 
 
-def tarefa(tarefa_id: str, con=None):
-    """Uma tarefa inteira, com o diff. `None` se nao existe."""
+def tarefa(tarefa_id: str, usuario_id=None, con=None):
+    """Uma tarefa inteira, com o diff. `None` se nao existe (ou nao e sua).
+
+    `usuario_id` e OPCIONAL de proposito: as duas pontas internas —
+    `_resultado` (ja provou o dono pela maquina, via `registrar_desfecho`) e o
+    laco de progresso da propria maquina — nao tem uma sessao para passar.
+    Toda rota alcancada por SESSAO (`_tarefas`, `_eventos`) tem de passar o
+    `usuario_id` dela: "nao existe" e "nao e sua" devolvem a MESMA resposta,
+    para nao revelar qual id pertence a outra conta.
+    """
     fechar = con is None
     con = con or conectar()
     try:
-        l = con.execute("SELECT * FROM fila WHERE id = ?",
-                        (tarefa_id,)).fetchone()
+        if usuario_id is None:
+            l = con.execute("SELECT * FROM fila WHERE id = ?",
+                            (tarefa_id,)).fetchone()
+        else:
+            l = con.execute(
+                "SELECT * FROM fila WHERE id = ? AND usuario_id = ?",
+                (tarefa_id, int(usuario_id))).fetchone()
         return dict(l) if l else None
     finally:
         if fechar:

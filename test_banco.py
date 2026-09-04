@@ -1682,8 +1682,8 @@ class TarefaNoBanco(unittest.TestCase):
             "INSERT INTO maquina (id, usuario_id, nome, token_hash, criado_em)"
             " VALUES (4, 7, 'vps', 'h2', ?)", (daqui(),))
         self.con.execute(
-            "INSERT INTO fila (id, projeto, regra, trilho, criado_em)"
-            " VALUES ('d:1', 'dervs', 'env_drift', 'claude', ?)", (daqui(),))
+            "INSERT INTO fila (id, usuario_id, projeto, regra, trilho, criado_em)"
+            " VALUES ('d:1', 7, 'dervs', 'env_drift', 'claude', ?)", (daqui(),))
         self.con.commit()
 
     def tearDown(self):
@@ -1764,15 +1764,15 @@ class TarefaNoBanco(unittest.TestCase):
         banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
         self.assertFalse(banco.registrar_progresso("d:1", 3, agora_iso=daqui(),
                                                    con=self.con))
-        self.assertTrue(banco.pedir_parada("d:1", daqui(), con=self.con))
+        self.assertTrue(banco.pedir_parada("d:1", 7, daqui(), con=self.con))
         self.assertTrue(banco.registrar_progresso("d:1", 3, agora_iso=daqui(),
                                                   con=self.con))
 
     def test_pedir_parada_duas_vezes_diz_a_verdade(self):
         banco.ligar_execucao(3, 7, True, con=self.con)
         banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
-        self.assertTrue(banco.pedir_parada("d:1", daqui(), con=self.con))
-        self.assertFalse(banco.pedir_parada("d:1", daqui(), con=self.con))
+        self.assertTrue(banco.pedir_parada("d:1", 7, daqui(), con=self.con))
+        self.assertFalse(banco.pedir_parada("d:1", 7, daqui(), con=self.con))
 
     def test_desfecho_grava_ramo_resumo_e_diff(self):
         banco.ligar_execucao(3, 7, True, con=self.con)
@@ -1804,8 +1804,8 @@ class TarefaNoBanco(unittest.TestCase):
     def test_tarefa_aprovada_vem_antes_da_que_espera(self):
         """A tarefa que o dono ja olhou tem preferencia sobre a que ele nao viu."""
         self.con.execute(
-            "INSERT INTO fila (id, projeto, regra, trilho, criado_em)"
-            " VALUES ('d:2', 'dervs', 'memoria_crlf', 'mecanico', ?)",
+            "INSERT INTO fila (id, usuario_id, projeto, regra, trilho, criado_em)"
+            " VALUES ('d:2', 7, 'dervs', 'memoria_crlf', 'mecanico', ?)",
             (daqui(minutes=-10),))
         self.con.commit()
         banco.ligar_execucao(3, 7, True, con=self.con)
@@ -1825,8 +1825,56 @@ class TarefaNoBanco(unittest.TestCase):
     def test_tarefas_do_painel_nao_carrega_o_diff(self):
         """A lista e lida a cada abertura de tela; o diff tem dezenas de
         milhares de caracteres. Quem quer o diff pede a tarefa."""
-        self.assertNotIn("diff", banco.tarefas_do_painel(con=self.con)[0])
+        self.assertNotIn("diff", banco.tarefas_do_painel(7, con=self.con)[0])
         self.assertIn("diff", banco.tarefa("d:1", con=self.con))
+
+    # --------------------------- a fila TEM DONO (03/09/2026) ----------------
+    #
+    # Ate aqui a `fila` nao tinha `usuario_id`: qualquer conta logada
+    # adivinhava um id (previsivel, `regra:projeto`) e aprovava, parava ou
+    # lia a tarefa vermelha de OUTRA conta, e a maquina de uma conta podia
+    # receber a tarefa aprovada de outra. Estes quatro casos sabotam cada
+    # trava de proposito — reverter a condicao de dono no WHERE correspondente
+    # tem de reprovar cada um deles.
+
+    def _segunda_conta(self):
+        self.con.execute("INSERT INTO usuario (id, email, criado_em)"
+                         " VALUES (8, 'b@teste.local', ?)", (daqui(),))
+        self.con.commit()
+
+    def test_aprovar_tarefa_de_outra_conta_e_recusado(self):
+        self._segunda_conta()
+        self.assertFalse(banco.aprovar_tarefa("d:1", 8, daqui(), con=self.con))
+        self.assertIsNone(banco.tarefa("d:1", con=self.con)["aprovado_em"])
+
+    def test_pedir_parada_de_outra_conta_e_recusado(self):
+        self._segunda_conta()
+        banco.ligar_execucao(3, 7, True, con=self.con)
+        banco.entregar_tarefa("d:1", 3, daqui(), con=self.con)
+        self.assertFalse(banco.pedir_parada("d:1", 8, daqui(), con=self.con))
+        self.assertIsNone(
+            banco.tarefa("d:1", con=self.con)["parada_pedida_em"])
+
+    def test_a_maquina_de_uma_conta_nao_recebe_a_tarefa_de_outra(self):
+        """A tarefa APROVADA de A nao pode ser a primeira oferecida a B."""
+        self._segunda_conta()
+        self.con.execute(
+            "INSERT INTO maquina (id, usuario_id, nome, token_hash, criado_em,"
+            " executa) VALUES (5, 8, 'pc-da-b', 'h3', ?, 1)", (daqui(),))
+        self.con.commit()
+        banco.aprovar_tarefa("d:1", 7, daqui(), con=self.con)
+        self.assertIsNone(banco.tarefa_para_maquina(5, con=self.con))
+
+    def test_tarefas_do_painel_de_uma_conta_nao_mostra_a_de_outra(self):
+        self._segunda_conta()
+        self.assertEqual(banco.tarefas_do_painel(8, con=self.con), [])
+
+    def test_tarefa_pedida_pelo_id_de_outra_conta_devolve_none(self):
+        """`?id=` no painel: `usuario_id` filtra a mesma tarefa que o painel ja
+        esconde da lista — sem isto, adivinhar o id bastava para ler o diff."""
+        self._segunda_conta()
+        self.assertIsNone(banco.tarefa("d:1", usuario_id=8, con=self.con))
+        self.assertIsNotNone(banco.tarefa("d:1", usuario_id=7, con=self.con))
 
 
 class CorDaRegra(unittest.TestCase):
@@ -3130,9 +3178,9 @@ class TarefaParaMaquinaTrazODetalheDoAchado(unittest.TestCase):
         banco.gravar_auditoria(self.uid, "dervs", "ok", [achado],
                                agora_iso=daqui(), con=self.con)
         banco.enfileirar([{
-            "id": achado["id"], "projeto": "dervs", "regra": achado["regra"],
-            "gravidade": "alta", "risco": 5.0, "trilho": "conserto",
-            "executor": "claude",
+            "id": achado["id"], "usuario_id": self.uid, "projeto": "dervs",
+            "regra": achado["regra"], "gravidade": "alta", "risco": 5.0,
+            "trilho": "conserto", "executor": "claude",
         }], con=self.con)
         candidata = banco.tarefa_para_maquina(self.maquina_id, con=self.con)
         self.assertIsNotNone(candidata)
@@ -3140,8 +3188,9 @@ class TarefaParaMaquinaTrazODetalheDoAchado(unittest.TestCase):
 
     def test_tarefa_sem_achado_ligado_nao_quebra(self):
         banco.enfileirar([{
-            "id": "outra:dervs", "projeto": "dervs", "regra": "outra",
-            "gravidade": "media", "risco": 1.0, "trilho": "conserto",
+            "id": "outra:dervs", "usuario_id": self.uid, "projeto": "dervs",
+            "regra": "outra", "gravidade": "media", "risco": 1.0,
+            "trilho": "conserto",
         }], con=self.con)
         candidata = banco.tarefa_para_maquina(self.maquina_id, con=self.con)
         self.assertIsNotNone(candidata)
@@ -3172,7 +3221,7 @@ class TarefaParaMaquinaTrazODetalheDoAchado(unittest.TestCase):
         # Aqui forcamos o casamento por id para provar que o dono, e nao o
         # id, e o que decide.
         banco.enfileirar([{
-            "id": achado_de_b["id"], "projeto": "dervs",
+            "id": achado_de_b["id"], "usuario_id": self.uid, "projeto": "dervs",
             "regra": achado_de_b["regra"], "gravidade": "alta", "risco": 5.0,
             "trilho": "conserto", "executor": "claude",
         }], con=self.con)

@@ -316,32 +316,23 @@ trabalhando. **Desfaça sabotagem editando de volta, e commite cedo.**
 
 ## Publicação
 
-> ### PARADA OBRIGATÓRIA (03/09/2026): NÃO PUBLIQUE
+> ### As quatro portas da fila fecharam (04/09/2026) — falta só o sinal do dono
 >
-> A `main` está **na frente do que está no ar, e isso é de propósito.** O
-> conserto do braço executor (`2b7b2eb`..`84c3f64`) está certo e testado, mas
-> ele **acorda** quatro furos de autorização que hoje só são inofensivos porque
-> o agente recusa toda tarefa. **O que está no ar é seguro por ser o código
-> velho.**
+> A tabela `fila` ganhou `usuario_id` (migração em `_migrar_fila_semaforo`,
+> preenchida por `enfileirar` e por `servir._auditoria_pedir`), e as quatro
+> travas que faltavam agora conferem o dono no `WHERE`: `banco.aprovar_tarefa`,
+> `banco.pedir_parada` (chamada por `servir._tarefa_parar`, que passa a receber
+> o usuário), `banco.tarefa_para_maquina` e `banco.tarefas_do_painel`. De
+> quebra, o mesmo furo existia no `?id=` de `/api/tarefas` e no fluxo ao vivo
+> (`/api/eventos`) — os dois também passaram a exigir o dono. Sabotado de
+> proposito (removendo a condição em `aprovar_tarefa`) para provar que o
+> teste novo pega: pegou. 622 testes de `banco`/`servir`/`fila`/`sse` verdes,
+> 6 deles escritos para provar cruzando duas contas.
 >
-> **A raiz é uma só: a tabela `fila` não tem coluna de dono.** Por isso não
-> filtram por conta: `banco.aprovar_tarefa` (o `usuario_id` é *gravado* em
-> `aprovado_por` e nunca *conferido*, e o id é `regra:projeto`, adivinhável) ·
-> `servir._tarefa_parar` (nem recebe o usuário) · `banco.tarefa_para_maquina`
-> (a tarefa aprovada de A é a primeira oferecida à máquina de B) ·
-> `banco.tarefas_do_usuario` (`SELECT ... FROM fila` sem filtro — a lista do
-> painel mostra tarefa de todas as contas).
->
-> Publicar antes de fechar isso deixa qualquer conta logada **disparar uma
-> sessão de IA na máquina de outra** e queimar o teto de R$ 50, que é
-> compartilhado.
->
-> **O conserto é a raiz, não remendo por rota:** coluna `usuario_id` na `fila`,
-> preenchida por `enfileirar`, e filtro nas quatro. O molde de conferência de
-> dono já está escrito em `servir._auditoria_pedir` — e lá "não existe" e "não
-> é seu" devolvem a **mesma** resposta.
->
-> Apague este bloco quando as quatro estiverem fechadas e a publicação sair.
+> **O que falta não é código: é o sinal do dono para publicar** — a "porta 2"
+> de sempre (`docs/regras/ambientes-e-publicacao.md`), e o lote inclui também
+> o conserto do braço executor (`2b7b2eb`..`84c3f64`). Apague este bloco quando
+> a publicação sair.
 
 
 - **O deploy roda no GitHub, nunca daqui.** Nada de `ssh`, `scp`, `rsync` ou
