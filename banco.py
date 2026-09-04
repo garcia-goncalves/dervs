@@ -364,7 +364,34 @@ CREATE TABLE IF NOT EXISTS projeto_conectado (
     UNIQUE (maquina_id, projeto)
 );
 
--- O endereco de producao de cada projeto — a "porta 3" (fatia B, 01/09/2026).
+-- O cadastro de servidores nomeados de cada conta (Servidores multiplos,
+-- E1, 04/09/2026). "O seu servidor" deixou de ser um endereco solto por
+-- projeto e virou isto: uma conta pode ter varios servidores, cada um com
+-- os proprios enderecos de producao.
+--
+-- NAO HA SEGREDO AQUI. `nome` e `padrao_subdominio` sao dado publico — o
+-- mesmo nome que o dono ve na propria tela e o mesmo padrao de subdominio
+-- que qualquer visitante ve na URL. Chave SSH, senha e token de deploy NAO
+-- entram nesta tabela, agora nem nunca. O dono esta na linha pelo mesmo
+-- motivo de `endereco_producao`, duas linhas abaixo: e dado de CONTA, nao
+-- configuracao da maquina.
+--
+-- `padrao_subdominio` tem UM jeito so de dizer "nenhum": `NULL`. Nunca
+-- string vazia. A conversao para `""` acontece so na borda JSON da rota —
+-- o banco e o JSON tem, cada um, um jeito so de dizer a mesma coisa, e e a
+-- mesma lei que `url` de `endereco_producao` ja segue.
+CREATE TABLE IF NOT EXISTS servidor (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id        INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    nome              TEXT NOT NULL CHECK (length(trim(nome)) > 0),
+    padrao_subdominio TEXT,
+    criado_em         TEXT NOT NULL,
+    UNIQUE (usuario_id, nome)
+);
+CREATE INDEX IF NOT EXISTS ix_servidor_dono ON servidor (usuario_id);
+
+-- O endereco de producao de cada projeto, POR SERVIDOR — a "porta 3" (fatia
+-- B, 01/09/2026; servidor_id chegou na E1 de Servidores multiplos).
 --
 -- POR QUE TEM DONO, e nao e uma coluna solta por projeto: o endereco sai do
 -- `casos.json`, que e um arquivo unico da maquina, e vira dado de conta. Duas
@@ -372,6 +399,11 @@ CREATE TABLE IF NOT EXISTS projeto_conectado (
 -- quem le o endereco de um projeto e a conta que o gravou. Coluna sem dono
 -- aqui seria IDOR por desenho de esquema — o mesmo defeito ja consertado duas
 -- vezes neste repositorio (etapas 8 e 11), e nao se repete.
+--
+-- POR QUE TEM `servidor_id`: o mesmo projeto pode responder em mais de um
+-- servidor ao mesmo tempo (staging, producao, um servidor por regiao). O
+-- `UNIQUE` passa a ser (usuario_id, servidor_id, projeto) — o mesmo projeto
+-- no MESMO servidor continua so podendo ter um endereco.
 --
 -- NAO HA SEGREDO AQUI. E uma URL publica, a mesma que qualquer visitante
 -- digita no navegador. Chave SSH, senha de servidor e token de deploy NAO
@@ -384,11 +416,12 @@ CREATE TABLE IF NOT EXISTS projeto_conectado (
 CREATE TABLE IF NOT EXISTS endereco_producao (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     usuario_id    INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    servidor_id   INTEGER NOT NULL REFERENCES servidor(id) ON DELETE CASCADE,
     projeto       TEXT NOT NULL CHECK (length(trim(projeto)) > 0),
     url           TEXT NOT NULL CHECK (length(trim(url)) > 0),
     criado_em     TEXT NOT NULL,
     atualizado_em TEXT NOT NULL,
-    UNIQUE (usuario_id, projeto)
+    UNIQUE (usuario_id, servidor_id, projeto)
 );
 CREATE INDEX IF NOT EXISTS ix_endereco_dono ON endereco_producao (usuario_id);
 
@@ -596,6 +629,7 @@ def migrar(con: sqlite3.Connection) -> None:
     _migrar_medida(con)
     _migrar_fila_semaforo(con)
     _migrar_endereco_producao(con)
+    _migrar_servidor_por_endereco(con)
     _migrar_instalacao_github(con)
     _migrar_auditoria(con)
     _migrar_achado_dono(con)
@@ -605,7 +639,7 @@ def migrar(con: sqlite3.Connection) -> None:
 # banco inteiro faria um orfao antigo, de outra tabela, travar toda subida.
 FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento",
                      "chave_de_acesso", "codigo_recuperacao",
-                     "endereco_producao", "instalacao_github",
+                     "servidor", "endereco_producao", "instalacao_github",
                      "auditoria", "achado")
 
 
@@ -967,27 +1001,42 @@ def _migrar_credencial(con: sqlite3.Connection) -> None:
 # `_CREATE_CREDENCIAL`: a do ESQUEMA e a documentacao do banco de hoje, esta e
 # a ferramenta da migracao. Se uma mudar, a outra muda junto, e ha teste que
 # cobra as duas terem a mesma forma.
+_CREATE_SERVIDOR = """CREATE TABLE IF NOT EXISTS servidor (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id        INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    nome              TEXT NOT NULL CHECK (length(trim(nome)) > 0),
+    padrao_subdominio TEXT,
+    criado_em         TEXT NOT NULL,
+    UNIQUE (usuario_id, nome))"""
+
 _CREATE_ENDERECO_PRODUCAO = """CREATE TABLE IF NOT EXISTS endereco_producao (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     usuario_id    INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    servidor_id   INTEGER NOT NULL REFERENCES servidor(id) ON DELETE CASCADE,
     projeto       TEXT NOT NULL CHECK (length(trim(projeto)) > 0),
     url           TEXT NOT NULL CHECK (length(trim(url)) > 0),
     criado_em     TEXT NOT NULL,
     atualizado_em TEXT NOT NULL,
-    UNIQUE (usuario_id, projeto))"""
+    UNIQUE (usuario_id, servidor_id, projeto))"""
 
 
 def _migrar_endereco_producao(con: sqlite3.Connection) -> None:
-    """A tabela do endereco de producao nasce aqui, e nao so no ESQUEMA.
+    """`servidor` e a tabela do endereco de producao nascem aqui, e nao so no
+    ESQUEMA.
 
     POR QUE NA MIGRACAO, se o `ESQUEMA` roda logo depois e tem
-    `CREATE TABLE IF NOT EXISTS`: porque a tabela aponta para `usuario`, e o
-    `ESQUEMA` roda DEPOIS de toda a migracao. Criar aqui, no fim, deixa a
-    tabela existir para o `_orfaos` da proxima reconstrucao de `usuario` — que
-    e o motivo de ela estar em `FILHAS_DE_USUARIO`. O dia em que houver uma
-    migracao nova que mexa nesta tabela, o lugar dela ja esta feito.
-    E vazia, entao nao ha dado antigo a converter: um hub.db de producao passa
-    por aqui sem uma linha ser tocada.
+    `CREATE TABLE IF NOT EXISTS`: porque as duas apontam para `usuario` (e
+    `endereco_producao` tambem para `servidor`), e o `ESQUEMA` roda DEPOIS de
+    toda a migracao. Criar aqui, no fim, deixa as tabelas existirem para o
+    `_orfaos` da proxima reconstrucao de `usuario` — que e o motivo de as duas
+    estarem em `FILHAS_DE_USUARIO`. O dia em que houver uma migracao nova que
+    mexa nelas, o lugar ja esta feito.
+    As duas nascem VAZIAS aqui: e vazia, entao nao ha dado antigo a converter,
+    um hub.db de producao passa por aqui sem uma linha ser tocada. Um hub.db
+    que JA TEM `endereco_producao` (na forma antiga, sem `servidor_id`) nao
+    passa por este caminho — a condicao de "ja migrado" e a PRESENCA da
+    tabela, e quem cuida de dar `servidor_id` a essas linhas e
+    `_migrar_servidor_por_endereco`, logo abaixo.
 
     Nunca `executescript` aqui: ele da COMMIT implicito e desmontaria o
     `BEGIN IMMEDIATE`, deixando duas subidas simultaneas migrarem juntas.
@@ -1013,7 +1062,96 @@ def _migrar_endereco_producao(con: sqlite3.Connection) -> None:
         if ja:
             con.rollback()
             return
+        con.execute(_CREATE_SERVIDOR)
+        con.execute("CREATE INDEX IF NOT EXISTS ix_servidor_dono"
+                    " ON servidor (usuario_id)")
         con.execute(_CREATE_ENDERECO_PRODUCAO)
+        con.execute("CREATE INDEX IF NOT EXISTS ix_endereco_dono"
+                    " ON endereco_producao (usuario_id)")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        _religar_fk(con)
+
+
+def _migrar_servidor_por_endereco(con: sqlite3.Connection) -> None:
+    """`endereco_producao` ganhou `servidor_id` (Servidores multiplos, E1,
+    04/09/2026). Antes, "o seu servidor" era um endereco solto por projeto;
+    agora e um cadastro de servidores nomeados, e todo endereco pertence a um.
+
+    Um hub.db que ja tinha `endereco_producao` na forma ANTIGA (sem
+    `servidor_id`) precisa de um servidor para cada dono, e cada linha antiga
+    aponta para o servidor daquele dono — nome `"Servidor"`, sem padrao de
+    subdominio. Nenhum endereco ja gravado some no caminho.
+
+    O SQLite nao sabe trocar `UNIQUE` nem acrescentar FK `NOT NULL` sem
+    reconstruir a tabela — mesmo molde de `_migrar_achado_dono`. Nunca
+    `executescript` aqui: ele da COMMIT implicito e desmontaria o
+    `BEGIN IMMEDIATE`, deixando duas subidas simultaneas migrarem juntas.
+    Licao paga em 26/08/2026.
+    """
+    forma = list(con.execute("PRAGMA table_info(endereco_producao)"))
+    if not forma:
+        return                        # sem a tabela: o proximo passo cria certo
+    if "servidor_id" in {l[1] for l in forma}:
+        return                        # ja migrado
+    con.execute("PRAGMA foreign_keys=OFF")
+    try:
+        # TUDO OU NADA. `executescript` faria COMMIT implicito e rodaria os
+        # comandos como transacoes soltas: uma queda entre o DROP e o RENAME
+        # apagaria a tabela e deixaria a copia orfa.
+        con.execute("BEGIN IMMEDIATE")
+        # DE NOVO, E AGORA DENTRO DA TRANSACAO — mesmo motivo do gemeo em
+        # `_migrar_pendencia_estado`: a leitura la em cima aconteceu antes do
+        # lock, e duas subidas simultaneas leriam as duas "preciso migrar".
+        forma = list(con.execute("PRAGMA table_info(endereco_producao)"))
+        if not forma:
+            con.rollback()
+            return
+        if "servidor_id" in {l[1] for l in forma}:
+            con.rollback()
+            return
+        con.execute(_CREATE_SERVIDOR)
+        con.execute("CREATE INDEX IF NOT EXISTS ix_servidor_dono"
+                    " ON servidor (usuario_id)")
+        quando = agora()
+        # Um servidor "Servidor" por DONO presente em `endereco_producao` —
+        # nunca um por linha: dois enderecos do mesmo dono viram o mesmo
+        # servidor, exatamente como eram um endereco solto por projeto.
+        donos = [l["usuario_id"] for l in con.execute(
+            "SELECT DISTINCT usuario_id FROM endereco_producao")]
+        servidor_do_dono = {}
+        for dono in donos:
+            cur = con.execute(
+                "INSERT INTO servidor (usuario_id, nome, criado_em)"
+                " VALUES (?, 'Servidor', ?)", (dono, quando))
+            servidor_do_dono[dono] = cur.lastrowid
+        con.execute("DROP TABLE IF EXISTS endereco_producao_nova")
+        con.execute("""CREATE TABLE endereco_producao_nova (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario_id    INTEGER NOT NULL
+                              REFERENCES usuario(id) ON DELETE CASCADE,
+                servidor_id   INTEGER NOT NULL
+                              REFERENCES servidor(id) ON DELETE CASCADE,
+                projeto       TEXT NOT NULL CHECK (length(trim(projeto)) > 0),
+                url           TEXT NOT NULL CHECK (length(trim(url)) > 0),
+                criado_em     TEXT NOT NULL,
+                atualizado_em TEXT NOT NULL,
+                UNIQUE (usuario_id, servidor_id, projeto))""")
+        for dono, sid in servidor_do_dono.items():
+            con.execute(
+                "INSERT INTO endereco_producao_nova"
+                " (id, usuario_id, servidor_id, projeto, url,"
+                "  criado_em, atualizado_em)"
+                " SELECT id, usuario_id, ?, projeto, url,"
+                "        criado_em, atualizado_em"
+                "   FROM endereco_producao WHERE usuario_id = ?",
+                (sid, dono))
+        con.execute("DROP TABLE endereco_producao")
+        con.execute("ALTER TABLE endereco_producao_nova"
+                    " RENAME TO endereco_producao")
         con.execute("CREATE INDEX IF NOT EXISTS ix_endereco_dono"
                     " ON endereco_producao (usuario_id)")
         con.commit()
@@ -3020,9 +3158,30 @@ def enderecos_de_producao(usuario_id: int, con=None) -> dict:
             con.close()
 
 
+def _servidor_padrao_do_usuario(usuario_id: int, con) -> int:
+    """O servidor que `guardar_endereco_de_producao` usa enquanto ela ainda
+    nao recebe qual servidor escolher.
+
+    PONTE, NAO API PUBLICA. A etapa 3 de "Servidores multiplos" troca esta
+    funcao por uma escolha explicita de `servidor_id` na rota; ate la, quem
+    chama a forma antiga continua gravando — nada some no caminho. Reusa (e
+    nunca duplica) o servidor da conta se ja houver um, e cria `"Servidor"`
+    na primeira vez — o mesmo nome que a migracao da a quem ja tinha endereco
+    antes de existir a tabela `servidor`.
+    """
+    l = con.execute("SELECT id FROM servidor WHERE usuario_id = ?"
+                    " ORDER BY id LIMIT 1", (usuario_id,)).fetchone()
+    if l:
+        return l["id"]
+    cur = con.execute("INSERT INTO servidor (usuario_id, nome, criado_em)"
+                      " VALUES (?, 'Servidor', ?)", (usuario_id, agora()))
+    return cur.lastrowid
+
+
 def guardar_endereco_de_producao(usuario_id: int, projeto: str, url,
                                  con=None) -> None:
-    """Grava, troca ou APAGA o endereco de um projeto daquela conta.
+    """Grava, troca ou APAGA o endereco de um projeto daquela conta, no
+    servidor padrao dela (ver `_servidor_padrao_do_usuario`).
 
     `url` vazia ou `None` apaga a linha, e nao grava string vazia: "sem
     endereco" tem um jeito so de ser dito neste banco — a ausencia da linha.
@@ -3043,15 +3202,17 @@ def guardar_endereco_de_producao(usuario_id: int, projeto: str, url,
                         (usuario_id, projeto))
         else:
             quando = agora()
+            servidor_id = _servidor_padrao_do_usuario(usuario_id, con)
             # O `criado_em` NAO entra no `DO UPDATE`: trocar o endereco nao
             # reescreve a data em que a conta declarou aquele projeto.
             con.execute(
                 "INSERT INTO endereco_producao"
-                " (usuario_id, projeto, url, criado_em, atualizado_em)"
-                " VALUES (?,?,?,?,?)"
-                " ON CONFLICT(usuario_id, projeto) DO UPDATE SET"
+                " (usuario_id, servidor_id, projeto, url,"
+                "  criado_em, atualizado_em)"
+                " VALUES (?,?,?,?,?,?)"
+                " ON CONFLICT(usuario_id, servidor_id, projeto) DO UPDATE SET"
                 " url=excluded.url, atualizado_em=excluded.atualizado_em",
-                (usuario_id, projeto, limpa, quando, quando))
+                (usuario_id, servidor_id, projeto, limpa, quando, quando))
         if fechar:                    # ver `gravar`: nao quebre a transacao alheia
             con.commit()
     finally:

@@ -52,6 +52,17 @@ def daqui(**kw) -> str:
     return iso(AGORA + timedelta(**kw))
 
 
+def normalizar_ddl(t: str) -> str:
+    """Reduz um `CREATE TABLE` a palavras, sem comentario `--` nem espaco.
+    Serve para comparar duas copias do mesmo CREATE (ESQUEMA vs constante da
+    migracao) sem que formatacao divirja o teste."""
+    corpo = t[t.index("("):t.rindex(")")]
+    palavras = []
+    for linha in corpo.splitlines():
+        palavras += linha.split("--")[0].split()
+    return " ".join(palavras)
+
+
 # O esquema como ele era ANTES desta etapa, reduzido ao que a migracao toca.
 # Existe para provar que um hub.db real do dia 26/08 sobe sem perder nada.
 ESQUEMA_VELHO = """
@@ -139,7 +150,7 @@ class Esquema(unittest.TestCase):
             "historico", "instalacao", "instalacao_github",
             "maquina", "medida", "pareamento", "pendencia_arquivada",
             "pendencia_estado", "pendencia_vida", "projeto_conectado",
-            "sessao", "tarefa_linha", "usuario"])
+            "servidor", "sessao", "tarefa_linha", "usuario"])
 
     def test_as_seis_tabelas_antigas_nao_perderam_coluna(self):
         """A etapa 8 acrescenta. So `pendencia_estado` muda, e so ganhando dono."""
@@ -1020,17 +1031,29 @@ class AsCorrecoesDaRevisao(unittest.TestCase):
         """As duas copias do CREATE da `credencial` so eram mantidas iguais por
         um comentario. Divergir e silencioso: banco novo ganha a coluna, banco
         migrado nao, e o `CREATE TABLE IF NOT EXISTS` vira no-op."""
-        def normalizar(t):
-            corpo = t[t.index("("):t.rindex(")")]
-            palavras = []
-            for linha in corpo.splitlines():
-                palavras += linha.split("--")[0].split()
-            return " ".join(palavras)
         do_esquema = banco.ESQUEMA[banco.ESQUEMA.index(
             "CREATE TABLE IF NOT EXISTS credencial"):]
         do_esquema = do_esquema[:do_esquema.index(");") + 1]
-        self.assertEqual(normalizar(do_esquema),
-                         normalizar(banco._CREATE_CREDENCIAL))
+        self.assertEqual(normalizar_ddl(do_esquema),
+                         normalizar_ddl(banco._CREATE_CREDENCIAL))
+
+    def test_o_esquema_e_a_constante_de_servidor_nao_divergem(self):
+        """Mesmo risco da `credencial`, agora para `servidor` (E1, 04/09/2026):
+        banco novo ganha coluna, banco migrado nao, e ninguem percebe."""
+        do_esquema = banco.ESQUEMA[banco.ESQUEMA.index(
+            "CREATE TABLE IF NOT EXISTS servidor"):]
+        do_esquema = do_esquema[:do_esquema.index(");") + 1]
+        self.assertEqual(normalizar_ddl(do_esquema),
+                         normalizar_ddl(banco._CREATE_SERVIDOR))
+
+    def test_o_esquema_e_a_constante_de_endereco_producao_nao_divergem(self):
+        """`endereco_producao` ganhou `servidor_id` nesta etapa: as duas copias
+        do CREATE tem de mudar juntas."""
+        do_esquema = banco.ESQUEMA[banco.ESQUEMA.index(
+            "CREATE TABLE IF NOT EXISTS endereco_producao"):]
+        do_esquema = do_esquema[:do_esquema.index(");") + 1]
+        self.assertEqual(normalizar_ddl(do_esquema),
+                         normalizar_ddl(banco._CREATE_ENDERECO_PRODUCAO))
 
     def test_o_identificador_de_senha_tem_de_ser_o_dono(self):
         """Tira a garantia "uma senha por pessoa" da convencao e poe no banco."""
@@ -2111,13 +2134,18 @@ class EnderecoDeProducaoNoBancoVelho(unittest.TestCase):
             presentes = {l[0] for l in con.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertIn("endereco_producao", presentes)
+            self.assertIn("servidor", presentes)
             self.assertFalse(con.in_transaction,
                              "a conexao nao pode sair daqui com transacao aberta:"
                              " `PRAGMA foreign_keys` seria NO-OP silencioso")
+            cur = con.execute("INSERT INTO servidor (usuario_id, nome, criado_em)"
+                              " VALUES (?, 'OVH', ?)", (uid, daqui()))
             con.execute("INSERT INTO endereco_producao"
-                        " (usuario_id, projeto, url, criado_em, atualizado_em)"
-                        " VALUES (?,?,?,?,?)",
-                        (uid, "dervs", "https://dervs.com.br", daqui(), daqui()))
+                        " (usuario_id, servidor_id, projeto, url,"
+                        "  criado_em, atualizado_em)"
+                        " VALUES (?,?,?,?,?,?)",
+                        (uid, cur.lastrowid, "dervs",
+                         "https://dervs.com.br", daqui(), daqui()))
             con.commit()
             self.assertEqual(con.execute(
                 "SELECT url FROM endereco_producao").fetchone()["url"],
@@ -2148,6 +2176,134 @@ class EnderecoDeProducaoNoBancoVelho(unittest.TestCase):
         # E ela precisa estar LIGADA: funcao perfeita que ninguem chama e
         # migracao que nunca roda.
         self.assertIn("_migrar_endereco_producao", inspect.getsource(banco.migrar))
+
+
+# A forma de `endereco_producao` de ANTES desta etapa (04/09/2026): sem
+# `servidor_id`, `UNIQUE (usuario_id, projeto)`. Existe para provar que um
+# hub.db real, com endereco ja gravado, sobe sem perder linha.
+ESQUEMA_ANTES_DO_SERVIDOR = """
+CREATE TABLE usuario (
+    id INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id <> 0),
+    email TEXT NOT NULL UNIQUE CHECK (length(trim(email)) > 0),
+    nome TEXT NOT NULL DEFAULT '',
+    criado_em TEXT NOT NULL,
+    desativado_em TEXT
+);
+CREATE TABLE endereco_producao (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    projeto TEXT NOT NULL CHECK (length(trim(projeto)) > 0),
+    url TEXT NOT NULL CHECK (length(trim(url)) > 0),
+    criado_em TEXT NOT NULL,
+    atualizado_em TEXT NOT NULL,
+    UNIQUE (usuario_id, projeto)
+);
+"""
+
+
+class ServidorNoBancoVelho(unittest.TestCase):
+    """Um hub.db anterior a "Servidores multiplos" (04/09/2026) abre com a
+    tabela `servidor` nova e sem perder um endereco sequer — o risco maior
+    deste plano: `endereco_producao` tem linhas no ar desde 01/09."""
+
+    def setUp(self):
+        self.pasta = tempfile.TemporaryDirectory()
+        self.caminho = Path(self.pasta.name) / "velho.db"
+        velho = sqlite3.connect(self.caminho)
+        velho.executescript(ESQUEMA_ANTES_DO_SERVIDOR)
+        velho.execute("INSERT INTO usuario (id, email, criado_em) VALUES"
+                      " (1, 'a@teste.local', '2026-08-26T10:00:00+00:00')")
+        velho.execute("INSERT INTO usuario (id, email, criado_em) VALUES"
+                      " (2, 'b@teste.local', '2026-08-26T10:00:00+00:00')")
+        for uid, projeto, url in (
+            (1, "dervs", "https://dervs.com.br"),
+            (1, "ajudei", "https://ajudei.com.br"),
+            (2, "ccvp", "https://ccvp.example.com"),
+        ):
+            velho.execute(
+                "INSERT INTO endereco_producao"
+                " (usuario_id, projeto, url, criado_em, atualizado_em)"
+                " VALUES (?,?,?,'2026-08-26T10:00:00+00:00',"
+                "         '2026-08-26T10:00:00+00:00')",
+                (uid, projeto, url))
+        velho.commit()
+        velho.close()
+
+    def tearDown(self):
+        self.pasta.cleanup()
+
+    def test_nenhuma_linha_some(self):
+        con = banco.conectar(self.caminho)
+        try:
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM endereco_producao"
+                           ).fetchone()[0], 3)
+        finally:
+            con.close()
+
+    def test_toda_linha_ganha_servidor_id(self):
+        con = banco.conectar(self.caminho)
+        try:
+            linhas = list(con.execute(
+                "SELECT servidor_id FROM endereco_producao"))
+            self.assertEqual(len(linhas), 3)
+            for l in linhas:
+                self.assertIsNotNone(l["servidor_id"])
+        finally:
+            con.close()
+
+    def test_um_servidor_por_dono_chamado_servidor(self):
+        con = banco.conectar(self.caminho)
+        try:
+            for uid in (1, 2):
+                linhas = list(con.execute(
+                    "SELECT nome FROM servidor WHERE usuario_id = ?", (uid,)))
+                self.assertEqual(len(linhas), 1,
+                                 "dono %d ficou com mais de um servidor" % uid)
+                self.assertEqual(linhas[0]["nome"], "Servidor")
+        finally:
+            con.close()
+
+    def test_a_url_de_cada_linha_e_identica_a_gravada_antes(self):
+        con = banco.conectar(self.caminho)
+        try:
+            urls = {l["projeto"]: l["url"] for l in con.execute(
+                "SELECT projeto, url FROM endereco_producao")}
+            self.assertEqual(urls, {
+                "dervs": "https://dervs.com.br",
+                "ajudei": "https://ajudei.com.br",
+                "ccvp": "https://ccvp.example.com",
+            })
+        finally:
+            con.close()
+
+    def test_abrir_duas_vezes_nao_cria_um_segundo_servidor(self):
+        banco.conectar(self.caminho).close()
+        con = banco.conectar(self.caminho)
+        try:
+            total = con.execute("SELECT COUNT(*) FROM servidor").fetchone()[0]
+            self.assertEqual(total, 2, "abrir de novo duplicou o servidor")
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM endereco_producao"
+                           ).fetchone()[0], 3)
+        finally:
+            con.close()
+
+    def test_a_migracao_nao_usa_executescript(self):
+        """Mesmo guarda de `_migrar_endereco_producao`, agora para a migracao
+        que da `servidor_id` as linhas antigas."""
+        import ast
+        import inspect
+        fonte = inspect.getsource(banco._migrar_servidor_por_endereco)
+        arvore = ast.parse(textwrap.dedent(fonte))
+        chamadas = [n.func.attr for n in ast.walk(arvore)
+                    if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute)]
+        self.assertNotIn("executescript", chamadas)
+        self.assertIn("execute", chamadas)
+        self.assertIn("BEGIN IMMEDIATE", fonte)
+        self.assertIn("_religar_fk", fonte)
+        self.assertIn("_migrar_servidor_por_endereco", inspect.getsource(banco.migrar))
 
 
 class EnderecoDeProducaoTemDono(unittest.TestCase):
@@ -2270,6 +2426,116 @@ class EnderecoDeProducaoTemDono(unittest.TestCase):
                        outra.execute("PRAGMA table_info(endereco_producao)")}
         outra.close()
         self.assertEqual(do_esquema, da_migracao)
+
+
+class ServidorRestricoes(unittest.TestCase):
+    """As travas do cadastro de servidores (E1, 04/09/2026). `guardar_servidor`
+    e as demais funcoes de acesso so nascem na E3 — aqui a prova e pelo SQL
+    cru, direto contra o `ESQUEMA`."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.a = banco.criar_usuario("a@teste.local", "teste1234", con=self.con)
+        self.b = banco.criar_usuario("b@teste.local", "teste1234", con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def _servidor(self, usuario_id, nome, padrao=None):
+        cur = self.con.execute(
+            "INSERT INTO servidor (usuario_id, nome, padrao_subdominio, criado_em)"
+            " VALUES (?,?,?,?)", (usuario_id, nome, padrao, daqui()))
+        self.con.commit()
+        return cur.lastrowid
+
+    def test_nome_repetido_na_mesma_conta_e_recusado(self):
+        self._servidor(self.a, "OVH")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self._servidor(self.a, "OVH")
+
+    def test_o_mesmo_nome_em_contas_diferentes_e_aceito(self):
+        self._servidor(self.a, "OVH")
+        self._servidor(self.b, "OVH")           # nao pode levantar
+        total = self.con.execute("SELECT COUNT(*) FROM servidor").fetchone()[0]
+        self.assertEqual(total, 2)
+
+    def test_mesmo_projeto_em_dois_servidores_e_aceito(self):
+        s1 = self._servidor(self.a, "OVH")
+        s2 = self._servidor(self.a, "TineHost")
+        for sid in (s1, s2):
+            self.con.execute(
+                "INSERT INTO endereco_producao"
+                " (usuario_id, servidor_id, projeto, url, criado_em, atualizado_em)"
+                " VALUES (?,?,?,?,?,?)",
+                (self.a, sid, "dervs", "https://dervs.example.com",
+                 daqui(), daqui()))
+        self.con.commit()
+        total = self.con.execute(
+            "SELECT COUNT(*) FROM endereco_producao").fetchone()[0]
+        self.assertEqual(total, 2)
+
+    def test_dois_enderecos_do_mesmo_projeto_no_mesmo_servidor_sao_recusados(self):
+        sid = self._servidor(self.a, "OVH")
+        self.con.execute(
+            "INSERT INTO endereco_producao"
+            " (usuario_id, servidor_id, projeto, url, criado_em, atualizado_em)"
+            " VALUES (?,?,?,?,?,?)",
+            (self.a, sid, "dervs", "https://um.example.com", daqui(), daqui()))
+        self.con.commit()
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.con.execute(
+                "INSERT INTO endereco_producao"
+                " (usuario_id, servidor_id, projeto, url, criado_em, atualizado_em)"
+                " VALUES (?,?,?,?,?,?)",
+                (self.a, sid, "dervs", "https://outro.example.com",
+                 daqui(), daqui()))
+
+    def test_apagar_o_servidor_leva_os_enderecos_dele_e_so_os_dele(self):
+        s1 = self._servidor(self.a, "OVH")
+        s2 = self._servidor(self.a, "TineHost")
+        for sid, projeto in ((s1, "dervs"), (s2, "dervs")):
+            self.con.execute(
+                "INSERT INTO endereco_producao"
+                " (usuario_id, servidor_id, projeto, url, criado_em, atualizado_em)"
+                " VALUES (?,?,?,?,?,?)",
+                (self.a, sid, projeto, "https://x.example.com", daqui(), daqui()))
+        self.con.commit()
+        self.con.execute("DELETE FROM servidor WHERE id = ?", (s1,))
+        self.con.commit()
+        restantes = list(self.con.execute(
+            "SELECT servidor_id FROM endereco_producao"))
+        self.assertEqual(len(restantes), 1)
+        self.assertEqual(restantes[0]["servidor_id"], s2)
+
+    def test_servidor_esta_em_filhas_de_usuario(self):
+        """`ON DELETE CASCADE` so vale com `PRAGMA foreign_keys=ON`
+        (`banco.py:568`), e a lista e o que a migracao confere ao reconstruir
+        `usuario` — servidor sem entrar aqui e um orfao esperando acontecer."""
+        self.assertIn("servidor", banco.FILHAS_DE_USUARIO)
+
+    def test_apagar_o_usuario_leva_os_servidores_dele(self):
+        self._servidor(self.a, "OVH")
+        self.con.execute("DELETE FROM usuario WHERE id = ?", (self.a,))
+        self.con.commit()
+        self.assertEqual(
+            self.con.execute("SELECT COUNT(*) FROM servidor").fetchone()[0], 0)
+
+    def test_padrao_subdominio_nulo_e_o_unico_jeito_de_dizer_nenhum(self):
+        sid = self._servidor(self.a, "OVH", padrao=None)
+        l = self.con.execute("SELECT padrao_subdominio FROM servidor"
+                             " WHERE id = ?", (sid,)).fetchone()
+        self.assertIsNone(l["padrao_subdominio"])
+
+    def test_nenhum_segredo_entra_na_tabela(self):
+        """Guarda barato contra coluna nova em silencio: `senha`, `chave`,
+        `token`, `ssh`, `secret`, `credencial` nunca entram aqui — nome e
+        padrao de subdominio sao dado publico, e e isso que o esquema pode
+        conter."""
+        colunas = {l[1] for l in
+                  self.con.execute("PRAGMA table_info(servidor)")}
+        self.assertEqual(colunas,
+                         {"id", "usuario_id", "nome",
+                          "padrao_subdominio", "criado_em"})
 
 
 class InstalacaoDoGithubNoBancoVelho(unittest.TestCase):
