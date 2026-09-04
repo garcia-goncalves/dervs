@@ -170,6 +170,40 @@ class ONovoSitesSempreExiste(unittest.TestCase):
         self.assertNotIn("site", novo)
 
 
+class UrlDoPadrao(unittest.TestCase):
+    """`coletar_github.url_do_padrao` — so FORMA, sem rede. E8 de "servidores
+    multiplos": o padrao vira URL candidata para a sugestao, e nada aqui bate
+    em lugar nenhum."""
+
+    def test_padrao_com_um_asterisco_vira_url(self):
+        self.assertEqual(
+            coletar_github.url_do_padrao("*.tinehost.com.br", "ccvp-painel"),
+            "https://ccvp-painel.tinehost.com.br")
+
+    def test_padrao_sem_asterisco_e_recusado(self):
+        self.assertEqual(
+            coletar_github.url_do_padrao("tinehost.com.br", "ccvp-painel"), "")
+
+    def test_padrao_com_dois_asteriscos_e_recusado(self):
+        self.assertEqual(
+            coletar_github.url_do_padrao("*.tinehost.*.br", "ccvp-painel"), "")
+
+    def test_projeto_com_barra_e_recusado(self):
+        self.assertEqual(
+            coletar_github.url_do_padrao("*.tinehost.com.br", "a/b"), "")
+
+    def test_projeto_com_espaco_e_recusado(self):
+        self.assertEqual(
+            coletar_github.url_do_padrao("*.tinehost.com.br", "a b"), "")
+
+    def test_projeto_com_ponto_ponto_e_recusado(self):
+        self.assertEqual(
+            coletar_github.url_do_padrao("*.tinehost.com.br", "a..b"), "")
+
+    def test_padrao_vazio_e_recusado(self):
+        self.assertEqual(coletar_github.url_do_padrao("", "ccvp-painel"), "")
+
+
 class OFioInteiro(unittest.TestCase):
     """Banco de verdade -> trecho de coleta -> `banco.montar_estado` ->
     `regras.avaliar`: dois servidores fora do ar no mesmo projeto viram DUAS

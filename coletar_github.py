@@ -34,6 +34,7 @@ excecao. Como os tres valores nascem, onde moram e como se trocam:
 """
 from __future__ import annotations
 
+import fnmatch
 import http.client
 import ipaddress
 import json
@@ -163,6 +164,35 @@ def enderecos_publicos(host: str) -> list:
 def host_publico(host: str) -> bool:
     """O nome resolve, e resolve para fora? Nome que nao resolve vira silencio."""
     return bool(enderecos_publicos(host))
+
+
+# So o rotulo de DNS: letras, digitos, ponto e hifen. Qualquer outra coisa —
+# barra, espaco, ".." — nao pode virar pedaco de nome de host.
+_ROTULO_INVALIDO = re.compile(r"[^A-Za-z0-9.\-]")
+
+
+def url_do_padrao(padrao: str, projeto: str) -> str:
+    """A URL candidata do PADRAO DE SUBDOMINIO de UM servidor para UM
+    projeto. So FORMA, sem rede — quem mede depois e `mede_site`, com a
+    peneira de sempre (`servir._servidor_sugerir` chama as duas em sequencia).
+
+    Devolve "" quando `padrao` nao tem exatamente um `*` (dois viram
+    ambiguos, zero nao e padrao nenhum), ou quando `projeto` carrega
+    caractere que nao pode virar rotulo de DNS. Nunca grava, nunca mede —
+    so monta e confere a propria montagem com `fnmatch`, a mesma peneira que
+    casaria o host de volta contra o padrao.
+    """
+    padrao = (padrao or "").strip()
+    projeto = (projeto or "").strip()
+    if not padrao or not projeto or padrao.count("*") != 1:
+        return ""
+    if (_ROTULO_INVALIDO.search(projeto) or ".." in projeto
+            or projeto.startswith(".") or projeto.endswith(".")):
+        return ""
+    host = padrao.replace("*", projeto)
+    if not fnmatch.fnmatch(host, padrao):
+        return ""
+    return "https://" + host
 
 
 class _Fixado(http.client.HTTPSConnection):

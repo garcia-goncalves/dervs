@@ -2355,6 +2355,216 @@ class OEnderecoDoServidorNoServidorDeVerdade(BaseServidorDeVerdade):
                                  {"combinacao": self.combinacao}).status)
 
 
+class OsServidoresSugerirNoServidorDeVerdade(BaseServidorDeVerdade):
+    """E8 de "servidores multiplos": a autodeteccao por padrao de
+    subdominio. O DERVS testa o padrao contra os projetos que ja conhece e
+    PROPOE — nunca grava. A rota nunca toca `endereco_producao`, e isto e
+    o caso que sustenta a decisao do Diretor.
+    """
+
+    SUGERIR = "/api/servidores/sugerir"
+
+    def setUp(self):
+        super().setUp()
+        # `mede_site` e `host_publico` de mentira, pelo mesmo motivo de
+        # `OEnderecoDoServidorNoServidorDeVerdade`: a CI nao tem internet
+        # garantida.
+        self._chamadas = []
+        self._medir = servir.coletar_github.mede_site
+
+        def dublado(url):
+            self._chamadas.append(url)
+            return {"url": url, "ok": True, "codigo": 200, "erro": "",
+                   "ms": 1, "tentativas": 1}
+        servir.coletar_github.mede_site = dublado
+        self.addCleanup(setattr, servir.coletar_github, "mede_site", self._medir)
+        self._resolver = servir.coletar_github.host_publico
+        servir.coletar_github.host_publico = lambda h: True
+        self.addCleanup(setattr, servir.coletar_github, "host_publico",
+                        self._resolver)
+
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM endereco_producao")
+            con.execute("DELETE FROM servidor")
+            con.execute("DELETE FROM medida")
+            con.commit()
+            self.servidor_id = banco.guardar_servidor(
+                self.uid, "OVH", "*.tinehost.com.br", con=con)
+            con.commit()
+        finally:
+            con.close()
+
+    def _com_projetos(self, *nomes):
+        con = banco.conectar()
+        try:
+            for nome in nomes:
+                banco.gravar(nome, "local", {"nome": nome}, con,
+                            usuario_id=self.uid)
+            con.commit()
+        finally:
+            con.close()
+
+    def pedir_sugestao(self, servidor_id=-1, cookies=None, token=None,
+                       com_origem=True):
+        if cookies is None:
+            cookies, token = self.sessao_e_token()
+        if servidor_id == -1:
+            servidor_id = self.servidor_id
+        cab = {} if token is None else {"X-Token": token}
+        corpo = {} if servidor_id is None else {"servidor_id": servidor_id}
+        return self.pedir(self.SUGERIR, "POST", corpo, cookies=cookies,
+                          com_origem=com_origem, cabecalhos=cab)
+
+    def _n_enderecos(self):
+        con = banco.conectar()
+        try:
+            return con.execute(
+                "SELECT COUNT(*) FROM endereco_producao").fetchone()[0]
+        finally:
+            con.close()
+
+    # ------------------------------------------------------------ as travas
+    def test_sem_sessao_e_recusado(self):
+        self.assertEqual(401, self.pedir(self.SUGERIR, "POST",
+                                         {"servidor_id": 1}).status)
+
+    def test_com_sessao_e_sem_anti_csrf_e_recusado(self):
+        cookies = self.com_sessao()
+        r = self.pedir(self.SUGERIR, "POST", {"servidor_id": 1},
+                       cookies=cookies)
+        self.assertEqual(403, r.status)
+
+    def test_sem_origem_e_recusado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.pedir_sugestao(cookies=cookies, token=token, com_origem=False)
+        self.assertEqual(403, r.status)
+
+    def test_servidor_id_ausente_e_recusado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.pedir_sugestao(servidor_id=None, cookies=cookies, token=token)
+        self.assertEqual(400, r.status)
+
+    def test_servidor_id_torto_e_recusado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.pedir(self.SUGERIR, "POST", {"servidor_id": "nao-e-numero"},
+                       cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertEqual(400, r.status)
+
+    # -------------------------------------------------------- a nao gravar
+    def test_a_rota_nao_grava_nada(self):
+        """O caso que sustenta a decisao do Diretor: conte as linhas de
+        `endereco_producao` antes e depois — tem de ser o mesmo numero."""
+        self._com_projetos("ccvp-painel")
+        antes = self._n_enderecos()
+        r = self.pedir_sugestao()
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual(antes, self._n_enderecos(),
+                         "a rota gravou algo, e ela so pode propor")
+
+    # ------------------------------------------------------- o caminho feliz
+    def test_propoe_para_o_projeto_que_casa_o_padrao(self):
+        self._com_projetos("ccvp-painel")
+        r = self.pedir_sugestao()
+        self.assertEqual(200, r.status, r.corpo)
+        sugestoes = json.loads(r.corpo)["sugestoes"]
+        self.assertEqual(
+            [{"projeto": "ccvp-painel",
+             "url": "https://ccvp-painel.tinehost.com.br"}], sugestoes)
+
+    def test_projeto_que_ja_tem_endereco_naquele_servidor_e_descartado(self):
+        self._com_projetos("ccvp-painel")
+        con = banco.conectar()
+        try:
+            banco.guardar_endereco_de_producao(
+                self.uid, self.servidor_id, "ccvp-painel",
+                "https://ja-tem.tinehost.com.br", con=con)
+            con.commit()
+        finally:
+            con.close()
+        r = self.pedir_sugestao()
+        self.assertEqual([], json.loads(r.corpo)["sugestoes"])
+
+    def test_servidor_sem_padrao_devolve_lista_vazia_sem_chamada_de_rede(self):
+        con = banco.conectar()
+        try:
+            sem_padrao = banco.guardar_servidor(self.uid, "Sem padrao",
+                                                 con=con)
+            con.commit()
+        finally:
+            con.close()
+        self._com_projetos("ccvp-painel")
+        r = self.pedir_sugestao(servidor_id=sem_padrao)
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual([], json.loads(r.corpo)["sugestoes"])
+        self.assertEqual([], self._chamadas, "nao pode chamar rede nenhuma")
+
+    def test_servidor_de_outra_conta_e_404_igual_a_nao_existe(self):
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("vizinho-sugerir@teste.local", con=con)
+            servidor_do_vizinho = banco.guardar_servidor(
+                outro, "Servidor alheio", "*.exemplo.com", con=con)
+            con.commit()
+        finally:
+            con.close()
+        r = self.pedir_sugestao(servidor_id=servidor_do_vizinho)
+        self.assertEqual(404, r.status)
+        self.assertEqual("nao existe", json.loads(r.corpo)["erro"])
+
+    def test_rede_interna_continua_recusada_aqui_tambem(self):
+        """`host_publico` devolvendo `False` -> zero sugestoes, e `mede_site`
+        NAO e chamado."""
+        servir.coletar_github.host_publico = lambda h: False
+        self._com_projetos("ccvp-painel")
+        r = self.pedir_sugestao()
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual([], json.loads(r.corpo)["sugestoes"])
+        self.assertEqual([], self._chamadas, "mede_site nao pode ter rodado")
+
+    def test_candidato_ok_false_nao_entra_na_lista(self):
+        servir.coletar_github.mede_site = lambda url: {
+            "url": url, "ok": False, "codigo": 503, "erro": "",
+            "ms": 1, "tentativas": 2}
+        self._com_projetos("ccvp-painel")
+        r = self.pedir_sugestao()
+        self.assertEqual([], json.loads(r.corpo)["sugestoes"])
+
+    def test_candidato_ok_none_nao_entra_na_lista(self):
+        servir.coletar_github.mede_site = lambda url: {
+            "url": url, "ok": None, "codigo": 0, "erro": "nao_resolveu",
+            "ms": 0, "tentativas": 0}
+        self._com_projetos("ccvp-painel")
+        r = self.pedir_sugestao()
+        self.assertEqual([], json.loads(r.corpo)["sugestoes"])
+
+    def test_no_maximo_tres_medicoes_por_chamada(self):
+        self._com_projetos("proj-a", "proj-b", "proj-c", "proj-d", "proj-e")
+        r = self.pedir_sugestao()
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual(3, len(self._chamadas),
+                         "so pode medir ate MAX_SUGESTOES por chamada")
+
+    # -------------------------------------------------------- o teto proprio
+    def test_o_teto_por_origem_tem_balcao_PROPRIO(self):
+        """Misturar balcoes tranca a maquina legitima. Estourar o balcao da
+        sugestao nao pode gastar o do endereco nem o do servidor."""
+        self._com_projetos("ccvp-painel")
+        cookies, token = self.sessao_e_token()
+        for _ in range(servir.Hub.TETO_DE_SUGESTOES + 2):
+            self.pedir_sugestao(cookies=cookies, token=token)
+        r = self.pedir_sugestao(cookies=cookies, token=token)
+        self.assertEqual(429, r.status, "o teto da sugestao nao segurou")
+        r2 = self.pedir("/api/enderecos/guardar", "POST",
+                        {"projeto": "x", "url": "https://a.com",
+                         "servidor_id": self.servidor_id},
+                        cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertNotEqual(429, r2.status, "o teto do endereco foi gasto junto")
+        r3 = self.pedir("/api/servidores/guardar", "POST", {"nome": "Outro"},
+                        cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertNotEqual(429, r3.status, "o teto do servidor foi gasto junto")
+
+
 class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
     """A porta 2. O caso que da nome a esta classe e um so:
 
