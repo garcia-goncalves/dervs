@@ -686,6 +686,22 @@ main { padding-bottom: var(--e12); }
   outline-offset: 2px;
 }
 
+/* --------------------------------------------------------- a sugestao (etapa 9)
+   Contorno `--borda-forte`, NUNCA `--estado-saudavel`/`--estado-quebrado`: e'
+   uma proposta de autodeteccao, nao um veredito medido. A cor de estado fica
+   reservada para o que foi medido como certo ou errado. */
+.sugestao {
+  margin-top: var(--e3);
+  padding: var(--e3);
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+  display: flex;
+  flex-direction: column;
+  gap: var(--e2);
+}
+
+.sugestao p { margin: 0; }
+
 
 /* ------------------------------------------------------- o registro ao vivo */
 .registro {
