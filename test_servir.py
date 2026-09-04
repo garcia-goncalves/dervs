@@ -20,6 +20,7 @@ respondida pela estrutura em memória, não por este arquivo.
 from __future__ import annotations
 
 import http.client
+import inspect
 import json
 import hashlib
 import io
@@ -1835,8 +1836,210 @@ class OConectadorNoServidorDeVerdade(BaseServidorDeVerdade):
         self.assertNotIn("conectador", getattr(servir, "__dict__", {}))
 
 
+class OsServidoresNoServidorDeVerdade(BaseServidorDeVerdade):
+    """A tela de "Seus servidores": cadastrar, listar, apagar.
+
+    Nenhuma rota daqui bate em rede: cadastrar servidor e so nome e padrao de
+    subdominio, os dois publicos e digitados pelo dono. A defesa e a mesma
+    sequencia das outras escritas — sessao, Origin, anti-CSRF, teto de balcao
+    PROPRIO — e o guarda de "nenhum segredo entra" no fim, sabotado antes de
+    aceitar.
+    """
+
+    LISTAR = "/api/servidores"
+    GUARDAR = "/api/servidores/guardar"
+    REMOVER = "/api/servidores/remover"
+
+    def setUp(self):
+        super().setUp()
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM servidor")
+            con.commit()
+        finally:
+            con.close()
+
+    def guardar(self, nome, padrao="", cookies=None, token=None, com_origem=True):
+        if cookies is None:
+            cookies, token = self.sessao_e_token()
+        cab = {} if token is None else {"X-Token": token}
+        return self.pedir(self.GUARDAR, "POST",
+                          {"nome": nome, "padrao_subdominio": padrao},
+                          cookies=cookies, com_origem=com_origem, cabecalhos=cab)
+
+    # ------------------------------------------------------------ as travas
+    def test_sem_sessao_nao_le(self):
+        self.assertEqual(401, self.pedir(self.LISTAR).status)
+
+    def test_sem_sessao_nao_grava(self):
+        self.assertEqual(401, self.pedir(self.GUARDAR, "POST",
+                                         {"nome": "OVH"}).status)
+
+    def test_sem_sessao_nao_apaga(self):
+        self.assertEqual(401, self.pedir(self.REMOVER, "POST", {"id": 1}).status)
+
+    def test_com_sessao_e_sem_anti_csrf_o_guardar_e_recusado(self):
+        cookies = self.com_sessao()
+        self.assertEqual(403, self.pedir(self.GUARDAR, "POST", {"nome": "OVH"},
+                                         cookies=cookies).status)
+
+    def test_com_sessao_e_sem_anti_csrf_o_remover_e_recusado(self):
+        cookies = self.com_sessao()
+        self.assertEqual(403, self.pedir(self.REMOVER, "POST", {"id": 1},
+                                         cookies=cookies).status)
+
+    def test_sem_origem_e_recusado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("OVH", cookies=cookies, token=token, com_origem=False)
+        self.assertEqual(403, r.status)
+
+    # ------------------------------------------------------- o caminho feliz
+    def test_cadastra_lista_e_apaga(self):
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("OVH", "*.tinehost.com.br", cookies, token)
+        self.assertEqual(200, r.status, r.corpo)
+        id_ = json.loads(r.corpo)["id"]
+
+        lidos = json.loads(self.pedir(self.LISTAR, cookies=cookies).corpo)
+        self.assertEqual([{"id": id_, "nome": "OVH",
+                           "padrao_subdominio": "*.tinehost.com.br",
+                           "criado_em": lidos["servidores"][0]["criado_em"]}],
+                         lidos["servidores"])
+
+        r = self.pedir(self.REMOVER, "POST", {"id": id_}, cookies=cookies,
+                       cabecalhos={"X-Token": token})
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual([], json.loads(
+            self.pedir(self.LISTAR, cookies=cookies).corpo)["servidores"])
+
+    def test_nome_vazio_e_recusado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("   ", cookies=cookies, token=token)
+        self.assertEqual(400, r.status)
+
+    def test_padrao_ausente_grava_NULL_e_volta_string_vazia(self):
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("OVH sem padrao", cookies=cookies, token=token)
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual("", json.loads(r.corpo)["padrao_subdominio"])
+        lidos = json.loads(self.pedir(self.LISTAR, cookies=cookies).corpo)
+        self.assertEqual("", lidos["servidores"][0]["padrao_subdominio"])
+
+    def test_padrao_so_com_espacos_tambem_vira_string_vazia(self):
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("OVH espacos", "   ", cookies=cookies, token=token)
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual("", json.loads(r.corpo)["padrao_subdominio"])
+
+    def test_nome_duplicado_na_mesma_conta_e_recusado(self):
+        cookies, token = self.sessao_e_token()
+        self.guardar("OVH", cookies=cookies, token=token)
+        r = self.guardar("OVH", cookies=cookies, token=token)
+        self.assertEqual(400, r.status)
+        lidos = json.loads(self.pedir(self.LISTAR, cookies=cookies).corpo)
+        self.assertEqual(1, len(lidos["servidores"]))
+
+    def test_o_21o_servidor_e_recusado(self):
+        con = banco.conectar()
+        try:
+            for i in range(banco.MAX_SERVIDORES_POR_CONTA):
+                banco.guardar_servidor(self.uid, "Servidor %d" % i, con=con)
+            con.commit()
+        finally:
+            con.close()
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("O 21o", cookies=cookies, token=token)
+        self.assertEqual(400, r.status)
+
+    # -------------------------------------------------------------- o IDOR
+    def test_o_servidor_de_outra_conta_nao_e_legivel(self):
+        cookies, token = self.sessao_e_token()
+        self.guardar("Meu OVH", cookies=cookies, token=token)
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("vizinho-servidor@teste.local", con=con)
+            banco.guardar_servidor(outro, "Servidor do vizinho", con=con)
+            con.commit()
+        finally:
+            con.close()
+        lidos = json.loads(self.pedir(self.LISTAR, cookies=cookies).corpo)
+        nomes = {s["nome"] for s in lidos["servidores"]}
+        self.assertEqual({"Meu OVH"}, nomes,
+                         "o servidor do vizinho vazou para esta sessao")
+
+    def test_apagar_servidor_de_outra_conta_devolve_404_e_nao_apaga(self):
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("vizinho-apaga@teste.local", con=con)
+            id_do_vizinho = banco.guardar_servidor(outro, "Servidor alheio",
+                                                    con=con)
+            con.commit()
+        finally:
+            con.close()
+        cookies, token = self.sessao_e_token()
+        r = self.pedir(self.REMOVER, "POST", {"id": id_do_vizinho},
+                       cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertEqual(404, r.status)
+        con = banco.conectar()
+        try:
+            self.assertEqual(
+                1, con.execute("SELECT COUNT(*) FROM servidor WHERE id = ?",
+                              (id_do_vizinho,)).fetchone()[0],
+                "a linha do vizinho sumiu")
+        finally:
+            con.close()
+
+    # -------------------------------------------------------- o teto proprio
+    def test_o_teto_por_origem_tem_balcao_PROPRIO(self):
+        """Misturar balcoes tranca a maquina legitima, e isso ja aconteceu duas
+        vezes nesta casa. Estourar o balcao do servidor nao pode gastar o do
+        endereco nem fechar a cortina."""
+        cookies, token = self.sessao_e_token()
+        for i in range(servir.Hub.TETO_DE_SERVIDORES + 2):
+            self.guardar("Servidor %d" % i, cookies=cookies, token=token)
+        r = self.guardar("Mais um", cookies=cookies, token=token)
+        self.assertEqual(429, r.status, "o teto do servidor nao segurou")
+        # O balcao do endereco continua intacto — ver `Hub.TETO_DE_ENDERECOS`.
+        r2 = self.pedir("/api/enderecos/guardar", "POST",
+                        {"projeto": "x", "url": "https://a.com",
+                         "servidor_id": 1},
+                        cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertNotEqual(429, r2.status, "o teto do endereco foi gasto junto")
+        # E a cortina continua de pe para quem chega.
+        self.assertEqual(204, self.pedir("/entrada", "POST",
+                                 {"combinacao": self.combinacao}).status)
+
+    # ----------------------------------------------------- nenhum segredo entra
+    #
+    # O casamento e SOBRE OS CAMPOS LIDOS DO CORPO, nao sobre o texto do fonte
+    # inteiro — senao a frase fixa "recarregue a pagina (token vencido)", que
+    # e mensagem de erro do CSRF e nao campo nenhum, acusaria em falso.
+    PALAVRAS_PROIBIDAS = ("senha", "chave", "token", "ssh", "secret",
+                          "credencial", "key")
+    CAMPO_DO_CORPO = re.compile(
+        r'(?:_texto_do_corpo|_numero_do_corpo)\(corpo,\s*"([^"]+)"')
+
+    def test_nenhum_segredo_e_lido_do_corpo(self):
+        for fonte in (inspect.getsource(servir.Hub._servidor_guardar),
+                     inspect.getsource(servir.Hub._servidor_remover)):
+            for campo in self.CAMPO_DO_CORPO.findall(fonte):
+                for palavra in self.PALAVRAS_PROIBIDAS:
+                    self.assertNotIn(palavra, campo.lower(), campo)
+
+    def test_o_guarda_de_segredo_sabe_reprovar(self):
+        """Sabotagem: se o casamento nao acusa um campo proibido escrito de
+        proposito, o guarda e decoracao — o defeito exato de 29/08."""
+        fonte_sabotada = (inspect.getsource(servir.Hub._servidor_guardar)
+                          + '\n        self._texto_do_corpo(corpo, "senha")\n')
+        campos = self.CAMPO_DO_CORPO.findall(fonte_sabotada)
+        achou = any(p in campo.lower() for campo in campos
+                   for p in self.PALAVRAS_PROIBIDAS)
+        self.assertTrue(achou, "o guarda nao acusaria um campo proibido")
+
+
 class OEnderecoDoServidorNoServidorDeVerdade(BaseServidorDeVerdade):
-    """A porta 3: o painel passa a BUSCAR uma URL que o usuario digitou.
+    """A porta 3: o painel passa a BUSCAR uma URL que o usuario digitou, e
+    diz EM QUAL SERVIDOR ela mora.
 
     E a superficie classica de pedir ao servidor que bata em endereco interno,
     entao cada faixa e provada UMA A UMA. Nada aqui bate na internet: a peneira
@@ -1868,26 +2071,40 @@ class OEnderecoDoServidorNoServidorDeVerdade(BaseServidorDeVerdade):
         con = banco.conectar()
         try:
             con.execute("DELETE FROM endereco_producao")
+            con.execute("DELETE FROM servidor")
+            con.commit()
+            self.servidor_id = banco.guardar_servidor(self.uid, "Servidor",
+                                                       con=con)
             con.commit()
         finally:
             con.close()
 
-    def guardar(self, projeto, url, cookies=None, token=None, com_origem=True):
+    def guardar(self, projeto, url, cookies=None, token=None, com_origem=True,
+               servidor_id=-1):
         if cookies is None:
             cookies, token = self.sessao_e_token()
+        if servidor_id == -1:
+            servidor_id = self.servidor_id
         cab = {} if token is None else {"X-Token": token}
-        return self.pedir(self.GUARDAR, "POST", {"projeto": projeto, "url": url},
+        corpo = {"projeto": projeto, "url": url}
+        if servidor_id is not None:
+            corpo["servidor_id"] = servidor_id
+        return self.pedir(self.GUARDAR, "POST", corpo,
                           cookies=cookies, com_origem=com_origem, cabecalhos=cab)
 
     # ------------------------------------------------------------ as travas
-    def test_sem_sessao_nao_grava_e_nao_le(self):
+    def test_sem_sessao_nao_grava(self):
         self.assertEqual(401, self.pedir(self.GUARDAR, "POST",
-                                         {"projeto": "x", "url": "https://a.com"}).status)
+                                         {"projeto": "x", "url": "https://a.com",
+                                          "servidor_id": 1}).status)
+
+    def test_sem_sessao_nao_le(self):
         self.assertEqual(401, self.pedir(self.LER).status)
 
     def test_com_sessao_e_sem_anti_csrf_e_recusado(self):
         cookies = self.com_sessao()
-        r = self.pedir(self.GUARDAR, "POST", {"projeto": "x", "url": "https://a.com"},
+        r = self.pedir(self.GUARDAR, "POST", {"projeto": "x", "url": "https://a.com",
+                                              "servidor_id": 1},
                        cookies=cookies)
         self.assertEqual(403, r.status)
 
@@ -1935,7 +2152,7 @@ class OEnderecoDoServidorNoServidorDeVerdade(BaseServidorDeVerdade):
                 self.assertIn("rede privada", r.corpo)
                 # E NADA foi gravado: recusar depois de gravar e gravar.
                 corpo = self.pedir(self.LER, cookies=cookies).corpo
-                self.assertEqual({}, json.loads(corpo)["enderecos"], url)
+                self.assertEqual([], json.loads(corpo)["enderecos"], url)
 
     def test_a_peneira_usada_e_a_do_coletor_e_nao_uma_copia(self):
         """Uma segunda copia dessa peneira ja matou o drift em silencio, com
@@ -1962,7 +2179,7 @@ class OEnderecoDoServidorNoServidorDeVerdade(BaseServidorDeVerdade):
         r = self.guardar("projeto-x", "https://parece-publico.com.br", cookies, token)
         self.assertEqual(400, r.status)
         corpo = self.pedir(self.LER, cookies=cookies).corpo
-        self.assertEqual({}, json.loads(corpo)["enderecos"])
+        self.assertEqual([], json.loads(corpo)["enderecos"])
 
     def test_o_redirecionamento_nunca_e_seguido(self):
         """A defesa mais forte possivel contra o pulo de publico para interno:
@@ -1983,7 +2200,8 @@ class OEnderecoDoServidorNoServidorDeVerdade(BaseServidorDeVerdade):
         self.assertIs(True, d["ok"])
         self.assertTrue(d["medido_em"], "todo numero medido leva carimbo")
         corpo = self.pedir(self.LER, cookies=cookies).corpo
-        self.assertEqual({"loja": "https://exemplo.com.br"},
+        self.assertEqual([{"servidor_id": self.servidor_id, "servidor": "Servidor",
+                          "projeto": "loja", "url": "https://exemplo.com.br"}],
                          json.loads(corpo)["enderecos"])
 
     def test_nao_deu_para_medir_NAO_e_fora_do_ar(self):
@@ -2010,12 +2228,59 @@ class OEnderecoDoServidorNoServidorDeVerdade(BaseServidorDeVerdade):
         r = self.guardar("loja", "", cookies, token)
         self.assertEqual(200, r.status, r.corpo)
         corpo = self.pedir(self.LER, cookies=cookies).corpo
-        self.assertEqual({}, json.loads(corpo)["enderecos"])
+        self.assertEqual([], json.loads(corpo)["enderecos"])
 
     def test_projeto_vazio_e_recusado(self):
         cookies, token = self.sessao_e_token()
         r = self.guardar("   ", "https://exemplo.com.br", cookies, token)
         self.assertEqual(400, r.status)
+
+    def test_servidor_id_ausente_e_recusado_e_nada_e_gravado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("loja", "https://exemplo.com.br", cookies, token,
+                         servidor_id=None)
+        self.assertEqual(400, r.status)
+        corpo = self.pedir(self.LER, cookies=cookies).corpo
+        self.assertEqual([], json.loads(corpo)["enderecos"])
+
+    def test_servidor_id_torto_e_recusado_e_nada_e_gravado(self):
+        cookies, token = self.sessao_e_token()
+        r = self.pedir(self.GUARDAR, "POST",
+                       {"projeto": "loja", "url": "https://exemplo.com.br",
+                        "servidor_id": "nao-e-numero"},
+                       cookies=cookies, cabecalhos={"X-Token": token})
+        self.assertEqual(400, r.status)
+        corpo = self.pedir(self.LER, cookies=cookies).corpo
+        self.assertEqual([], json.loads(corpo)["enderecos"])
+
+    def test_apagar_tambem_exige_servidor_id(self):
+        """"sem endereco" continua exigindo saber de QUAL servidor se esta
+        falando, mesmo no caminho de apagar."""
+        cookies, token = self.sessao_e_token()
+        self.guardar("loja", "https://exemplo.com.br", cookies, token)
+        r = self.guardar("loja", "", cookies, token, servidor_id=None)
+        self.assertEqual(400, r.status)
+        # E o endereco continua gravado — a recusa nao apagou nada.
+        corpo = self.pedir(self.LER, cookies=cookies).corpo
+        self.assertEqual(1, len(json.loads(corpo)["enderecos"]))
+
+    def test_servidor_de_outra_conta_e_404_igual_a_nao_existe(self):
+        """"nao e seu" responde IGUAL a "nao existe" — a mesma convencao das
+        quatro portas da fila (04/09/2026)."""
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("vizinho-endereco@teste.local", con=con)
+            servidor_do_vizinho = banco.guardar_servidor(outro, "Servidor alheio",
+                                                          con=con)
+        finally:
+            con.close()
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("loja", "https://exemplo.com.br", cookies, token,
+                         servidor_id=servidor_do_vizinho)
+        self.assertEqual(404, r.status)
+        self.assertEqual("nao existe", json.loads(r.corpo)["erro"])
+        corpo = self.pedir(self.LER, cookies=cookies).corpo
+        self.assertEqual([], json.loads(corpo)["enderecos"])
 
     def test_o_endereco_de_outra_conta_nao_e_legivel(self):
         cookies, token = self.sessao_e_token()
@@ -2023,14 +2288,59 @@ class OEnderecoDoServidorNoServidorDeVerdade(BaseServidorDeVerdade):
         con = banco.conectar()
         try:
             outro = banco.criar_usuario("vizinho@teste.local", con=con)
-            banco.guardar_endereco_de_producao(outro, "loja",
+            servidor_do_vizinho = banco.guardar_servidor(outro, "Servidor",
+                                                          con=con)
+            banco.guardar_endereco_de_producao(outro, servidor_do_vizinho, "loja",
                                                "https://do-vizinho.com.br", con=con)
         finally:
             con.close()
         corpo = self.pedir(self.LER, cookies=cookies).corpo
-        self.assertEqual({"loja": "https://minha.com.br"},
+        self.assertEqual([{"servidor_id": self.servidor_id, "servidor": "Servidor",
+                          "projeto": "loja", "url": "https://minha.com.br"}],
                          json.loads(corpo)["enderecos"],
                          "o endereco do vizinho vazou para esta sessao")
+
+    def test_o_mesmo_projeto_em_dois_servidores_aparece_duas_vezes(self):
+        """O criterio do briefing, no nivel da rota: dois servidores, mesmo
+        projeto, duas entradas com `servidor` diferente."""
+        con = banco.conectar()
+        try:
+            segundo = banco.guardar_servidor(self.uid, "Contabo", con=con)
+            con.commit()
+        finally:
+            con.close()
+        cookies, token = self.sessao_e_token()
+        self.guardar("loja", "https://um.com.br", cookies, token,
+                    servidor_id=self.servidor_id)
+        self.guardar("loja", "https://dois.com.br", cookies, token,
+                    servidor_id=segundo)
+        lidos = json.loads(self.pedir(self.LER, cookies=cookies).corpo)["enderecos"]
+        self.assertEqual(2, len(lidos))
+        servidores = {l["servidor"] for l in lidos}
+        self.assertEqual({"Servidor", "Contabo"}, servidores)
+
+    def test_rede_interna_e_recusada_com_servidor_id_valido(self):
+        """A peneira tem de barrar ANTES de o servidor importar."""
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("projeto-x", "http://10.0.0.5/", cookies, token,
+                         servidor_id=self.servidor_id)
+        self.assertEqual(400, r.status)
+        self.assertIn("rede privada", r.corpo)
+
+    def test_apagar_o_servidor_leva_os_enderecos_dele_junto(self):
+        """`ON DELETE CASCADE` na tabela, visto pela rota: apagar o servidor
+        faz o endereco sumir de `/api/enderecos` sem chamada nenhuma na
+        propria tabela de enderecos."""
+        cookies, token = self.sessao_e_token()
+        self.guardar("loja", "https://exemplo.com.br", cookies, token)
+        self.assertEqual(1, len(json.loads(
+            self.pedir(self.LER, cookies=cookies).corpo)["enderecos"]))
+        r = self.pedir("/api/servidores/remover", "POST",
+                       {"id": self.servidor_id}, cookies=cookies,
+                       cabecalhos={"X-Token": token})
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual([], json.loads(
+            self.pedir(self.LER, cookies=cookies).corpo)["enderecos"])
 
     def test_o_teto_por_origem_tem_balcao_PROPRIO(self):
         """Misturar balcoes tranca a maquina legitima, e isso ja aconteceu duas
