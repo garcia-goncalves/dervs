@@ -1585,16 +1585,87 @@ class Hub(SimpleHTTPRequestHandler):
     # casa.
     TETO_DE_ENDERECOS = 20
 
-    def _enderecos(self):
-        """O que esta gravado, so da conta de quem pergunta."""
+    # O balcao dos SERVIDORES e PROPRIO — nunca o `TETO_DE_ENDERECOS`. Misturar
+    # balcoes tranca a maquina legitima, e isso ja aconteceu duas vezes nesta
+    # casa (`servir.py:1581-1585`). Cadastrar servidor nao bate em rede nenhuma,
+    # mas o teto continua existindo para limitar a velocidade de criacao.
+    TETO_DE_SERVIDORES = 20
+
+    def _servidores(self):
+        """Os servidores da conta, so da conta de quem pergunta."""
         sessao = self._sessao()
         if sessao is None:
             return self._json(403, {"erro": "entre de novo"})
-        return self._json(200, {"enderecos": banco.enderecos_de_producao(
-            sessao["usuario_id"])})
+        lista = banco.servidores(sessao["usuario_id"])
+        # `padrao_subdominio` tem UM jeito so de dizer "nenhum" em cada lado:
+        # `None` no banco, `""` no JSON. A troca mora so aqui, na borda.
+        for item in lista:
+            item["padrao_subdominio"] = item.get("padrao_subdominio") or ""
+        return self._json(200, {"servidores": lista})
+
+    def _servidor_guardar(self):
+        """Cadastra um servidor nomeado. Nenhum segredo entra aqui: so nome e
+        padrao de subdominio, os dois publicos."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        if not self._csrf_ok(sessao):
+            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+        corpo = self._corpo_json(teto=4096) or {}
+        nome = self._texto_do_corpo(corpo, "nome", teto=60).strip()
+        padrao = self._texto_do_corpo(corpo, "padrao_subdominio", teto=200).strip()
+        if not nome:
+            return self._json(400, {"erro": "diga o nome do servidor"})
+
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="servidor",
+                                           teto=self.TETO_DE_SERVIDORES):
+            return self._json(429, self.RECUSA)
+
+        id_ = banco.guardar_servidor(sessao["usuario_id"], nome, padrao or None)
+        if id_ is None:
+            return self._json(400, {"erro": "esse nome ja existe nesta conta, "
+                                            "ou voce ja tem 20 servidores "
+                                            "cadastrados"})
+        return self._json(200, {"id": id_, "nome": nome,
+                                "padrao_subdominio": padrao})
+
+    def _servidor_remover(self):
+        """Apaga um servidor da conta, e os enderecos dele junto (CASCADE).
+        Nao e seu responde IGUAL a nao existe."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        if not self._csrf_ok(sessao):
+            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+        corpo = self._corpo_json(teto=4096) or {}
+        ok, id_ = self._numero_do_corpo(corpo, "id", int)
+        if not ok or id_ is None:
+            return self._json(400, {"erro": "id invalido"})
+        if not banco.remover_servidor(sessao["usuario_id"], id_):
+            return self._json(404, {"erro": "nao existe"})
+        return self._json(200, {"ok": True})
+
+    def _enderecos(self):
+        """O que esta gravado, so da conta de quem pergunta — uma linha por
+        (projeto, servidor), ordenada por (nome do servidor, projeto)."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        por_projeto = banco.enderecos_por_servidor(sessao["usuario_id"])
+        lista = [{"servidor_id": item["servidor_id"], "servidor": item["servidor"],
+                 "projeto": projeto, "url": item["url"]}
+                for projeto, itens in por_projeto.items() for item in itens]
+        lista.sort(key=lambda l: (l["servidor"], l["projeto"]))
+        return self._json(200, {"enderecos": lista})
 
     def _endereco_guardar(self):
-        """Grava o endereco de producao de um projeto, e mede se ele responde."""
+        """Grava o endereco de producao de um projeto NUM SERVIDOR, e mede se
+        ele responde."""
         sessao = self._sessao()
         if sessao is None:
             return self._json(403, {"erro": "entre de novo"})
@@ -1608,9 +1679,18 @@ class Hub(SimpleHTTPRequestHandler):
         if not projeto:
             return self._json(400, {"erro": "diga de qual projeto e o endereco"})
 
+        # ENTRE A LEITURA DO CORPO E A PENEIRA. Ausente ou torto e 400 mesmo
+        # para o caminho de apagar: "sem endereco" continua exigindo saber DE
+        # QUAL servidor se esta falando.
+        ok, servidor_id = self._numero_do_corpo(corpo, "servidor_id", int)
+        if not ok or servidor_id is None:
+            return self._json(400, {"erro":
+                                    "diga em qual servidor esse endereco mora"})
+
         # Apagar nao gasta o balcao nem bate em lugar nenhum.
         if not url:
-            banco.guardar_endereco_de_producao(sessao["usuario_id"], projeto, None)
+            banco.guardar_endereco_de_producao(sessao["usuario_id"], servidor_id,
+                                               projeto, None)
             return self._json(200, {"projeto": projeto, "url": "",
                                     "ok": None, "guardado": False})
 
@@ -1638,7 +1718,12 @@ class Hub(SimpleHTTPRequestHandler):
         if not coletar_github.host_publico(urllib.parse.urlsplit(url).hostname):
             return self._json(400, {"erro": self.ENDERECO_RECUSADO})
 
-        banco.guardar_endereco_de_producao(sessao["usuario_id"], projeto, url)
+        # `servidor_id` de OUTRA conta: o banco confere o dono e devolve
+        # `False` SEM GRAVAR. "nao e seu" responde igual a "nao existe" — e
+        # ISSO ACONTECE ANTES DE MEDIR: recusar nao pode custar uma medicao.
+        if not banco.guardar_endereco_de_producao(sessao["usuario_id"],
+                                                   servidor_id, projeto, url):
+            return self._json(404, {"erro": "nao existe"})
         # `mede_site` devolve `ok` como None para NAO DEU PARA MEDIR, e isso nao
         # e fora do ar — a invariante esta escrita no docstring dela. Os tres
         # estados viajam separados para a tela nao poder confundi-los.
@@ -2790,9 +2875,13 @@ ROTAS = {
     # comentario em cima de `_conectador`.
     "/api/conectador":          Rota("POST", Hub._conectador,       "dado"),
 
-    # A porta 3 (fatia B). As duas sao `dado`: endereco de producao e dado da
-    # conta que o gravou, e `_enderecos` le SO o da sessao — o IDOR ja foi
-    # consertado duas vezes neste repositorio.
+    # A porta 3 (fatia B). As cinco sao `dado`: servidor e endereco de producao
+    # sao dado da conta que gravou, e cada rota le SO o da sessao — o IDOR ja
+    # foi consertado duas vezes neste repositorio. A quarta de servidores
+    # (`/api/servidores/sugerir`) nasce na etapa seguinte (E8).
+    "/api/servidores":          Rota("GET",  Hub._servidores,        "dado"),
+    "/api/servidores/guardar":  Rota("POST", Hub._servidor_guardar,  "dado"),
+    "/api/servidores/remover":  Rota("POST", Hub._servidor_remover,  "dado"),
     "/api/enderecos":           Rota("GET",  Hub._enderecos,        "dado"),
     "/api/enderecos/guardar":   Rota("POST", Hub._endereco_guardar, "dado"),
 
