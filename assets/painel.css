@@ -63,11 +63,18 @@ header.topo {
 }
 .marca svg { display: block; flex: none; }
 
+/* Sete telas não cabem numa linha só a partir de ~1450px pra baixo. `wrap`
+   deixava a última sobrar sozinha, descolada, numa segunda linha embaixo da
+   marca — "menu quebrado", reportado em 04/09/2026. `nowrap` + rolagem
+   horizontal DENTRO do próprio nav resolve em toda largura: acima de 1450px
+   tudo cabe e não rola nada; abaixo, vira uma faixa que rola, nunca quebra. */
 nav.mapa {
   display: flex;
   gap: var(--e1);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 nav.mapa a {
   padding: var(--e2) var(--e3);
@@ -81,6 +88,8 @@ nav.mapa a {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 nav.mapa a:hover { background: var(--fundo-elevado); }
 /* O item ativo é `--acao`, nunca verde. Verde é estado saudável. */
@@ -99,14 +108,8 @@ nav.mapa a[aria-current="page"] {
   .topo .linha { padding: var(--e2) var(--e3); gap: var(--e2); }
   .marca { order: 1; }
   .topo .canto { order: 2; margin-left: auto; }
-  nav.mapa {
-    order: 3;
-    flex-basis: 100%;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  nav.mapa a { min-height: 36px; white-space: nowrap; }
+  nav.mapa { order: 3; flex-basis: 100%; }
+  nav.mapa a { min-height: 36px; }
   .topo .canto .botao { padding: var(--e1) var(--e2); font-size: var(--fs-metadado); }
 }
 
