@@ -3053,6 +3053,44 @@ class OPedidoDeAuditoriaERecusadoFechado(BaseServidorDeVerdade):
         self.assertEqual(r.status, 200, r.corpo)
         self.assertEqual(self.na_fila("meu-projeto"), 1)
 
+    # ------------------------------------------ o id da fila TAMBEM tem dono
+    def test_duas_contas_com_projeto_de_mesmo_nome_nao_colidem_no_id(self):
+        """Achado da revisao de Python de 04/09/2026: `fila.id` continua
+        TEXT PRIMARY KEY global. Sem o dono NO ID (e nao so na coluna), a
+        conta B pedindo auditoria de um projeto com o MESMO NOME que um
+        projeto ja auditado pela conta A esbarrava no `INSERT OR IGNORE` da
+        linha de A: `entraram = 0`, e a rota respondia 200 "pedido" para um
+        pedido que nunca entrou na fila de B — sucesso relatado sem efeito, a
+        mesma mentira que a lei 2 proibe.
+        """
+        vizinho = self.outra_conta()
+        self.com_projeto("site")
+        self.com_projeto("site", usuario_id=vizinho)
+        primeira = self.pedir_auditoria("site")
+        self.assertEqual(primeira.status, 200, primeira.corpo)
+        self.assertTrue(json.loads(primeira.corpo)["pedido"])
+
+        cookies, csrf = self.sessao_e_token()      # ainda a conta A
+        con = banco.conectar()
+        try:
+            cookie = banco.novo_token()
+            banco.abrir_sessao(vizinho, cookie, banco.prazo(3600), con=con)
+            final = banco.confirmar_segundo_fator(cookie, banco.novo_token(),
+                                                  con=con)
+            s = banco.sessao_valida(final, con=con)
+        finally:
+            con.close()
+        segunda = self.pedir("/api/auditoria/pedir", "POST",
+                             {"projeto": "site"}, cookies={"sessao": final},
+                             cabecalhos={"X-Token":
+                                        servir.Hub._csrf_da_sessao(s)})
+        self.assertEqual(segunda.status, 200, segunda.corpo)
+        self.assertTrue(json.loads(segunda.corpo)["pedido"],
+                        "a conta B recebeu 'pedido: true' sem a tarefa dela"
+                        " ter entrado na fila")
+        self.assertEqual(self.na_fila("site"), 2,
+                         "as duas contas colidiram no mesmo id de fila")
+
 
 class OResultadoDaAuditoriaNaoDerrubaARota(BaseServidorDeVerdade):
     """Defeito 1 (o teto proprio dos achados) e o menor do `custo_usd`."""

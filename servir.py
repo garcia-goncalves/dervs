@@ -2471,8 +2471,19 @@ class Hub(SimpleHTTPRequestHandler):
             return self._json(404, {"erro": "projeto nao encontrado"})
         if projeto.lower() in tarefas.PROJETOS_BLOQUEADOS:
             return self._json(403, {"erro": "projeto bloqueado"})
+        # O DONO entra NO ID, e nao so na coluna. `fila.id` continua sendo
+        # TEXT PRIMARY KEY global (nao (usuario_id, id), como `achado`), e
+        # sem o dono aqui duas contas com projeto de mesmo nome colidiam no
+        # MESMO id: `INSERT OR IGNORE` da segunda nao inseria nada,
+        # `entraram` vinha 0, e a rota respondia 200 "pedido" para um pedido
+        # que nunca entrou na fila DAQUELA conta — sucesso relatado sem
+        # efeito, a mesma classe de mentira que a lei 2 proibe. Achado da
+        # revisao de Python de 04/09/2026. `.split(":")[0]` (quem le a regra
+        # a partir do id, em `execucao.py`) continua valendo: só o PRIMEIRO
+        # pedaço importa.
         entraram = banco.enfileirar([{
-            "id": "%s:%s" % (auditoria.REGRA_DE_VENCIMENTO, projeto),
+            "id": "%s:%s:%s" % (auditoria.REGRA_DE_VENCIMENTO,
+                                sessao["usuario_id"], projeto),
             "usuario_id": sessao["usuario_id"],
             "projeto": projeto,
             "regra": auditoria.REGRA_DE_VENCIMENTO,
