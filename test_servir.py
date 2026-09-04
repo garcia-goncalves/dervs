@@ -2068,11 +2068,11 @@ class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
         self._confirmar = servir.github_app.confirmar_instalacao
         self.addCleanup(setattr, servir.github_app, "confirmar_instalacao",
                         self._confirmar)
-        self._membro_da_organizacao = \
-            servir.github_app.usuario_e_membro_da_organizacao
+        self._administra_a_organizacao = \
+            servir.github_app.usuario_administra_a_organizacao
         self.addCleanup(setattr, servir.github_app,
-                        "usuario_e_membro_da_organizacao",
-                        self._membro_da_organizacao)
+                        "usuario_administra_a_organizacao",
+                        self._administra_a_organizacao)
         # Por padrao o GitHub CONFIRMA. Cada caso que precisa do contrario
         # troca este duble, e o que ele devolve nunca carrega segredo.
         # O duble devolve o `account` porque e ELE que prova a posse: a conta
@@ -2242,22 +2242,24 @@ class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
     # A divida de instalacao de ORGANIZACAO foi paga em 04/09/2026: o `account.id`
     # da instalacao continua sendo o da organizacao, nunca o da pessoa, mas
     # agora ha um segundo caminho — perguntar ao proprio App (com a permissao
-    # "Members: Read-only") se o dono da sessao e membro dela.
-    # `servir.github_app.usuario_e_membro_da_organizacao` e o duble aqui: os
+    # "Members: Read-only") se o dono da sessao ADMINISTRA ela. Nao basta ser
+    # membro: achado da revisao de seguranca de 04/09/2026, um membro raso
+    # podia amarrar a instalacao inteira a propria conta.
+    # `servir.github_app.usuario_administra_a_organizacao` e o duble aqui: os
     # testes DELE (rede simulada, `_pedir`) moram em `test_github_app.py`.
 
-    def test_instalacao_de_ORGANIZACAO_de_quem_e_membro_confere_e_grava(self):
+    def test_instalacao_de_ORGANIZACAO_de_quem_administra_confere_e_grava(self):
         servir.github_app.confirmar_instalacao = \
             lambda *a, **k: {"id": 424242, "app_id": 1,
                              "account": {"id": 777, "login": "minha-org",
                                          "type": "Organization"}}
         vistos = {}
 
-        def membro(app_id, chave, inst, organizacao, github_id, **k):
+        def administra(app_id, chave, inst, organizacao, github_id, **k):
             vistos.update(inst=inst, organizacao=organizacao, github_id=github_id)
             return True
 
-        servir.github_app.usuario_e_membro_da_organizacao = membro
+        servir.github_app.usuario_administra_a_organizacao = administra
         r = self.voltar(self.selo(), "424242")
         self.assertIn("ligado", r.cabecalhos.get("Location"))
         self.assertEqual("424242", self.gravada())
@@ -2268,12 +2270,13 @@ class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
         self.assertEqual("minha-org", vistos["organizacao"])
         self.assertEqual("4242", vistos["github_id"])
 
-    def test_instalacao_de_ORGANIZACAO_de_quem_NAO_e_membro_continua_recusada(self):
+    def test_instalacao_de_ORGANIZACAO_de_quem_NAO_administra_continua_recusada(self):
+        """O caso central da revisao de seguranca: ser MEMBRO nao basta."""
         servir.github_app.confirmar_instalacao = \
             lambda *a, **k: {"id": 424242, "app_id": 1,
                              "account": {"id": 777, "login": "minha-org",
                                          "type": "Organization"}}
-        servir.github_app.usuario_e_membro_da_organizacao = \
+        servir.github_app.usuario_administra_a_organizacao = \
             lambda *a, **k: False
         r = self.voltar(self.selo(), "424242")
         self.assertIn("nao-deu", r.cabecalhos.get("Location"))
@@ -2281,13 +2284,13 @@ class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
 
     def test_instalacao_de_ORGANIZACAO_sem_a_permissao_Members_e_recusada_nao_aceita(self):
         """`None` (o App sem a permissao Members, ou a rede falhou) e tratado
-        exatamente como 'nao e membro'. Ausencia de configuracao NUNCA pode
+        exatamente como 'nao administra'. Ausencia de configuracao NUNCA pode
         virar 'sim, pode entrar' — falha fechada, a lei 3 deste repositorio."""
         servir.github_app.confirmar_instalacao = \
             lambda *a, **k: {"id": 424242, "app_id": 1,
                              "account": {"id": 777, "login": "minha-org",
                                          "type": "Organization"}}
-        servir.github_app.usuario_e_membro_da_organizacao = \
+        servir.github_app.usuario_administra_a_organizacao = \
             lambda *a, **k: None
         r = self.voltar(self.selo(), "424242")
         self.assertIn("nao-deu", r.cabecalhos.get("Location"))
@@ -2310,7 +2313,7 @@ class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
             lambda *a, **k: {"id": 424242, "app_id": 1,
                              "account": {"id": 777, "login": "minha-org",
                                          "type": "Organization"}}
-        servir.github_app.usuario_e_membro_da_organizacao = explodir
+        servir.github_app.usuario_administra_a_organizacao = explodir
         r = self.voltar(self.selo(sem_github), "424242")
         self.assertIn("nao-deu", r.cabecalhos.get("Location"))
         self.assertIsNone(self.gravada(sem_github))

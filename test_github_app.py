@@ -418,17 +418,22 @@ class ConfirmarInstalacaoContraAApi(unittest.TestCase):
             None, None, 302, "", {}, "https://qualquer-um.invalido/"))
 
 
-class MembroDaOrganizacao(unittest.TestCase):
+class AdministraAOrganizacao(unittest.TestCase):
     """Fecha a divida nomeada de `servir._instalacao_e_dele`: a instalacao de
     uma ORGANIZACAO tem `account.id` da org, nunca da pessoa. Esta funcao
-    pergunta ao proprio app — ja instalado ali — se a pessoa e membro,
-    usando o TOKEN DESTA instalacao, nunca o JWT nem um token do usuario.
+    pergunta ao proprio app — ja instalado ali — se a pessoa ADMINISTRA a
+    organizacao, usando o TOKEN DESTA instalacao, nunca o JWT nem um token
+    do usuario.
+
+    ADMIN, E NAO SO MEMBRO — achado da revisao de seguranca de 04/09/2026:
+    um membro raso podia amarrar a instalacao inteira a propria conta. Por
+    isso a lista pedida e' `?role=admin`, nunca a lista de membros inteira.
     """
 
     def setUp(self):
         self.chave = PEM_PKCS1
 
-    def falso_com(self, membros):
+    def falso_com(self, administradores):
         chamadas = []
 
         def pedir(url, jwt, teto, metodo="POST"):
@@ -436,82 +441,104 @@ class MembroDaOrganizacao(unittest.TestCase):
             if "access_tokens" in url:
                 return {"token": "ghs-org-token",
                         "expires_at": "2026-08-27T21:00:00Z"}
-            return membros
+            return administradores
 
         return pedir, chamadas
 
-    def test_confere_quando_o_id_aparece_na_lista_de_membros(self):
+    def test_confere_quando_o_id_aparece_na_lista_de_administradores(self):
         pedir, chamadas = self.falso_com(
             [{"id": 111, "login": "outro"}, {"id": 424242, "login": "dono"}])
-        r = github_app.usuario_e_membro_da_organizacao(
+        r = github_app.usuario_administra_a_organizacao(
             "123", self.chave, "555", "minha-org", "424242", _pedir=pedir)
         self.assertTrue(r)
         self.assertEqual(2, len(chamadas))
         self.assertIn("access_tokens", chamadas[0][0])
         self.assertEqual("POST", chamadas[0][1])
         self.assertIn("/orgs/minha-org/members", chamadas[1][0])
+        self.assertIn("role=admin", chamadas[1][0],
+                      "pediu a lista de membros inteira, nao so os admins")
         self.assertEqual("GET", chamadas[1][1])
 
-    def test_nao_confere_quando_o_id_nao_aparece_na_lista(self):
+    def test_nao_confere_quando_o_id_nao_e_admin(self):
+        """O caso central da revisao: aparecer como MEMBRO nao basta."""
         pedir, _ = self.falso_com([{"id": 111, "login": "outro"}])
-        r = github_app.usuario_e_membro_da_organizacao(
+        r = github_app.usuario_administra_a_organizacao(
             "123", self.chave, "555", "minha-org", "424242", _pedir=pedir)
         self.assertFalse(r)
 
     def test_sem_a_permissao_members_o_github_recusa_e_isso_e_None_nao_True(self):
-        """Sem a permissao no App, a segunda chamada falha. `None`, nunca `True`
-        — a ausencia da permissao NUNCA pode virar 'sim, e membro'."""
+        """Sem a permissao no App, a segunda chamada falha. `None`, nunca
+        `True` — a ausencia da permissao NUNCA pode virar 'sim, administra'."""
         def pedir(url, jwt, teto, metodo="POST"):
             if "access_tokens" in url:
                 return {"token": "ghs-org-token",
                         "expires_at": "2026-08-27T21:00:00Z"}
             raise OSError("403: Forbidden (a permissao Members falta)")
 
-        self.assertIsNone(github_app.usuario_e_membro_da_organizacao(
+        self.assertIsNone(github_app.usuario_administra_a_organizacao(
             "123", self.chave, "555", "minha-org", "424242", _pedir=pedir))
 
     def test_falha_ao_trocar_por_token_devolve_None(self):
         def explodir(*a, **k):
             raise OSError("a rede caiu")
 
-        self.assertIsNone(github_app.usuario_e_membro_da_organizacao(
+        self.assertIsNone(github_app.usuario_administra_a_organizacao(
             "123", self.chave, "555", "minha-org", "424242", _pedir=explodir))
 
     def test_resposta_que_nao_e_lista_nao_confirma(self):
         pedir, _ = self.falso_com({"nao": "e uma lista"})
-        self.assertIsNone(github_app.usuario_e_membro_da_organizacao(
+        self.assertIsNone(github_app.usuario_administra_a_organizacao(
             "123", self.chave, "555", "minha-org", "424242", _pedir=pedir))
 
     def test_organizacao_fora_do_padrao_de_login_nao_chega_a_perguntar(self):
         """O nome vai para dentro de uma URL. `../` apontaria a requisicao —
-        com o token junto — para outro caminho da API."""
-        def explodir(*a, **k):
-            raise AssertionError("nao podia ter perguntado")
+        com o token junto — para outro caminho da API.
+
+        O DUBLE E UM ESPIAO, NUNCA UM QUE LEVANTA: uma excecao aqui dentro
+        cairia no `except Exception` da propria funcao e devolveria `None`
+        de qualquer jeito — a guarda-da-guarda, achado da revisao de
+        seguranca de 04/09/2026, provando que uma versao sem peneira nenhuma
+        passaria pelos mesmos casos com um sentinela que levanta.
+        """
+        chamadas = []
+
+        def espiao(*a, **k):
+            chamadas.append(a)
+            return {}
 
         for torta in ("minha-org/../x", "", "-comeca-com-hifen",
                       "termina-com-hifen-", "a" * 40, None, 42):
             with self.subTest(organizacao=torta):
-                self.assertIsNone(github_app.usuario_e_membro_da_organizacao(
+                self.assertIsNone(github_app.usuario_administra_a_organizacao(
                     "123", self.chave, "555", torta, "424242",
-                    _pedir=explodir))
+                    _pedir=espiao))
+        self.assertEqual([], chamadas, "perguntou ao GitHub sem precisar")
 
     def test_github_id_vazio_nao_chega_a_perguntar(self):
-        def explodir(*a, **k):
-            raise AssertionError("nao podia ter perguntado")
+        chamadas = []
+
+        def espiao(*a, **k):
+            chamadas.append(a)
+            return {}
 
         for torto in ("", None, 424242):
             with self.subTest(github_id=torto):
-                self.assertIsNone(github_app.usuario_e_membro_da_organizacao(
+                self.assertIsNone(github_app.usuario_administra_a_organizacao(
                     "123", self.chave, "555", "minha-org", torto,
-                    _pedir=explodir))
+                    _pedir=espiao))
+        self.assertEqual([], chamadas, "perguntou ao GitHub sem precisar")
 
     def test_sem_chave_privada_nao_pergunta(self):
-        def explodir(*a, **k):
-            raise AssertionError("nao podia ter perguntado")
+        chamadas = []
 
-        self.assertIsNone(github_app.usuario_e_membro_da_organizacao(
+        def espiao(*a, **k):
+            chamadas.append(a)
+            return {}
+
+        self.assertIsNone(github_app.usuario_administra_a_organizacao(
             "123", "isto nao e uma chave", "555", "minha-org", "424242",
-            _pedir=explodir))
+            _pedir=espiao))
+        self.assertEqual([], chamadas, "perguntou ao GitHub sem chave valida")
 
 
 if __name__ == "__main__":

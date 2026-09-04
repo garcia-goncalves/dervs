@@ -366,69 +366,11 @@ def confirmar_instalacao(app_id, chave_pem, instalacao_id, teto: int = 15,
 # o GitHub ja devolveu (`account.login`), nunca de entrada digitada; a peneira
 # existe para a URL montada abaixo nunca carregar algo que nao seja um login.
 SO_LOGIN_DO_GITHUB = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
-API_MEMBROS = "https://api.github.com/orgs/%s/members?per_page=100"
-
-
-def usuario_e_membro_da_organizacao(app_id, chave_pem, instalacao_id,
-                                    organizacao, github_id, teto=15,
-                                    _pedir=None):
-    """A conta com este `github_id` e membro desta organizacao? `None` se nao
-    deu para saber.
-
-    FECHA A DIVIDA NOMEADA de `servir._instalacao_e_dele`: quando a instalacao
-    e de uma ORGANIZACAO, `account.id` e o da organizacao, nunca o da pessoa
-    — recusar sempre era a unica escolha segura ate esta funcao existir.
-
-    A PROVA E O PROPRIO APP PERGUNTANDO, com o TOKEN DESTA INSTALACAO (nao o
-    JWT, que fala pelo app inteiro, e nao um token do usuario, que exigiria
-    pedir mais uma permissao dele no login). Isso exige o App ter a permissao
-    de organizacao "Members: Read-only" — sem ela o GitHub recusa a segunda
-    chamada, a excecao e pega abaixo, e a funcao devolve `None`. `None` e
-    tratado por quem chama exatamente como "nao confirmou": falha fechada,
-    nunca uma porta.
-
-    UMA PAGINA SO (100 membros). Organizacao maior que isso perderia gente na
-    cauda — divida aceitavel para as contas de hoje; pesar se um dia isto vier
-    a importar.
-
-    LEI 3 DESTE ARQUIVO: `None` em qualquer falha, nunca excecao para quem
-    chama tratar.
-    """
-    if not isinstance(github_id, str) or not github_id.strip():
-        return None
-    if not isinstance(organizacao, str) \
-            or not SO_LOGIN_DO_GITHUB.fullmatch(organizacao):
-        return None
-    if not isinstance(instalacao_id, str) or not SO_DIGITOS.fullmatch(instalacao_id):
-        return None
-    chave = chave_de_pem(chave_pem)
-    if chave is None:
-        _diga("a chave privada do app nao foi lida; nao da para perguntar")
-        return None
-    jwt = montar_jwt(app_id, chave)
-    if jwt is None:
-        _diga("nao consegui montar o pedido; confira o App ID")
-        return None
-    pedir = _pedir or _pedir_ao_github
-    try:
-        resposta = pedir(API % instalacao_id, jwt, teto, "POST")
-    except Exception:                      # noqa: BLE001 — rede, HTTP, JSON
-        _diga("o GitHub nao entregou um token para conferir a organizacao")
-        return None
-    token = resposta.get("token") if isinstance(resposta, dict) else None
-    if not isinstance(token, str) or not token.strip():
-        _diga("a resposta do GitHub veio sem token")
-        return None
-    try:
-        membros = pedir(API_MEMBROS % organizacao, token.strip(), teto, "GET")
-    except Exception:                      # noqa: BLE001 — rede, HTTP, JSON
-        _diga("o GitHub nao respondeu sobre os membros da organizacao "
-              "(falta a permissao Members no App?)")
-        return None
-    if not isinstance(membros, list):
-        return None
-    return any(isinstance(m, dict) and str(m.get("id") or "") == github_id
-               for m in membros)
+# `role=admin`, NUNCA a lista de membros inteira: instalar um App exige ser
+# ADMIN da organizacao, e provar "e membro" prova um direito menor que o que
+# a instalacao em si ja exigiu. Ver a nota de seguranca em
+# `usuario_administra_a_organizacao`.
+API_ADMINS = "https://api.github.com/orgs/%s/members?role=admin&per_page=100"
 
 
 class Coletor:
@@ -501,3 +443,67 @@ class Coletor:
         self._vence_em = min(vence, agora + 3600) if vence else agora + 600
         self._token = novo
         return novo
+
+
+def usuario_administra_a_organizacao(
+        app_id, chave_pem, instalacao_id, organizacao, github_id, teto=15,
+        _pedir=None):
+    """A conta com este `github_id` ADMINISTRA esta organizacao? `None` se
+    nao deu para saber.
+
+    FECHA A DIVIDA NOMEADA de `servir._instalacao_e_dele`: quando a instalacao
+    e de uma ORGANIZACAO, `account.id` e o da organizacao, nunca o da pessoa
+    — recusar sempre era a unica escolha segura ate esta funcao existir.
+
+    POR QUE ADMIN, E NAO SO MEMBRO. Achado da revisao de seguranca de
+    04/09/2026: um membro RASO da organizacao — sem direito de instalar nada,
+    talvez sem acesso a nenhum repositorio privado — podia pedir o proprio
+    selo, chamar a volta com o `installation_id` da organizacao (numero
+    publico e sequencial, ver `servir._instalacao_e_dele`) e amarrar a
+    instalacao inteira a conta dele. Hoje isso tranca o dono legitimo para
+    sempre (nao ha rota de reivindicacao); no dia em que a leitura de
+    repositorios da organizacao passar a valer, seria token do App sobre
+    repositorio privado alheio na mao de quem nao tem acesso a ele no GitHub.
+    ADMIN e o direito certo a provar, porque e o mesmo que instalar um App
+    exige — provar "e membro" prova de menos.
+
+    A PROVA E O PROPRIO APP PERGUNTANDO, com o TOKEN DESTA INSTALACAO — por
+    isso `Coletor` e reaproveitado aqui, e nao reescrito: e ele que ja sabe
+    trocar chave por token com todas as defesas (o caractere impossivel em
+    cabecalho HTTP incluido), e uma segunda copia dessa troca e o tipo de
+    drift que este arquivo existe para nao ter. Nunca o JWT, que fala pelo
+    app inteiro, e nunca um token do usuario, que exigiria pedir mais uma
+    permissao dele no login.
+
+    Isso exige o App ter a permissao de organizacao "Members: Read-only" —
+    sem ela o GitHub recusa a segunda chamada, a excecao e pega abaixo, e a
+    funcao devolve `None`. `None` e tratado por quem chama exatamente como
+    "nao confirmou": falha fechada, nunca uma porta.
+
+    UMA PAGINA SO (100 administradores). Organizacao maior que isso perderia
+    gente na cauda — divida aceitavel para as contas de hoje; pesar se um dia
+    isto vier a importar. Ver o aviso em
+    `docs/operacao/registrar-app-github.md`.
+
+    LEI 3 DESTE REPOSITORIO: `None` em qualquer falha, nunca excecao para
+    quem chama tratar.
+    """
+    if not isinstance(github_id, str) or not github_id.strip():
+        return None
+    if not isinstance(organizacao, str) \
+            or not SO_LOGIN_DO_GITHUB.fullmatch(organizacao):
+        return None
+    pedir = _pedir or _pedir_ao_github
+    token = Coletor(app_id, instalacao_id, chave_pem, _pedir=pedir).token()
+    if token is None:
+        return None
+    try:
+        administradores = pedir(API_ADMINS % organizacao, token, teto, "GET")
+    except Exception:                      # noqa: BLE001 — rede, HTTP, JSON
+        _diga("o GitHub nao respondeu sobre os administradores da "
+              "organizacao (falta a permissao Members no App?)")
+        return None
+    if not isinstance(administradores, list):
+        return None
+    return any(isinstance(m, dict) and str(m.get("id") or "") == github_id
+               for m in administradores)

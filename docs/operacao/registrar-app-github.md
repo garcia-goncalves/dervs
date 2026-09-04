@@ -83,6 +83,13 @@ GitHub pedir (ela so vale depois que um administrador da organizacao aceita).
 Sem essa permissao a funcao devolve `None`, e o servidor trata isso como "nao
 e membro" — falha fechada, nunca uma porta que abre sozinha.
 
+**A conferencia so aceita quem ADMINISTRA a organizacao, nunca so membro.**
+Instalar um App exige ser admin; aceitar qualquer membro provaria um direito
+menor que o que a propria instalacao ja exigiu. E **so a primeira pagina, ate
+100 administradores** — uma organizacao com mais que isso perderia gente na
+cauda, e a pessoa veria "nao deu para conferir" mesmo tendo o direito. Pesar
+se um dia isto vier a importar.
+
 As tres ja estao gravadas no repositorio e, desde 02/09/2026, chegam ao
 `/opt/dervs/.env` e **entram no container** a cada publicacao. Ate essa data as
 tres paravam no meio do caminho: o `docker-compose.yml` nao as passava para

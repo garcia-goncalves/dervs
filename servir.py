@@ -1803,12 +1803,14 @@ class Hub(SimpleHTTPRequestHandler):
 
         INSTALACAO EM ORGANIZACAO — a divida foi paga em 04/09/2026. Ali o
         `account.id` e o da organizacao, nunca o da pessoa, e o caminho de
-        cima nunca confirma. `github_app.usuario_e_membro_da_organizacao`
-        pergunta ao PROPRIO APP — ja instalado ali — se o dono da sessao e
-        membro dela; exige a permissao de organizacao "Members: Read-only" no
-        App, e sem ela devolve `None`, que este metodo trata como "nao e
-        dele": falha fechada, nunca uma porta que se abre sozinha por falta
-        de configuracao.
+        cima nunca confirma. `github_app.usuario_administra_a_organizacao`
+        pergunta ao PROPRIO APP — ja instalado ali — se o dono da sessao
+        ADMINISTRA ela (nao so "e membro": um membro raso podia pedir o
+        proprio selo e amarrar a instalacao inteira a propria conta, achado
+        da revisao de seguranca de 04/09/2026). Exige a permissao de
+        organizacao "Members: Read-only" no App, e sem ela devolve `None`,
+        que este metodo trata como "nao e dele": falha fechada, nunca uma
+        porta que se abre sozinha por falta de configuracao.
         """
         conta = (confirmada or {}).get("account") or {}
         dono = str(conta.get("id") or "").strip()
@@ -1817,7 +1819,8 @@ class Hub(SimpleHTTPRequestHandler):
         with contextlib.closing(banco.conectar()) as con:
             linha = con.execute(
                 "SELECT usuario_id FROM credencial"
-                " WHERE tipo = 'github' AND identificador = ?", (dono,)).fetchone()
+                " WHERE tipo = 'github' AND identificador = ?"
+                "   AND revogada_em IS NULL", (dono,)).fetchone()
         if linha is not None and linha["usuario_id"] == usuario_id:
             return True
         if conta.get("type") != "Organization":
@@ -1828,16 +1831,21 @@ class Hub(SimpleHTTPRequestHandler):
         with contextlib.closing(banco.conectar()) as con:
             minha = con.execute(
                 "SELECT identificador FROM credencial"
-                " WHERE tipo = 'github' AND usuario_id = ?",
-                (usuario_id,)).fetchone()
+                " WHERE tipo = 'github' AND usuario_id = ?"
+                "   AND revogada_em IS NULL", (usuario_id,)).fetchone()
         if minha is None:
             return False
-        membro = github_app.usuario_e_membro_da_organizacao(
+        # ADMIN, nao so membro: instalar um App exige ser admin da
+        # organizacao, e aceitar qualquer membro provaria um direito menor
+        # que o que a propria instalacao ja exigiu de quem a fez. Achado da
+        # revisao de seguranca de 04/09/2026 -- ver a nota completa em
+        # `github_app.usuario_administra_a_organizacao`.
+        administra = github_app.usuario_administra_a_organizacao(
             (os.environ.get("DERVS_GITHUB_APP_ID") or "").strip(),
             os.environ.get("DERVS_GITHUB_APP_KEY") or "",
             str(confirmada.get("id") or ""), organizacao,
             minha["identificador"])
-        return membro is True
+        return administra is True
 
     def _ir_para(self, destino: str):
         self.send_response(302)
