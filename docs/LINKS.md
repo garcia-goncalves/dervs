@@ -63,8 +63,13 @@ e nenhuma promete o que ainda não faz.
 - **A sua conta do GitHub.** Um botão leva à instalação do aplicativo e volta
   com a conta ligada. **Exige `DERVS_GITHUB_APP_SLUG`** no ambiente do
   servidor; sem ela o botão fica desligado, com o motivo escrito.
-- **O seu servidor.** Um campo de endereço por projeto. Endereço de rede
-  interna é recusado de propósito, com a explicação na tela.
+- **Os seus servidores** (04/09/2026). Você cadastra quantos servidores
+  quiser (nome + endereço público), e dentro de cada um informa o endereço de
+  cada projeto — o mesmo projeto pode responder em mais de um servidor ao
+  mesmo tempo. Endereço de rede interna é recusado de propósito, com a
+  explicação na tela. Quando um servidor tem um padrão de subdomínio
+  cadastrado, o DERVS **propõe** o endereço de um projeto que combine — você
+  confirma com um clique, nunca grava sozinho.
 
 **A pasta que o agente mede deixou de estar no código-fonte.** Ela vem, nesta
 ordem: da variável `DERVS_RAIZES` (vários caminhos separados por `;`), da chave
