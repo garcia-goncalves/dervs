@@ -1801,12 +1801,14 @@ class Hub(SimpleHTTPRequestHandler):
         (`banco.ligar_github`, que guarda o id NUMERICO justamente porque login
         se troca).
 
-        O QUE ISTO NAO RESOLVE, e esta escrito para nao ser descoberto depois:
-        instalacao em ORGANIZACAO. Ali o `account.id` e o da organizacao, e nao
-        o da pessoa — e provar que alguem e membro dela exige o fluxo de token
-        DO USUARIO, que e outra etapa. Ate la, instalacao de organizacao e
-        recusada aqui: recusar quem tem direito e um incomodo, aceitar quem nao
-        tem e uma porta. Divida nomeada.
+        INSTALACAO EM ORGANIZACAO — a divida foi paga em 04/09/2026. Ali o
+        `account.id` e o da organizacao, nunca o da pessoa, e o caminho de
+        cima nunca confirma. `github_app.usuario_e_membro_da_organizacao`
+        pergunta ao PROPRIO APP — ja instalado ali — se o dono da sessao e
+        membro dela; exige a permissao de organizacao "Members: Read-only" no
+        App, e sem ela devolve `None`, que este metodo trata como "nao e
+        dele": falha fechada, nunca uma porta que se abre sozinha por falta
+        de configuracao.
         """
         conta = (confirmada or {}).get("account") or {}
         dono = str(conta.get("id") or "").strip()
@@ -1816,7 +1818,26 @@ class Hub(SimpleHTTPRequestHandler):
             linha = con.execute(
                 "SELECT usuario_id FROM credencial"
                 " WHERE tipo = 'github' AND identificador = ?", (dono,)).fetchone()
-        return linha is not None and linha["usuario_id"] == usuario_id
+        if linha is not None and linha["usuario_id"] == usuario_id:
+            return True
+        if conta.get("type") != "Organization":
+            return False
+        organizacao = str(conta.get("login") or "").strip()
+        if not organizacao:
+            return False
+        with contextlib.closing(banco.conectar()) as con:
+            minha = con.execute(
+                "SELECT identificador FROM credencial"
+                " WHERE tipo = 'github' AND usuario_id = ?",
+                (usuario_id,)).fetchone()
+        if minha is None:
+            return False
+        membro = github_app.usuario_e_membro_da_organizacao(
+            (os.environ.get("DERVS_GITHUB_APP_ID") or "").strip(),
+            os.environ.get("DERVS_GITHUB_APP_KEY") or "",
+            str(confirmada.get("id") or ""), organizacao,
+            minha["identificador"])
+        return membro is True
 
     def _ir_para(self, destino: str):
         self.send_response(302)

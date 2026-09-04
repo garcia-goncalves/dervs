@@ -2068,6 +2068,11 @@ class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
         self._confirmar = servir.github_app.confirmar_instalacao
         self.addCleanup(setattr, servir.github_app, "confirmar_instalacao",
                         self._confirmar)
+        self._membro_da_organizacao = \
+            servir.github_app.usuario_e_membro_da_organizacao
+        self.addCleanup(setattr, servir.github_app,
+                        "usuario_e_membro_da_organizacao",
+                        self._membro_da_organizacao)
         # Por padrao o GitHub CONFIRMA. Cada caso que precisa do contrario
         # troca este duble, e o que ele devolve nunca carrega segredo.
         # O duble devolve o `account` porque e ELE que prova a posse: a conta
@@ -2234,20 +2239,81 @@ class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
         self.voltar(self.selo(), "424242")
         self.assertIsNone(self.gravada())
 
-    def test_instalacao_de_ORGANIZACAO_e_recusada_e_isso_e_deliberado(self):
-        """Divida NOMEADA, e nao esquecimento: provar que alguem e membro de uma
-        organizacao exige o fluxo de token DO USUARIO, que e outra etapa.
+    # A divida de instalacao de ORGANIZACAO foi paga em 04/09/2026: o `account.id`
+    # da instalacao continua sendo o da organizacao, nunca o da pessoa, mas
+    # agora ha um segundo caminho — perguntar ao proprio App (com a permissao
+    # "Members: Read-only") se o dono da sessao e membro dela.
+    # `servir.github_app.usuario_e_membro_da_organizacao` e o duble aqui: os
+    # testes DELE (rede simulada, `_pedir`) moram em `test_github_app.py`.
 
-        Recusar quem tem direito e um incomodo; aceitar quem nao tem e uma
-        porta. Este caso existe para que a escolha nao seja redescoberta como
-        se fosse um defeito.
-        """
+    def test_instalacao_de_ORGANIZACAO_de_quem_e_membro_confere_e_grava(self):
         servir.github_app.confirmar_instalacao = \
             lambda *a, **k: {"id": 424242, "app_id": 1,
                              "account": {"id": 777, "login": "minha-org",
                                          "type": "Organization"}}
-        self.voltar(self.selo(), "424242")
+        vistos = {}
+
+        def membro(app_id, chave, inst, organizacao, github_id, **k):
+            vistos.update(inst=inst, organizacao=organizacao, github_id=github_id)
+            return True
+
+        servir.github_app.usuario_e_membro_da_organizacao = membro
+        r = self.voltar(self.selo(), "424242")
+        self.assertIn("ligado", r.cabecalhos.get("Location"))
+        self.assertEqual("424242", self.gravada())
+        # O que perguntamos foi certo: a instalacao (nao o `account.id`), a
+        # organizacao pelo LOGIN, e o github id da PESSOA da sessao (4242,
+        # do andaime) — nunca o id da organizacao (777).
+        self.assertEqual("424242", vistos["inst"])
+        self.assertEqual("minha-org", vistos["organizacao"])
+        self.assertEqual("4242", vistos["github_id"])
+
+    def test_instalacao_de_ORGANIZACAO_de_quem_NAO_e_membro_continua_recusada(self):
+        servir.github_app.confirmar_instalacao = \
+            lambda *a, **k: {"id": 424242, "app_id": 1,
+                             "account": {"id": 777, "login": "minha-org",
+                                         "type": "Organization"}}
+        servir.github_app.usuario_e_membro_da_organizacao = \
+            lambda *a, **k: False
+        r = self.voltar(self.selo(), "424242")
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
         self.assertIsNone(self.gravada())
+
+    def test_instalacao_de_ORGANIZACAO_sem_a_permissao_Members_e_recusada_nao_aceita(self):
+        """`None` (o App sem a permissao Members, ou a rede falhou) e tratado
+        exatamente como 'nao e membro'. Ausencia de configuracao NUNCA pode
+        virar 'sim, pode entrar' — falha fechada, a lei 3 deste repositorio."""
+        servir.github_app.confirmar_instalacao = \
+            lambda *a, **k: {"id": 424242, "app_id": 1,
+                             "account": {"id": 777, "login": "minha-org",
+                                         "type": "Organization"}}
+        servir.github_app.usuario_e_membro_da_organizacao = \
+            lambda *a, **k: None
+        r = self.voltar(self.selo(), "424242")
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada())
+
+    def test_instalacao_de_ORGANIZACAO_sem_credencial_de_github_nao_pergunta(self):
+        """Sessao sem GitHub ligado nao tem `identificador` para perguntar —
+        e nao ha o que confirmar."""
+        con = banco.conectar()
+        try:
+            sem_github = banco.criar_usuario("sem-github@teste.local", con=con)
+            con.commit()
+        finally:
+            con.close()
+
+        def explodir(*a, **k):
+            raise AssertionError("nao podia ter perguntado ao GitHub")
+
+        servir.github_app.confirmar_instalacao = \
+            lambda *a, **k: {"id": 424242, "app_id": 1,
+                             "account": {"id": 777, "login": "minha-org",
+                                         "type": "Organization"}}
+        servir.github_app.usuario_e_membro_da_organizacao = explodir
+        r = self.voltar(self.selo(sem_github), "424242")
+        self.assertIn("nao-deu", r.cabecalhos.get("Location"))
+        self.assertIsNone(self.gravada(sem_github))
 
     def test_numero_ja_gravado_por_outra_conta_nao_e_roubado(self):
         """A segunda tranca, no banco. A primeira e a conferencia do dono."""

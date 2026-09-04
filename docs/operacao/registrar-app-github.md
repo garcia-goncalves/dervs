@@ -70,6 +70,19 @@ Ele **ja existe**, criado em 27/08/2026:
 | Chave privada (`DERVS_GITHUB_APP_KEY`) | no cofre do repositorio |
 | Onde administrar | <https://github.com/organizations/garcia-goncalves/settings/apps/dervs-coletor> |
 
+**Permissao de organizacao "Members: Read-only" — acrescentada em 04/09/2026.**
+Sem ela, instalar o app numa ORGANIZACAO (o unico jeito quando os repositorios
+de verdade moram numa organizacao, nao numa conta pessoal) sempre terminava em
+"nao deu para conferir": o `account.id` da instalacao e o da organizacao,
+nunca o da pessoa, e nao havia como provar que a pessoa e membro dela. Com a
+permissao, `github_app.usuario_e_membro_da_organizacao` pergunta ao proprio
+app (autenticado como a instalacao) se o dono da sessao aparece na lista de
+membros. **Adicionar** em Permissions & events -> Organization permissions ->
+Members -> Read-only, salvar, e aceitar a atualizacao de permissao quando o
+GitHub pedir (ela so vale depois que um administrador da organizacao aceita).
+Sem essa permissao a funcao devolve `None`, e o servidor trata isso como "nao
+e membro" — falha fechada, nunca uma porta que abre sozinha.
+
 As tres ja estao gravadas no repositorio e, desde 02/09/2026, chegam ao
 `/opt/dervs/.env` e **entram no container** a cada publicacao. Ate essa data as
 tres paravam no meio do caminho: o `docker-compose.yml` nao as passava para
