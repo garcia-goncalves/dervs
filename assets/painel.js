@@ -168,6 +168,44 @@ function carimboDe(p) {
   return quais.length ? new Date(Math.max(...quais)).toISOString() : "";
 }
 
+/* SERVIDORES MÚLTIPLOS (etapa 6): a lista de sites do projeto, um item por
+   servidor onde ele tem endereço gravado.
+
+   `null` = "não sei" (a camada GitHub não foi lida, ou não trouxe nada);
+   `[]` = "sei, e é vazio" (nenhum servidor tem esse projeto). As duas coisas
+   NUNCA se confundem — é a mesma lei 2 que distingue "não deu para conferir"
+   de "não está conectado" em toda porta desta tela.
+
+   PONTE PARA DADO ANTIGO: enquanto `coletar_github` não escrever `sites`
+   (lista), a camada `github` ainda carrega `site` (um dicionário só). Ela
+   vira uma lista de um item, com `servidor: ""` — e some sozinha na
+   primeira coleta que já escrever o formato novo. */
+function sitesDoProjeto(gh) {
+  if (!gh) return null;
+  if (Array.isArray(gh.sites)) return gh.sites;
+  if (gh.site) return [Object.assign({ servidor: "" }, gh.site)];
+  return [];
+}
+
+/* O selo "servidor(es)" do card do projeto e do cabeçalho da tela de
+   detalhe: NUNCA um quinto estado — os três de `marcaDaPorta` bastam, e o
+   rótulo escrito é quem carrega a contagem ("em 2 servidores"). A saúde de
+   cada servidor (respondendo ou não) já é o `piorDe()` de cima; este selo
+   responde só "em quantos e quais", nunca "está no ar". */
+function seloDeServidores(p) {
+  const sites = (p.camadas || {}).github ? sitesDoProjeto(p.github) : null;
+  if (sites === null) {
+    return { estado: "sem_dados", rotulo: "não deu para conferir" };
+  }
+  if (!sites.length) {
+    return { estado: "desconectado",
+             rotulo: "não está em nenhum servidor cadastrado" };
+  }
+  const n = sites.length;
+  return { estado: "conectado",
+           rotulo: n === 1 ? "em 1 servidor" : "em " + n + " servidores" };
+}
+
 /* A frase de resumo, em linguagem humana, escrita a partir do dado. Se ela não
    mudar quando o dado muda, é decoração — e decoração no topo de um painel
    operacional ensina a pessoa a não ler o topo. */
@@ -263,6 +301,15 @@ function pintarPainel() {
     const pior = piorDe(p.nome);
 
     li.append(selo(p.selo, { aoClicar: () => irPara("#/projeto/" + encodeURIComponent(p.nome)) }));
+
+    /* O selo "servidor(es)", AO LADO do selo principal — servidores
+       múltiplos, etapa 6. Ele nunca inventa um quinto estado: os três de
+       `marcaDaPorta` bastam, e "1 servidor caiu" já é o `piorDe()` de cima
+       que resolve, com o nome do servidor na frase do motivo. */
+    const infoServ = seloDeServidores(p);
+    const marcaServ = marcaDaPorta(infoServ.estado, infoServ.rotulo);
+    marcaServ.classList.add("marca--servidores");
+    li.append(marcaServ);
 
     const dizeres = document.createElement("div");
     dizeres.className = "dizeres";
@@ -486,13 +533,28 @@ function pintarProjeto(nome) {
                      + "publicado com o que está no repositório.", c.github));
   } else {
     const marca = "medido " + haQuanto(c.github);
-    const site = gh.site || {};
     const dep = gh.deploy || {};
-    noar.append(criterio(
-      "Site respondendo",
-      site.ok === false ? "quebrado" : site.ok === true ? "saudavel" : "sem_dados",
-      site.ok === true ? "responde" : site.ok === false ? "fora do ar" : "não medido",
-      marca, (site.url || "") + "\ncódigo: " + (site.codigo ?? "sem resposta")));
+    /* SERVIDORES MÚLTIPLOS (etapa 6): um critério POR SERVIDOR onde o
+       projeto tem endereço, cada um com o próprio selo, código e carimbo —
+       "um critério que falha não derruba os outros" (design.md, tela 3). */
+    const sites = sitesDoProjeto(gh);
+    if (!sites || !sites.length) {
+      noar.append(criterio(
+        "Site respondendo", "sem_dados",
+        "Não está em nenhum servidor cadastrado.", marca, ""));
+    } else {
+      for (const item of sites) {
+        const rotuloCriterio = item.servidor
+          ? "Site respondendo — " + item.servidor
+          : "Site respondendo";
+        noar.append(criterio(
+          rotuloCriterio,
+          item.ok === false ? "quebrado" : item.ok === true ? "saudavel" : "sem_dados",
+          item.ok === true ? "responde" : item.ok === false ? "fora do ar" : "não medido",
+          "medido " + haQuanto(item.medido_em),
+          (item.url || "") + "\ncódigo: " + (item.codigo ?? "sem resposta")));
+      }
+    }
     noar.append(criterio(
       "Versão publicada",
       typeof dep.atras === "number" && dep.atras > 0 ? "atencao"
@@ -743,8 +805,14 @@ const ESTADO_DA_PORTA = {
 
 /* QUATRO SINAIS, como o selo dos projetos: cor (o fundo), forma (a borda),
    glifo (o caractere) e rótulo escrito. Cor sozinha some no preto e branco e
-   não existe para quem não distingue verde de vermelho. */
-function marcaDaPorta(estado) {
+   não existe para quem não distingue verde de vermelho.
+
+   `rotulo` é opcional: por padrão o texto é o de `ESTADO_DA_PORTA[e].rotulo`,
+   mas o selo "servidor(es)" do card do projeto (servidores múltiplos, etapa
+   6) precisa de um texto que carrega a CONTAGEM — "em 2 servidores" — e não
+   um dos três rótulos fixos. Um parâmetro a mais evita a segunda montagem de
+   marca que o comentário de `porta()` já avisa que diverge. */
+function marcaDaPorta(estado, rotulo) {
   const e = ESTADO_DA_PORTA[estado] ? estado : "sem_dados";
   const d = ESTADO_DA_PORTA[e];
   const span = document.createElement("span");
@@ -755,7 +823,7 @@ function marcaDaPorta(estado) {
   g.setAttribute("aria-hidden", "true");
   g.textContent = d.glifo;
   const r = document.createElement("span");
-  r.textContent = d.rotulo;
+  r.textContent = rotulo || d.rotulo;
   span.append(g, r);
   return span;
 }

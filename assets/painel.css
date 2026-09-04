@@ -163,6 +163,11 @@ nav.mapa a[aria-current="page"] {
 }
 .projetos .abrir { flex: none; }
 
+/* O selo "servidor(es)" (servidores múltiplos, etapa 6): ao lado do selo
+   principal em telas largas. Reusa `.marca` inteira — nenhum token novo,
+   só um recuo para não colar no selo principal. */
+.projetos .marca--servidores { flex: none; align-self: center; }
+
 /* Em 360px a linha tem de encolher, e o que sai é o botão de texto — não a
    informação. O selo JÁ é o botão que abre a prova, e ele continua ali: manter
    os dois empilhados custava 100px por linha e não cabia projeto nenhum na
@@ -173,6 +178,9 @@ nav.mapa a[aria-current="page"] {
   .projetos .motivo { -webkit-line-clamp: 2; }
   .projetos .dizeres { min-width: 0; }
   .projetos .nome { font-size: var(--fs-corpo); }
+  /* O selo de servidores desce para a linha do carimbo quando não cabe ao
+     lado do nome — nunca rolagem horizontal (design.md, tela 2, "360px"). */
+  .projetos .marca--servidores { order: 3; margin-left: auto; }
 }
 
 /* O esqueleto tem a altura exata das linhas, para a tela não saltar quando o

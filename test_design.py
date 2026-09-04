@@ -930,6 +930,120 @@ class ATelaDeAuditoriaCasaOsTresLados(unittest.TestCase):
         self.assertIn("painel.css", nomes)
 
 
+class OCardEODetalheMostramServidoresSeparados(unittest.TestCase):
+    """Etapa 6 do plano 'servidores multiplos'.
+
+    O contrato do dado ja esta pinado em `regras.py`: a camada `github` carrega
+    `sites`, uma lista com um item por servidor. Esta classe cobra que o CARD
+    do projeto (painel principal) e a TELA DE DETALHE leem esse formato — sem
+    inventar um quinto estado de selo, e sem esquecer o carimbo por servidor.
+
+    Nao ha runtime de JS neste repositorio (CLAUDE.md, `test_design.PAINEL_JS`
+    ja documenta isso para a tela de Auditoria): os casos abaixo leem
+    `painel.js`/`painel.css` como TEXTO. "O selo lista os dois nomes na tela"
+    fica para o clique -- `verificacao.md` da fase 6.
+    """
+
+    def script(self):
+        return PAINEL_JS.read_text(encoding="utf-8")
+
+    def folha(self):
+        return sem_comentarios_css(PAINEL_CSS.read_text(encoding="utf-8"))
+
+    def classes_do_script(self):
+        """Mesma extracao de `ATelaDeComputadoresCasaDosDoisLados` — cada
+        literal e' lido inteiro, para nao atravessar aspas nem parar na
+        primeira maiuscula (as duas sabotagens de 29/08/2026). O `-` entra no
+        conjunto: sem ele, `marca--servidores` cortaria em `marca` e o teste
+        aprovaria uma classe qualquer que comecasse com `marca`."""
+        nomes = set()
+        for literal in re.findall(r'"(?:[^"\\\n]|\\.)*"', self.script()):
+            nomes.update(re.findall(r"[A-Za-z][A-Za-z0-9_-]*", literal))
+        return nomes
+
+    def classes_da_folha(self):
+        """Cada nome de classe usado num seletor CSS, INTEIRO — casamento
+        por substring (`assertIn` puro) deixaria `.marca--servidoresX`
+        aprovar a busca por `.marca--servidores`, porque uma string contem a
+        outra. Pego sabotando: a primeira versao deste caso nao reprovava."""
+        return set(re.findall(r"\.([A-Za-z][A-Za-z0-9_-]*)", self.folha()))
+
+    def test_a_classe_do_selo_de_servidores_casa_dos_dois_lados(self):
+        """O selo "servidor(es)" do card usa `.marca--servidores`. Renomear
+        so no CSS ou so no JS tem de acusar — sabotado nos dois sentidos
+        antes de aceitar este caso (ver 'sabotar antes de aceitar' no plano)."""
+        self.assertIn(
+            "marca--servidores", self.classes_da_folha(),
+            "o CSS nao estiliza `.marca--servidores` — a busca quebrou, ou "
+            "a classe sumiu do painel.css")
+        self.assertIn(
+            "marca--servidores", self.classes_do_script(),
+            "o `painel.js` nao escreve a classe `marca--servidores` em "
+            "string nenhuma — o selo do card ficou sem o recuo do CSS")
+
+    def test_os_rotulos_de_contagem_existem_e_o_plural_comeca_em_dois(self):
+        """Os quatro textos de `design.md`, secao 'O selo servidor(es)'."""
+        j = self.script()
+        self.assertIn('"em 1 servidor"', j,
+                      "o rotulo do singular sumiu — 'em 1 servidor', sem s")
+        self.assertNotIn('"em 1 servidores"', j,
+                         "o singular nao pode escrever 'servidores' com s")
+        self.assertIn('"em " + n + " servidores"', j,
+                      "o rotulo do plural nao monta 'em N servidores' a "
+                      "partir da contagem — a busca quebrou, ou o texto "
+                      "virou uma frase fixa")
+        self.assertIn('"não está em nenhum servidor cadastrado"', j,
+                      "sumiu o rotulo de 'zero servidores' do selo do card")
+        self.assertIn('"não deu para conferir"', j,
+                      "sumiu o rotulo de 'nao sei' — ESTADO_DA_PORTA.sem_dados")
+
+    def test_a_linha_de_ausencia_na_tela_de_detalhe_e_a_frase_do_design(self):
+        """A tela de detalhe usa a frase COM maiuscula e ponto final —
+        'Nao está em nenhum servidor cadastrado.' — diferente do rotulo do
+        card, que e' minusculo e sem ponto. As duas existem, e sao textos
+        distintos (design.md nunca deixa 'nao se aplica' escapar)."""
+        j = self.script()
+        self.assertIn('"Não está em nenhum servidor cadastrado."', j,
+                      "a linha de ausencia da tela de detalhe sumiu, ou "
+                      "perdeu a maiuscula/o ponto final que a distingue do "
+                      "rotulo do card")
+        self.assertNotIn("não se aplica", j.lower(),
+                         "'nao se aplica' e' proibido pelo design.md para "
+                         "este estado — ausencia tem frase propria")
+
+    def test_o_criterio_por_servidor_chama_haquanto(self):
+        """test_8c (o item mais importante dos oito) pelo lado desta etapa:
+        a funcao que desenha um criterio por servidor tem de carimbar CADA
+        item com a PROPRIA medicao — nunca o carimbo geral do `gh`, que
+        pertence a leitura inteira do GitHub e nao a cada servidor."""
+        j = self.script()
+        i = j.index("function pintarProjeto")
+        fim = j.index("\nfunction pintarAlertasDoProjeto", i)
+        corpo = j[i:fim]
+        self.assertIn("sitesDoProjeto(gh)", corpo,
+                      "pintarProjeto parou de ler a lista de sites por "
+                      "servidor")
+        self.assertIn("haQuanto(item.medido_em)", corpo,
+                      "o criterio por servidor nao carimba com a medicao "
+                      "DAQUELE item — um numero sem saber de quando ele e'")
+
+    def test_o_selo_do_card_nunca_e_um_quinto_estado(self):
+        """`seloDeServidores` so pode devolver os tres estados que
+        `marcaDaPorta`/`ESTADO_DA_PORTA` ja conhecem — design.md e' explicito:
+        'Nenhum quinto estado de selo e' criado'."""
+        j = self.script()
+        i = j.index("function seloDeServidores")
+        fim = j.index("\n}\n", i)
+        corpo = j[i:fim]
+        estados = set(re.findall(r'estado:\s*"([a-z_]+)"', corpo))
+        self.assertTrue(estados, "a busca de estados em seloDeServidores "
+                        "nao achou nada — a extracao quebrou")
+        self.assertTrue(
+            estados <= {"conectado", "desconectado", "sem_dados"},
+            "seloDeServidores devolve %s — so os tres estados de "
+            "ESTADO_DA_PORTA sao permitidos" % estados)
+
+
 if __name__ == "__main__":
     # `exit=False` sozinho devolvia 0 mesmo com caso reprovado: em 28/08/2026
     # este arquivo imprimiu FAILED (failures=4) e a CI seguiu verde. O codigo
