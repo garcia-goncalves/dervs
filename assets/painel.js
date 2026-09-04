@@ -969,6 +969,16 @@ let SERVIDORES_LIDO_EM = "";
 let MEDIDAS = {};
 function chaveDaMedida(servidorId, projeto) { return servidorId + "|" + projeto; }
 
+/* SERVIDORES MULTIPLOS (etapa 9): a sugestao de autodeteccao. `pintarConectar`
+   e chamada por `olharOsEnderecos`, `olharOsComputadores` E `olharOsServidores`
+   — tres disparos por abertura de tela — e cada chamada a `/api/servidores/
+   sugerir` custa ate 68s de thread no servidor (ate 3 medicoes de ~22,5s).
+   `SERVIDORES_JA_SUGERIDOS` guarda os `servidor_id` ja pedidos NESTA SESSAO:
+   sem ele, cada repintura dispararia a mesma medicao de novo. */
+const SERVIDORES_JA_SUGERIDOS = new Set();
+let SUGESTOES = {};             /* servidor_id -> lista de {projeto, url} */
+const SUGESTOES_IGNORADAS = new Set();   /* "servidorId:projeto", nesta sessao */
+
 const ESPERA = {
   t: null,           /* o relógio da sondagem */
   ate: 0,            /* quando o número vence, em ms */
@@ -1197,6 +1207,66 @@ async function guardarServidor(nome, padrao) {
   recado("servidor cadastrado.");
   await olharOsServidores();
   if (rota().tela === "conectar") pintarConectar();
+}
+
+/* Pede a sugestao de autodeteccao PARA AQUELE SERVIDOR — uma vez por sessao,
+   garantido por `SERVIDORES_JA_SUGERIDOS` (o `Set` e marcado ANTES do
+   `await`, entao duas chamadas de `blocoDeServidor` no mesmo repinte nunca
+   disparam a mesma medicao duas vezes). Nao grava nada: so propoe. */
+async function pedirSugestao(servidorId) {
+  SERVIDORES_JA_SUGERIDOS.add(servidorId);
+  try {
+    const r = await escrever("/api/servidores/sugerir", { servidor_id: servidorId });
+    if (!r.ok) return;
+    const d = await r.json();
+    SUGESTOES[servidorId] = d.sugestoes || [];
+  } catch {
+    return;
+  }
+  if (rota().tela === "conectar") pintarConectar();
+}
+
+/* A linha de sugestao, dentro do bloco do servidor, acima do formulario
+   manual. Contorno `--borda-forte` — NUNCA `--estado-saudavel`/
+   `--estado-quebrado`: e' uma proposta, nao um veredito, e as duas cores de
+   estado sao reservadas para o que foi MEDIDO como certo ou errado. */
+function linhaDeSugestao(servidorId, projeto, url) {
+  const linha = document.createElement("div");
+  linha.className = "sugestao";
+
+  const texto = document.createElement("p");
+  texto.textContent = "O endereço " + url
+    + " respondeu e parece ser deste projeto. Quer usar este endereço para o "
+    + projeto + "?";
+  linha.append(texto);
+
+  const acoes = document.createElement("div");
+  acoes.className = "acoes";
+
+  const usar = document.createElement("button");
+  usar.className = "botao";
+  usar.type = "button";
+  usar.textContent = "Usar este endereço";
+  usar.addEventListener("click", () => {
+    /* Nada e gravado sem este clique — a sugestao so vira endereco aqui. */
+    SUGESTOES[servidorId] = (SUGESTOES[servidorId] || [])
+      .filter(s => s.projeto !== projeto);
+    guardarEndereco(servidorId, projeto, url);
+  });
+
+  const ignorar = document.createElement("button");
+  ignorar.className = "botao botao--secundario";
+  ignorar.type = "button";
+  ignorar.textContent = "Ignorar";
+  ignorar.addEventListener("click", () => {
+    /* So some da tela nesta sessao — nunca volta a perguntar sozinho. */
+    SUGESTOES_IGNORADAS.add(servidorId + ":" + projeto);
+    pintarConectar();
+  });
+
+  acoes.append(usar, ignorar);
+  linha.append(acoes);
+  return linha;
 }
 
 async function apagarServidor(id) {
@@ -1465,6 +1535,17 @@ function blocoDeServidor(item) {
   acoes.className = "acoes";
   acoes.append(apagar);
   bloco.append(acoes);
+
+  /* SO servidor COM PADRAO, e SO UMA VEZ por sessao — o `Set` decide, nunca
+     o repinte. Sem padrao, `/api/servidores/sugerir` devolveria lista vazia
+     mesmo assim, e pedir seria rede gasta a toa. */
+  if (item.padrao_subdominio && !SERVIDORES_JA_SUGERIDOS.has(item.id)) {
+    pedirSugestao(item.id);
+  }
+  for (const s of (SUGESTOES[item.id] || [])) {
+    if (SUGESTOES_IGNORADAS.has(item.id + ":" + s.projeto)) continue;
+    bloco.append(linhaDeSugestao(item.id, s.projeto, s.url));
+  }
 
   bloco.append(formularioDeEndereco(item.id));
   return bloco;

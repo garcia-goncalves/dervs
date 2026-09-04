@@ -1178,6 +1178,104 @@ class OCartaoDeConectarListaOsServidores(unittest.TestCase):
                       "responder")
 
 
+class ASugestaoNaTelaPropoeEPara(unittest.TestCase):
+    """Etapa 9 do plano 'servidores multiplos'.
+
+    A sugestao de autodeteccao aparece DENTRO do bloco do servidor, acima do
+    formulario manual, com contorno `--borda-forte` -- nunca uma cor de
+    estado, porque e' proposta, nao veredito. Nada e' gravado sem o clique em
+    "Usar este endereço", e ela custa rede so UMA VEZ por servidor com
+    padrao, por sessao (`SERVIDORES_JA_SUGERIDOS`) -- sem isso cada repintura
+    de `pintarConectar()` dispararia ate 68s de medicao no servidor.
+    """
+
+    def script(self):
+        return PAINEL_JS.read_text(encoding="utf-8")
+
+    def folha(self):
+        return sem_comentarios_css(PAINEL_CSS.read_text(encoding="utf-8"))
+
+    def test_o_texto_da_sugestao_e_os_dois_rotulos_existem_no_fonte(self):
+        j = self.script()
+        for texto in (
+            "O endereço ",
+            " respondeu e parece ser deste projeto. Quer usar este endereço "
+            "para o ",
+            "Usar este endereço",
+            "Ignorar",
+        ):
+            with self.subTest(texto=texto):
+                self.assertIn(texto, j, "sumiu do painel.js: %r" % texto)
+
+    def test_a_linha_de_sugestao_usa_borda_forte_nao_cor_de_estado(self):
+        """E' a diferenca entre proposta e veredito, e a unica forma
+        automatizavel de cobrar isso (design.md, secao 'telas', item 1)."""
+        folha = self.folha()
+        self.assertIn(".sugestao {", folha,
+                      "sumiu o bloco `.sugestao` do painel.css")
+        i = folha.index(".sugestao {")
+        fim = folha.index("}", i)
+        bloco = folha[i:fim]
+        self.assertIn("--borda-forte", bloco,
+                      "a linha de sugestao perdeu o contorno --borda-forte")
+        for proibido in ("--estado-saudavel", "--estado-quebrado"):
+            with self.subTest(token=proibido):
+                self.assertNotIn(
+                    proibido, bloco,
+                    "a linha de sugestao usa %r -- e' proposta, nao "
+                    "veredito" % proibido)
+
+    def test_o_pedido_de_sugestao_e_guardado_num_set_por_sessao(self):
+        """A armadilha do plano: chamar `sugerir` dentro de `pintarConectar()`
+        sem o Set dispara ate 68s de medicao a cada um dos tres disparos por
+        abertura de tela (`olharOsEnderecos`, `olharOsComputadores`,
+        `olharOsServidores`)."""
+        j = self.script()
+        self.assertIn("SERVIDORES_JA_SUGERIDOS", j,
+                      "sumiu a guarda que evita repetir a medicao a cada "
+                      "repintura de pintarConectar()")
+        i = j.index("function blocoDeServidor")
+        fim = j.index("\nfunction ", i + 10)
+        corpo = j[i:fim]
+        self.assertIn(
+            "SERVIDORES_JA_SUGERIDOS.has(item.id)", corpo,
+            "blocoDeServidor nao confere o Set antes de pedir a sugestao "
+            "-- cada repintura dispararia rede de novo")
+
+    def test_a_tela_busca_a_rota_de_sugerir(self):
+        """`ATelaSoChamaRotaQueExiste` (test_servir.py) prova que a rota
+        existe de verdade; este caso prova so que a TELA a busca."""
+        self.assertIn('"/api/servidores/sugerir"', self.script())
+
+    def test_usar_este_endereco_chama_guardarendereco(self):
+        j = self.script()
+        i = j.index("function linhaDeSugestao")
+        fim = j.index("\nfunction ", i + 10)
+        corpo = j[i:fim]
+        self.assertIn("guardarEndereco(servidorId, projeto, url)", corpo,
+                      "o botao 'Usar este endereço' parou de gravar")
+
+    def test_ignorar_nunca_grava_e_so_some_nesta_sessao(self):
+        """'Nada e gravado sem o clique' -- o botao Ignorar nunca pode
+        chamar `guardarEndereco`, e some via `SUGESTOES_IGNORADAS`, nunca
+        apagando a sugestao do servidor (que reapareceria na proxima
+        leitura)."""
+        j = self.script()
+        i = j.index("function linhaDeSugestao")
+        fim = j.index("\nfunction ", i + 10)
+        corpo = j[i:fim]
+        i2 = corpo.index('"Ignorar"')
+        depois = corpo[i2:]
+        fim_click = depois.index("});")
+        trecho_do_clique = depois[:fim_click]
+        self.assertNotIn("guardarEndereco", trecho_do_clique,
+                         "Ignorar chama guardarEndereco -- ele nao pode "
+                         "gravar nada")
+        self.assertIn("SUGESTOES_IGNORADAS.add", trecho_do_clique,
+                      "Ignorar nao guarda a escolha -- a sugestao voltaria "
+                      "a aparecer sozinha na mesma sessao")
+
+
 if __name__ == "__main__":
     # `exit=False` sozinho devolvia 0 mesmo com caso reprovado: em 28/08/2026
     # este arquivo imprimiu FAILED (failures=4) e a CI seguiu verde. O codigo
