@@ -239,19 +239,30 @@ class Comportamento(unittest.TestCase):
         self.assertEqual(regras.avaliar([p], quota=None, silenciadas={item["id"]: "9999"}), [])
 
 class SiteDeProducao(unittest.TestCase):
-    """Regra 15 — a unica pendencia desta lista que o CLIENTE percebe primeiro."""
+    """Regra 15 — a unica pendencia desta lista que o CLIENTE percebe primeiro.
 
-    def gh(self, **site):
+    Contrato pinado pelo plano "servidores multiplos": a camada `github`
+    carrega `sites`, uma LISTA com um item por servidor. Dois servidores fora
+    do ar no mesmo projeto tem de virar duas pendencias distinguiveis — nao
+    uma frase ambigua que nao diz qual dos dois caiu.
+    """
+
+    def item(self, servidor_id, servidor, ok, codigo=0, url="https://exemplo.com.br"):
+        return {"servidor_id": servidor_id, "servidor": servidor, "url": url,
+                "ok": ok, "codigo": codigo, "erro": "",
+                "medido_em": "2026-09-04T00:00:00+00:00"}
+
+    def gh(self, sites):
         base = dict(projeto()["github"])
-        base["site"] = dict({"url": "https://exemplo.com.br"}, **site)
+        base["sites"] = sites
         return base
 
     def test_site_no_ar_nao_produz_pendencia(self):
-        p = projeto(github=self.gh(ok=True, codigo=200))
+        p = projeto(github=self.gh([self.item(1, "OVH", True, 200)]))
         self.assertEqual(so(regras.avaliar([p]), "site_fora"), [])
 
     def test_site_que_nao_responde_e_pendencia_alta(self):
-        p = projeto(github=self.gh(ok=False, codigo=0, erro="timeout"))
+        p = projeto(github=self.gh([self.item(1, "OVH", False, 0)]))
         pend = so(regras.avaliar([p]), "site_fora")
         self.assertEqual(len(pend), 1)
         self.assertEqual(pend[0]["gravidade"], "alta")
@@ -259,12 +270,12 @@ class SiteDeProducao(unittest.TestCase):
         self.assertEqual(pend[0]["acao"]["url"], "https://exemplo.com.br")
 
     def test_erro_do_servidor_conta_como_fora_do_ar(self):
-        p = projeto(github=self.gh(ok=False, codigo=503))
+        p = projeto(github=self.gh([self.item(1, "OVH", False, 503)]))
         self.assertEqual(len(so(regras.avaliar([p]), "site_fora")), 1)
 
     def test_projeto_sem_endereco_de_producao_fica_calado(self):
         """Invariante 2: camada nao medida nao vira alarme."""
-        p = projeto()                       # o github base nao tem 'site'
+        p = projeto()                       # o github base nao tem 'sites'
         self.assertEqual(so(regras.avaliar([p]), "site_fora"), [])
 
     def test_camada_github_ausente_fica_calada(self):
@@ -277,10 +288,70 @@ class SiteDeProducao(unittest.TestCase):
         Mesmo vindo de arquivo que so o dono escreve, texto de fora nao entra
         cru numa string que pode acabar num prompt. Foi assim que o titulo de PR
         de um estranho quase virou comando, em 25/08/2026."""
-        p = projeto(github=self.gh(ok=False, codigo=500))
+        p = projeto(github=self.gh([self.item(1, "OVH", False, 500)]))
         t = so(regras.avaliar([p]), "site_fora")[0]["texto"]
         self.assertIn("exemplo", t)         # o NOME do projeto, nao a url
         self.assertNotIn("https://", t)
+
+    def test_dois_servidores_ambos_no_ar_nao_produzem_pendencia(self):
+        p = projeto(github=self.gh([self.item(1, "OVH", True, 200),
+                                    self.item(2, "AWS", True, 200)]))
+        self.assertEqual(so(regras.avaliar([p]), "site_fora"), [])
+
+    def test_dois_servidores_um_fora_produz_uma_pendencia_que_o_nomeia(self):
+        p = projeto(github=self.gh([self.item(1, "OVH", False, 0),
+                                    self.item(2, "AWS", True, 200)]))
+        pend = so(regras.avaliar([p]), "site_fora")
+        self.assertEqual(len(pend), 1)
+        self.assertIn("OVH", pend[0]["texto"])
+        self.assertNotIn("AWS", pend[0]["texto"])
+
+    def test_ok_none_e_nao_medi_e_nunca_vira_pendencia(self):
+        """Invariante 2 dentro da lista: 'nao medi' nao e 'esta fora'."""
+        p = projeto(github=self.gh([self.item(1, "OVH", False, 0),
+                                    self.item(2, "AWS", None)]))
+        pend = so(regras.avaliar([p]), "site_fora")
+        self.assertEqual(len(pend), 1)
+        self.assertIn("OVH", pend[0]["texto"])
+
+    def test_o_id_traz_o_servidor_id_no_sufixo(self):
+        p = projeto(github=self.gh([self.item(3, "OVH", False, 0)]))
+        pend = so(regras.avaliar([p]), "site_fora")
+        self.assertEqual(pend[0]["id"], "site_fora:exemplo:3")
+
+    def test_o_detalhe_diz_o_codigo_ou_sem_resposta(self):
+        p = projeto(github=self.gh([self.item(1, "OVH", False, 503)]))
+        self.assertEqual(so(regras.avaliar([p]), "site_fora")[0]["detalhe"], "código 503")
+        p2 = projeto(github=self.gh([self.item(1, "OVH", False, 0)]))
+        self.assertEqual(so(regras.avaliar([p2]), "site_fora")[0]["detalhe"], "código sem resposta")
+
+    def test_dois_servidores_os_dois_fora_produzem_duas_pendencias_com_ids_diferentes(self):
+        p = projeto(github=self.gh([self.item(1, "OVH", False, 0),
+                                    self.item(2, "AWS", False, 503)]))
+        pend = so(regras.avaliar([p]), "site_fora")
+        self.assertEqual(len(pend), 2)
+        ids = {i["id"] for i in pend}
+        self.assertEqual(len(ids), 2, "os dois ids colidiram — o painel some com um")
+        textos = " | ".join(i["texto"] for i in pend)
+        self.assertIn("OVH", textos)
+        self.assertIn("AWS", textos)
+
+    def test_sites_vazio_fica_calado(self):
+        """Invariante 2: projeto sem endereco em servidor nenhum e silencio."""
+        p = projeto(github=self.gh([]))
+        self.assertEqual(so(regras.avaliar([p]), "site_fora"), [])
+
+    def test_ponte_para_o_formato_antigo_com_site_singular(self):
+        """Sem esta ponte, um `hub.db` com coleta anterior a esta etapa fica
+        calado sobre um site fora do ar de verdade — a lei 2 quebrada por uma
+        migracao de formato."""
+        base = dict(projeto()["github"])
+        base["site"] = {"url": "https://exemplo.com.br", "ok": False, "codigo": 0}
+        p = projeto(github=base)
+        pend = so(regras.avaliar([p]), "site_fora")
+        self.assertEqual(len(pend), 1)
+        self.assertEqual(pend[0]["id"], "site_fora:exemplo")   # sem sufixo
+        self.assertEqual(pend[0]["texto"], "O site de produção do exemplo não respondeu.")
 
 
 class ADocumentacaoNaoPodeMentir(unittest.TestCase):

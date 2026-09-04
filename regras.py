@@ -198,19 +198,47 @@ def _do_projeto(p: dict, agora=None) -> list:
     # O QUE ESTA REGRA NAO GARANTE, e vale repetir onde alguem va ler: responder
     # 200 na raiz nao e o mesmo que estar funcionando. Banco caido atras de uma
     # home estatica continua devolvendo 200. Isto pega o apagao, nao a doenca.
-    site = (gh or {}).get("site") or {}
-    if site and site.get("ok") is False:
-        motivo = ("respondeu com erro %s" % site["codigo"]
-                  if site.get("codigo") else "não respondeu")
+    #
+    # CONTRATO (pinado pelo plano "servidores multiplos"): a camada `github`
+    # carrega `sites`, uma lista com um item por servidor, ordenada por nome:
+    #   {"servidor_id": 3, "servidor": "OVH", "url": "https://…",
+    #    "ok": True, "codigo": 200, "erro": "", "medido_em": "2026-…"}
+    # `ok` pode ser True, False ou None ("nao medi" — nunca vira pendencia).
+    # Lista vazia = projeto sem endereco em servidor nenhum, e fica calado
+    # (invariante 2). Cada servidor fora do ar e UMA pendencia, com o
+    # `sufixo` sendo o `servidor_id` — nunca o nome: renomear trocaria o id, e
+    # nome+projeto pode estourar o teto de 200 caracteres de `_id_de_pendencia`.
+    #
+    # PONTE PARA DADO ANTIGO, e ela morre sozinha na primeira coleta boa: um
+    # `hub.db` cuja ultima coleta e anterior a este formato ainda traz `site`
+    # (dict, singular). Sem esta ponte a lei 2 vira uma mentira por migracao de
+    # formato — um site fora do ar de verdade ficaria calado ate a proxima
+    # coleta. A frase deste caso e a de sempre, sem nomear servidor.
+    gh_dict = gh or {}
+    sites = gh_dict.get("sites")
+    if sites is None:
+        antigo = gh_dict.get("site")
+        sites = [dict(antigo, servidor="")] if antigo else []
+    for item in sites:
+        if item.get("ok") is not False:
+            continue
+        motivo = ("respondeu com erro %s" % item["codigo"]
+                  if item.get("codigo") else "não respondeu")
+        servidor = item.get("servidor") or ""
+        texto = (
+            "O site de produção do %s no servidor %s %s." % (nome, servidor, motivo)
+            if servidor else
+            "O site de produção do %s %s." % (nome, motivo))
         itens.append(_p(
-            "site_fora", "alta", nome,
-            "O site de produção do %s %s." % (nome, motivo),
+            "site_fora", "alta", nome, texto,
             # A URL vai na ACAO, que o navegador trata como endereco. No TEXTO
-            # entra so o nome do projeto e um motivo escrito por nos: texto de
+            # entra so o nome do projeto, o nome do servidor (escrito pelo
+            # dono, nao pelo GitHub) e um motivo escrito por nos: texto de
             # arquivo nao entra cru em string que pode acabar num prompt.
             {"tipo": "abrir_url", "rotulo": "Abrir o site",
-             "url": site.get("url", "")},
-            detalhe="código %s" % (site.get("codigo") or "sem resposta")))
+             "url": item.get("url", "")},
+            detalhe="código %s" % (item.get("codigo") or "sem resposta"),
+            sufixo=str(item["servidor_id"]) if item.get("servidor_id") else ""))
 
     # 16. Trabalho pronto no GitHub que nunca foi publicado
     #
