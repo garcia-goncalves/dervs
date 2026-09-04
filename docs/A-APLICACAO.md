@@ -164,11 +164,15 @@ número que volta na URL **não é aceito por ter vindo na URL**: o DERVS pergun
 se aquela instalação existe e se ela é sua, e só então grava. Desconectar acontece em
 github.com, e a tela diz isso.
 
-**c) O seu servidor.** **Sem chave SSH, agora e sempre.** Você informa o endereço público
-do site, por projeto; o DERVS bate nele e conta o que respondeu. Endereço de rede interna
-é recusado de propósito — o painel roda num servidor, e um endereço interno faria dele uma
-ferramenta de varredura. A recusa vem explicada em português, porque ela é o
-comportamento certo e não um defeito.
+**c) Os seus servidores.** **Sem chave SSH, agora e sempre.** Você cadastra os seus
+servidores (nome + endereço público — "OVH", "TineHost", quantos tiver), e dentro de cada
+um informa o endereço de cada projeto; o DERVS bate neles e conta o que respondeu. O mesmo
+projeto pode responder em mais de um servidor ao mesmo tempo, e o card diz em quais.
+Quando um servidor tem um padrão de subdomínio (ex. `*.tinehost.com.br`), o DERVS **propõe**
+o endereço de um projeto que combine com o padrão — você confirma com um clique, ele nunca
+grava sozinho. Endereço de rede interna é recusado de propósito — o painel roda num
+servidor, e um endereço interno faria dele uma ferramenta de varredura. A recusa vem
+explicada em português, porque ela é o comportamento certo e não um defeito.
 
 ### 5.2. O botão consertar — com aprovação de um clique, nunca sozinho
 
@@ -496,6 +500,15 @@ correções de 2 minutos. O que a medição sustenta é **roteamento por tipo de
 Claude escreve melhor código que atravessa vários arquivos (87,6% × 85,0% no SWE-bench
 Verified), Codex opera melhor terminal e infraestrutura (81,8% no Terminal-Bench 2.0). Isso
 é uma coluna a mais na tabela `fila`, não uma arquitetura a mais.
+
+**Servidores múltiplos entregue em 04/09/2026 (fase 5 da esteira, 9 etapas, todas em
+`main`).** "O seu servidor" virou "os seus servidores": cadastro de servidores nomeados,
+o mesmo projeto podendo responder em mais de um ao mesmo tempo, o card mostrando os três
+selos (computador, GitHub, servidores) separados, e a autodetecção por padrão de
+subdomínio que propõe e nunca grava sozinha. Continua sem chave SSH, agora e sempre — a
+peneira anti-SSRF de sempre, reusada e nunca copiada. Revisão especializada (fase 6) e
+publicação seguem o mesmo caminho do resto: revisor antes de mesclar, sinal do dono antes
+de publicar.
 
 ## 12. O que não se relitiga
 

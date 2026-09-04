@@ -229,6 +229,38 @@ desfazer uma sabotagem e apagou junto o trabalho não commitado do mesmo arquivo
 e o coordenador removeu uma worktree já mesclada em que **outro** executor estava
 trabalhando. **Desfaça sabotagem editando de volta, e commite cedo.**
 
+## Servidores múltiplos (04/09/2026)
+
+`novo["sites"]` é **lista**, nunca `site` (singular). Um item por servidor, cada
+um com o próprio `medido_em` — quando um servidor não é medido numa rodada
+(`ok=None`), só **aquele** item preserva a medição anterior, nunca a lista
+inteira. Uma ponte em `regras.py` ainda lê o formato antigo `site` para um
+`hub.db` cuja última coleta seja de antes desta mudança; ela morre sozinha na
+primeira coleta boa daquele projeto.
+
+O sufixo do id de pendência `site_fora` é o **`servidor_id`**, nunca o nome do
+servidor: nome se renomeia, id não, e nome + projeto pode estourar o teto de 200
+caracteres de `_id_de_pendencia`.
+
+`padrao_subdominio` tem um jeito só de dizer "nenhum": `NULL` no banco. A
+conversão para `""` acontece **só** na borda da rota (`servir.py`), nunca em dois
+lugares.
+
+`banco.um_endereco_por_projeto` (a antiga `enderecos_de_producao`) é a régua de
+prontidão do `casos.json` (`coletar.py`) — **não responde** "o projeto está no
+ar". Quem responde isso é `banco.enderecos_por_servidor`. Confundir as duas é o
+jeito mais fácil de reintroduzir a mentira que a Lei 2 proíbe.
+
+Os balcões `"servidor"` e `"sugestao"` em `servir.py` são **próprios**;
+`TETO_DE_ENDERECOS` nunca é emprestado por uma rota nova — cada rota paga o
+próprio teto, pelo mesmo motivo de sempre (`servir.py`, comentário perto de
+`TETO_DE_ENDERECOS`).
+
+A sugestão de autodetecção por padrão de subdomínio **propõe e para**: a rota
+`/api/servidores/sugerir` nunca grava uma linha, e a tela só pede sugestão uma
+vez por servidor por sessão (nunca a cada repintura — cada medição pode levar até
+~23s, e um servidor com padrão pode ter até 3 candidatos por chamada).
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em
