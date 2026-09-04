@@ -158,6 +158,12 @@ jobs:
       - name: Coletor
         run: python test_coletar.py
 
+      # Servidores multiplos (E5): o fio inteiro — banco de verdade, trecho
+      # de coleta, `montar_estado` e `regras.avaliar` — provando que dois
+      # servidores fora do ar viram duas pendencias, nunca uma so.
+      - name: Sites por servidor
+        run: python test_servidores.py
+
       - name: Coletor pesado
         run: python test_coletar_pesado.py
 

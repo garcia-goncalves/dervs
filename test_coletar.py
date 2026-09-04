@@ -2003,7 +2003,9 @@ class OColetorLEOEnderecoDoBancoDeVerdade(unittest.TestCase):
     def _rodar(self, url_no_banco, url_no_arquivo):
         import banco
         medidos = []
-        enderecos = {"projeto": url_no_banco} if url_no_banco else {}
+        por_servidor = ({"projeto": [{"servidor_id": 1, "servidor": "S",
+                                      "url": url_no_banco}]}
+                        if url_no_banco else {})
         local = {"git": {"remoto_slug": "dono/repo"}}
         if url_no_arquivo:
             local["url_prod"] = url_no_arquivo
@@ -2012,7 +2014,7 @@ class OColetorLEOEnderecoDoBancoDeVerdade(unittest.TestCase):
                     "local": {"dados": local}}}),
                 (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
                 (banco, "conta_local", lambda *a, **k: 1),
-                (banco, "um_endereco_por_projeto", lambda uid, con=None: enderecos),
+                (banco, "enderecos_por_servidor", lambda uid, con=None: por_servidor),
                 (banco, "gravar", lambda *a, **k: None),
                 (coletar_github, "mede_deploy", lambda *a, **k: {}),
                 (coletar_github, "mede_site",

@@ -306,6 +306,52 @@ def mede_site(url: str) -> dict:
     return fora
 
 
+def _monta_sites(nome: str, itens: list, url_casos_json: str,
+                 antes_gh: dict) -> list:
+    """`novo["sites"]` de UM projeto: uma medicao por servidor onde `nome`
+    tem endereco gravado pela tela (`itens`, na ordem que
+    `banco.enderecos_por_servidor` ja devolve — por nome de servidor), ou —
+    SO quando `itens` vem vazio — uma entrada UNICA com `url_casos_json`,
+    `servidor=""` e `servidor_id=0`. Sem endereco nenhum e sem `url_prod`,
+    devolve `[]`: projeto sem endereco em servidor nenhum nao tem site para
+    estar fora do ar (invariante 2 do painel).
+
+    PRESERVACAO POR SERVIDOR: quando a medicao de um servidor vier
+    `ok=None` (interruptor desligado, ou URL que nao passou na peneira
+    anti-SSRF), o item anterior DAQUELE servidor — nunca de outro, nunca a
+    lista inteira — e reaproveitado. Gravar `ok=None` por cima apagaria do
+    painel um "fora do ar" real medido numa rodada passada; o mesmo cuidado
+    que os alertas de seguranca ganham logo acima, pelo mesmo motivo.
+    """
+    antes = {item.get("servidor_id"): item
+             for item in (antes_gh.get("sites") or [])}
+    if itens:
+        alvos = [(item["servidor_id"], item["servidor"], item["url"])
+                 for item in itens]
+    elif url_casos_json:
+        alvos = [(0, "", url_casos_json)]
+    else:
+        return []
+    sites = []
+    for servidor_id, servidor, url in alvos:
+        medida = mede_site(url)
+        if medida.get("ok") is None:
+            anterior = antes.get(servidor_id)
+            if anterior:
+                sites.append(anterior)
+                continue
+        sites.append({
+            "servidor_id": servidor_id,
+            "servidor": servidor,
+            "url": url,
+            "ok": medida.get("ok"),
+            "codigo": medida.get("codigo") or 0,
+            "erro": medida.get("erro") or "",
+            "medido_em": AGORA.isoformat(timespec="seconds"),
+        })
+    return sites
+
+
 def escolher_workflow(workflows) -> dict:
     """O workflow que publica, entre os do repositorio. {} quando nao da para saber."""
     for w in workflows or []:
@@ -963,9 +1009,9 @@ def main():
         # etapa — perder a medicao toda por causa de um campo opcional seria
         # trocar um dado a menos por nenhum dado.
         try:
-            enderecos = banco.um_endereco_por_projeto(dono, con=con)
+            por_servidor = banco.enderecos_por_servidor(dono, con=con)
         except Exception:                  # noqa: BLE001 — medir vale mais
-            enderecos = {}
+            por_servidor = {}
         for alias, nome in por_alias.items():
             no = dados.get(alias)
             if not no:
@@ -1018,8 +1064,9 @@ def main():
             local = ((tudo.get(nome) or {}).get("local") or {}).get("dados") or {}
             antes_gh = ((tudo.get(nome) or {}).get("github") or {}).get("dados") or {}
 
-            # O SITE: so para quem declarou endereco. Projeto sem endereco nao
-            # tem site para estar fora do ar.
+            # OS SITES: um item por servidor onde `nome` tem endereco
+            # gravado pela tela. So na AUSENCIA TOTAL de endereco no banco
+            # e que o `casos.json` entra, com uma entrada unica.
             #
             # O BANCO VENCE O `casos.json`, e a ordem importa: o `casos.json` e
             # arquivo versionado, escrito a mao e igual para todo mundo; o
@@ -1029,19 +1076,13 @@ def main():
             #
             # O `casos.json` NAO some: ele continua sendo a fonte dos campos
             # narrativos e do endereco de quem nunca abriu a tela.
-            url_prod = enderecos.get(nome) or local.get("url_prod") or ""
-            if url_prod:
-                site = mede_site(url_prod)
-                if site.get("ok") is None:
-                    # NAO medimos (interruptor desligado, ou URL que nao passou na
-                    # checagem). Gravar isso apagaria do painel um "fora do ar"
-                    # real que ja estava no banco — o mesmo cuidado que os alertas
-                    # de seguranca ganharam logo abaixo, pelo mesmo motivo.
-                    anterior = antes_gh.get("site")
-                    if anterior:
-                        novo["site"] = anterior
-                else:
-                    novo["site"] = site
+            #
+            # `novo["site"]` (singular) DEIXA DE SER ESCRITO — so `sites`
+            # (lista). `regras.py` tem a ponte para quem ainda tem o formato
+            # antigo gravado; escrever os dois criaria duas verdades vivas.
+            novo["sites"] = _monta_sites(
+                nome, por_servidor.get(nome) or [], local.get("url_prod") or "",
+                antes_gh)
 
             # A PUBLICACAO: para TODO repositorio, nao so os com endereco de site.
             # Amarrar as duas coisas foi erro meu, achado rodando: o `dents` tem
