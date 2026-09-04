@@ -120,6 +120,16 @@ que resolva para **qualquer** endereço interno é recusado inteiro.
 `account.id` contra o id do GitHub amarrado àquela conta, e a tabela tem
 `UNIQUE (installation_id)`. As duas travas são independentes de propósito.
 
+**Instalação em ORGANIZAÇÃO: só ADMIN confere, nunca "é membro" (04/09/2026,
+PR #25).** `github_app.usuario_administra_a_organizacao` pergunta ao próprio
+app (token da instalação, `?role=admin`) se o dono da sessão administra a
+org. Achado de revisão de segurança, antes de mesclar: aceitar qualquer
+membro deixaria alguém sem direito de instalar nada pedir o próprio selo e
+amarrar a instalação da organização inteira à própria conta — travando o
+dono legítimo para sempre. Nunca afrouxe para `?role=` vazio ou para a lista
+de membros pura; o teste `test_nao_confere_quando_o_id_nao_e_admin` existe
+para isso.
+
 **Todo código de seis dígitos ocupa uma vaga num espaço COMPARTILHADO.**
 `codigo_hash` é chave primária global; sem `limpar_pareamentos_vencidos` e sem o
 teto de criação por origem (balcão `codigos`), quem gerasse códigos em laço
