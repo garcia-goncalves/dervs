@@ -1743,6 +1743,73 @@ class Hub(SimpleHTTPRequestHandler):
                          "ou nao e um endereco http(s) publico. O DERVS so mede "
                          "endereco que qualquer um alcanca pela internet.")
 
+    # O balcao da SUGESTAO e PROPRIO — nunca `TETO_DE_ENDERECOS` nem
+    # `TETO_DE_SERVIDORES`. Misturar balcoes tranca a maquina legitima
+    # (`servir.py:1581-1585`), e esta rota e a mais cara das tres: cada
+    # chamada pode medir ate `MAX_SUGESTOES` sites.
+    TETO_DE_SUGESTOES = 5
+
+    # Cada medicao custa ate 5s de DNS + 2 x 8s de tentativa + 1,5s de pausa
+    # ~= 22,5s de pior caso (`coletar_github.mede_site`). Tres candidatos por
+    # chamada = ate ~68s de thread do servidor; e por isso o numero e 3, e
+    # nao "todos os projetos que casam".
+    MAX_SUGESTOES = 3
+
+    def _servidor_sugerir(self):
+        """Testa o padrao do servidor contra os projetos que o DERVS ja
+        conhece e PROPOE. Nunca grava — nem uma linha em `endereco_producao`."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
+            return self._json(403, {"erro": "origem nao permitida"})
+        if not self._csrf_ok(sessao):
+            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+        corpo = self._corpo_json(teto=4096) or {}
+        ok, servidor_id = self._numero_do_corpo(corpo, "servidor_id", int)
+        if not ok or servidor_id is None:
+            return self._json(400, {"erro":
+                                    "diga de qual servidor e a sugestao"})
+
+        # "nao e seu" responde IGUAL a "nao existe" — a mesma convencao das
+        # quatro portas da fila (04/09/2026).
+        servidor = next((s for s in banco.servidores(sessao["usuario_id"])
+                        if s["id"] == servidor_id), None)
+        if servidor is None:
+            return self._json(404, {"erro": "nao existe"})
+        padrao = servidor.get("padrao_subdominio")
+        if not padrao:
+            return self._json(200, {"sugestoes": []})
+
+        # O TETO VEM ANTES DE QUALQUER COISA QUE TOQUE A REDE — o mesmo
+        # motivo de `_endereco_guardar` (`servir.py:1708-1712`).
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="sugestao",
+                                           teto=self.TETO_DE_SUGESTOES):
+            return self._json(429, self.RECUSA)
+
+        ja_tem = {p for p, itens in
+                 banco.enderecos_por_servidor(sessao["usuario_id"]).items()
+                 if any(i["servidor_id"] == servidor_id for i in itens)}
+        nomes = sorted(p["nome"] for p in
+                       banco.montar_estado(usuario_id=sessao["usuario_id"])
+                       ["projetos"] if p["nome"] not in ja_tem)
+
+        sugestoes = []
+        for nome in nomes:
+            if len(sugestoes) >= self.MAX_SUGESTOES:
+                break
+            url = coletar_github.url_do_padrao(padrao, nome)
+            if not url or not coletar_github.url_segura(url):
+                continue
+            if not coletar_github.host_publico(
+                    urllib.parse.urlsplit(url).hostname):
+                continue
+            medida = coletar_github.mede_site(url)
+            if medida.get("ok") is True:
+                sugestoes.append({"projeto": nome, "url": url})
+        return self._json(200, {"sugestoes": sugestoes})
+
     # ------------------------------------------- a conta do GitHub (etapa C2)
     #
     # O `state` E ASSINADO COM O COFRE, e nao guardado em cookie. O caminho do
@@ -2877,11 +2944,12 @@ ROTAS = {
 
     # A porta 3 (fatia B). As cinco sao `dado`: servidor e endereco de producao
     # sao dado da conta que gravou, e cada rota le SO o da sessao — o IDOR ja
-    # foi consertado duas vezes neste repositorio. A quarta de servidores
-    # (`/api/servidores/sugerir`) nasce na etapa seguinte (E8).
+    # foi consertado duas vezes neste repositorio. `/api/servidores/sugerir`
+    # SO PROPOE — nao grava nada em `endereco_producao`.
     "/api/servidores":          Rota("GET",  Hub._servidores,        "dado"),
     "/api/servidores/guardar":  Rota("POST", Hub._servidor_guardar,  "dado"),
     "/api/servidores/remover":  Rota("POST", Hub._servidor_remover,  "dado"),
+    "/api/servidores/sugerir":  Rota("POST", Hub._servidor_sugerir,  "dado"),
     "/api/enderecos":           Rota("GET",  Hub._enderecos,        "dado"),
     "/api/enderecos/guardar":   Rota("POST", Hub._endereco_guardar, "dado"),
 
