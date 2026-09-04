@@ -2012,7 +2012,7 @@ class OColetorLEOEnderecoDoBancoDeVerdade(unittest.TestCase):
                     "local": {"dados": local}}}),
                 (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
                 (banco, "conta_local", lambda *a, **k: 1),
-                (banco, "enderecos_de_producao", lambda uid, con=None: enderecos),
+                (banco, "um_endereco_por_projeto", lambda uid, con=None: enderecos),
                 (banco, "gravar", lambda *a, **k: None),
                 (coletar_github, "mede_deploy", lambda *a, **k: {}),
                 (coletar_github, "mede_site",
@@ -2075,7 +2075,7 @@ class OColetorLEOEnderecoDoBancoDeVerdade(unittest.TestCase):
                 (coletar, "abertos_no_editor", lambda: set()),
                 (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
                 (banco, "conta_local", lambda *a, **k: 1),
-                (banco, "enderecos_de_producao", lambda uid, con=None: enderecos)):
+                (banco, "um_endereco_por_projeto", lambda uid, con=None: enderecos)):
             self.addCleanup(setattr, alvo, nome, getattr(alvo, nome))
             setattr(alvo, nome, valor)
         return coletar.medir()["projetos"][0]

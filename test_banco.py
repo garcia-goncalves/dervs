@@ -2101,7 +2101,7 @@ class EnderecoDeProducaoNoBancoVelho(unittest.TestCase):
         con = banco.conectar(self.caminho)
         try:
             uid = banco.criar_usuario("dono@teste.local", "teste1234", con=con)
-            self.assertIsNone(banco.endereco_de_producao(uid, "dervs", con=con))
+            self.assertEqual(banco.enderecos_do_projeto(uid, "dervs", con=con), [])
         finally:
             con.close()
 
@@ -2307,58 +2307,72 @@ class ServidorNoBancoVelho(unittest.TestCase):
 
 
 class EnderecoDeProducaoTemDono(unittest.TestCase):
-    """A porta 3 e dado de conta, nao configuracao da maquina."""
+    """A porta 3 e dado de conta, nao configuracao da maquina.
+
+    Molde de E1 (04/09/2026): `guardar_endereco_de_producao` agora exige
+    `servidor_id`, e `endereco_de_producao`/`enderecos_de_producao` (as formas
+    de UM endereco por conta) saem, substituidas por `enderecos_do_projeto` e
+    `um_endereco_por_projeto` (E3)."""
 
     def setUp(self):
         self.con = banco.conectar(":memory:")
         self.a = banco.criar_usuario("a@teste.local", "teste1234", con=self.con)
         self.b = banco.criar_usuario("b@teste.local", "teste1234", con=self.con)
+        self.sa = banco.guardar_servidor(self.a, "OVH", con=self.con)
+        self.sb = banco.guardar_servidor(self.b, "OVH", con=self.con)
 
     def tearDown(self):
         self.con.close()
 
     def test_grava_e_le_de_volta(self):
-        banco.guardar_endereco_de_producao(self.a, "dervs", "https://dervs.com.br",
-                                           con=self.con)
-        self.assertEqual(banco.endereco_de_producao(self.a, "dervs", con=self.con),
-                         "https://dervs.com.br")
+        banco.guardar_endereco_de_producao(self.a, self.sa, "dervs",
+                                           "https://dervs.com.br", con=self.con)
+        self.assertEqual(
+            banco.enderecos_do_projeto(self.a, "dervs", con=self.con),
+            [{"servidor_id": self.sa, "servidor": "OVH",
+              "url": "https://dervs.com.br"}])
 
     def test_duas_contas_o_mesmo_projeto_e_uma_nao_le_a_da_outra(self):
         """O criterio do briefing ao pe da letra. Nome de projeto e escolha de
         quem o criou: dois donos podem ter um `dervs` cada, em servidores
         diferentes."""
-        banco.guardar_endereco_de_producao(self.a, "dervs", "https://a.example.com",
-                                           con=self.con)
-        banco.guardar_endereco_de_producao(self.b, "dervs", "https://b.example.com",
-                                           con=self.con)
-        self.assertEqual(banco.endereco_de_producao(self.a, "dervs", con=self.con),
-                         "https://a.example.com")
-        self.assertEqual(banco.endereco_de_producao(self.b, "dervs", con=self.con),
-                         "https://b.example.com")
+        banco.guardar_endereco_de_producao(self.a, self.sa, "dervs",
+                                           "https://a.example.com", con=self.con)
+        banco.guardar_endereco_de_producao(self.b, self.sb, "dervs",
+                                           "https://b.example.com", con=self.con)
+        self.assertEqual(
+            [i["url"] for i in banco.enderecos_do_projeto(self.a, "dervs",
+                                                           con=self.con)],
+            ["https://a.example.com"])
+        self.assertEqual(
+            [i["url"] for i in banco.enderecos_do_projeto(self.b, "dervs",
+                                                           con=self.con)],
+            ["https://b.example.com"])
 
     def test_o_mapa_de_uma_conta_nao_traz_o_da_outra(self):
-        banco.guardar_endereco_de_producao(self.a, "dervs", "https://a.example.com",
-                                           con=self.con)
-        banco.guardar_endereco_de_producao(self.b, "dervs", "https://b.example.com",
-                                           con=self.con)
-        banco.guardar_endereco_de_producao(self.b, "outro", "https://b2.example.com",
-                                           con=self.con)
-        self.assertEqual(banco.enderecos_de_producao(self.a, con=self.con),
+        banco.guardar_endereco_de_producao(self.a, self.sa, "dervs",
+                                           "https://a.example.com", con=self.con)
+        banco.guardar_endereco_de_producao(self.b, self.sb, "dervs",
+                                           "https://b.example.com", con=self.con)
+        banco.guardar_endereco_de_producao(self.b, self.sb, "outro",
+                                           "https://b2.example.com", con=self.con)
+        self.assertEqual(banco.um_endereco_por_projeto(self.a, con=self.con),
                          {"dervs": "https://a.example.com"})
-        self.assertEqual(banco.enderecos_de_producao(self.b, con=self.con),
+        self.assertEqual(banco.um_endereco_por_projeto(self.b, con=self.con),
                          {"dervs": "https://b.example.com",
                           "outro": "https://b2.example.com"})
 
-    def test_quem_nao_gravou_nada_le_none_e_mapa_vazio(self):
-        self.assertIsNone(banco.endereco_de_producao(self.a, "dervs", con=self.con))
-        self.assertEqual(banco.enderecos_de_producao(self.a, con=self.con), {})
+    def test_quem_nao_gravou_nada_le_lista_e_mapa_vazios(self):
+        self.assertEqual(banco.enderecos_do_projeto(self.a, "dervs", con=self.con), [])
+        self.assertEqual(banco.um_endereco_por_projeto(self.a, con=self.con), {})
 
     def test_o_dono_e_obrigatorio_e_posicional(self):
         """Assinatura com padrao para `usuario_id` e o caminho pronto para uma
         rota esquecer o dono e ler o endereco alheio."""
         import inspect
-        for f in (banco.endereco_de_producao, banco.enderecos_de_producao,
-                  banco.guardar_endereco_de_producao):
+        for f in (banco.enderecos_do_projeto, banco.um_endereco_por_projeto,
+                  banco.guardar_endereco_de_producao, banco.enderecos_por_servidor,
+                  banco.servidores, banco.guardar_servidor, banco.remover_servidor):
             p = inspect.signature(f).parameters["usuario_id"]
             self.assertIs(p.default, inspect.Parameter.empty,
                           "%s tem padrao para usuario_id" % f.__name__)
@@ -2366,23 +2380,23 @@ class EnderecoDeProducaoTemDono(unittest.TestCase):
 
     def test_url_vazia_ou_none_apaga_o_endereco(self):
         for apagador in ("", "   ", None):
-            banco.guardar_endereco_de_producao(self.a, "dervs",
+            banco.guardar_endereco_de_producao(self.a, self.sa, "dervs",
                                                "https://a.example.com", con=self.con)
-            banco.guardar_endereco_de_producao(self.a, "dervs", apagador,
+            banco.guardar_endereco_de_producao(self.a, self.sa, "dervs", apagador,
                                                con=self.con)
-            self.assertIsNone(banco.endereco_de_producao(self.a, "dervs",
-                                                         con=self.con))
+            self.assertEqual(
+                banco.enderecos_do_projeto(self.a, "dervs", con=self.con), [])
             self.assertEqual(self.con.execute(
                 "SELECT COUNT(*) FROM endereco_producao").fetchone()[0], 0,
                 "apagar tem de tirar a LINHA, e nao gravar string vazia")
 
     def test_regravar_troca_a_url_sem_duplicar_nem_perder_o_criado_em(self):
-        banco.guardar_endereco_de_producao(self.a, "dervs", "https://velho.example.com",
-                                           con=self.con)
+        banco.guardar_endereco_de_producao(self.a, self.sa, "dervs",
+                                           "https://velho.example.com", con=self.con)
         antes = self.con.execute("SELECT criado_em FROM endereco_producao"
                                  " WHERE usuario_id = ?", (self.a,)).fetchone()[0]
-        banco.guardar_endereco_de_producao(self.a, "dervs", "https://novo.example.com",
-                                           con=self.con)
+        banco.guardar_endereco_de_producao(self.a, self.sa, "dervs",
+                                           "https://novo.example.com", con=self.con)
         linhas = list(self.con.execute("SELECT * FROM endereco_producao"
                                        " WHERE usuario_id = ?", (self.a,)))
         self.assertEqual(len(linhas), 1)
@@ -2392,16 +2406,18 @@ class EnderecoDeProducaoTemDono(unittest.TestCase):
     def test_apagar_a_conta_apaga_o_endereco_dela_e_so_o_dela(self):
         """`ON DELETE CASCADE` so vale com `PRAGMA foreign_keys=ON` ligado NESTA
         conexao — e e por isso que `_religar_fk` existe."""
-        banco.guardar_endereco_de_producao(self.a, "dervs", "https://a.example.com",
-                                           con=self.con)
-        banco.guardar_endereco_de_producao(self.b, "dervs", "https://b.example.com",
-                                           con=self.con)
+        banco.guardar_endereco_de_producao(self.a, self.sa, "dervs",
+                                           "https://a.example.com", con=self.con)
+        banco.guardar_endereco_de_producao(self.b, self.sb, "dervs",
+                                           "https://b.example.com", con=self.con)
         self.con.execute("DELETE FROM usuario WHERE id = ?", (self.a,))
         self.con.commit()
         self.assertEqual(self.con.execute(
             "SELECT COUNT(*) FROM endereco_producao").fetchone()[0], 1)
-        self.assertEqual(banco.endereco_de_producao(self.b, "dervs", con=self.con),
-                         "https://b.example.com")
+        self.assertEqual(
+            [i["url"] for i in banco.enderecos_do_projeto(self.b, "dervs",
+                                                           con=self.con)],
+            ["https://b.example.com"])
 
     def test_a_tabela_recusa_projeto_e_url_em_branco(self):
         """O CHECK vive no banco, e nao so no Python: hoje ha um escritor, e
@@ -2536,6 +2552,143 @@ class ServidorRestricoes(unittest.TestCase):
         self.assertEqual(colunas,
                          {"id", "usuario_id", "nome",
                           "padrao_subdominio", "criado_em"})
+
+
+class FuncoesDeAcessoPorServidor(unittest.TestCase):
+    """E3 de "Servidores multiplos" (04/09/2026): as funcoes de acesso deixam
+    de responder "o endereco do projeto X" como se houvesse um so servidor."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.a = banco.criar_usuario("a@teste.local", "teste1234", con=self.con)
+        self.b = banco.criar_usuario("b@teste.local", "teste1234", con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    # ------------------------------------------------------------ servidores
+
+    def test_servidores_lista_so_os_da_conta_ordenados_por_nome(self):
+        banco.guardar_servidor(self.a, "TineHost", con=self.con)
+        banco.guardar_servidor(self.a, "OVH", con=self.con)
+        banco.guardar_servidor(self.b, "AWS", con=self.con)
+        nomes = [s["nome"] for s in banco.servidores(self.a, con=self.con)]
+        self.assertEqual(nomes, ["OVH", "TineHost"])
+
+    def test_guardar_servidor_devolve_o_id(self):
+        sid = banco.guardar_servidor(self.a, "OVH", con=self.con)
+        self.assertIsInstance(sid, int)
+        self.assertEqual(
+            [s["id"] for s in banco.servidores(self.a, con=self.con)], [sid])
+
+    def test_guardar_servidor_recusa_nome_repetido_na_mesma_conta(self):
+        banco.guardar_servidor(self.a, "OVH", con=self.con)
+        self.assertIsNone(banco.guardar_servidor(self.a, "OVH", con=self.con))
+        self.assertEqual(len(banco.servidores(self.a, con=self.con)), 1)
+
+    def test_guardar_servidor_aceita_o_mesmo_nome_em_conta_diferente(self):
+        banco.guardar_servidor(self.a, "OVH", con=self.con)
+        sid = banco.guardar_servidor(self.b, "OVH", con=self.con)
+        self.assertIsNotNone(sid)
+
+    def test_guardar_servidor_recusa_nome_vazio(self):
+        for nome in ("", "   "):
+            self.assertIsNone(banco.guardar_servidor(self.a, nome, con=self.con))
+        self.assertEqual(banco.servidores(self.a, con=self.con), [])
+
+    def test_guardar_servidor_recusa_o_vigesimo_primeiro(self):
+        for i in range(banco.MAX_SERVIDORES_POR_CONTA):
+            self.assertIsNotNone(
+                banco.guardar_servidor(self.a, "servidor-%d" % i, con=self.con))
+        self.assertIsNone(
+            banco.guardar_servidor(self.a, "o-vigesimo-primeiro", con=self.con))
+        self.assertEqual(len(banco.servidores(self.a, con=self.con)),
+                         banco.MAX_SERVIDORES_POR_CONTA)
+
+    def test_guardar_servidor_normaliza_padrao_vazio_para_none(self):
+        banco.guardar_servidor(self.a, "OVH", padrao_subdominio="", con=self.con)
+        self.assertIsNone(banco.servidores(self.a, con=self.con)[0]
+                          ["padrao_subdominio"])
+
+    # ---------------------------------------------------------- remover
+
+    def test_remover_servidor_apaga_e_devolve_true(self):
+        sid = banco.guardar_servidor(self.a, "OVH", con=self.con)
+        self.assertTrue(banco.remover_servidor(self.a, sid, con=self.con))
+        self.assertEqual(banco.servidores(self.a, con=self.con), [])
+
+    def test_remover_servidor_com_dono_errado_devolve_false_e_nao_apaga(self):
+        """O dono no `WHERE`, nao num `if` antes — a licao das quatro portas da
+        fila (04/09/2026)."""
+        sid = banco.guardar_servidor(self.a, "OVH", con=self.con)
+        self.assertFalse(banco.remover_servidor(self.b, sid, con=self.con))
+        self.assertEqual(len(banco.servidores(self.a, con=self.con)), 1)
+
+    def test_remover_servidor_inexistente_devolve_false(self):
+        self.assertFalse(banco.remover_servidor(self.a, 99999, con=self.con))
+
+    # -------------------------------------------------- guardar_endereco...
+
+    def test_guardar_endereco_com_servidor_de_outra_conta_devolve_false_e_nao_grava(self):
+        """O criterio de aceitacao "nao e seu responde igual a nao existe", no
+        nivel do banco."""
+        sid = banco.guardar_servidor(self.b, "OVH", con=self.con)
+        antes = self.con.execute(
+            "SELECT COUNT(*) FROM endereco_producao").fetchone()[0]
+        ok = banco.guardar_endereco_de_producao(self.a, sid, "dervs",
+                                                "https://dervs.com.br",
+                                                con=self.con)
+        self.assertFalse(ok)
+        depois = self.con.execute(
+            "SELECT COUNT(*) FROM endereco_producao").fetchone()[0]
+        self.assertEqual(antes, depois)
+
+    def test_guardar_endereco_com_servidor_da_propria_conta_devolve_true(self):
+        sid = banco.guardar_servidor(self.a, "OVH", con=self.con)
+        ok = banco.guardar_endereco_de_producao(self.a, sid, "dervs",
+                                                "https://dervs.com.br",
+                                                con=self.con)
+        self.assertTrue(ok)
+
+    # -------------------------------------------------- enderecos_por_servidor
+
+    def test_enderecos_por_servidor_traz_os_dois_servidores_do_mesmo_projeto(self):
+        s1 = banco.guardar_servidor(self.a, "AWS", con=self.con)
+        s2 = banco.guardar_servidor(self.a, "OVH", con=self.con)
+        banco.guardar_endereco_de_producao(self.a, s1, "dervs",
+                                           "https://aws.example.com", con=self.con)
+        banco.guardar_endereco_de_producao(self.a, s2, "dervs",
+                                           "https://ovh.example.com", con=self.con)
+        mapa = banco.enderecos_por_servidor(self.a, con=self.con)
+        self.assertEqual([i["servidor"] for i in mapa["dervs"]], ["AWS", "OVH"])
+        self.assertEqual([i["url"] for i in mapa["dervs"]],
+                         ["https://aws.example.com", "https://ovh.example.com"])
+
+    def test_enderecos_por_servidor_nao_traz_o_de_outra_conta(self):
+        sa = banco.guardar_servidor(self.a, "OVH", con=self.con)
+        sb = banco.guardar_servidor(self.b, "OVH", con=self.con)
+        banco.guardar_endereco_de_producao(self.a, sa, "dervs",
+                                           "https://a.example.com", con=self.con)
+        banco.guardar_endereco_de_producao(self.b, sb, "dervs",
+                                           "https://b.example.com", con=self.con)
+        self.assertEqual(
+            [i["url"] for i in banco.enderecos_por_servidor(self.a, con=self.con)
+             ["dervs"]], ["https://a.example.com"])
+
+    # -------------------------------------------------- um_endereco_por_projeto
+
+    def test_um_endereco_por_projeto_devolve_o_do_servidor_de_menor_nome(self):
+        s_tine = banco.guardar_servidor(self.a, "TineHost", con=self.con)
+        s_aws = banco.guardar_servidor(self.a, "AWS", con=self.con)
+        banco.guardar_endereco_de_producao(self.a, s_tine, "dervs",
+                                           "https://tine.example.com", con=self.con)
+        banco.guardar_endereco_de_producao(self.a, s_aws, "dervs",
+                                           "https://aws.example.com", con=self.con)
+        self.assertEqual(banco.um_endereco_por_projeto(self.a, con=self.con),
+                         {"dervs": "https://aws.example.com"})
+
+    def test_um_endereco_por_projeto_confessa_o_que_e_na_docstring(self):
+        self.assertIn("prontidao", banco.um_endereco_por_projeto.__doc__)
 
 
 class InstalacaoDoGithubNoBancoVelho(unittest.TestCase):

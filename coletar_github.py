@@ -963,7 +963,7 @@ def main():
         # etapa — perder a medicao toda por causa de um campo opcional seria
         # trocar um dado a menos por nenhum dado.
         try:
-            enderecos = banco.enderecos_de_producao(dono, con=con)
+            enderecos = banco.um_endereco_por_projeto(dono, con=con)
         except Exception:                  # noqa: BLE001 — medir vale mais
             enderecos = {}
         for alias, nome in por_alias.items():

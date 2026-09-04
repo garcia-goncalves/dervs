@@ -3124,64 +3124,184 @@ def arquivar_projeto(maquina_id: int, projeto: str, con=None) -> None:
             con.close()
 
 
-def endereco_de_producao(usuario_id: int, projeto: str, con=None):
-    """A URL de producao daquele projeto DAQUELA conta, ou `None`.
+# Sem teto TOTAL de servidores, so o teto de VELOCIDADE do balcao por origem
+# (na rota) limitaria a criacao. `_servidor_sugerir` varre `servidores()`
+# inteiro e mede ate 3 candidatos por chamada — sem um teto total essa lista
+# cresceria sem fim e a rota de sugestao ficaria mais lenta a cada servidor
+# cadastrado.
+MAX_SERVIDORES_POR_CONTA = 20
 
-    `usuario_id` e POSICIONAL E OBRIGATORIO, e nao um argumento com padrao. Um
-    padrao aqui seria o caminho pronto para uma rota esquecer de passar o dono e
-    ler o endereco de outra pessoa — que e o IDOR ja consertado duas vezes neste
-    repositorio. Sem dono nao ha leitura: e por isso que a assinatura nao
-    permite chamar sem ele.
+
+def servidores(usuario_id: int, con=None) -> list:
+    """[{"id","nome","padrao_subdominio","criado_em"}] de UMA conta, ordenado
+    por nome.
+
+    `padrao_subdominio` sai como veio do banco — `None` quando nao ha padrao.
+    A conversao para `""` mora na borda do JSON, na rota: o banco tem um jeito
+    so de dizer "nenhum", e o JSON tem outro, e a troca acontece num lugar so.
     """
     fechar = con is None
     con = con or conectar()
     try:
-        l = con.execute("SELECT url FROM endereco_producao"
-                        " WHERE usuario_id = ? AND projeto = ?",
-                        (usuario_id, projeto)).fetchone()
-        return l["url"] if l else None
+        return [dict(l) for l in con.execute(
+            "SELECT id, nome, padrao_subdominio, criado_em FROM servidor"
+            " WHERE usuario_id = ? ORDER BY nome", (usuario_id,))]
     finally:
         if fechar:
             con.close()
 
 
-def enderecos_de_producao(usuario_id: int, con=None) -> dict:
-    """{projeto: url} de UMA conta. E o que o coletor consome de uma vez so."""
+def guardar_servidor(usuario_id: int, nome: str, padrao_subdominio=None,
+                     con=None):
+    """Cria um servidor nomeado. Devolve o `id`, ou `None` quando o nome
+    colide com outro da MESMA conta, fica vazio depois do `strip`, ou a conta
+    ja tem `MAX_SERVIDORES_POR_CONTA` servidores.
+
+    `padrao_subdominio` tem UM jeito so de dizer "nenhum": `""` e espacos
+    puros viram `None` aqui, antes de chegar ao banco — nunca grava string
+    vazia.
+
+    A checagem de nome repetido e feita por `SELECT` antes do `INSERT`, e nao
+    por capturar `IntegrityError` do `UNIQUE`: um erro cru levantado no meio
+    de um caminho que grava dado de conta seria dificil de distinguir de um
+    tropeco de verdade — o mesmo cuidado de `guardar_instalacao_do_github`.
+    """
     fechar = con is None
     con = con or conectar()
     try:
+        nome_limpo = (nome or "").strip()
+        if not nome_limpo:
+            return None
+        padrao = (padrao_subdominio or "").strip() or None
+        total = con.execute("SELECT COUNT(*) FROM servidor WHERE usuario_id = ?",
+                            (usuario_id,)).fetchone()[0]
+        if total >= MAX_SERVIDORES_POR_CONTA:
+            return None
+        ja = con.execute("SELECT 1 FROM servidor"
+                         " WHERE usuario_id = ? AND nome = ?",
+                         (usuario_id, nome_limpo)).fetchone()
+        if ja:
+            return None
+        cur = con.execute(
+            "INSERT INTO servidor (usuario_id, nome, padrao_subdominio, criado_em)"
+            " VALUES (?,?,?,?)", (usuario_id, nome_limpo, padrao, agora()))
+        if fechar:                    # ver `gravar`: nao quebre a transacao alheia
+            con.commit()
+        return cur.lastrowid
+    finally:
+        if fechar:
+            con.close()
+
+
+def remover_servidor(usuario_id: int, servidor_id: int, con=None) -> bool:
+    """`DELETE ... WHERE id = ? AND usuario_id = ?`; devolve se apagou.
+
+    O DONO NO `WHERE`, NAO NUM `if` ANTES — a licao das quatro portas da fila
+    (04/09/2026): a camada que decide tem de ser a mesma que executa. Os
+    enderecos daquele servidor vao junto por `ON DELETE CASCADE`.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        cur = con.execute("DELETE FROM servidor WHERE id = ? AND usuario_id = ?",
+                          (servidor_id, usuario_id))
+        if fechar:
+            con.commit()
+        return cur.rowcount > 0
+    finally:
+        if fechar:
+            con.close()
+
+
+def enderecos_por_servidor(usuario_id: int, con=None) -> dict:
+    """{projeto: [{"servidor_id","servidor","url"}, ...]} de UMA conta, um
+    item por servidor onde aquele projeto responde, ordenado pelo nome do
+    servidor. E a resposta a "em quais servidores este projeto esta no ar".
+
+    `usuario_id` e POSICIONAL E OBRIGATORIO — mesmo motivo de sempre: um
+    padrao aqui seria o caminho pronto para uma rota esquecer o dono e ler o
+    endereco de outra pessoa. O `WHERE endereco_producao.usuario_id = ?` e
+    quem DECIDE a resposta; o `JOIN servidor` so traz o nome para exibir.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        por_projeto: dict = {}
+        for l in con.execute(
+                "SELECT ep.projeto AS projeto, ep.servidor_id AS servidor_id,"
+                "       s.nome AS servidor, ep.url AS url"
+                "  FROM endereco_producao ep"
+                "  JOIN servidor s ON s.id = ep.servidor_id"
+                " WHERE ep.usuario_id = ?"
+                " ORDER BY s.nome, ep.projeto", (usuario_id,)):
+            por_projeto.setdefault(l["projeto"], []).append({
+                "servidor_id": l["servidor_id"],
+                "servidor": l["servidor"],
+                "url": l["url"],
+            })
+        return por_projeto
+    finally:
+        if fechar:
+            con.close()
+
+
+def enderecos_do_projeto(usuario_id: int, projeto: str, con=None) -> list:
+    """[{"servidor_id","servidor","url"}, ...] de UM projeto DAQUELA conta,
+    ordenado pelo nome do servidor. Substitui `endereco_de_producao`: um
+    projeto pode responder em mais de um servidor ao mesmo tempo, e quem le
+    precisa dos dois — nunca so o primeiro que um `SELECT` sem `servidor_id`
+    trouxesse.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return [{"servidor_id": l["servidor_id"], "servidor": l["servidor"],
+                 "url": l["url"]}
+                for l in con.execute(
+                    "SELECT ep.servidor_id AS servidor_id, s.nome AS servidor,"
+                    "       ep.url AS url"
+                    "  FROM endereco_producao ep"
+                    "  JOIN servidor s ON s.id = ep.servidor_id"
+                    " WHERE ep.usuario_id = ? AND ep.projeto = ?"
+                    " ORDER BY s.nome", (usuario_id, projeto))]
+    finally:
+        if fechar:
+            con.close()
+
+
+def um_endereco_por_projeto(usuario_id: int, con=None) -> dict:
+    """{projeto: url} de UMA conta — o endereco do servidor de MENOR NOME, e
+    SO para a regua de prontidao do `casos.json` (`coletar.py:669`). Quem
+    quer saber se o projeto esta no ar usa `enderecos_por_servidor` — esta
+    aqui nao sabe responder isso: ela nao diz QUAL servidor, nem se ha mais de
+    um, nem se algum deles esta fora do ar enquanto outro responde.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        # ORDER BY ... s.nome DESC: dentro de cada projeto, o dict comprehension
+        # guarda o ULTIMO valor lido para a mesma chave — descendente faz o
+        # servidor de MENOR nome ser o ultimo, e por isso o que sobrevive.
         return {l["projeto"]: l["url"] for l in con.execute(
-            "SELECT projeto, url FROM endereco_producao"
-            " WHERE usuario_id = ? ORDER BY projeto", (usuario_id,))}
+            "SELECT ep.projeto AS projeto, ep.url AS url"
+            "  FROM endereco_producao ep"
+            "  JOIN servidor s ON s.id = ep.servidor_id"
+            " WHERE ep.usuario_id = ?"
+            " ORDER BY ep.projeto, s.nome DESC", (usuario_id,))}
     finally:
         if fechar:
             con.close()
 
 
-def _servidor_padrao_do_usuario(usuario_id: int, con) -> int:
-    """O servidor que `guardar_endereco_de_producao` usa enquanto ela ainda
-    nao recebe qual servidor escolher.
+def guardar_endereco_de_producao(usuario_id: int, servidor_id: int, projeto: str,
+                                 url, con=None) -> bool:
+    """Grava, troca ou APAGA o endereco de um projeto NAQUELE servidor daquela
+    conta. Devolve se gravou.
 
-    PONTE, NAO API PUBLICA. A etapa 3 de "Servidores multiplos" troca esta
-    funcao por uma escolha explicita de `servidor_id` na rota; ate la, quem
-    chama a forma antiga continua gravando — nada some no caminho. Reusa (e
-    nunca duplica) o servidor da conta se ja houver um, e cria `"Servidor"`
-    na primeira vez — o mesmo nome que a migracao da a quem ja tinha endereco
-    antes de existir a tabela `servidor`.
-    """
-    l = con.execute("SELECT id FROM servidor WHERE usuario_id = ?"
-                    " ORDER BY id LIMIT 1", (usuario_id,)).fetchone()
-    if l:
-        return l["id"]
-    cur = con.execute("INSERT INTO servidor (usuario_id, nome, criado_em)"
-                      " VALUES (?, 'Servidor', ?)", (usuario_id, agora()))
-    return cur.lastrowid
-
-
-def guardar_endereco_de_producao(usuario_id: int, projeto: str, url,
-                                 con=None) -> None:
-    """Grava, troca ou APAGA o endereco de um projeto daquela conta, no
-    servidor padrao dela (ver `_servidor_padrao_do_usuario`).
+    CONFERE QUE O SERVIDOR E DA CONTA antes de gravar, e falha fechada: um
+    `servidor_id` de outra conta devolve `False` SEM TOCAR o banco — "nao e
+    seu" responde igual a "nao existe", a mesma convencao das quatro portas
+    da fila (04/09/2026).
 
     `url` vazia ou `None` apaga a linha, e nao grava string vazia: "sem
     endereco" tem um jeito so de ser dito neste banco — a ausencia da linha.
@@ -3195,14 +3315,18 @@ def guardar_endereco_de_producao(usuario_id: int, projeto: str, url,
     fechar = con is None
     con = con or conectar()
     try:
+        dono = con.execute("SELECT 1 FROM servidor"
+                           " WHERE id = ? AND usuario_id = ?",
+                           (servidor_id, usuario_id)).fetchone()
+        if not dono:
+            return False
         limpa = (url or "").strip()
         if not limpa:
             con.execute("DELETE FROM endereco_producao"
-                        " WHERE usuario_id = ? AND projeto = ?",
-                        (usuario_id, projeto))
+                        " WHERE usuario_id = ? AND servidor_id = ? AND projeto = ?",
+                        (usuario_id, servidor_id, projeto))
         else:
             quando = agora()
-            servidor_id = _servidor_padrao_do_usuario(usuario_id, con)
             # O `criado_em` NAO entra no `DO UPDATE`: trocar o endereco nao
             # reescreve a data em que a conta declarou aquele projeto.
             con.execute(
@@ -3215,6 +3339,7 @@ def guardar_endereco_de_producao(usuario_id: int, projeto: str, url,
                 (usuario_id, servidor_id, projeto, limpa, quando, quando))
         if fechar:                    # ver `gravar`: nao quebre a transacao alheia
             con.commit()
+        return True
     finally:
         if fechar:
             con.close()
@@ -3224,7 +3349,7 @@ def instalacao_do_github(usuario_id: int, con=None):
     """O `installation_id` DAQUELA conta, ou `None` se ela nao conectou.
 
     `usuario_id` e POSICIONAL E OBRIGATORIO, e nao um argumento com padrao —
-    mesmo motivo de `endereco_de_producao`: um padrao aqui seria o caminho
+    mesmo motivo de `enderecos_do_projeto`: um padrao aqui seria o caminho
     pronto para uma rota esquecer de passar o dono e agir com a instalacao de
     outra pessoa. Sem dono nao ha leitura.
 

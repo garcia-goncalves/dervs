@@ -999,7 +999,7 @@ def medir() -> dict:
     try:
         con_end = banco.conectar()
         try:
-            enderecos_gravados = banco.enderecos_de_producao(
+            enderecos_gravados = banco.um_endereco_por_projeto(
                 banco.conta_local(con_end), con=con_end)
         finally:
             con_end.close()
