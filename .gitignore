@@ -17,3 +17,4 @@ cofre.chave
 
 # chave privada de GitHub App - nunca versionar
 *.pem
+conftest.py
