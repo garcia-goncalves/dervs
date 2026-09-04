@@ -424,6 +424,7 @@ CREATE TABLE IF NOT EXISTS endereco_producao (
     UNIQUE (usuario_id, servidor_id, projeto)
 );
 CREATE INDEX IF NOT EXISTS ix_endereco_dono ON endereco_producao (usuario_id);
+CREATE INDEX IF NOT EXISTS ix_endereco_servidor ON endereco_producao (servidor_id);
 
 -- A instalacao do GitHub App DAQUELA conta. NAO confundir com a tabela
 -- `instalacao` acima: aquela e a impressao digital da combinacao da cortina,
@@ -1068,6 +1069,8 @@ def _migrar_endereco_producao(con: sqlite3.Connection) -> None:
         con.execute(_CREATE_ENDERECO_PRODUCAO)
         con.execute("CREATE INDEX IF NOT EXISTS ix_endereco_dono"
                     " ON endereco_producao (usuario_id)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_endereco_servidor"
+                    " ON endereco_producao (servidor_id)")
         con.commit()
     except Exception:
         con.rollback()
@@ -1154,6 +1157,8 @@ def _migrar_servidor_por_endereco(con: sqlite3.Connection) -> None:
                     " RENAME TO endereco_producao")
         con.execute("CREATE INDEX IF NOT EXISTS ix_endereco_dono"
                     " ON endereco_producao (usuario_id)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_endereco_servidor"
+                    " ON endereco_producao (servidor_id)")
         con.commit()
     except Exception:
         con.rollback()
@@ -3232,6 +3237,7 @@ def enderecos_por_servidor(usuario_id: int, con=None) -> dict:
                 "       s.nome AS servidor, ep.url AS url"
                 "  FROM endereco_producao ep"
                 "  JOIN servidor s ON s.id = ep.servidor_id"
+                "                 AND s.usuario_id = ep.usuario_id"
                 " WHERE ep.usuario_id = ?"
                 " ORDER BY s.nome, ep.projeto", (usuario_id,)):
             por_projeto.setdefault(l["projeto"], []).append({
@@ -3262,6 +3268,7 @@ def enderecos_do_projeto(usuario_id: int, projeto: str, con=None) -> list:
                     "       ep.url AS url"
                     "  FROM endereco_producao ep"
                     "  JOIN servidor s ON s.id = ep.servidor_id"
+                    "                 AND s.usuario_id = ep.usuario_id"
                     " WHERE ep.usuario_id = ? AND ep.projeto = ?"
                     " ORDER BY s.nome", (usuario_id, projeto))]
     finally:
@@ -3286,6 +3293,7 @@ def um_endereco_por_projeto(usuario_id: int, con=None) -> dict:
             "SELECT ep.projeto AS projeto, ep.url AS url"
             "  FROM endereco_producao ep"
             "  JOIN servidor s ON s.id = ep.servidor_id"
+            "                 AND s.usuario_id = ep.usuario_id"
             " WHERE ep.usuario_id = ?"
             " ORDER BY ep.projeto, s.nome DESC", (usuario_id,))}
     finally:

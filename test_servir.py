@@ -2279,6 +2279,25 @@ class OEnderecoDoServidorNoServidorDeVerdade(BaseServidorDeVerdade):
                          servidor_id=servidor_do_vizinho)
         self.assertEqual(404, r.status)
         self.assertEqual("nao existe", json.loads(r.corpo)["erro"])
+
+    def test_apagar_no_servidor_de_outra_conta_tambem_e_404(self):
+        """Achado da revisao (04/09/2026): o caminho de apagar (url vazia)
+        ignorava o retorno do banco e sempre respondia 200, mesmo quando o
+        `servidor_id` era de outra conta — inconsistente com o caminho de
+        gravar, logo acima. "nao e seu" responde IGUAL a "nao existe" nos
+        dois."""
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("vizinho-apagar@teste.local", con=con)
+            servidor_do_vizinho = banco.guardar_servidor(outro, "Servidor alheio 2",
+                                                          con=con)
+        finally:
+            con.close()
+        cookies, token = self.sessao_e_token()
+        r = self.guardar("loja", "", cookies, token,
+                         servidor_id=servidor_do_vizinho)
+        self.assertEqual(404, r.status)
+        self.assertEqual("nao existe", json.loads(r.corpo)["erro"])
         corpo = self.pedir(self.LER, cookies=cookies).corpo
         self.assertEqual([], json.loads(corpo)["enderecos"])
 
@@ -2544,6 +2563,27 @@ class OsServidoresSugerirNoServidorDeVerdade(BaseServidorDeVerdade):
         self.assertEqual(200, r.status, r.corpo)
         self.assertEqual(3, len(self._chamadas),
                          "so pode medir ate MAX_SUGESTOES por chamada")
+
+    def test_no_maximo_tres_medicoes_MESMO_QUANDO_NENHUMA_ACERTA(self):
+        """O guarda acima nao podia reprovar: com o dublê padrao (sempre
+        `ok: True`) o laco quebra no terceiro ACERTO, e conta 3 mesmo se o
+        teto contasse acertos em vez de medicoes. Achado da revisao de
+        seguranca (04/09/2026): sem este caso, um servidor cujo padrao
+        aponta para um dominio que nunca responde media TODOS os projetos
+        da conta a cada chamada, virando o DERVS num refletor de rede.
+        """
+        def nunca_responde(url):
+            self._chamadas.append(url)
+            return {"url": url, "ok": False, "codigo": 0,
+                   "erro": "recusado", "ms": 0, "tentativas": 2}
+        servir.coletar_github.mede_site = nunca_responde
+        self._com_projetos("proj-a", "proj-b", "proj-c", "proj-d", "proj-e")
+        r = self.pedir_sugestao()
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual([], json.loads(r.corpo)["sugestoes"])
+        self.assertEqual(3, len(self._chamadas),
+                         "o teto e de MEDICOES, nao de acertos — sem isso "
+                         "a rota mede a conta inteira quando ninguem responde")
 
     # -------------------------------------------------------- o teto proprio
     def test_o_teto_por_origem_tem_balcao_PROPRIO(self):

@@ -164,9 +164,16 @@ nav.mapa a[aria-current="page"] {
 .projetos .abrir { flex: none; }
 
 /* O selo "servidor(es)" (servidores múltiplos, etapa 6): ao lado do selo
-   principal em telas largas. Reusa `.marca` inteira — nenhum token novo,
-   só um recuo para não colar no selo principal. */
-.projetos .marca--servidores { flex: none; align-self: center; }
+   principal em telas largas, e MENOR que ele — dois selos do mesmo
+   tamanho na mesma linha competem pela atenção, e o design pediu
+   hierarquia. Reusa `.marca` inteira, sem token novo: só reduz a escala
+   e o recuo do que já existe (achado da revisão de design, 04/09/2026). */
+.projetos .marca--servidores {
+  flex: none;
+  align-self: center;
+  font-size: calc(var(--fs-metadado) * 0.9);
+  padding: 0 var(--e1);
+}
 
 /* Em 360px a linha tem de encolher, e o que sai é o botão de texto — não a
    informação. O selo JÁ é o botão que abre a prova, e ele continua ali: manter

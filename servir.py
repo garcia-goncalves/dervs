@@ -1687,10 +1687,16 @@ class Hub(SimpleHTTPRequestHandler):
             return self._json(400, {"erro":
                                     "diga em qual servidor esse endereco mora"})
 
-        # Apagar nao gasta o balcao nem bate em lugar nenhum.
+        # Apagar nao gasta o balcao nem bate em lugar nenhum. Mas "nao e
+        # seu" responde IGUAL a "nao existe" nos dois caminhos — achado da
+        # revisao (04/09/2026): o de gravar ja devolvia 404 aqui embaixo,
+        # e este devolvia 200 mesmo quando `servidor_id` era de outra
+        # conta. Nao vazava dado (o banco ja recusava gravar), mas a
+        # inconsistencia e exatamente o tipo de fresta que ensina errado.
         if not url:
-            banco.guardar_endereco_de_producao(sessao["usuario_id"], servidor_id,
-                                               projeto, None)
+            if not banco.guardar_endereco_de_producao(
+                    sessao["usuario_id"], servidor_id, projeto, None):
+                return self._json(404, {"erro": "nao existe"})
             return self._json(200, {"projeto": projeto, "url": "",
                                     "ok": None, "guardado": False})
 
@@ -1795,9 +1801,19 @@ class Hub(SimpleHTTPRequestHandler):
                        banco.montar_estado(usuario_id=sessao["usuario_id"])
                        ["projetos"] if p["nome"] not in ja_tem)
 
+        # O teto e de MEDICOES, nao de acertos (achado da revisao de
+        # seguranca, 04/09/2026). Contar so `len(sugestoes)` deixava o laco
+        # correr por TODOS os projetos da conta sempre que o candidato nao
+        # respondesse "ok" — um dono malicioso podia apontar o padrao para
+        # um dominio que nunca responde e usar cada projeto conhecido como
+        # uma sondagem contra aquele alvo, virando o DERVS num refletor de
+        # rede vestindo o IP do servidor. `medidos` conta toda chamada real
+        # a `mede_site`, sucesso ou nao, e o laco para em MAX_SUGESTOES
+        # medicoes — nunca mais que isso, seja qual for a resposta.
         sugestoes = []
+        medidos = 0
         for nome in nomes:
-            if len(sugestoes) >= self.MAX_SUGESTOES:
+            if medidos >= self.MAX_SUGESTOES:
                 break
             url = coletar_github.url_do_padrao(padrao, nome)
             if not url or not coletar_github.url_segura(url):
@@ -1805,6 +1821,7 @@ class Hub(SimpleHTTPRequestHandler):
             if not coletar_github.host_publico(
                     urllib.parse.urlsplit(url).hostname):
                 continue
+            medidos += 1
             medida = coletar_github.mede_site(url)
             if medida.get("ok") is True:
                 sugestoes.append({"projeto": nome, "url": url})
