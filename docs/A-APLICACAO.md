@@ -535,11 +535,16 @@ Decisões travadas. Mudar qualquer uma exige um motivo novo, escrito.
 
 ## 13. Dívidas conhecidas, ainda abertas
 
-- **A porta 2 nunca falou com o GitHub de verdade.** Toda a lógica está provada contra
-  dublês — o selo assinado, a recusa, a posse, o "não deu para conferir" —, mas não existe
-  aplicativo registrado com a *setup URL* apontando para `/github/instalado`. Criá-lo
-  **exige a mão do dono** em github.com. Ver `docs/esteira/conectar-tres-portas/`
-  `verificacao.md`.
+- **A porta 2 falou com o GitHub de verdade em 04/09/2026, e o resultado foi o previsto:
+  recusada.** O app está registrado, a *setup URL* está certa, e o vai-e-volta funciona
+  (uma instalação velha de testes estava travando o redirecionamento; desinstalar e
+  reinstalar resolveu isso). Mas a única organização em que o dono pode instalar
+  (`garcia-goncalves`, dona dos repositórios de verdade) esfarela na recusa deliberada de
+  `_instalacao_e_dele` — `test_instalacao_de_ORGANIZACAO_e_recusada_e_isso_e_deliberado`
+  prova que isso é por desenho, não defeito. **Fechar isso de verdade exige o app ganhar a
+  permissão "Members: Read-only"** (aprovação do dono em github.com) e código novo que
+  pergunte ao próprio app se a pessoa é membro — ainda não escrito, e não deve ser sem o
+  dono decidir que quer isso. Ver `docs/esteira/conectar-tres-portas/verificacao.md`.
 - **A tarefa agendada foi montada, não vista rodar.** A CI não tem Windows nem agendador.
   Ninguém reiniciou o Windows para ver a máquina voltar a reportar; enquanto isso,
   "sempre atualizado" é promessa.
