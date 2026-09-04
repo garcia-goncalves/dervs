@@ -139,8 +139,8 @@ function navegar() {
        fica reservado para a pergunta que falhou, e nao para a que nunca foi
        feita. As duas coisas se parecem na tela e nao sao a mesma. */
     case "conectar":     mostrar("conectar"); pintarConectar();
-                         olharOsComputadores(); olharOsEnderecos();
-                         olharOGithub(); break;
+                         olharOsComputadores(); olharOsServidores();
+                         olharOsEnderecos(); olharOGithub(); break;
     case "computadores": mostrar("computadores"); carregarComputadores(); break;
     case "entrada":      mostrar("entrada"); pdCarregar(); break;
     default:             mostrar("painel"); pintarPainel(); break;
@@ -948,11 +948,26 @@ async function baixarConectador() {
 let GITHUB = null;
 let GITHUB_LIDO_EM = "";
 
+/* SERVIDORES MULTIPLOS (etapa 7): `ENDERECOS` deixou de ser um dicionario
+   {projeto: url} — `/api/enderecos` agora devolve a LISTA chata que
+   `banco.enderecos_por_servidor` monta, um item por (servidor, projeto). Quem
+   quer os enderecos de um servidor filtra por `servidor_id`. */
 let ENDERECOS = null;
 let ENDERECOS_LIDO_EM = "";
-/* O resultado da ultima medicao feita pela tela, por projeto. Ele NAO vem da
-   leitura: `/api/enderecos` diz o que esta gravado, e nao se responde. */
+
+/* Os servidores cadastrados por esta conta, e o carimbo de quando foram
+   lidos. `null` e "nao li"; lista vazia e "li, e nao ha nenhum" — as duas
+   coisas nao se confundem, a mesma lei 2 de sempre. */
+let SERVIDORES = null;
+let SERVIDORES_LIDO_EM = "";
+
+/* O resultado da ultima medicao feita pela tela, por (servidor, projeto). A
+   chave carrega o servidor porque o MESMO projeto pode ter endereco em mais
+   de um servidor ao mesmo tempo — sem o servidor na chave, medir o endereco
+   de um sobrescreveria a medicao do outro. Ele NAO vem da leitura:
+   `/api/enderecos` diz o que esta gravado, e nao se responde. */
 let MEDIDAS = {};
+function chaveDaMedida(servidorId, projeto) { return servidorId + "|" + projeto; }
 
 const ESPERA = {
   t: null,           /* o relógio da sondagem */
@@ -1146,7 +1161,7 @@ async function olharOsEnderecos() {
     const r = await fetch("/api/enderecos");
     if (!r.ok) throw new Error("recusado");
     const d = await r.json();
-    ENDERECOS = d.enderecos || {};
+    ENDERECOS = d.enderecos || [];
     ENDERECOS_LIDO_EM = new Date().toISOString();
   } catch {
     return;                 /* sem carimbo: a porta 3 dirá que não olhou */
@@ -1154,8 +1169,48 @@ async function olharOsEnderecos() {
   if (rota().tela === "conectar") pintarConectar();
 }
 
-async function guardarEndereco(projeto, url) {
-  const r = await escrever("/api/enderecos/guardar", { projeto, url });
+/* Molde exato de `olharOsEnderecos()`: o `catch` VOLTA SEM CARIMBO, porque é
+   o carimbo ausente que faz o selo "Seus servidores" dizer "não olhei" em
+   vez de "nenhum servidor cadastrado". */
+async function olharOsServidores() {
+  try {
+    const r = await fetch("/api/servidores");
+    if (!r.ok) throw new Error("recusado");
+    const d = await r.json();
+    SERVIDORES = d.servidores || [];
+    SERVIDORES_LIDO_EM = new Date().toISOString();
+  } catch {
+    return;                 /* sem carimbo: a porta 3 dirá que não olhou */
+  }
+  if (rota().tela === "conectar") pintarConectar();
+}
+
+async function guardarServidor(nome, padrao) {
+  const r = await escrever("/api/servidores/guardar",
+                           { nome, padrao_subdominio: padrao });
+  let d = {};
+  try { d = await r.json(); } catch { d = {}; }
+  if (!r.ok) {
+    recado(d.erro || "não conseguimos cadastrar esse servidor.", true);
+    return;
+  }
+  recado("servidor cadastrado.");
+  await olharOsServidores();
+  if (rota().tela === "conectar") pintarConectar();
+}
+
+async function apagarServidor(id) {
+  const r = await escrever("/api/servidores/remover", { id });
+  if (!r.ok) { recado("não conseguimos apagar esse servidor.", true); return; }
+  recado("servidor apagado. Os endereços gravados nele saem do DERVS.");
+  await olharOsServidores();
+  await olharOsEnderecos();
+  if (rota().tela === "conectar") pintarConectar();
+}
+
+async function guardarEndereco(servidorId, projeto, url) {
+  const r = await escrever("/api/enderecos/guardar",
+                           { servidor_id: servidorId, projeto, url });
   let d = {};
   try { d = await r.json(); } catch { d = {}; }
   if (!r.ok) {
@@ -1165,12 +1220,13 @@ async function guardarEndereco(projeto, url) {
     recado(d.erro || "não conseguimos guardar esse endereço.", true);
     return;
   }
+  const chave = chaveDaMedida(servidorId, projeto);
   if (!url) {
-    delete MEDIDAS[projeto];
+    delete MEDIDAS[chave];
     recado("endereço apagado. Esse projeto volta a não ter site medido.");
   } else {
-    MEDIDAS[projeto] = { ok: d.ok, codigo: d.codigo, erro: d.erro,
-                         medido_em: d.medido_em };
+    MEDIDAS[chave] = { ok: d.ok, codigo: d.codigo, erro: d.erro,
+                       medido_em: d.medido_em };
     recado("endereço guardado.");
   }
   await olharOsEnderecos();
@@ -1280,41 +1336,155 @@ function pintarConectar() {
         + "depois. Nenhuma chave é digitada aqui."
   }));
 
-  /* PORTA 3 — o servidor (etapa B3). */
-  const leuEnd = !!ENDERECOS_LIDO_EM;
-  const quantos = leuEnd ? Object.keys(ENDERECOS).length : 0;
+  /* PORTA 3 — os SEUS SERVIDORES (servidores multiplos, etapa 7). "O seu
+     servidor" virou uma lista: o mesmo projeto pode responder em mais de um
+     servidor ao mesmo tempo, e o card diz em quais. */
+  const leuServ = !!SERVIDORES_LIDO_EM;
+  const nServ = leuServ ? SERVIDORES.length : 0;
+  const resumoServ = !leuServ
+    ? "Não consegui ler os servidores desta conta. Isso não quer dizer que "
+      + "nenhum está cadastrado — quer dizer que não olhei."
+    : (nServ
+       ? (nServ === 1 ? "Há 1 servidor cadastrado."
+                      : "Há " + nServ + " servidores cadastrados.")
+       : "Nenhum servidor cadastrado ainda. Cadastre o nome de um provedor "
+         + "(por exemplo OVH ou TineHost) para começar a gravar endereços "
+         + "nele.");
   const cartao3 = porta({
-    titulo: "O seu servidor",
-    estado: !leuEnd ? "sem_dados" : (quantos ? "conectado" : "desconectado"),
-    resumo: !leuEnd
-      ? "Não consegui ler os endereços desta conta. Isso não quer dizer que "
-        + "nenhum está gravado — quer dizer que não olhei."
-      : (quantos
-         ? "Há " + quantos + " projeto(s) com endereço gravado. A coluna No ar "
-           + "deles sai de uma medição de verdade, e não de um arquivo escrito "
-           + "à mão."
-         : "Sem endereço gravado, a coluna No ar sai de um arquivo escrito à "
-           + "mão. Com ele, o DERVS bate no seu site e conta o que respondeu."),
-    carimbo: leuEnd ? "endereços lidos " + haQuanto(ENDERECOS_LIDO_EM) : "",
+    titulo: "Seus servidores",
+    estado: !leuServ ? "sem_dados" : (nServ ? "conectado" : "desconectado"),
+    resumo: resumoServ,
+    carimbo: leuServ ? "servidores lidos " + haQuanto(SERVIDORES_LIDO_EM) : "",
+    /* Nota fixa REAPROVEITADA sem reescrever — o texto e as travas que ela
+       descreve não mudaram: nunca pedimos senha, sempre recusamos rede
+       interna. */
     nota: "Nunca pedimos chave de acesso ao servidor, e não vamos pedir: o "
         + "endereço público basta para conferir se ele responde. Endereço de "
         + "rede interna é recusado de propósito — o painel roda num servidor, "
         + "e um endereço interno faria dele uma ferramenta de varredura."
   });
-  if (leuEnd) cartao3.append(formularioDeEndereco());
+  /* NUNCA pinta lista nem formulário antes da leitura responder — é a lei 2:
+     "nenhum servidor cadastrado" tem de significar "olhei, e não há", nunca
+     "ainda não perguntei". */
+  if (leuServ) {
+    cartao3.append(formularioDeServidorNovo());
+    for (const item of SERVIDORES) cartao3.append(blocoDeServidor(item));
+  }
   onde.append(cartao3);
 
   reencontrarEspera();
 }
 
-/* O campo de endereço, mais a lista do que já está gravado. Um formulário de
-   verdade: quem digita e aperta Enter espera que funcione, e um `<div>` com
-   botão não dá isso ao teclado nem ao leitor de tela. */
-function formularioDeEndereco() {
+/* O texto de ajuda do campo "padrão de subdomínio", palavra por palavra do
+   design. Numa função à parte de propósito: `formularioDeServidorNovo` monta
+   dado da TELA (nomes de campo), não dado MEDIDO — juntar o texto ali
+   confundiria o vigia do item 8 (`test_design.NenhumNumeroSemCarimbo`), que
+   cobra carimbo em toda função que mistura dado medido com escrita na
+   tela. */
+function textoDeAjudaDoPadrao() {
+  return "Se os projetos deste servidor seguem um padrão de endereço, o "
+       + "DERVS testa sozinho e sugere o preenchimento — você ainda confirma "
+       + "antes de qualquer coisa ser gravada.";
+}
+
+/* O formulário de cadastrar servidor, acima da lista. Nome obrigatório,
+   padrão de subdomínio opcional — é ele que alimenta a autodetecção da
+   etapa 8, mas esta tela não a chama ainda. */
+function formularioDeServidorNovo() {
+  const form = document.createElement("form");
+  form.className = "servidor servidor--novo";
+
+  const titulo = document.createElement("h3");
+  titulo.textContent = "Cadastrar servidor";
+  form.append(titulo);
+
+  const nome = document.createElement("input");
+  nome.type = "text";
+  nome.required = true;
+  nome.placeholder = "OVH";
+  nome.setAttribute("aria-label", "Nome do servidor");
+
+  const padrao = document.createElement("input");
+  padrao.type = "text";
+  padrao.placeholder = "*.tinehost.com.br";
+  padrao.setAttribute("aria-label", "Padrão de subdomínio (opcional)");
+
+  const ajuda = document.createElement("p");
+  ajuda.className = "mole";
+  ajuda.textContent = textoDeAjudaDoPadrao();
+
+  const salvar = document.createElement("button");
+  salvar.className = "botao";
+  salvar.type = "submit";
+  salvar.textContent = "Cadastrar servidor";
+  const acoes = document.createElement("div");
+  acoes.className = "acoes";
+  acoes.append(salvar);
+
+  form.addEventListener("submit", ev => {
+    ev.preventDefault();
+    guardarServidor(nome.value.trim(), padrao.value.trim());
+    nome.value = padrao.value = "";
+  });
+
+  form.append(nome, padrao, ajuda, acoes);
+  return form;
+}
+
+/* Um bloco por servidor cadastrado: nome, padrão (se houver), botão Apagar e
+   os endereços gravados NAQUELE servidor. */
+function blocoDeServidor(item) {
+  const bloco = document.createElement("div");
+  bloco.className = "servidor";
+
+  const cabeca = document.createElement("div");
+  cabeca.className = "servidor__cabeca";
+  const nome = document.createElement("strong");
+  nome.className = "servidor__nome";
+  nome.textContent = item.nome;
+  cabeca.append(nome);
+  if (item.padrao_subdominio) {
+    const padrao = document.createElement("span");
+    padrao.className = "servidor__padrao";
+    padrao.textContent = item.padrao_subdominio;
+    cabeca.append(padrao);
+  }
+  bloco.append(cabeca);
+
+  const apagar = document.createElement("button");
+  apagar.className = "botao botao--secundario";
+  apagar.type = "button";
+  apagar.textContent = "Apagar";
+  apagar.addEventListener("click", () => confirmar({
+    titulo: "Apagar o servidor " + item.nome + "?",
+    texto: "Os endereços gravados nele saem do DERVS. O site em si não é "
+         + "tocado — só paramos de medir por aqui.",
+    sim: "Apagar", nao: "Manter"
+  }, () => apagarServidor(item.id)));
+  const acoes = document.createElement("div");
+  acoes.className = "acoes";
+  acoes.append(apagar);
+  bloco.append(acoes);
+
+  bloco.append(formularioDeEndereco(item.id));
+  return bloco;
+}
+
+/* O campo de endereço daquele SERVIDOR, mais a lista do que já está gravado
+   nele. Um formulário de verdade: quem digita e aperta Enter espera que
+   funcione, e um `<div>` com botão não dá isso ao teclado nem ao leitor de
+   tela.
+
+   `servidorId` filtra `ENDERECOS` — a lista chata que `/api/enderecos`
+   devolve agora, um item por (servidor, projeto) — e não entra num campo do
+   formulário: o servidor já está implícito no bloco em que o formulário
+   vive, como o design manda. */
+function formularioDeEndereco(servidorId) {
   const caixa = document.createElement("div");
   caixa.className = "enderecos";
 
-  for (const [projeto, url] of Object.entries(ENDERECOS || {})) {
+  const doServidor = (ENDERECOS || []).filter(e => e.servidor_id === servidorId);
+  for (const { projeto, url } of doServidor) {
     const li = document.createElement("div");
     li.className = "endereco";
 
@@ -1331,7 +1501,7 @@ function formularioDeEndereco() {
        NÃO DEU PARA CONFERIR. `ok` como `null` é o quarto estado do selo, e
        pintá-lo de "fora do ar" apagaria a diferença entre um site caído e uma
        medição que não aconteceu. */
-    const m = MEDIDAS[projeto];
+    const m = MEDIDAS[chaveDaMedida(servidorId, projeto)];
     if (m) {
       dizeres.append(marcaDaPorta(m.ok === true ? "conectado"
                                 : m.ok === false ? "desconectado" : "sem_dados"));
@@ -1348,7 +1518,7 @@ function formularioDeEndereco() {
     tirar.className = "botao botao--secundario";
     tirar.type = "button";
     tirar.textContent = "Apagar";
-    tirar.addEventListener("click", () => guardarEndereco(projeto, ""));
+    tirar.addEventListener("click", () => guardarEndereco(servidorId, projeto, ""));
     const acoes = document.createElement("div");
     acoes.className = "acoes";
     acoes.append(tirar);
@@ -1375,7 +1545,7 @@ function formularioDeEndereco() {
   salvar.textContent = "Guardar o endereço";
   form.addEventListener("submit", ev => {
     ev.preventDefault();
-    guardarEndereco(projeto.value.trim(), url.value.trim());
+    guardarEndereco(servidorId, projeto.value.trim(), url.value.trim());
     projeto.value = url.value = "";
   });
   const acoes = document.createElement("div");

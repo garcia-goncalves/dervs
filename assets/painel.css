@@ -628,7 +628,63 @@ main { padding-bottom: var(--e12); }
 
 .endereco--novo { border-top: var(--traco) dashed var(--borda); padding-top: var(--e3); }
 
+/* ------------------------------------------------- os servidores cadastrados
+   Etapa 7 do plano "servidores multiplos": o cartao "Seus servidores" lista
+   um bloco por servidor, cada um com nome, padrao (se houver) e o proprio
+   grupo de enderecos dentro — `.enderecos`/`.endereco` sao reusados sem
+   alteracao, como o design manda. */
+.servidor {
+  margin-top: var(--e3);
+  padding-top: var(--e3);
+  border-top: var(--traco) solid var(--borda);
+}
 
+.servidor__cabeca {
+  display: flex;
+  align-items: baseline;
+  gap: var(--e2);
+  flex-wrap: wrap;
+}
+
+.servidor__nome { font-size: var(--fs-destaque); }
+
+/* Padrao de subdominio e dado tecnico, igual a um endereco — mesma fonte
+   monoespacada de `.endereco__url`. */
+.servidor__padrao {
+  font-family: var(--fonte-mono);
+  font-size: var(--fs-metadado);
+  color: var(--texto-suave);
+}
+
+/* O formulario de cadastrar servidor, acima da lista. Borda TRACEJADA, igual
+   a `.endereco--novo` — o mesmo sinal de "isto e' um formulario, nao um
+   servidor ja cadastrado". */
+.servidor--novo {
+  border-top: var(--traco) dashed var(--borda);
+  padding-top: var(--e3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--e2);
+}
+
+.servidor--novo h3 { margin: 0; font-size: var(--fs-corpo); }
+
+.servidor--novo input {
+  min-height: 44px;
+  padding: var(--e2);
+  border: var(--traco) solid var(--borda);
+  border-radius: var(--r2, 4px);
+  background: var(--fundo);
+  color: var(--texto);
+  font: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.servidor--novo input:focus-visible {
+  outline: var(--foco-largura) solid var(--acao);
+  outline-offset: 2px;
+}
 
 
 /* ------------------------------------------------------- o registro ao vivo */

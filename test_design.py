@@ -1044,6 +1044,140 @@ class OCardEODetalheMostramServidoresSeparados(unittest.TestCase):
             "ESTADO_DA_PORTA sao permitidos" % estados)
 
 
+class OCartaoDeConectarListaOsServidores(unittest.TestCase):
+    """Etapa 7 do plano 'servidores multiplos'.
+
+    O cartao "O seu servidor" virou "Seus servidores": cadastra, lista,
+    apaga servidor, e o formulario de endereco vive DENTRO de cada bloco. Os
+    textos abaixo sao os de `design.md`, secao `textos`, palavra por
+    palavra -- divergir um caractere e' o mesmo defeito que "Máquinas" no
+    roteiro velho (`ORoteiroChamaAsTelasPeloNomeDelas`).
+    """
+
+    def script(self):
+        return PAINEL_JS.read_text(encoding="utf-8")
+
+    def folha(self):
+        return sem_comentarios_css(PAINEL_CSS.read_text(encoding="utf-8"))
+
+    def classes_do_script(self):
+        """Mesma extracao das outras classes deste arquivo: cada literal
+        lido inteiro, sem atravessar aspas nem parar na primeira maiuscula
+        (as duas sabotagens de 29/08/2026)."""
+        nomes = set()
+        for literal in re.findall(r'"(?:[^"\\\n]|\\.)*"', self.script()):
+            nomes.update(re.findall(r"[A-Za-z][A-Za-z0-9_-]*", literal))
+        return nomes
+
+    def classes_da_folha(self):
+        """Nome de classe INTEIRO -- `assertIn` puro deixaria `.servidorX`
+        aprovar a busca por `.servidor`, porque uma string contem a outra."""
+        return set(re.findall(r"\.([A-Za-z][A-Za-z0-9_-]*)", self.folha()))
+
+    def frases_concatenadas(self):
+        """`design.md` escreve frases longas, e o painel.js as monta com
+        `+` entre literais quebrados em varias linhas -- um `assertIn` cru
+        contra o arquivo inteiro nunca acha a frase inteira. Esta funcao
+        junta cada CADEIA de literais unidos por `+` numa string so, e e' AI
+        que a frase completa aparece."""
+        script = re.sub(r"/\*.*?\*/", " ", self.script(), flags=re.S)
+        script = re.sub(r"(?m)^\s*//.*$", " ", script)
+        cadeias = re.findall(
+            r'"(?:[^"\\]|\\.)*"(?:\s*\+\s*"(?:[^"\\]|\\.)*")*', script)
+        return ["".join(re.findall(r'"((?:[^"\\]|\\.)*)"', c))
+                for c in cadeias]
+
+    def test_a_guarda_da_extracao_de_frases_concatenadas(self):
+        """Se a busca acima parar de juntar literais quebrados, os testes de
+        texto abaixo passariam vazios e mentiriam."""
+        junto = self.frases_concatenadas()
+        self.assertTrue(
+            any("DERVS" in f and len(f) > 80 for f in junto),
+            "nenhuma frase longa foi remontada -- a extracao quebrou")
+
+    def test_o_cabecalho_e_os_campos_de_cadastro_existem_palavra_por_palavra(self):
+        j = self.script()
+        for texto in ("Seus servidores", "Cadastrar servidor",
+                      "Nome do servidor",
+                      "Padrão de subdomínio (opcional)",
+                      "*.tinehost.com.br"):
+            with self.subTest(texto=texto):
+                self.assertIn(texto, j, "sumiu do painel.js: %r" % texto)
+
+    def test_o_texto_de_ajuda_do_padrao_e_o_do_design(self):
+        self.assertIn(
+            "Se os projetos deste servidor seguem um padrão de endereço, o "
+            "DERVS testa sozinho e sugere o preenchimento — você ainda "
+            "confirma antes de qualquer coisa ser gravada.",
+            self.frases_concatenadas())
+
+    def test_os_tres_resumos_do_selo_geral_existem(self):
+        junto = self.frases_concatenadas()
+        self.assertIn(
+            "Não consegui ler os servidores desta conta. Isso não quer "
+            "dizer que nenhum está cadastrado — quer dizer que não olhei.",
+            junto)
+        self.assertIn("Há 1 servidor cadastrado.", self.script())
+        self.assertIn(
+            "Nenhum servidor cadastrado ainda. Cadastre o nome de um "
+            "provedor (por exemplo OVH ou TineHost) para começar a gravar "
+            "endereços nele.",
+            junto)
+
+    def test_a_confirmacao_de_apagar_nomeia_o_que_morre(self):
+        self.assertIn(
+            "Os endereços gravados nele saem do DERVS. O site em si não é "
+            "tocado — só paramos de medir por aqui.",
+            self.frases_concatenadas())
+        self.assertIn('sim: "Apagar", nao: "Manter"', self.script())
+
+    def test_as_classes_novas_de_servidor_casam_dos_dois_lados(self):
+        """Sabotado nos dois sentidos antes de aceitar: renomear so no CSS
+        ou so no JS tem de acusar (o molde e' `ATelaDeComputadoresCasaDos
+        DoisLados`, ja provado assim em 29/08/2026)."""
+        no_css = self.classes_da_folha()
+        no_js = self.classes_do_script()
+        for classe in ("servidor", "servidor__cabeca", "servidor__nome",
+                       "servidor__padrao", "servidor--novo"):
+            with self.subTest(classe=classe):
+                self.assertIn(classe, no_css,
+                              "o painel.css nao estiliza .%s" % classe)
+                self.assertIn(classe, no_js,
+                              "o painel.js nao escreve a classe %r em "
+                              "string nenhuma" % classe)
+
+    def test_a_tela_busca_as_tres_rotas_de_servidor(self):
+        """`ATelaSoChamaRotaQueExiste` (test_servir.py) e' quem prova que a
+        rota EXISTE de verdade; este caso prova so que a TELA a busca."""
+        j = self.script()
+        self.assertIn('fetch("/api/servidores")', j)
+        self.assertIn('"/api/servidores/guardar"', j)
+        self.assertIn('"/api/servidores/remover"', j)
+
+    def test_o_formulario_de_endereco_manda_o_servidor_id(self):
+        """A licao do contrato: `guardarEndereco` tem de mandar
+        `servidor_id` no corpo -- sem ele `/api/enderecos/guardar` devolve
+        400 (servir.py), e o formulario pareceria quebrado sem motivo."""
+        j = self.script()
+        i = j.index("async function guardarEndereco")
+        fim = j.index("\n}\n", i)
+        corpo = j[i:fim]
+        self.assertIn("servidor_id: servidorId", corpo)
+
+    def test_o_cartao_nao_pinta_lista_nem_formulario_antes_de_ler(self):
+        """A armadilha do plano: 'pintar Nenhum servidor cadastrado enquanto
+        a leitura ainda nao voltou' e' a lei 2 quebrada na cara do dono. O
+        formulario e a lista so entram no cartao DENTRO do `if (leuServ)`."""
+        j = self.script()
+        i = j.index('titulo: "Seus servidores"')
+        fim = j.index("\nfunction formularioDeServidorNovo", i)
+        corpo = j[i:fim]
+        self.assertIn("if (leuServ) {", corpo,
+                      "a lista/formulario de servidor nao esta guardada "
+                      "pela leitura -- pintaria antes de /api/servidores "
+                      "responder")
+
+
 if __name__ == "__main__":
     # `exit=False` sozinho devolvia 0 mesmo com caso reprovado: em 28/08/2026
     # este arquivo imprimiu FAILED (failures=4) e a CI seguiu verde. O codigo
