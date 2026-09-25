@@ -221,8 +221,10 @@ do cofre (`DERVS_COFRE`) nasce lá e nunca passa por chat, repositório ou commi
 ## O servidor (etapa 16, 28/08/2026)
 
 O painel também roda em `https://dervs.com.br`, dentro de um container. **Colocar
-lá é um botão no GitHub**, e o roteiro inteiro — inclusive o que só a sua mão
-resolve — está em `docs/operacao/publicar-no-servidor.md`.
+lá é commit + push e a tarefa "Deploy para a VPS" do VS Code** (padrão em
+<https://github.com/garcia-goncalves/deploy-padrao>), e o roteiro inteiro —
+inclusive o que só a sua mão resolve — está em
+`docs/operacao/publicar-no-servidor.md`.
 
 O que muda entre este computador e o servidor é **só configuração**, nunca
 código. São seis variáveis, e cada uma existe por um motivo concreto:
@@ -241,8 +243,9 @@ código. São seis variáveis, e cada uma existe por um motivo concreto:
 `pythonw servir.py` e ponto — os padrões são os de sempre.
 
 Os arquivos: `Dockerfile` (a imagem), `docker-compose.yml` (como o container
-roda no servidor), `infra/nginx-dervs.conf` (o porteiro do site) e
-`.github/workflows/publicar.yml` (o botão).
+roda no servidor, montado lá mesmo com `build: .`), `infra/nginx-dervs.conf`
+(o porteiro do site) e `.deploy-vps` + `scripts/deploy-vps.*` (a tarefa do VS
+Code que publica).
 
 ### Rodar a imagem de produção aqui, para conferir
 

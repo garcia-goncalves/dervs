@@ -2,21 +2,23 @@
 #
 # Este arquivo não sobe nada nesta máquina. Aqui o painel roda direto,
 # `python servir.py`, e o `docs/LINKS.md` explica. O compose existe para o
-# servidor, e é copiado para lá pelo workflow de publicação.
+# servidor: a publicação sai do VS Code (tarefa "Deploy para a VPS"), o
+# servidor puxa o commit e monta a imagem ali mesmo, com `build: .`
+# (https://github.com/garcia-goncalves/deploy-padrao). Desde 25/09/2026 o
+# GitHub não publica mais nada.
 #
-# TRÊS COISAS QUE ESTE ARQUIVO NÃO FAZ, DE PROPÓSITO:
+# DUAS COISAS QUE ESTE ARQUIVO NÃO FAZ, DE PROPÓSITO:
 #
-#   1. Não constrói imagem. A imagem é construída no GitHub e baixada pronta.
-#      Construir no servidor faria a máquina que serve 8 sistemas parar para
-#      compilar, e faria o que está no ar depender do que estava no disco dela.
-#   2. Não abre porta na internet. A porta fica presa em `127.0.0.1`; quem fala
+#   1. Não abre porta na internet. A porta fica presa em `127.0.0.1`; quem fala
 #      com o mundo é o nginx do host, com o certificado.
-#   3. Não tem serviço `dervs-live`. O código antigo do dervs (`vivo/`) abre um
-#      terminal sem autenticação nenhuma. Ele não roda em lugar nenhum.
+#   2. Não tem serviço `dervs-live`. O código antigo do dervs (`vivo/`) abre um
+#      terminal sem autenticação nenhuma. Ele não roda em lugar nenhum — e o
+#      `.dockerignore` e o `Dockerfile` o mantêm fora da imagem montada aqui.
 
 services:
   dervs:
-    image: ${DERVS_IMAGEM:?defina DERVS_IMAGEM no .env do servidor}
+    build: .
+    image: dervs:vps
     container_name: dervs
     restart: unless-stopped
 
@@ -67,7 +69,8 @@ services:
       # `github_app.chave_de_pem` junta o miolo ignorando a armadura — medido
       # nos dois formatos (PKCS#1 e PKCS#8) em 02/09/2026, com a chave de
       # teste do repositório: o resultado é a mesma chave. Quem achata o
-      # arquivo é o workflow de publicação, e ele tira a armadura ANTES —
+      # arquivo é quem grava o `.env` do servidor (à mão, desde 25/09/2026), e
+      # tem de tirar a armadura ANTES —
       # colar o arquivo inteiro numa linha só produz algo que começa com
       # `-----`, e o filtro descarta a linha inteira: a chave sairia vazia.
       DERVS_GITHUB_APP_SLUG: ${DERVS_GITHUB_APP_SLUG:-}
