@@ -282,7 +282,7 @@ def achar_o_agente(raiz: str = "") -> str:
     return ""
 
 
-def comando_da_tarefa(agente: str, alvo: str) -> str:
+def comando_da_tarefa(agente: str, alvo: str, uma_vez: bool = False) -> str:
     """O valor de /TR, montado como DADO.
 
     `schtasks` tem regra de aspas propria: o valor de /TR e uma linha de comando
@@ -290,23 +290,32 @@ def comando_da_tarefa(agente: str, alvo: str) -> str:
     sem aspas vira dois argumentos la dentro. As aspas entram AQUI, uma vez, e
     `test_conectador.py` prova isso com um caminho com espaco.
     """
-    return '"%s" "%s" --alvo "%s" --intervalo 60' % (
-        sys.executable or "python", agente, alvo.rstrip("/"))
+    fim = "" if uma_vez else " --intervalo 60"
+    return '"%s" "%s" --alvo "%s"%s' % (
+        sys.executable or "python", agente, alvo.rstrip("/"), fim)
 
 
-def argumentos_do_schtasks(agente: str, alvo: str) -> list:
+def argumentos_do_schtasks(agente: str, alvo: str, plano_b: bool = False) -> list:
     """A LISTA de argumentos. Nunca string unica, nunca `shell=True`.
 
     Uma string unica com `shell=True` faz o caminho da pasta escolhida pela
     pessoa atravessar o interpretador de comandos do Windows. Lista fecha isso
     de uma vez: o sistema recebe argumento por argumento.
+
+    `ONLOGON` exige administrador e, sem ele, falha com "Acesso negado" — foi
+    assim que um computador ficou 26 dias calado. O plano B, `MINUTE`, nao
+    exige: a tarefa acorda a cada 10 minutos e o agente reporta UMA vez e sai.
     """
+    if plano_b:
+        return ["schtasks", "/Create", "/TN", NOME_DA_TAREFA,
+                "/TR", comando_da_tarefa(agente, alvo, uma_vez=True),
+                "/SC", "MINUTE", "/MO", "10", "/F"]
     return ["schtasks", "/Create", "/TN", NOME_DA_TAREFA,
             "/TR", comando_da_tarefa(agente, alvo),
             "/SC", "ONLOGON", "/F"]
 
 
-def agendar(agente: str, alvo: str) -> bool:
+def agendar(agente: str, alvo: str, plano_b: bool = False) -> bool:
     """Registra a tarefa. Devolve False sem levantar quando nao deu.
 
     `schtasks` e do Windows. No macOS e no Linux este arquivo pareia e grava a
@@ -316,7 +325,7 @@ def agendar(agente: str, alvo: str) -> bool:
     if os.name != "nt":
         return False
     try:
-        fim = subprocess.run(argumentos_do_schtasks(agente, alvo),
+        fim = subprocess.run(argumentos_do_schtasks(agente, alvo, plano_b),
                              shell=False, capture_output=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return False
@@ -397,6 +406,9 @@ def main() -> int:
         fala("  python " + agente + " --alvo " + alvo.rstrip("/") + " --intervalo 60")
     elif agendar(agente, alvo):
         fala("Pronto: a tarefa '" + NOME_DA_TAREFA + "' roda a cada login.")
+    elif agendar(agente, alvo, plano_b=True):
+        fala("Sem permissao de administrador para rodar a cada login, entao usei")
+        fala("o plano B: a tarefa '" + NOME_DA_TAREFA + "' acorda a cada 10 minutos.")
     else:
         fala("Nao consegui criar a tarefa agendada (o Windows pode ter pedido")
         fala("permissao de administrador). O pareamento acima valeu. Para")

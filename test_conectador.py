@@ -310,6 +310,21 @@ class OComandoDaTarefaAgendada(unittest.TestCase):
         tr = conectador.comando_da_tarefa("/x/enviar.py", "https://um site/")
         self.assertIn('--alvo "https://um site"', tr)
 
+    def test_o_plano_b_nao_usa_ONLOGON_e_reporta_uma_vez(self):
+        """ONLOGON exige administrador; MINUTE nao. Sem --intervalo o agente
+        reporta uma vez e sai, senao cada acordada empilharia um laco."""
+        argv = conectador.argumentos_do_schtasks("/x/enviar.py", "https://d",
+                                                 plano_b=True)
+        self.assertNotIn("ONLOGON", argv)
+        self.assertEqual("MINUTE", argv[argv.index("/SC") + 1])
+        self.assertEqual("10", argv[argv.index("/MO") + 1])
+        self.assertNotIn("--intervalo", argv[argv.index("/TR") + 1])
+
+    def test_o_plano_A_continua_com_laco(self):
+        argv = conectador.argumentos_do_schtasks("/x/enviar.py", "https://d")
+        self.assertEqual("ONLOGON", argv[argv.index("/SC") + 1])
+        self.assertIn("--intervalo 60", argv[argv.index("/TR") + 1])
+
     def test_agendar_nunca_usa_shell(self):
         vistos = {}
 
