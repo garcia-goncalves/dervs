@@ -173,6 +173,10 @@ class OBotaoConsertarSoExisteAtrasDeConsertavel(unittest.TestCase):
         self.assertIn("p.consertavel", cabeca,
                       "o botao esta guardado por %r, e nao por `p.consertavel`"
                       % cabeca)
+        # O bloco tem de ABRIR na propria linha do `if`: `if (x) { }` seguido
+        # de um bloco solto guardaria nada. (Sabotado: passava.)
+        self.assertTrue(cabeca.rstrip().endswith("{"),
+                        "o `if` nao abre o bloco do botao: %r" % cabeca)
         # ... e ninguem o fecha entre o `if` e o rotulo (o rotulo estaria FORA).
         entre = corpo[corpo.index("\n", j):i]
         self.assertNotIn("\n  }", entre,
