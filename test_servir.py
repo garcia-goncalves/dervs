@@ -4065,6 +4065,12 @@ class OBotaoConsertarComIA(BaseServidorDeVerdade):
         for p in fora:
             self.assertIs(p["consertavel"], False, p["id"])
 
+    def test_projeto_bloqueado_nao_e_consertavel_nem_com_caixa_diferente(self):
+        # A rota recusa com 403; a tela nao pode oferecer um botao que sempre falha.
+        self.com_projeto("Ajudei-Saude", memoria_crlf=["a.md"])
+        pend = {p["id"]: p for p in self.dados()["pendencias"]}
+        self.assertIs(pend["memoria_crlf:Ajudei-Saude"]["consertavel"], False)
+
     def test_a_poda_e_depois_do_motor_montar_estado_ainda_tem_os_alertas(self):
         """Terceiro teste da poda (CLAUDE.md): `consertavel` e posto sobre o
         resultado do motor; o estado cru continua entregando o dado."""

@@ -828,8 +828,12 @@ class Hub(SimpleHTTPRequestHandler):
             # cru que o motor le os achados. A regra vem de UMA constante, a
             # mesma que `_consertar_pedir` confere do lado do servidor.
             for x in pend:
-                x["consertavel"] = (x.get("regra")
-                                    in tarefas.REGRAS_CONSERTAVEIS_PELA_TELA)
+                # Projeto bloqueado sai FALSO aqui: a rota o recusaria com 403, e
+                # um botao que sempre falha e um botao que mente.
+                x["consertavel"] = (
+                    x.get("regra") in tarefas.REGRAS_CONSERTAVEIS_PELA_TELA
+                    and (x.get("projeto") or "").lower()
+                    not in tarefas.PROJETOS_BLOQUEADOS)
             tend = memoria.tendencia(con, agora_iso)
             guardadas = banco.arquivadas_detalhe(usuario_id=usuario_id, con=con)
         finally:
