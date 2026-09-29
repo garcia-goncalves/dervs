@@ -29,9 +29,15 @@ endereço na barra do navegador e cair direto nela.
 | Painel | `#/painel` | a frase de resumo, a ação recomendada, e um selo por projeto |
 | Projeto | `#/projeto/<nome>` | a prova do selo, nas três colunas, mais os arquivados |
 | Alerta | `#/alerta/<id>` | o que houve, e as ações: adiar 24 h ou "isto está certo assim" |
-| Conectar projeto | `#/conectar` | as três portas: o seu computador, a sua conta do GitHub, o seu servidor |
-| Computadores | `#/computadores` | quem reporta, e o número de pareamento |
-| Formas de entrar | `#/entrada` | chaves de acesso e códigos do papel |
+| Conectar | `#/conectar` | as três portas (o seu computador, a sua conta do GitHub, o seu servidor) e, embaixo, os computadores: parear e "Deixar consertar aqui". `#/computadores` cai aqui |
+| Consertar | `#/trabalho` e `#/auditoria` | abas Tarefas e Auditoria: o que a IA fez, o que espera o seu clique ("Pode fazer") e o que ela achou no código |
+| Conta | `#/conta` e `#/conta/entrada` | abas Consumo (quanto o painel gastou em 7 dias) e Formas de entrar (chaves de acesso e códigos do papel). `#/consumo` e `#/entrada` caem aqui |
+
+O menu do alto tem **quatro** lugares: Painel, Consertar, Conectar e Conta. Nos
+alertas de `memoria_crlf` e `env_drift` (fora de projeto bloqueado), a tela do
+alerta tem o botão **Consertar com IA**: um clique põe o conserto na fila, e o
+"Pode fazer" em Consertar libera. Sem computador conectado e autorizado, ou com o
+teto do dia estourado, a própria tela diz o motivo.
 
 A tela **Entrar** é outra página (`index-cortina.html` + `portas.html`): ela é
 servida antes de existir sessão, e por isso não mora aqui dentro.

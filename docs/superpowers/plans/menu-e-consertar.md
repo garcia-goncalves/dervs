@@ -29,7 +29,7 @@ desfecho tiver esse campo.
 
 ## Fatia A — servidor (executor 1)
 
-Arquivos: `servir.py`, `fila.py`, `banco.py` (só se faltar consulta), `test_servir.py`,
+Arquivos: `servir.py`, `fila.py`, `tarefas.py` (a constante mora aqui; `fila.py` a reexporta), `banco.py` (só se faltar consulta), `test_servir.py`,
 `test_fila.py`, `test_rotas.py`, `.github/workflows/ci.yml` (só se criar teste novo).
 
 1. `fila.REGRAS_CONSERTAVEIS_PELA_TELA` + teste de que é subconjunto de `REGRAS_MECANICAS`
