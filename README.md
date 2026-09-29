@@ -43,7 +43,7 @@ mora no celular. A chave privada nunca sai do aparelho: é por isso que passkey
 encontra chave nenhuma para oferecer.
 
 Cadastrar, apelidar e remover chaves é dentro do painel, no botão
-**Formas de entrar**. É lá também que se geram os dez códigos de papel — eles
+**Conta → Formas de entrar**. É lá também que se geram os dez códigos de papel — eles
 aparecem **uma vez só**. Detalhes e a razão de cada escolha em
 [`docs/operacao/formas-de-entrar.md`](docs/operacao/formas-de-entrar.md).
 
@@ -854,7 +854,7 @@ A etapa 8 abriu as tabelas para várias máquinas; a 11 é quem finalmente põe 
 de outra máquina lá dentro. O pacote `agente/` mede um computador e **manda** o
 resultado para um DERVS remoto.
 
-Conectar é um número de seis dígitos, gerado no botão **Computadores** do painel e
+Conectar é um número de seis dígitos, gerado em **Conectar → Computadores**, no painel, e
 digitado na outra máquina, **num terminal aberto dentro da pasta do DERVS** — a
 que tem a pasta `agente`:
 
@@ -880,7 +880,7 @@ como deixar reportando sozinho — está em
 
 **Parear um computador nunca deu a ele o direito de rodar código.** A coluna
 `maquina.executa` nasce `0`, e ligar é um segundo sim, explícito, no botão
-**Deixar consertar aqui** da tela **Computadores**. Enquanto ele estiver
+**Deixar consertar aqui** da seção **Computadores** da tela **Conectar**. Enquanto ele estiver
 desligado, o agente daquela máquina continua medindo e reportando — e a
 resposta que ele recebe do painel vem sempre com `"tarefa": null`.
 
