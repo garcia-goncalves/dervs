@@ -66,6 +66,15 @@ TETO_AUDITORIA_USD = 1.50
 # objeto — nao ha uma segunda lista no repositorio.
 PROJETOS_BLOQUEADOS = {"ajudei-saude"}
 
+# As regras que o botao "Consertar com IA" do painel pode enfileirar. So as
+# MECANICAS e seguras: `dependencia_insegura`, `auditoria_vencida` e os achados
+# de seguranca ficam de fora (a IA nao mexe em seguranca sem revisao humana).
+# Mora aqui, e nao em `fila.py`, pelo mesmo motivo de PROJETOS_BLOQUEADOS:
+# `servir.py` aplica o filtro e nao pode importar `fila` (`test_rotas.AMPUTADOS`,
+# e o Dockerfile nao leva `fila.py`). `fila.py` reexporta o MESMO objeto, e
+# `test_fila` cobra que e subconjunto de `REGRAS_MECANICAS`.
+REGRAS_CONSERTAVEIS_PELA_TELA = frozenset({"memoria_crlf", "env_drift"})
+
 # Palpite, nao decisao: a spec nao fixa numero de turnos para auditoria. 60 e
 # o dobro de MAX_TURNOS porque ler um repositorio inteiro com Read/Grep/Glob
 # gasta turno rapido, e nenhum deles escreve nada — a primeira auditoria real
