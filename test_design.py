@@ -685,10 +685,10 @@ class ORoteiroChamaAsTelasPeloNomeDelas(unittest.TestCase):
         bloco = re.search(r"<nav.*?</nav>", html(), re.S)
         self.assertIsNotNone(bloco, "o menu sumiu do index.html")
         nomes = re.findall(r'data-tela="[^"]+"\s*>([^<]+)<', bloco.group(0))
-        self.assertEqual(len(nomes), 7, nomes)
+        self.assertEqual(len(nomes), 4, nomes)
         return nomes
 
-    def test_o_menu_tem_os_sete_nomes_esperados(self):
+    def test_o_menu_tem_os_quatro_nomes_esperados(self):
         """Se o menu mudar de forma, o teste abaixo passa vazio e nao vigia.
 
         Eram quatro ate a Fatia 2. "Trabalho" e "Consumo" entraram junto com o
@@ -697,11 +697,13 @@ class ORoteiroChamaAsTelasPeloNomeDelas(unittest.TestCase):
         impressao. "Auditoria" entrou na Fase 4 (02/09/2026), entre as duas —
         e' a mesma familia de "o que o DERVS ja fez/esta fazendo" que
         "Trabalho" representa para o conserto, so que para o que ele leu.
+
+        Eram sete ate o menu enxuto: agora sao quatro lugares, e as telas
+        antigas viraram abas ou secoes dentro deles (`test_menu.py` cobra o
+        desenho completo).
         """
         self.assertEqual(self.menu(),
-                         ["Painel", "Trabalho", "Auditoria", "Consumo",
-                          "Conectar projeto", "Computadores",
-                          "Formas de entrar"])
+                         ["Painel", "Consertar", "Conectar", "Conta"])
 
     def test_nenhum_roteiro_manda_clicar_num_botao_que_nao_existe(self):
         # O par: o nome errado que ja custou uma verificacao, e o certo.
@@ -710,7 +712,9 @@ class ORoteiroChamaAsTelasPeloNomeDelas(unittest.TestCase):
         for doc in self.DOCS:
             texto = doc.read_text(encoding="utf-8")
             for errado, certo in trocas.items():
-                self.assertIn(certo, self.menu(), certo)
+                # "Computadores" deixou de ser item do menu: e' o titulo de
+                # uma secao da tela Conectar. O teste cobra o titulo.
+                self.assertIn(">%s<" % certo, html(), certo)
                 with self.subTest(doc=doc.name, palavra=errado):
                     self.assertNotIn(
                         "**%s**" % errado, texto,
@@ -859,8 +863,9 @@ class ATelaDeAuditoriaCasaOsTresLados(unittest.TestCase):
         h = self.html_texto()
         self.assertIn('id="tela-auditoria"', h,
                       "a <section id=\"tela-auditoria\"> sumiu do index.html")
-        self.assertIn('data-tela="auditoria"', h,
-                      "o link da navegacao com data-tela=\"auditoria\" sumiu")
+        # A auditoria e' uma aba de "Consertar", nao mais item do menu.
+        self.assertIn('data-aba="auditoria"', h,
+                      "a aba com data-aba=\"auditoria\" sumiu")
         j = self.js_texto()
         self.assertRegex(
             j, r'case\s+"auditoria"\s*:',

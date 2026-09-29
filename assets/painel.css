@@ -100,6 +100,35 @@ nav.mapa a[aria-current="page"] {
 }
 .topo .canto { display: flex; gap: var(--e2); flex-shrink: 0; }
 
+/* O seletor de dentro da tela (Tarefas | Auditoria, Consumo | Formas de
+   entrar). Mesma linguagem do menu, mas por baixo dele: a aba marcada é
+   `--acao`, nunca verde (verde é estado saudável). */
+.abas {
+  display: flex;
+  gap: var(--e1);
+  flex-wrap: wrap;
+  margin-bottom: var(--e4);
+}
+.abas a {
+  padding: var(--e2) var(--e3);
+  border: var(--traco) solid transparent;
+  border-radius: var(--raio);
+  color: var(--texto-suave);
+  text-decoration: none;
+  font-size: var(--fs-metadado);
+  font-weight: var(--peso-medio);
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.abas a:hover { background: var(--fundo-elevado); }
+.abas a[aria-current="page"] {
+  color: var(--acao);
+  border-color: var(--borda-forte);
+  background: var(--fundo-elevado);
+}
+#alerta-consertar-resposta { margin-top: var(--e4); }
+
 /* Em 360px o cabeçalho inteiro quebrava em quatro linhas e comia 217px — um
    terço da tela, antes de o primeiro projeto aparecer. Agora a marca e os dois
    botões ficam na primeira linha, e a navegação vira uma faixa que rola DENTRO
