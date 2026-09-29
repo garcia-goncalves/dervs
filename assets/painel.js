@@ -113,17 +113,47 @@ function rota() {
   return { tela: cru[0] || "painel", alvo: decodeURIComponent(cru[1] || "") };
 }
 
-function mostrar(tela) {
+/* O menu tem QUATRO lugares (Painel, Consertar, Conectar, Conta), mas as telas
+   continuam sendo as de sempre: cada uma vive sob o lugar certo. Esta tabela
+   diz qual item do menu fica marcado para cada tela. Tela que não está aqui
+   (projeto, alerta) não marca nenhum, como antes. */
+const MENU_DE = {
+  painel: "painel",
+  trabalho: "trabalho", auditoria: "trabalho",
+  conectar: "conectar",
+  consumo: "conta", entrada: "conta"
+};
+
+/* Os endereços que existiam antes do menu enxuto. Continuam abrindo a mesma
+   coisa: o endereço é reescrito para o novo (sem empilhar histórico), e a tela
+   certa abre. Quem guardou o link nos favoritos não percebe a troca. */
+const ROTAS_ANTIGAS = {
+  computadores: "#/conectar",
+  consumo: "#/conta",
+  entrada: "#/conta/entrada"
+};
+
+/* `abas` diz qual aba do seletor da tela fica marcada (Tarefas | Auditoria,
+   Consumo | Formas de entrar). `tambem` são telas que aparecem juntas. */
+function mostrar(tela, { aba = "", tambem = [] } = {}) {
+  const abertas = new Set([tela, ...tambem]);
   for (const s of document.querySelectorAll("main > section")) {
-    s.hidden = s.id !== "tela-" + tela;
+    s.hidden = !abertas.has(s.id.replace(/^tela-/, ""));
   }
+  const item = MENU_DE[tela];
   for (const a of document.querySelectorAll("nav.mapa a")) {
-    if (a.dataset.tela === tela) a.setAttribute("aria-current", "page");
+    if (a.dataset.tela === item) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  }
+  for (const a of document.querySelectorAll(".abas a")) {
+    if (a.dataset.aba === aba) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   }
 }
 
 function navegar() {
+  const antiga = ROTAS_ANTIGAS[rota().tela];
+  if (antiga) history.replaceState(null, "", antiga);
   const { tela, alvo } = rota();
   /* Sair da tela encerra a espera da máquina nova. Repintar a MESMA tela não —
      esse caso é tratado por `reencontrarEspera`. */
@@ -131,18 +161,26 @@ function navegar() {
   switch (tela) {
     case "projeto":      mostrar("projeto"); pintarProjeto(alvo); break;
     case "alerta":       mostrar("alerta"); pintarAlerta(alvo); break;
-    case "trabalho":     mostrar("trabalho"); pintarTrabalho(alvo); break;
-    case "auditoria":    mostrar("auditoria"); pintarAuditoria(alvo); break;
-    case "consumo":      mostrar("consumo"); pintarConsumo(); break;
+    case "trabalho":     mostrar("trabalho", { aba: "trabalho" }); pintarTrabalho(alvo); break;
+    case "auditoria":    mostrar("auditoria", { aba: "auditoria" }); pintarAuditoria(alvo); break;
+    /* "Conta" tem duas abas. `#/conta` abre o consumo; `#/conta/entrada`, as
+       formas de entrar. `#/consumo` e `#/entrada` chegam aqui reescritos por
+       `ROTAS_ANTIGAS`. */
+    case "conta":
+      if (alvo === "entrada") { mostrar("entrada", { aba: "entrada" }); pdCarregar(); }
+      else { mostrar("consumo", { aba: "consumo" }); pintarConsumo(); }
+      break;
     /* A tela pinta PRIMEIRO, com o que ja se sabe, e depois pergunta. Assim
        ela nao fica em branco esperando a rede -- e "nao deu para conferir"
        fica reservado para a pergunta que falhou, e nao para a que nunca foi
        feita. As duas coisas se parecem na tela e nao sao a mesma. */
-    case "conectar":     mostrar("conectar"); pintarConectar();
+    /* A tela dos computadores (parear, "Deixar consertar aqui") mora embaixo
+       da de conectar projeto, na mesma página. */
+    case "conectar":     mostrar("conectar", { tambem: ["computadores"] });
+                         pintarConectar();
                          olharOsComputadores(); olharOsServidores();
-                         olharOsEnderecos(); olharOGithub(); break;
-    case "computadores": mostrar("computadores"); carregarComputadores(); break;
-    case "entrada":      mostrar("entrada"); pdCarregar(); break;
+                         olharOsEnderecos(); olharOGithub();
+                         carregarComputadores(); break;
     default:             mostrar("painel"); pintarPainel(); break;
   }
   window.scrollTo(0, 0);
@@ -342,7 +380,7 @@ function pintarPainel() {
     const abrir = document.createElement("button");
     abrir.className = "botao botao--secundario abrir";
     abrir.type = "button";
-    abrir.textContent = "Ver o que gerou este selo";
+    abrir.textContent = "Ver detalhes";
     abrir.addEventListener("click",
       () => irPara("#/projeto/" + encodeURIComponent(p.nome)));
 
@@ -601,7 +639,7 @@ function pintarAlertasDoProjeto(projeto) {
     const b = document.createElement("button");
     b.className = "botao botao--secundario";
     b.type = "button";
-    b.textContent = "Abrir";
+    b.textContent = "Ver detalhes";
     b.addEventListener("click", () => irPara("#/alerta/" + encodeURIComponent(p.id)));
     li.append(txt, b);
     ul.append(li);
@@ -672,10 +710,76 @@ function pintarArquivados(projeto) {
 
 /* ================================================== 6. Alerta ============ */
 
+/* O que o dono lê quando o pedido de conserto não entra. Sempre uma frase
+   em português: "nada acontece" ao clicar é o pior dos resultados. O servidor
+   fala pela própria boca só nos dois 403 que descrevem algo que o dono entende;
+   o resto é frase nossa. */
+function frasePorQueNaoConsertou(status, corpo) {
+  const erro = corpo && typeof corpo.erro === "string" ? corpo.erro : "";
+  if (status === 401) return "Sua sessão acabou. Recarregue a página e entre de novo.";
+  if (status === 404) return "Este alerta não está mais na lista. Volte ao painel para ver o que vale agora.";
+  if (status === 403 && erro === "projeto bloqueado") {
+    return "Este projeto não pode ser consertado pelo DERVS.";
+  }
+  if (status === 403) return "Este tipo de alerta não é consertado por aqui.";
+  if (status === 429) return "Você pediu conserto demais em pouco tempo. Espere um pouco e tente de novo.";
+  return "Não deu para pedir o conserto agora (erro " + status + "). Tente de novo em instantes.";
+}
+
+async function consertarComIA(p, botao) {
+  const caixa = $("#alerta-consertar-resposta");
+  const texto = $("#alerta-consertar-texto");
+  const aviso = $("#alerta-consertar-aviso");
+  const link = $("#alerta-consertar-link");
+  aviso.hidden = true;
+  aviso.textContent = "";
+  botao.disabled = true;
+
+  const mostrarFalha = (frase) => {
+    caixa.hidden = false;
+    link.hidden = true;
+    texto.textContent = frase;
+    botao.disabled = false;
+  };
+
+  let r;
+  try {
+    r = await escrever("/api/consertar", { id: p.id });
+  } catch {
+    mostrarFalha("Não deu para falar com o servidor. Confira a conexão e tente de novo.");
+    return;
+  }
+  let corpo = null;
+  try { corpo = await r.json(); } catch {}
+
+  if (!r.ok) { mostrarFalha(frasePorQueNaoConsertou(r.status, corpo)); return; }
+  if (!corpo || corpo.ok !== true) {
+    mostrarFalha("O servidor respondeu de um jeito que não entendi. Confira em "
+                 + "Consertar se o pedido entrou na fila.");
+    link.hidden = false;
+    return;
+  }
+
+  caixa.hidden = false;
+  link.hidden = false;
+  texto.textContent = corpo.pedido === false
+    ? "Este conserto já estava na fila. Aprove em Consertar."
+    : "Na fila. Aprove em Consertar.";
+  /* O aviso é o motivo pelo qual o conserto entrou na fila mas NÃO roda agora
+     (nenhum computador, sem autorização, teto do dia). Vem pronto do servidor. */
+  if (typeof corpo.aviso === "string" && corpo.aviso) {
+    aviso.hidden = false;
+    aviso.textContent = corpo.aviso;
+  }
+  botao.disabled = true; /* já está na fila: outro clique só repetiria o pedido */
+  await carregarTarefas();
+}
+
 function pintarAlerta(id) {
   const p = (ESTADO && ESTADO.pendencias || []).find(x => x.id === id);
   const acoes = $("#alerta-acoes");
   acoes.textContent = "";
+  $("#alerta-consertar-resposta").hidden = true;
   if (!p) {
     $("#alerta-titulo").textContent = "Este alerta não está mais na lista";
     $("#alerta-texto").textContent =
@@ -717,6 +821,20 @@ function pintarAlerta(id) {
       catch { recado("não deu para copiar. O caminho é " + a.caminho, true); }
     });
     acoes.append(b);
+  }
+
+  /* O botão só existe quando o SERVIDOR diz que a regra é consertável
+     (`consertavel`). A tela nunca decide sozinha: a lista de regras vive num
+     lugar só, no servidor, e ele recusa o pedido de qualquer outra de todo
+     jeito. Sem `consertavel`, sem botão. */
+  if (p.consertavel) {
+    const conserto = document.createElement("button");
+    conserto.className = "botao";
+    conserto.type = "button";
+    conserto.id = "alerta-consertar";
+    conserto.textContent = "Consertar com IA";
+    conserto.addEventListener("click", () => consertarComIA(p, conserto));
+    acoes.prepend(conserto);
   }
 
   const adiar = document.createElement("button");
@@ -1352,7 +1470,8 @@ function pintarConectar() {
     caminhos: [
       { rotulo: "Baixar o conectador", aoClicar: baixarConectador },
       { rotulo: "Usar a linha de comando", secundario: true,
-        aoClicar: () => irPara("#/computadores") }
+        /* Os computadores moram embaixo desta mesma tela: descer até eles. */
+        aoClicar: () => $("#tela-computadores").scrollIntoView({ behavior: "smooth" }) }
     ],
     depois: "espera-maquina",
     nota: "O conectador é um arquivo que você abre com dois cliques: ele "
@@ -2241,6 +2360,13 @@ async function recarregarTarefa() {
     + (t.frase ? " — " + t.frase : "")
     + (t.erro ? " — " + t.erro : "");
   $("#tarefa-numeros").textContent = numerosDaTarefa(t);
+
+  /* O pedido de alteração, quando a sessão abriu um. Só endereço que passa em
+     `enderecoSeguro`: o campo vem do desfecho gravado pelo computador. */
+  const prLink = $("#tarefa-pr");
+  const temPr = !!(t.pr_url && enderecoSeguro(t.pr_url));
+  $("#tarefa-pr-caixa").hidden = !temPr;
+  prLink.href = temPr ? t.pr_url : "#";
 
   const linhas = $("#tarefa-linhas");
   linhas.textContent = "";
