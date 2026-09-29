@@ -1446,6 +1446,27 @@ async function olharOsComputadores() {
   if (rota().tela === "conectar") pintarConectar();
 }
 
+/* A PORTA 1 NÃO PODE DIZER "conectado" SÓ PORQUE HÁ LINHAS NA LISTA.
+   Em 29/09/2026 a tela mostrava "[OK] conectado" para dois computadores que
+   não davam notícia havia 26 dias — o painel inteiro "sem dados" e a porta
+   verde. Uma máquina calada não é uma máquina conectada: quem manda é o
+   `visto_em` MAIS RECENTE da lista, e o limite é largo de propósito (o agente
+   manda a cada 10 min no máximo; duas horas de silêncio já é queda, não
+   atraso). Função pura, sem DOM: `test_menu.py` a executa de verdade. */
+const COMPUTADOR_CALADO_APOS_MS = 2 * 60 * 60 * 1000;
+function estadoDosComputadores(lista, agoraMs) {
+  const n = lista ? lista.length : 0;
+  if (!n) return { estado: "desconectado", vistoEm: "", calado: false };
+  const tempos = lista.map(m => Date.parse(m.visto_em)).filter(t => !isNaN(t));
+  if (!tempos.length) {
+    return { estado: "desconectado", vistoEm: "", calado: true };
+  }
+  const ultimo = Math.max(...tempos);
+  const calado = agoraMs - ultimo > COMPUTADOR_CALADO_APOS_MS;
+  return { estado: calado ? "desconectado" : "conectado",
+           vistoEm: new Date(ultimo).toISOString(), calado };
+}
+
 function pintarConectar() {
   const onde = $("#conectar-corpo");
   onde.textContent = "";
@@ -1455,13 +1476,21 @@ function pintarConectar() {
      para conferir" — nunca "nenhum computador", que é outra coisa. */
   const ligados = COMPUTADORES ? COMPUTADORES.length : 0;
   const leu = !!COMPUTADORES_LIDO_EM;
+  const vida = estadoDosComputadores(COMPUTADORES, Date.now());
   onde.append(porta({
     titulo: "O seu computador",
-    estado: !leu ? "sem_dados" : (ligados ? "conectado" : "desconectado"),
+    estado: !leu ? "sem_dados" : vida.estado,
     resumo: !leu
       ? "Não consegui ler a lista de computadores desta conta. Isso não quer "
         + "dizer que nenhum está conectado — quer dizer que não olhei."
-      : (ligados
+      : (vida.calado
+         ? "Há " + ligados + " computador(es) pareado(s) com esta conta, mas "
+           + "nenhum deu notícia " + (vida.vistoEm
+               ? "desde " + new Date(vida.vistoEm).toLocaleDateString("pt-BR")
+               : "até hoje")
+           + ". Sem o agente rodando, o painel não recebe medição nova e "
+           + "mostra tudo como “sem dados”. Abra o computador e rode o agente."
+      : ligados
          ? "Há " + ligados + " computador(es) reportando para esta conta. O "
            + "agente varre as pastas com Git e manda o que achou; não há nada "
            + "para escolher aqui."

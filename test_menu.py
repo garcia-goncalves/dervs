@@ -226,5 +226,69 @@ class ODetalheDaTarefaMostraOPedidoDeAlteracao(unittest.TestCase):
         self.assertIn("enderecoSeguro(t.pr_url)", corpo)
 
 
+class APortaDoComputadorNaoMenteQuandoEleCalou(unittest.TestCase):
+    """Em 29/09/2026 a porta 1 mostrava "[OK] conectado" para dois computadores
+    mudos havia 26 dias. Estado vem do `visto_em` mais recente, nao da contagem.
+
+    A funcao e pura e sem DOM, entao ela e EXECUTADA (node), nao so lida. Sem
+    node o caso de comportamento e pulado -- os de texto abaixo continuam.
+    """
+
+    @staticmethod
+    def _roda(lista, agora_iso):
+        import json, shutil, subprocess
+        node = shutil.which("node")
+        if not node:
+            return None
+        ini = JS.index("const COMPUTADOR_CALADO_APOS_MS")
+        fim = JS.index("function pintarConectar()")
+        prog = (JS[ini:fim] + "\nconsole.log(JSON.stringify("
+                "estadoDosComputadores(%s, Date.parse(%s))));"
+                % (json.dumps(lista), json.dumps(agora_iso)))
+        r = subprocess.run([node, "-"], input=prog, capture_output=True,
+                           text=True, timeout=30)
+        assert r.returncode == 0, r.stderr
+        return json.loads(r.stdout)
+
+    AGORA = "2026-09-29T18:00:00Z"
+
+    def test_calado_ha_semanas_nao_e_conectado(self):
+        r = self._roda([{"visto_em": "2026-09-03T12:00:00+00:00"},
+                        {"visto_em": "2026-08-28T12:00:00+00:00"}], self.AGORA)
+        if r is None:
+            self.skipTest("sem node")
+        self.assertEqual(r["estado"], "desconectado")
+        self.assertTrue(r["calado"])
+        self.assertTrue(r["vistoEm"].startswith("2026-09-03"))
+
+    def test_o_mais_recente_da_lista_e_quem_manda(self):
+        r = self._roda([{"visto_em": "2026-08-28T12:00:00+00:00"},
+                        {"visto_em": "2026-09-29T17:50:00+00:00"}], self.AGORA)
+        if r is None:
+            self.skipTest("sem node")
+        self.assertEqual(r["estado"], "conectado")
+        self.assertFalse(r["calado"])
+
+    def test_sem_carimbo_nenhum_nao_e_conectado(self):
+        r = self._roda([{"visto_em": None}], self.AGORA)
+        if r is None:
+            self.skipTest("sem node")
+        self.assertEqual(r["estado"], "desconectado")
+        self.assertTrue(r["calado"])
+
+    def test_lista_vazia_continua_desconectado(self):
+        r = self._roda([], self.AGORA)
+        if r is None:
+            self.skipTest("sem node")
+        self.assertEqual(r["estado"], "desconectado")
+        self.assertFalse(r["calado"])
+
+    def test_a_tela_usa_a_funcao_e_nao_a_contagem(self):
+        corpo = corpo_da_funcao("pintarConectar")
+        self.assertIn("estadoDosComputadores(COMPUTADORES", corpo)
+        self.assertIn("vida.estado", corpo)
+        self.assertNotIn('ligados ? "conectado"', corpo)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
