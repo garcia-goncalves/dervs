@@ -360,25 +360,6 @@ vez por servidor por sessão (nunca a cada repintura — cada medição pode lev
 
 ## Publicação
 
-> ### As quatro portas da fila fecharam (04/09/2026) — falta só o sinal do dono
->
-> A tabela `fila` ganhou `usuario_id` (migração em `_migrar_fila_semaforo`,
-> preenchida por `enfileirar` e por `servir._auditoria_pedir`), e as quatro
-> travas que faltavam agora conferem o dono no `WHERE`: `banco.aprovar_tarefa`,
-> `banco.pedir_parada` (chamada por `servir._tarefa_parar`, que passa a receber
-> o usuário), `banco.tarefa_para_maquina` e `banco.tarefas_do_painel`. De
-> quebra, o mesmo furo existia no `?id=` de `/api/tarefas` e no fluxo ao vivo
-> (`/api/eventos`) — os dois também passaram a exigir o dono. Sabotado de
-> proposito (removendo a condição em `aprovar_tarefa`) para provar que o
-> teste novo pega: pegou. 622 testes de `banco`/`servir`/`fila`/`sse` verdes,
-> 6 deles escritos para provar cruzando duas contas.
->
-> **O que falta não é código: é o sinal do dono para publicar** — a "porta 2"
-> de sempre (`docs/regras/ambientes-e-publicacao.md`), e o lote inclui também
-> o conserto do braço executor (`2b7b2eb`..`84c3f64`). Apague este bloco quando
-> a publicação sair.
-
-
 - **Deploy pelo VS Code (desde 25/09/2026).** Commit + push para a `main`, e a
   tarefa **"Deploy para a VPS"** (`.deploy-vps`, `scripts/deploy-vps.*`). O
   servidor faz backup do volume `dervs-dados`, monta a imagem ali mesmo
