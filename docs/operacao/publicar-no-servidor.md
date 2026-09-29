@@ -283,6 +283,27 @@ printf '%s\n' "login-do-github email@exemplo.com" | docker exec -i dervs python 
 O padrão da VPS, e como configurar o seu computador uma vez, estão em
 <https://github.com/garcia-goncalves/deploy-padrao>.
 
+**O apelido SSH `vps-ovh` (uma vez, no seu computador).** O SSH desta VPS
+escuta na porta **3119**, o usuário é `tiba`, e a porta 22 está fechada. Sem o
+apelido, o deploy pára em `Could not resolve hostname` ou em `Connection timed
+out`. Crie uma chave só para o deploy (`ssh-keygen -t ed25519 -f
+"$HOME\.ssh\dervs_deploy"`), peça ao administrador para acrescentar a parte
+**pública** (`.pub`) ao `authorized_keys` do `tiba` e cadastre no `~/.ssh/config`:
+
+```
+Host vps-ovh
+    HostName 57.129.81.137
+    Port 3119
+    User tiba
+    IdentityFile ~/.ssh/dervs_deploy
+    IdentitiesOnly yes
+```
+
+Teste com `ssh vps-ovh "sudo deploy --lista"`: deve listar os projetos, com o
+`dervs` como `sim`. A chave pede a frase dela a cada etapa do deploy. Quem
+tiver o arquivo da chave privada entra como `tiba`: ele não sai do seu
+computador, e revogar é apagar a linha no servidor.
+
 1. Faça commit e **push** para a `main` (o servidor publica o que está no
    GitHub, não o que está só no seu disco).
 2. No VS Code: **Terminal → Executar Tarefa → "Deploy para a VPS"**.

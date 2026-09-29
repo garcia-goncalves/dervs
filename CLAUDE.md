@@ -378,11 +378,13 @@ produção, mas quem o ligar duplica a tarefa.
   pediu em 28/08 a noite e a das CAPACIDADES, reescritas em Python. Isso entra
   pela esteira, comecando pelo briefing — "tudo que um DEV precisa" e intencao,
   nao escopo, **e continua sem comecar**.
-- **O que esta no ar e MAIS VELHO que a `main`.** A ultima publicacao levou a
-  Fatia 2; tudo de 29/08 (a tela de Computadores refeita e as mensagens do
-  agente) esta so no GitHub. Antes de dizer ao dono que a tela mudou, confira
-  qual commit esta no ar (`ssh vps-ovh sudo deploy --lista`; as etiquetas
-  `publicado-*` so cobrem ate 04/09/2026, quando o GitHub ainda publicava).
+- **O que esta no ar pode ser mais velho que a `main`.** Em 29/09/2026 as
+  15:15 subiu o commit `96eb3fc` (menu de quatro e botao Consertar), pelo
+  VS Code, e a rota nova `/api/consertar` responde 401 sem sessao (uma rota
+  inventada responde 404). Depois disso, confira qual commit esta no ar antes
+  de dizer ao dono que a tela mudou (`ssh vps-ovh sudo deploy --lista`; as
+  etiquetas `publicado-*` so cobrem ate 04/09/2026, quando o GitHub ainda
+  publicava).
 - `docs/operacao/` — os roteiros que exigem a mão do dono (GitHub App, entrar,
   conectar computador, **publicar no servidor**).
 
