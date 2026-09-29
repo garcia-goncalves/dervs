@@ -236,6 +236,12 @@ function fraseDeResumo(conta, total) {
     partes.push(conta.saudavel === 1 ? "1 está bem"
                                      : conta.saudavel + " estão bem");
   }
+  /* Sem nenhum estado medido a lista fica vazia, e a frase virava ". E 24 não
+     foram medidos." — um ponto solto na frente. Nesse caso a frase é só esta. */
+  if (!partes.length) {
+    return conta.sem_dados === 1 ? "O seu projeto ainda não foi medido."
+                                 : "Nenhum dos " + total + " projetos foi medido ainda.";
+  }
   let frase = partes.join(", ") + ".";
   if (conta.sem_dados) {
     frase += conta.sem_dados === 1 ? " E 1 não foi medido."
