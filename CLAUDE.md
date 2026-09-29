@@ -148,8 +148,9 @@ lê. `test_conectar_ponta_a_ponta` reprova se o espaço reservado sumir.
 ## As duas travas de 02/09/2026
 
 **Chegar ao servidor não põe a variável dentro do container.** São dois
-arquivos, mantidos por mãos diferentes: `publicar.yml` escreve no ambiente do
-servidor, e o bloco `environment:` do `docker-compose.yml` é que passa aquilo
+arquivos, mantidos por mãos diferentes: o `/opt/dervs/.env` do servidor
+(gravado à mão pelo administrador desde 25/09/2026; antes, pelo `publicar.yml`),
+e o bloco `environment:` do `docker-compose.yml` é que passa aquilo
 para dentro do processo. As três variáveis do GitHub App tinham a primeira
 metade e não a segunda — a porta 2 estava morta em produção **por
 construção**, e a tela dizia "o aplicativo não está registrado", que é a mesma
@@ -352,7 +353,8 @@ vez por servidor por sessão (nunca a cada repintura — cada medição pode lev
 - **O que esta no ar e MAIS VELHO que a `main`.** A ultima publicacao levou a
   Fatia 2; tudo de 29/08 (a tela de Computadores refeita e as mensagens do
   agente) esta so no GitHub. Antes de dizer ao dono que a tela mudou, confira
-  se a etiqueta `publicado-*` mais nova cobre o commit em questao.
+  qual commit esta no ar (`ssh vps-ovh sudo deploy --lista`; as etiquetas
+  `publicado-*` so cobrem ate 04/09/2026, quando o GitHub ainda publicava).
 - `docs/operacao/` — os roteiros que exigem a mão do dono (GitHub App, entrar,
   conectar computador, **publicar no servidor**).
 
@@ -377,15 +379,19 @@ vez por servidor por sessão (nunca a cada repintura — cada medição pode lev
 > a publicação sair.
 
 
-- **O deploy roda no GitHub, nunca daqui.** Nada de `ssh`, `scp`, `rsync` ou
-  `docker compose` apontados para o servidor saindo desta máquina.
-- `.github/workflows/publicar.yml` dispara **só** por `workflow_dispatch`, com a
-  palavra `PUBLICAR` digitada. Um passo dele falha se alguém acrescentar gatilho
-  automático — a trava é o próprio arquivo se conferindo.
-- **A VPS não é terreno limpo:** 26 containers, 8 sistemas. Porta alta nova,
-  conferida antes; arquivo de nginx novo; nenhum script escreve em
+- **Deploy pelo VS Code (desde 25/09/2026).** Commit + push para a `main`, e a
+  tarefa **"Deploy para a VPS"** (`.deploy-vps`, `scripts/deploy-vps.*`). O
+  servidor faz backup do volume `dervs-dados`, monta a imagem ali mesmo
+  (`build: .`, imagem `dervs:vps`), confere `https://dervs.com.br/robots.txt` e
+  volta sozinho se falhar. Padrão: https://github.com/garcia-goncalves/deploy-padrao .
+  O GitHub **não publica mais nada** — o `publicar.yml` foi removido.
+- O que o `publicar.yml` fazia de administração (gravar OAuth/GitHub App no
+  `.env`, trocar a cortina, convidar donos) agora é **manual no servidor**, com
+  o administrador: `docs/operacao/publicar-no-servidor.md`, passo 6.
+- **A VPS não é terreno limpo:** vários sistemas na mesma máquina. Porta alta
+  nova, conferida antes; arquivo de nginx novo; nenhum script escreve em
   `/etc/nginx/sites-enabled/`.
 - **A imagem é conferida subindo, não lendo.** `test_imagem.py` cobra a lista de
-  cópia do `Dockerfile` contra o que `servir.py` importa de verdade; o workflow
-  sobe o container e bate na porta. A CI sozinha não pega isso: ela roda os
+  cópia do `Dockerfile` contra o que `servir.py` importa de verdade; o deploy
+  sobe o container e bate no domínio. A CI sozinha não pega isso: ela roda os
   testes, não a imagem.

@@ -181,37 +181,6 @@ class ATravaDeDiffEstaLigada(unittest.TestCase):
                 "-x = 1\\n+x = 2\\n")
         self.assertEqual(fila.reprovar(diff, "memoria_crlf"), "")
 
-    def test_o_publicar_yml_do_repositorio_continua_so_com_a_mao_de_alguem(self):
-        """O arquivo de verdade, e nao um diff de mentira."""
-        publicar = AQUI / ".github" / "workflows" / "publicar.yml"
-        if not publicar.is_file():
-            self.skipTest("este repositorio nao tem workflow de publicacao")
-        texto = publicar.read_text(encoding="utf-8")
-        self.assertIn("workflow_dispatch", texto)
-        # SO o bloco `on:`, e nao o arquivo inteiro. O proprio workflow tem um
-        # passo que se confere procurando `push|workflow_run|schedule` no
-        # arquivo — varrer tudo reprovaria a guarda por conter o nome do que
-        # ela guarda, e a "correcao" seria apagar a guarda.
-        dentro = False
-        gatilhos = []
-        for linha in texto.splitlines():
-            if linha.startswith("on:"):
-                dentro = True
-                continue
-            if dentro:
-                if linha and not linha[0].isspace():
-                    break
-                nu = linha.strip()
-                if nu and not nu.startswith("#"):
-                    gatilhos.append(nu)
-        self.assertTrue(gatilhos, "nao achei o bloco `on:` do workflow")
-        for nu in gatilhos:
-            for automatico in ("push:", "workflow_run:", "schedule:",
-                               "pull_request:"):
-                self.assertNotIn(automatico, nu,
-                                 "o workflow de publicacao ganhou gatilho "
-                                 "automatico: %r" % nu)
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=0)

@@ -1,13 +1,15 @@
 # Colocar o DERVS no ar em dervs.com.br
 
-*Escrito em 28/08/2026, na etapa 16 da fatia 1.*
+*Escrito em 28/08/2026, na etapa 16 da fatia 1. Publicação refeita em
+25/09/2026: agora sai do VS Code, e o GitHub não publica mais nada.*
 
 Este é o roteiro completo, e ele tem duas partes bem diferentes:
 
 - **A parte de uma vez só** (passos 1 a 6). Preparar o servidor e guardar os
   segredos. Isso exige a sua mão, porque envolve senha, chave e uma decisão de
   produto. Leva uns 30 minutos, e depois nunca mais.
-- **A parte de sempre** (passo 7). Publicar. Um botão no GitHub, e pronto.
+- **A parte de sempre** (passo 7). Publicar. Commit + push, e a tarefa
+  **"Deploy para a VPS"** no VS Code.
 
 Ao longo do texto, sempre que houver um comando para você, ele vem com: **onde
 colar**, **o que aparece se der certo** e **o que fazer se der errado**.
@@ -25,12 +27,13 @@ colar**, **o que aparece se der certo** e **o que fazer se der errado**.
 naquela máquina, com o certificado do domínio.
 
 **O que nunca vai:** a pasta `vivo/` — o código antigo do dervs, que abre um
-terminal sem senha nenhuma. Três travas independentes o seguram, e a publicação
-para se qualquer uma cair.
+terminal sem senha nenhuma. O `.dockerignore` e a cópia arquivo por arquivo do
+`Dockerfile` o seguram fora da imagem (a terceira trava, a busca dentro da
+imagem, era do `publicar.yml` e saiu com ele em 25/09/2026).
 
 **A publicação não é automática.** Nenhum commit vai para o ar sozinho. Você
-aperta um botão e digita a palavra `PUBLICAR`. Isso é decisão, não limitação:
-publicar a cada commit é mandar todo rascunho para a gráfica.
+roda a tarefa do VS Code quando quer. Isso é decisão, não limitação: publicar a
+cada commit é mandar todo rascunho para a gráfica.
 
 **Um cuidado que vale repetir:** aquela VPS **não é terreno limpo**. São 26
 containers servindo 8 sistemas, incluindo o Ajudei. Por isso o passo 2 confere a
@@ -233,196 +236,73 @@ ele troca a configuração sem parar o nginx.
 
 ---
 
-## Passo 6 — Guardar no GitHub o que o robô da publicação precisa
+## Passo 6 — O que era do workflow e agora é à mão, com o administrador
 
-Estes são os quatro valores que o GitHub usa para chegar ao servidor. Eles ficam
-guardados **no GitHub**, cifrados, e nem eu nem você os lemos de volta depois.
+Até 25/09/2026 o `publicar.yml` do GitHub gravava valores no `/opt/dervs/.env`
+e rodava comandos dentro do container. Ele saiu (o runner do GitHub foi tirado
+do servidor, e as chaves de robô apagadas). Estas tarefas agora são **manuais
+no servidor**, feitas pelo administrador da VPS. Nada disso muda a cada
+publicação: o `.env` e o banco (volume `dervs-dados`) ficam onde estão.
 
-**Onde:** no navegador, em
-<https://github.com/garcia-goncalves/dervs/settings/secrets/actions>.
+**6.1 — entrada por GitHub (OAuth App) e GitHub App.** NÃO é opcional: em
+produção `/entrar/github` é a **única** porta de entrada, e sem
+`DERVS_GITHUB_ID`/`DERVS_GITHUB_SECRET` ela responde 404 (foi o que aconteceu em
+28/08/2026). No GitHub, o callback do App **DERVS** tem de ser
+`https://dervs.com.br/entrar/github/retorno`. Os valores vão direto no
+`/opt/dervs/.env` (`DERVS_GITHUB_ID`, `DERVS_GITHUB_SECRET`,
+`DERVS_GITHUB_APP_SLUG`, `DERVS_GITHUB_APP_ID`, `DERVS_GITHUB_APP_KEY`), e depois
+uma publicação (ou `docker compose up -d` na pasta) recria o container.
 
-Clique em **New repository secret**, uma vez para cada linha da tabela:
+> A chave do GitHub App vai **em uma linha**, sem as linhas `-----BEGIN`/
+> `-----END`: `grep -v -- ----- chave.pem | tr -d '\n'`. Colar o arquivo
+> inteiro achatado produz uma linha começando com `-----`, que o painel descarta
+> — a chave sairia vazia. Chave cifrada (`ENCRYPTED`) não serve. Para conferir:
+> `docker exec dervs python -c 'import os, github_app; print(bool(github_app.chave_de_pem(os.environ.get("DERVS_GITHUB_APP_KEY") or "")))'`
+> tem de dizer `True`.
 
-São **cinco**, não quatro. O `VPS_PORTA_SSH` faltava neste roteiro e é
-obrigatório: sem ele o workflow tenta a porta 22, que naquela máquina está
-fechada, e a publicação morre em `Connection refused`.
-
-| Nome (copie exatamente) | O que colar no valor | Situação em 28/08/2026 |
-|---|---|---|
-| `VPS_HOST` | `57.129.81.137` | **já gravado** |
-| `VPS_USUARIO` | `tiba` | **já gravado** |
-| `VPS_PORTA_SSH` | `3119` | **já gravado** |
-| `VPS_IMPRESSAO_DIGITAL` | a linha que o passo 6.1 abaixo gera | **já gravado** |
-| `VPS_CHAVE_SSH` | a **chave privada** que abre o servidor — o arquivo inteiro, do `-----BEGIN` ao `-----END` | **falta, e só a sua mão faz** |
-
-Os quatro primeiros não são segredo de verdade: endereço, nome de usuário,
-número de porta e uma chave *pública*. O quinto é o único que abre a porta, e
-por isso ele nunca passa por mim, por commit, por log nem por esta conversa —
-você o cola direto do arquivo para o campo do GitHub.
-
-**6.1 — a impressão digital do servidor.** Ela é o que impede o deploy de ser
-entregue a uma máquina que só *finge* ser a sua VPS. **Onde:** no seu
-computador (não dentro do servidor):
+**6.2 — a combinação da cortina (seis dígitos).** Nasce sorteada na primeira
+subida e é impressa uma vez, no registro daquele container. Para trocar, dentro
+do servidor (o número vai por STDIN, não aparece em `ps`):
 
 ```
-ssh-keyscan -t ed25519 -p 3119 57.129.81.137
+read -rs CORTINA && printf '%s' "$CORTINA" | docker exec -i dervs python -c 'import sys, banco, cortina; con = banco.conectar(); cortina.trocar(sys.stdin.read().strip(), con); con.close(); print("combinacao da cortina trocada")'; unset CORTINA
 ```
 
-**O `-p 3119` não é opcional.** Sem ele o comando bate na porta 22, não recebe
-nada, e devolve vazio — sem erro, sem aviso. Um `VPS_IMPRESSAO_DIGITAL` vazio
-faz a publicação falhar lá na frente, com uma mensagem que não fala de porta
-nenhuma.
-
-**Se der certo:** sai uma linha longa começando com o endereço e
-`ssh-ed25519 AAAA...`. É essa linha inteira que vai no valor de
-`VPS_IMPRESSAO_DIGITAL` (ignore as linhas que começam com `#`).
-
-**6.2 — a entrada por GitHub. NÃO é opcional.**
-
-Este passo já foi chamado de opcional aqui, com a frase *"o site sobe igual, só
-sem o botão"*. Era falso, e custou caro: em 28/08/2026 o dervs.com.br subiu com
-a CI verde, o domínio respondendo e **ninguém capaz de entrar**. A porta
-`/entrar/local` só entra na tabela de rotas quando o ambiente é local; em
-produção `/entrar/github` é a **única** porta que existe. Sem estas credenciais
-ela responde 404, e o site é uma vitrine trancada.
-
-O que **você** faz, uma vez, no navegador:
-
-1. Vá em <https://github.com/settings/developers> → o App **DERVS**.
-2. Em **Authorization callback URL**, deixe exatamente:
-   `https://dervs.com.br/entrar/github/retorno`
-   Se estiver apontando para `localhost`, a entrada falha depois do login com
-   *"redirect_uri is not associated with this application"*.
-3. Confira o **Client ID** e, se não tiver o secret guardado, gere um novo.
-
-O que **a publicação** faz sozinha, desde 28/08/2026: lê
-`vars.DERVS_GITHUB_ID` e `secrets.DERVS_GITHUB_SECRET` do repositório e grava
-as duas no `/opt/dervs/.env`, por STDIN, sem passar por log nem por `ps`. Não
-há mais `sed` à mão dentro do servidor. Para trocar o valor:
+**6.3 — a conta de um dono.** `autenticacao.convidar()` é a **única** forma de
+criar conta, e não passa pela web de propósito. O e-mail é único e **não existe
+comando para apagar conta criada errada** — confira antes. Dentro do servidor:
 
 ```
-gh variable set DERVS_GITHUB_ID --repo garcia-goncalves/dervs --body "Ov23..."
-gh secret   set DERVS_GITHUB_SECRET --repo garcia-goncalves/dervs
+printf '%s\n' "login-do-github email@exemplo.com" | docker exec -i dervs python -c 'import sys, banco, autenticacao; con = banco.conectar(); ns = [l.split() for l in sys.stdin.read().splitlines() if l.split()]; [print(("ja existe: %s" % e) if con.execute("SELECT 1 FROM usuario WHERE email = ?", (e.strip().lower(),)).fetchone() else ("conta criada: %s (id %d)" % (e, autenticacao.convidar(g, e, con=con)))) for g, e in ns]; con.close()'
 ```
-
-**Se as duas faltarem:** a publicação não falha — ela imprime um aviso em
-maiúsculas e segue. O site sobe sem entrada nenhuma. O aviso está lá para que
-isso seja uma escolha, e não uma surpresa.
-
-**6.2b — a combinação da cortina (seis dígitos).**
-
-A cortina é a tela de teclado que aparece antes de qualquer coisa. Ela **não é
-a fechadura** — serve para que robô que varre a internet atrás de tela de login
-não encontre tela nenhuma. O número nasce sorteado na primeira subida e é
-impresso **uma vez só**, no registro daquele container. Cada publicação recria o
-container, e o registro vai junto com ele.
-
-Foi o que aconteceu: o número da primeira subida deixou de existir na segunda
-publicação, e não havia como trocá-lo. Agora há. Escolha seis dígitos, guarde-os
-onde você guarda senha, e grave:
-
-```
-gh secret set DERVS_CORTINA --repo garcia-goncalves/dervs --body "123456"
-```
-
-A próxima publicação aplica. O número viaja por STDIN até dentro do container e
-não aparece em log nenhum. Enquanto o segredo existir, toda publicação reafirma
-o mesmo número — trocar é gravar outro e publicar.
-
-**6.2c — a sua conta. Sem ela, a porta aberta não leva a lugar nenhum.**
-
-Passar a cortina e autorizar no GitHub ainda não é entrar. `convidar()` é a
-**única** forma de criar conta no DERVS, e ela não passa pela web de propósito:
-criar conta custa acesso à máquina, e é isso que mantém o cadastro fechado sem
-precisar de lista de convidados em lugar nenhum.
-
-Em 28/08/2026 nada rodava esse comando no servidor. O efeito na tela é cruel de
-diagnosticar: você digita a combinação, clica em *Entrar com GitHub*, autoriza —
-e volta para a mesma capa, **sem uma palavra de explicação**. É por desenho: o
-retorno responde igual no sucesso e no fracasso, para não dizer a um estranho
-qual metade ele acertou.
-
-O DERVS tem mais de um dono, então a variável é uma **lista**: uma linha por
-pessoa, `<login-do-github> <e-mail>`. Não são segredos.
-
-```
-gh variable set DERVS_DONOS --repo garcia-goncalves/dervs --body "thi-garcia tibamooca@gmail.com
-outro-login outro@exemplo.com"
-```
-
-A publicação decide **pessoa a pessoa**: quem já tem conta (pelo e-mail, que é
-UNIQUE) é pulado com uma frase; quem não tem é convidado. Contar credenciais no
-total não serviria — na segunda publicação daria "já há 1 conta" e o segundo
-dono nunca entraria.
-
-Não há `|| true` escondendo erro: uma falha de rede ou da API do GitHub deixa a
-publicação vermelha, como deve.
-
-**Sobre o e-mail:** `dervs.com.br` publica um MX nulo — o domínio declara que
-não recebe e-mail. Um endereço `@dervs.com.br` nunca será entregável sem
-contratar correio. Como a aplicação não envia e-mail nenhum hoje, o campo é só
-identificador; ainda assim, prefira um endereço real, para o dia em que alguma
-funcionalidade tentar escrever para ele.
-
-**Escolha o e-mail com cuidado.** Ele é único no banco e **não existe comando
-para apagar uma conta criada errada**. Errar aqui custa mexer no banco do
-servidor à mão.
-
-**6.3 — uma trava a mais, se você quiser (opcional).** O ambiente `producao` já
-existe no repositório. Em
-<https://github.com/garcia-goncalves/dervs/settings/environments> você pode
-abrir `producao` e ligar **Required reviewers**, marcando você mesmo. A partir
-daí toda publicação para e espera você aprovar no navegador — é um segundo
-"sim", depois da palavra `PUBLICAR`. Útil no dia em que houver mais gente com
-acesso ao repositório; hoje, com você sozinho, é cinto sobre suspensório.
 
 ---
 
 ## Passo 7 — Publicar (este é o passo de sempre)
 
-**Onde:** no navegador, em
-<https://github.com/garcia-goncalves/dervs/actions/workflows/publicar.yml>.
+O padrão da VPS, e como configurar o seu computador uma vez, estão em
+<https://github.com/garcia-goncalves/deploy-padrao>.
 
-1. Clique em **Run workflow** (canto direito).
-2. No campo que aparece, digite `PUBLICAR` — em maiúsculas, exatamente assim.
-3. Clique no botão verde **Run workflow**.
+1. Faça commit e **push** para a `main` (o servidor publica o que está no
+   GitHub, não o que está só no seu disco).
+2. No VS Code: **Terminal → Executar Tarefa → "Deploy para a VPS"**.
 
-**O que acontece, nesta ordem:** toda a suíte de testes roda duas vezes; a
-imagem é montada; ela é **subida e testada** antes de sair do GitHub; só então o
-servidor troca o container; o site é conferido pelo endereço de verdade; e uma
-etiqueta é criada para marcar o que está no ar.
+**O que acontece:** o servidor faz backup do volume `dervs-dados`, pega o
+commit, **monta a imagem ali mesmo** (`build: .` no `docker-compose.yml`, imagem
+`dervs:vps`) com a versão antiga no ar, troca o container e confere
+`https://dervs.com.br/robots.txt`. Se o site não responder, ele **volta sozinho**
+para a versão anterior. O `/opt/dervs/.env` nunca é tocado.
 
-**Se der certo:** todos os passos ficam com visto verde, e
-<https://dervs.com.br> abre a capa do painel.
-
-**Se der errado:** clique no passo vermelho e leia a última linha. Os três erros
-prováveis:
-
-| O que aparece | O que aconteceu | O que fazer |
-|---|---|---|
-| `/opt/dervs/.env não existe` | o passo 4 não foi feito | refaça o passo 4 |
-| `a imagem não ficou saudável` | o container não subiu | me chame; a causa está no código, não no servidor |
-| `Permission denied (publickey)` | a chave do passo 6 está errada | refaça `VPS_CHAVE_SSH` — tem de ser a chave **privada**, o arquivo inteiro |
+**Se der errado:** leia as últimas linhas da tarefa. Se a imagem não montar ou
+o container não ficar saudável, a causa está no código — a versão anterior
+continua no ar.
 
 ---
 
 ## Voltar atrás
 
-Cada publicação cria uma etiqueta com a data e a hora. Para ver as últimas:
-
-```
-gh release list --repo garcia-goncalves/dervs --limit 5
-```
-
-Para voltar a versão anterior, **dentro do servidor**:
-
-```
-cd /opt/dervs && docker compose down && \
-  sed -i "s|^DERVS_IMAGEM=.*|DERVS_IMAGEM=A-REFERENCIA-ANTERIOR|" .env && \
-  docker compose up -d --wait
-```
-
-Onde `A-REFERENCIA-ANTERIOR` sai de `docker images | grep dervs`.
+No VS Code: **Terminal → Executar Tarefa → "Deploy: voltar para a versao
+anterior"**.
 
 **O banco não é afetado por isso.** Ele mora num volume separado, fora da imagem
 — é justamente para que voltar atrás no código não custe nenhuma conta, nenhum
@@ -435,8 +315,8 @@ computador pareado e nenhuma medição.
 | Coisa | Onde |
 |---|---|
 | Os segredos do painel | `/opt/dervs/.env`, dentro do servidor, só leitura do dono |
-| Os segredos do deploy | no GitHub, em Settings → Secrets → Actions |
-| O banco | volume Docker `dervs-dados`, fora da imagem |
+| A configuração da publicação | `/etc/deploy/dervs.conf` (servidor) e `.deploy-vps` (repositório) |
+| O banco | volume Docker `dervs-dados`, fora da imagem (backup antes de cada publicação) |
 | A configuração do nginx | `/etc/nginx/sites-available/dervs.conf` |
 | O certificado | `/etc/letsencrypt/live/dervs.com.br/` |
-| O que está no ar agora | `grep DERVS_IMAGEM /opt/dervs/.env` |
+| O que está no ar agora | `ssh vps-ovh sudo deploy --lista` |

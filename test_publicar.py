@@ -1,31 +1,24 @@
 # -*- coding: utf-8 -*-
-"""O workflow de publicacao leva ao servidor o que abre a porta.
+"""O container recebe o que o codigo le.
 
 POR QUE ESTE ARQUIVO EXISTE.
 
 Em 28/08/2026 o dervs.com.br foi publicado com a verificacao verde, o dominio
-respondendo 200 e a aparencia certa na tela. E **ninguem conseguia entrar**.
+respondendo 200 e a aparencia certa na tela. E **ninguem conseguia entrar**: a
+unica porta de producao, `/entrar/github`, responde 404 sem `DERVS_GITHUB_ID` e
+`DERVS_GITHUB_SECRET`, e nada as levava ate o processo. Em 02/09/2026 o mesmo
+formato de defeito voltou um arquivo adiante (o GitHub App).
 
-A cadeia era esta, e cada elo estava individualmente correto:
+Ate 25/09/2026 este arquivo tambem lia o `.github/workflows/publicar.yml`. Esse
+workflow saiu: a publicacao agora e feita do VS Code direto para a VPS
+(https://github.com/garcia-goncalves/deploy-padrao), e o que ele fazia de
+administracao (gravar OAuth/GitHub App no `.env`, trocar a cortina, convidar
+donos) passou a ser feito a mao no servidor, com o administrador — o roteiro
+esta em `docs/operacao/publicar-no-servidor.md`. Ficou aqui o que continua
+valendo: o `docker-compose.yml` passa ao container toda variavel que o
+servidor le, e os dois comandos que o roteiro manual chama existem.
 
-  - em producao `/entrar/local` NAO entra na tabela de rotas (`servir.py`,
-    `if E_LOCAL:`), entao `/entrar/github` e a unica porta que existe;
-  - `/entrar/github` responde 404 sem `DERVS_GITHUB_ID` e `DERVS_GITHUB_SECRET`;
-  - as duas moravam no repositorio como variable e secret desde 27/08, e o
-    workflow de publicacao nunca as levava para o `/opt/dervs/.env`;
-  - e o roteiro de operacao chamava esse passo de **opcional**, com a frase "o
-    site sobe igual, so sem o botao".
-
-Nenhum teste podia falhar, porque nenhum teste olhava para esse caminho.
-
-A cortina tinha o mesmo formato de defeito, um degrau adiante: a combinacao de
-seis digitos nasce sorteada na primeira subida e e impressa uma vez, no registro
-daquele container. Cada publicacao recria o container. `cortina.trocar()` existia
-desde a etapa 9 e **nada no produto o chamava** — perder o numero era ficar
-trancado para fora do proprio site, sem recuperacao.
-
-Este arquivo le o `publicar.yml` como texto e como YAML. Ele nao publica nada e
-nao precisa de rede.
+Nao publica nada e nao precisa de rede.
 
     python test_publicar.py
 """
@@ -36,169 +29,20 @@ import unittest
 from pathlib import Path
 
 AQUI = Path(__file__).parent
-WORKFLOW = AQUI / ".github" / "workflows" / "publicar.yml"
 
 
-def texto() -> str:
-    return WORKFLOW.read_text(encoding="utf-8")
-
-
-def passo_do_servidor() -> str:
-    """O passo que fala com a VPS, como texto.
-
-    A GUARDA vem junto de proposito: se o nome do passo mudar e este recorte
-    voltar vazio, todos os casos abaixo passariam sobre string vazia — verdes,
-    e sobre nada. E a lei 2 deste repositorio aplicada ao proprio teste.
-    """
-    t = texto()
-    i = t.index("- name: Trocar o container")
-    j = t.index("\n      - name:", i + 10)
-    trecho = t[i:j]
-    assert len(trecho) > 2000, (
-        "o passo do servidor saiu com %d caracteres; o recorte quebrou e os "
-        "casos seguintes passariam vazios." % len(trecho))
-    return trecho
-
-
-class APortaChegaAoServidor(unittest.TestCase):
-    """As credenciais do OAuth App, sem as quais nao ha entrada nenhuma."""
-
-    def setUp(self):
-        self.passo = passo_do_servidor()
-
-    def test_o_workflow_le_as_duas_credenciais_do_repositorio(self):
-        for origem in ("vars.DERVS_GITHUB_ID", "secrets.DERVS_GITHUB_SECRET"):
-            self.assertIn(
-                origem, self.passo,
-                "o passo do servidor nao le %s. Sem isso o /opt/dervs/.env "
-                "sobe sem credencial e /entrar/github responde 404 — e em "
-                "producao nao ha segunda porta." % origem)
-
-    def test_as_duas_sao_gravadas_no_env_do_servidor(self):
-        for chave in ("DERVS_GITHUB_ID=", "DERVS_GITHUB_SECRET="):
-            self.assertRegex(
-                self.passo, r">>\s*\.env\.novo" ,
-                "nada e acrescentado ao .env do servidor.")
-            self.assertIn(
-                'echo "%s' % chave, self.passo,
-                "%s nao e escrita no .env do servidor." % chave)
-
-    def test_o_valor_nao_viaja_pela_linha_de_comando(self):
-        """O achado da etapa 16, aplicado ao que foi acrescentado depois.
-
-        `ssh alvo VAR=segredo comando` e `docker exec -e VAR=segredo` poem o
-        valor no argv, legivel em /proc/<pid>/cmdline por qualquer conta local
-        da VPS — que serve outros oito sistemas. Tudo tem de ir por STDIN.
-        """
-        self.assertNotRegex(
-            self.passo, r"docker exec [^\n]*-e\s+\w+=",
-            "docker exec -e poe o valor no argv do processo; use STDIN.")
-        for nome in ("OAUTH_SECRET", "CORTINA"):
-            # `%q` cita o valor para o shell remoto; o bloco inteiro entra pelo
-            # STDIN do ssh, que nenhum `ps` mostra.
-            self.assertIn(
-                "printf '" + nome + "=%q", self.passo,
-                nome + " nao viaja por STDIN citado com %q.")
-
-    def test_faltar_credencial_avisa_em_vez_de_silenciar(self):
-        """Publicar sem porta pode ser uma escolha; nao pode ser uma surpresa."""
-        self.assertIn("AVISO: sem DERVS_GITHUB_ID", self.passo,
-                      "sem as credenciais a publicacao segue calada.")
-
-
-class ACortinaTemVolta(unittest.TestCase):
-    """A combinacao de seis digitos pode ser trocada de fora."""
-
-    def setUp(self):
-        self.passo = passo_do_servidor()
-
-    def test_o_workflow_chama_cortina_trocar(self):
-        self.assertIn(
-            "cortina.trocar(", self.passo,
-            "nada no workflow chama cortina.trocar(). A combinacao nasce "
-            "sorteada, e impressa uma vez no registro do container, e o "
-            "registro morre na publicacao seguinte: sem esta chamada, perder "
-            "o numero e perder o site.")
-
-    def test_a_troca_e_opcional(self):
-        """Sem o segredo, a publicacao nao pode falhar nem trocar nada."""
-        self.assertIn('if [ -n "${CORTINA:-}" ]; then', self.passo,
-                      "a troca da cortina nao esta atras de um teste de vazio.")
+class OsComandosDoRoteiroManualExistem(unittest.TestCase):
+    """O roteiro manual chama codigo de verdade, nao um nome que ja mudou."""
 
     def test_cortina_trocar_existe_com_essa_assinatura(self):
-        """O workflow chama codigo de verdade, nao um nome que ja mudou."""
         import cortina
         self.assertTrue(callable(cortina.trocar))
         with self.assertRaises(ValueError):
             cortina.trocar("12345", None)   # cinco digitos param antes do banco
 
-
-class ExisteUmaConta(unittest.TestCase):
-    """A terceira peca da primeira subida.
-
-    Cortina aberta e botao do GitHub ligado nao bastam: `convidar()` e a unica
-    porta para criar conta, e nada a chamava no servidor. O sintoma nao ajuda
-    ninguem — o retorno do GitHub responde igual no sucesso e no fracasso, de
-    proposito, entao autorizar caia na capa sem uma palavra.
-    """
-
-    def setUp(self):
-        self.passo = passo_do_servidor()
-
-    def test_o_workflow_convida_o_dono(self):
-        self.assertIn(
-            "autenticacao.convidar(", self.passo,
-            "nada no workflow cria a conta do dono. O site sobe com a porta "
-            "aberta e nenhuma conta atras dela.")
-
-    def test_o_convite_nao_se_repete(self):
-        """`convidar` estoura na segunda vez, e nao ha comando para apagar
-        conta criada errada: repetir cegamente quebraria toda publicacao
-        seguinte."""
-        self.assertIn("SELECT 1 FROM usuario WHERE email = ?", self.passo,
-                      "o convite nao consulta se a PESSOA ja tem conta. Contar"
-                      " credenciais no total pularia o segundo dono para"
-                      " sempre: o DERVS tem mais de um.")
-        self.assertNotIn("convidar(login, email) || true", self.passo)
-
-    def test_o_erro_de_verdade_nao_e_engolido(self):
-        """Idempotencia pela contagem, nunca por `|| true`: um `|| true` faria
-        falha de rede e conta-ja-existe darem a mesma linha verde."""
-        for engolidor in ("|| true", "|| echo", "2>/dev/null"):
-            self.assertNotIn(
-                "convidar" + engolidor, self.passo.replace(" ", ""))
-
-    def test_login_e_email_nao_vao_pelo_argv(self):
-        self.assertNotRegex(
-            self.passo, r"autenticacao\.py convidar",
-            "o CLI recebe login e e-mail como argumentos, e argv e legivel em "
-            "/proc por qualquer conta local da VPS. Use STDIN.")
-        self.assertIn("printf 'DONOS=%q", self.passo)
-
     def test_convidar_existe_com_essa_assinatura(self):
         import autenticacao
         self.assertTrue(callable(autenticacao.convidar))
-
-
-class PublicarContinuaSendoDecisaoDeGente(unittest.TestCase):
-    """O que foi acrescentado nao pode ter afrouxado a trava principal."""
-
-    def test_o_unico_gatilho_e_o_botao(self):
-        t = texto()
-        cabeca = t[:t.index("jobs:")]
-        for automatico in ("on: push", "\n  push:", "\n  schedule:",
-                           "\n  workflow_run:", "\n  pull_request:"):
-            self.assertNotIn(
-                automatico, cabeca,
-                "gatilho automatico %r no workflow de publicacao." % automatico)
-        self.assertIn("workflow_dispatch:", cabeca)
-
-    def test_a_palavra_publicar_continua_exigida(self):
-        self.assertIn("inputs.confirmar == 'PUBLICAR'", texto())
-
-    def test_publicacao_cortada_no_meio_nao_e_permitida(self):
-        self.assertIn("cancel-in-progress: false", texto())
-
 
 
 # ---------------------------------------------------------------------------
@@ -366,215 +210,6 @@ class OContainerRecebeOQueOCodigoLe(unittest.TestCase):
                 t, r"\$\{%s:\?" % nome,
                 "%s com `:?` derruba o container inteiro quando falta." % nome)
 
-
-class AChaveDoAppChegaInteira(unittest.TestCase):
-    """A chave privada tem varias linhas, e arquivo de ambiente nao tem.
-
-    `github_app.chave_de_pem` ignora as linhas de armadura e junta o resto, o
-    que faz uma UNICA linha de base64 puro funcionar — medido nos dois formatos
-    em 02/09/2026. O que NAO funciona e o jeito ingenuo, `tr -d '\n'` sobre o
-    arquivo inteiro: a armadura gruda no miolo, vira uma linha so comecando com
-    `-----`, o filtro a descarta inteira e a chave sai vazia. A diferenca entre
-    os dois e uma linha de `grep`, e ela e a razao desta classe existir.
-    """
-
-    def setUp(self):
-        self.passo = passo_do_servidor()
-
-    def test_a_armadura_sai_antes_de_a_chave_virar_uma_linha(self):
-        self.assertRegex(
-            self.passo, r"grep -v[^\n]*-----",
-            "a chave e achatada sem tirar as linhas -----BEGIN/-----END "
-            "antes; o resultado e uma linha unica que comeca com '-----', que "
-            "chave_de_pem descarta INTEIRA. A chave chegaria vazia e a volta "
-            "da instalacao falharia sempre, em silencio.")
-
-    def test_a_chave_nao_viaja_pela_linha_de_comando(self):
-        """Presenca do jeito certo NAO exclui a presenca do jeito errado.
-
-        A primeira versao so cobrava que `printf 'APP_KEY=%q` existisse -- e
-        continuava verde com um `docker exec -e K="$APP_KEY"` acrescentado ao
-        lado, porque o `printf` seguia la. Guarda que nao pode reprovar o que o
-        nome dela promete. Achado da revisao de seguranca de 02/09/2026, pelo
-        criterio do proprio CLAUDE.md.
-
-        Agora a assercao e de AUSENCIA: as duas variaveis com material de chave
-        so podem aparecer nas linhas que as poem em STDIN ou as escrevem no
-        arquivo de ambiente. Qualquer outra mencao -- `docker exec -e`, um
-        `echo` de depuracao, um prefixo de ambiente no `ssh` -- reprova.
-        """
-        self.assertIn(
-            "printf 'APP_KEY=%q", self.passo,
-            "a chave privada do App nao viaja por STDIN citado com %q; "
-            "qualquer conta local desta VPS de 26 containers a leria em "
-            "/proc/<pid>/cmdline durante a publicacao.")
-        # O bloco `env:` do passo entra aqui: e ele que traz o segredo do
-        # cofre do repositorio para o ambiente do runner, e sem ele nada
-        # funciona. O que esta guarda persegue e a chave em ARGV.
-        # O QUE ESTA GUARDA PERSEGUE E O VALOR EXPANDIDO, nao o nome.
-        # `grep -e '^DERVS_GITHUB_APP_KEY='` cita o nome e nao expande nada;
-        # `docker exec -e K="$APP_KEY"` poe o VALOR no argv, legivel em
-        # /proc/<pid>/cmdline por qualquer conta local desta VPS de 26
-        # containers. Sao coisas diferentes, e so a segunda vaza.
-        expansao = re.compile(r"\$\{?(APP_KEY|chave_numa_linha)\b")
-        #: Onde o valor PODE aparecer: no STDIN citado com %q, na escrita do
-        #: arquivo de ambiente, no achatamento que o produz, e na peneira de
-        #: forma (`case` e embutido do shell -- nao cria processo, nao tem
-        #: argv). Qualquer outro lugar reprova.
-        permitidas = (
-            "printf 'APP_KEY=%q",
-            'echo "DERVS_GITHUB_APP_KEY=$chave_numa_linha"',
-            "chave_numa_linha=$(printf",
-            'case "${chave_numa_linha:-}" in',
-            # A peneira da chave CRUA, que procura a marca de cifrada na
-            # armadura -- o achatamento come a armadura, entao ela so pode ser
-            # olhada aqui.
-            'case "${APP_KEY:-}" in',
-        )
-        for linha in self.passo.splitlines():
-            if linha.lstrip().startswith("#") or not expansao.search(linha):
-                continue
-            self.assertTrue(
-                any(p in linha for p in permitidas),
-                "o VALOR da chave do App e expandido numa linha que nao e o "
-                "STDIN, a escrita no arquivo de ambiente, o achatamento nem a "
-                "peneira -- e por ai que ele vaza para /proc: %s"
-                % linha.strip())
-
-    def test_os_tres_valores_sao_peneirados_antes_de_serem_gravados(self):
-        """Presenca nao e validade, e o arquivo de ambiente e lido pelo shell.
-
-        Dois achados da revisao de seguranca de 02/09/2026, reproduzidos em
-        bash de verdade, e a mesma peneira fecha os dois:
-
-        1. Uma chave PEM CIFRADA (`Proc-Type: 4,ENCRYPTED`) nao tem `-----`
-           nessas linhas: elas escapam do `grep -v` e sao coladas no miolo. O
-           resultado NAO e vazio, entao um teste de presenca passa, a
-           publicacao fica verde dizendo "gravadas" -- e toda tentativa de
-           conectar termina em "nao deu para conferir".
-        2. `DERVS_GITHUB_APP_SLUG=ab$(comando)cd` executaria o comando dentro
-           do servidor.
-
-        Medido depois da correcao: dos nove casos, um aceito e oito recusados
-        pelo motivo certo, incluindo nova linha, espaco e ponto-e-virgula.
-        """
-        for peneira, alvo in (
-                ("*[!A-Za-z0-9-]*", "APP_SLUG"),
-                ("*[!0-9]*", "APP_ID"),
-                ("*[!A-Za-z0-9+/=]*", "a chave em base64")):
-            self.assertIn(
-                peneira, self.passo,
-                "falta a peneira de forma para %s. Sem ela, presenca passa "
-                "por validade -- e um valor com `$(...)` chega a ser lido "
-                "pelo shell do servidor." % alvo)
-
-    def test_a_chave_cifrada_no_formato_moderno_e_recusada(self):
-        """A peneira de base64 nao ve a chave cifrada do formato novo.
-
-        O formato legado (`Proc-Type: 4,ENCRYPTED`) tem a marca DENTRO do
-        miolo, e a peneira de base64 a pega. O moderno --
-        `BEGIN ENCRYPTED PRIVATE KEY` (escrito sem os tracos de proposito: o varredor de segredo barra o bloco literal, e com razao), o que `openssl pkcs8 -topk8`
-        produz por padrao -- tem miolo em base64 PURO: atravessa o `grep -v` e
-        a peneira sem uma marca. Na proxima troca da chave do App, a
-        publicacao sairia VERDE dizendo "gravadas" e toda volta de instalacao
-        terminaria em "nao deu para conferir".
-
-        A marca vive na ARMADURA, e o achatamento come a armadura -- por isso
-        o teste tem de ser sobre `APP_KEY` cru, antes dele.
-        """
-        self.assertIn(
-            "*ENCRYPTED*", self.passo,
-            "nada recusa a chave cifrada no formato moderno. Ela passa por "
-            "base64 puro, e a publicacao fica verde com a porta 2 morta.")
-        self.assertIn(
-            'case "${APP_KEY:-}" in', self.passo,
-            "a marca de cifrada e procurada depois do achatamento, que ja "
-            "comeu a armadura onde ela mora: o teste nunca casaria.")
-
-    def test_a_chave_e_conferida_pelo_codigo_que_vai_usa_la(self):
-        """Peneira de forma diz "parece"; so o codigo diz "serve".
-
-        Toda vez que este arquivo acreditou na forma, alguma coisa saiu verde
-        e morta. A conferencia roda DENTRO do container, com `chave_de_pem` --
-        o mesmo desenho da conferencia do gateway, e pelo mesmo motivo: nao e
-        uma segunda implementacao da mesma regra.
-        """
-        self.assertIn(
-            "github_app.chave_de_pem(", self.passo,
-            "a publicacao nao pergunta ao servidor se a chave serve. Sem "
-            "isso, uma chave que passa na peneira e o codigo nao le deixa a "
-            "porta 2 morta em silencio.")
-        self.assertIn(
-            "A CHAVE DO GITHUB APP NAO SERVE", self.passo,
-            "a conferencia existe mas nao diz nada quando falha.")
-
-    def test_o_aviso_nao_afirma_o_que_nao_foi_verificado(self):
-        """Nada aqui apaga linha do arquivo de ambiente do servidor.
-
-        A mensagem antiga dizia que "a porta 2 nao aparece na tela", e isso
-        podia ser FALSO: valores de uma publicacao anterior seguem de pe.
-        Alguem que apagasse o segredo do repositorio para retirar uma chave
-        suspeita leria aquilo e acreditaria ter retirado -- com a chave viva no
-        processo. Lei 2 deste repositorio, aplicada ao log da publicacao.
-        """
-        self.assertIn("CONTINUA", self.passo,
-                      "o aviso nao diz que o que ja esta no servidor continua "
-                      "valendo.")
-        self.assertNotIn("a porta 2 (conectar a conta do GitHub) nao",
-                         self.passo,
-                         "o aviso voltou a afirmar um estado do servidor que "
-                         "este passo nao verifica.")
-
-    def test_o_arquivo_de_ambiente_do_servidor_nao_e_executado(self):
-        """`. ./.env` EXECUTA o que estiver escrito la, e exporta tudo.
-
-        Duas consequencias: um valor com `$(...)` vira comando, e a chave
-        privada mais a chave do cofre passam a ser herdadas por todo processo
-        seguinte -- legiveis em /proc/<pid>/environ. Duas linhas de `grep`
-        resolvem, lendo como TEXTO.
-        """
-        # Linha de comentario nao executa nada -- e o comentario que explica
-        # a decisao cita justamente o comando proibido. Guarda que le texto
-        # cru reprovaria a propria explicacao.
-        executaveis = "\n".join(l for l in self.passo.splitlines()
-                                if not l.lstrip().startswith("#"))
-        self.assertNotIn(
-            ". ./.env", executaveis,
-            "o roteiro voltou a sourcear o arquivo de ambiente do servidor.")
-        self.assertIn("grep '^DERVS_PORTA=", self.passo,
-                      "a porta nao e mais lida como texto.")
-        # `tail -n1`, e nao a primeira: com a chave repetida no arquivo o
-        # docker compose usa a ULTIMA. Divergir dele faz a conferencia bater
-        # numa porta que nao e a que subiu.
-        self.assertIn("tail -n1", self.passo,
-                      "a leitura pega a primeira ocorrencia, e o compose usa "
-                      "a ultima: as duas discordariam em silencio.")
-
-    def test_o_rascunho_do_env_e_apagado_se_o_roteiro_morrer(self):
-        """Sobra um arquivo com a chave privada dentro se ninguem limpar."""
-        linhas = [l for l in self.passo.splitlines() if "trap " in l]
-        self.assertTrue(linhas, "o roteiro perdeu o trap de saida.")
-        self.assertIn(".env.novo", linhas[0],
-                      "o rascunho do arquivo de ambiente nao e apagado na "
-                      "saida: se o roteiro morrer entre a escrita e o `mv`, "
-                      "fica no disco um arquivo com a chave privada.")
-        # A POSICAO, E NAO SO A PRESENCA. O trap ja existiu armado DEPOIS de
-        # todos os `mv` -- ou seja, depois do unico instante em que o rascunho
-        # existe: o `rm -f` era sempre no-op, e este teste passava verde sobre
-        # a defesa desligada. "Guarda que so podia passar", pela terceira vez
-        # neste repositorio. Achado na revisao final de 02/09/2026.
-        self.assertLess(
-            self.passo.index("trap "), self.passo.index("> .env.novo"),
-            "o trap e armado DEPOIS do primeiro rascunho: ele nunca chega a "
-            "apagar nada, e a linha acima vira enfeite.")
-
-    def test_as_tres_chegam_ao_env_do_servidor(self):
-        for chave in ("DERVS_GITHUB_APP_SLUG=", "DERVS_GITHUB_APP_ID=",
-                      "DERVS_GITHUB_APP_KEY="):
-            self.assertIn(
-                'echo "%s' % chave, self.passo,
-                "%s nao e escrita no /opt/dervs/.env. Sem ela no arquivo, o "
-                "compose passa vazio para o container." % chave)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
