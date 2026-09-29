@@ -120,7 +120,9 @@ deixar rodando.
 ## Deixar reportando sozinho
 
 O conectador já faz isso: ele registra uma tarefa que roda a cada login do
-Windows. Se você conectou pela linha de comando, ou quer outro intervalo:
+Windows. Sem permissão de administrador o Windows nega essa tarefa; então ele
+cai no plano B, uma tarefa que acorda de 10 em 10 minutos e reporta uma vez.
+Se você conectou pela linha de comando, ou quer outro intervalo:
 
 ```
 python "<CAMINHO DO DERVS>\agente\enviar.py" --alvo https://SEU-DERVS --intervalo 600
