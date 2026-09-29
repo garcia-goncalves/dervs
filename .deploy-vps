@@ -1,7 +1,7 @@
 # Deploy direto do VS Code para a VPS (Terminal > Executar Tarefa > "Deploy para a VPS").
-# projeto  = nome do projeto no servidor (lista: ssh vps-ovh sudo deploy --lista)
+# projeto  = nome do projeto no servidor (lista: ssh dervs sudo deploy --lista)
 # servidor = nome do "Host" no seu ~/.ssh/config
 # ramo     = unico ramo que pode ser publicado
 projeto=dervs
-servidor=vps-ovh
+servidor=dervs
 ramo=main

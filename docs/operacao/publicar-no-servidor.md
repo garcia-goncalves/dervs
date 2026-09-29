@@ -319,4 +319,4 @@ computador pareado e nenhuma medição.
 | O banco | volume Docker `dervs-dados`, fora da imagem (backup antes de cada publicação) |
 | A configuração do nginx | `/etc/nginx/sites-available/dervs.conf` |
 | O certificado | `/etc/letsencrypt/live/dervs.com.br/` |
-| O que está no ar agora | `ssh vps-ovh sudo deploy --lista` |
+| O que está no ar agora | `ssh dervs sudo deploy --lista` |

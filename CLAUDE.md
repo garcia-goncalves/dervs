@@ -381,7 +381,7 @@ produção, mas quem o ligar duplica a tarefa.
 - **O que esta no ar e MAIS VELHO que a `main`.** A ultima publicacao levou a
   Fatia 2; tudo de 29/08 (a tela de Computadores refeita e as mensagens do
   agente) esta so no GitHub. Antes de dizer ao dono que a tela mudou, confira
-  qual commit esta no ar (`ssh vps-ovh sudo deploy --lista`; as etiquetas
+  qual commit esta no ar (`ssh dervs sudo deploy --lista`; as etiquetas
   `publicado-*` so cobrem ate 04/09/2026, quando o GitHub ainda publicava).
 - `docs/operacao/` — os roteiros que exigem a mão do dono (GitHub App, entrar,
   conectar computador, **publicar no servidor**).
