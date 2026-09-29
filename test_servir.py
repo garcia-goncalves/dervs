@@ -4105,9 +4105,38 @@ class OBotaoConsertarComIA(BaseServidorDeVerdade):
         self.assertEqual(r.status, 200, r.corpo)
         j = json.loads(r.corpo)
         self.assertIs(j["pedido"], False)
-        self.assertIsNone(j["aviso"])
+        self.assertIn("ja esta na fila", j["aviso"])
         self.assertEqual(j["tarefa"], primeira["tarefa"])
         self.assertEqual(len(self.linhas_da_fila()), 1)
+
+    def _repetir_com_estado(self, nome, **campos):
+        self.com_projeto(nome, memoria_crlf=["a.md"])
+        self.maquina_com_token()
+        primeira = json.loads(self.consertar("memoria_crlf:" + nome).corpo)
+        banco.marcar_fila(primeira["tarefa"], **campos)
+        r = self.consertar("memoria_crlf:" + nome)
+        self.assertEqual(r.status, 200, r.corpo)
+        return json.loads(r.corpo)
+
+    def test_repetido_com_conserto_ja_feito_nao_diz_que_esta_na_fila(self):
+        j = self._repetir_com_estado("cv-feito", estado="ok")
+        self.assertIs(j["pedido"], False)
+        self.assertIn("ja foi feito", j["aviso"])
+        self.assertNotIn("na fila", j["aviso"])
+
+    def test_repetido_que_falhou_e_pode_tentar_de_novo_diz_amanha(self):
+        j = self._repetir_com_estado("cv-falhou", estado="falha", tentativas=1)
+        self.assertIn("tenta de novo amanha", j["aviso"])
+
+    def test_repetido_que_falhou_no_teto_de_tentativas_diz_que_desistiu(self):
+        j = self._repetir_com_estado("cv-desistiu", estado="falha",
+                                     tentativas=tarefas.MAX_TENTATIVAS)
+        self.assertIn("nao deu certo", j["aviso"])
+        self.assertNotIn("amanha", j["aviso"])
+
+    def test_repetido_rodando_diz_que_esta_sendo_feito(self):
+        j = self._repetir_com_estado("cv-rodando", estado="rodando")
+        self.assertIn("sendo feito agora", j["aviso"])
 
     def test_a_rota_e_acesso_dado_e_exige_sessao_e_token(self):
         self.assertEqual(servir.ROTAS["/api/consertar"].acesso, "dado")
@@ -4130,6 +4159,17 @@ class OBotaoConsertarComIA(BaseServidorDeVerdade):
             ultimo = self.pedir("/api/consertar", "POST", {"id": "nada:nada"},
                                 cookies=cookies, cabecalhos={"X-Token": csrf})
         self.assertEqual(ultimo.status, 429)
+
+    def test_esgotar_o_balcao_consertar_nao_tranca_a_auditoria(self):
+        # Prova que o balcao e PROPRIO: trocar `balcao="consertar"` por
+        # `"auditoria"` faria as duas rotas dividirem o mesmo teto.
+        cookies, csrf = self.sessao_e_token()
+        for _ in range(servir.Hub.TETO_DE_CONSERTOS + 1):
+            self.pedir("/api/consertar", "POST", {"id": "nada:nada"},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        r = self.pedir("/api/auditoria/pedir", "POST", {"projeto": "nao-existe"},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertNotEqual(r.status, 429, r.corpo)
 
     # ------------------------------------------------------------- duas contas
     def test_alerta_de_outra_conta_e_inexistente_dao_a_MESMA_resposta(self):

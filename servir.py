@@ -2721,6 +2721,26 @@ class Hub(SimpleHTTPRequestHandler):
                     "fica na fila e so roda quando o limite renovar.")
         return None
 
+    @staticmethod
+    def _aviso_do_pedido_repetido(linha):
+        """O que dizer ao dono quando o conserto JA existe, segundo o estado real."""
+        estado = (linha or {}).get("estado") or ""
+        if estado in ("esperando", "aguardando_aprovacao"):
+            return "Este conserto ja esta na fila. Aprove em Consertar."
+        if estado == "rodando":
+            return "Este conserto esta sendo feito agora. Acompanhe em Consertar."
+        if estado == "ok":
+            return ("Este conserto ja foi feito. Se o alerta continua, o pedido "
+                    "de alteracao pode estar esperando a sua revisao no GitHub "
+                    "- veja em Consertar.")
+        if estado == "falha":
+            if int(linha.get("tentativas") or 0) >= tarefas.MAX_TENTATIVAS:
+                return ("Este conserto ja foi tentado %d vezes e nao deu certo. "
+                        "Veja o motivo em Consertar." % tarefas.MAX_TENTATIVAS)
+            return ("A ultima tentativa deste conserto falhou. A fila tenta de "
+                    "novo amanha, dentro do limite de gasto.")
+        return "Este conserto ja foi pedido. Veja o estado em Consertar."
+
     def _consertar_pedir(self):
         """O botao "Consertar com IA": enfileira o conserto de UMA pendencia.
 
@@ -2762,9 +2782,16 @@ class Hub(SimpleHTTPRequestHandler):
             "trilho": "claude",
             "executor": "claude",
         }])
+        if entrou:
+            aviso = self._aviso_do_conserto(uid)
+        else:
+            # `INSERT OR IGNORE` devolve 0 para uma linha que ja existe em
+            # QUALQUER estado. Dizer "ja estava na fila" para um conserto que
+            # falhou ou terminou seria mentira: a tela le a frase daqui.
+            aviso = self._aviso_do_pedido_repetido(banco.tarefa(id_fila, uid))
         return self._json(200, {
             "ok": True, "pedido": bool(entrou), "tarefa": id_fila,
-            "aviso": self._aviso_do_conserto(uid) if entrou else None})
+            "aviso": aviso})
 
     def _maquina_autorizar(self):
         """Liga ou desliga o direito desta maquina de trabalhar sozinha.

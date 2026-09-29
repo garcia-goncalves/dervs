@@ -762,12 +762,16 @@ async function consertarComIA(p, botao) {
 
   caixa.hidden = false;
   link.hidden = false;
-  texto.textContent = corpo.pedido === false
-    ? "Este conserto já estava na fila. Aprove em Consertar."
+  /* Pedido repetido: quem sabe o estado real da tarefa é o servidor (na fila,
+     rodando, feita, falhou), e a frase dele é a única que não mente. */
+  const repetido = corpo.pedido === false;
+  texto.textContent = repetido
+    ? (typeof corpo.aviso === "string" && corpo.aviso
+        ? corpo.aviso : "Este conserto já foi pedido. Veja em Consertar.")
     : "Na fila. Aprove em Consertar.";
   /* O aviso é o motivo pelo qual o conserto entrou na fila mas NÃO roda agora
      (nenhum computador, sem autorização, teto do dia). Vem pronto do servidor. */
-  if (typeof corpo.aviso === "string" && corpo.aviso) {
+  if (!repetido && typeof corpo.aviso === "string" && corpo.aviso) {
     aviso.hidden = false;
     aviso.textContent = corpo.aviso;
   }
