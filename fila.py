@@ -38,6 +38,9 @@ REGRAS_MECANICAS = {
     "auditoria_vencida":    "claude",
 }
 
+# Mora em `tarefas.py` (o servidor nao importa `fila`); e o MESMO objeto.
+REGRAS_CONSERTAVEIS_PELA_TELA = tarefas.REGRAS_CONSERTAVEIS_PELA_TELA
+
 # Mesma ordem de `regras.ORDEM`. Nao importamos de la para a fila nao depender
 # do motor de deteccao: sao dois assuntos, e o acoplamento so custaria.
 ORDEM = {"alta": 0, "media": 1, "baixa": 2}

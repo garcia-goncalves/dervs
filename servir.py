@@ -823,6 +823,17 @@ class Hub(SimpleHTTPRequestHandler):
             agora_iso = banco.agora()
             pend = memoria.decorar(pend, memoria.vidas(con), agora_iso,
                                    desde=memoria.desde(con))
+            # O botao "Consertar com IA" so aparece atras deste bool. Calculado
+            # DEPOIS do motor (`regras.avaliar`), nunca na origem: e do estado
+            # cru que o motor le os achados. A regra vem de UMA constante, a
+            # mesma que `_consertar_pedir` confere do lado do servidor.
+            for x in pend:
+                # Projeto bloqueado sai FALSO aqui: a rota o recusaria com 403, e
+                # um botao que sempre falha e um botao que mente.
+                x["consertavel"] = (
+                    x.get("regra") in tarefas.REGRAS_CONSERTAVEIS_PELA_TELA
+                    and (x.get("projeto") or "").lower()
+                    not in tarefas.PROJETOS_BLOQUEADOS)
             tend = memoria.tendencia(con, agora_iso)
             guardadas = banco.arquivadas_detalhe(usuario_id=usuario_id, con=con)
         finally:
@@ -2691,6 +2702,101 @@ class Hub(SimpleHTTPRequestHandler):
         }])
         return self._json(200, {"ok": True, "pedido": bool(entraram)})
 
+    # Consertar gasta dinheiro e escreve em repositorio: balcao PROPRIO, como o
+    # da auditoria — nunca emprestado de outra rota.
+    TETO_DE_CONSERTOS = 10
+
+    def _aviso_do_conserto(self, usuario_id):
+        """Por que o conserto entrou na fila mas NAO roda agora, ou `None`.
+
+        Texto para leigo. Ordem: sem computador, computador sem autorizacao,
+        teto do dia.
+        """
+        maquinas = banco.maquinas_do_usuario(usuario_id)
+        if not maquinas:
+            return ("Nenhum computador está conectado à sua conta. Conecte um "
+                    "em Conectar para o conserto poder rodar.")
+        if not any(int(m.get("executa") or 0) for m in maquinas):
+            return ("Seus computadores ainda não foram autorizados a consertar. "
+                    "Em Conectar, ligue \"Deixar consertar aqui\".")
+        janela = tarefas.janela_local_em_utc(tarefas.hoje_local())
+        if not tarefas.cabe_no_teto(banco.gasto_entre(*janela)):
+            return ("O limite de gasto de hoje já foi alcançado. O conserto "
+                    "fica na fila e só roda quando o limite renovar.")
+        return None
+
+    @staticmethod
+    def _aviso_do_pedido_repetido(linha):
+        """O que dizer ao dono quando o conserto JA existe, segundo o estado real."""
+        estado = (linha or {}).get("estado") or ""
+        if estado in ("esperando", "aguardando_aprovacao"):
+            return "Este conserto já está na fila. Aprove em Consertar."
+        if estado == "rodando":
+            return "Este conserto está sendo feito agora. Acompanhe em Consertar."
+        if estado == "ok":
+            return ("Este conserto já foi feito. Se o alerta continua, o pedido "
+                    "de alteração pode estar esperando a sua revisão no GitHub "
+                    "— veja em Consertar.")
+        if estado == "falha":
+            if int(linha.get("tentativas") or 0) >= tarefas.MAX_TENTATIVAS:
+                return ("Este conserto já foi tentado %d vezes e não deu certo. "
+                        "Veja o motivo em Consertar." % tarefas.MAX_TENTATIVAS)
+            return ("A última tentativa deste conserto falhou. A fila tenta de "
+                    "novo amanhã, dentro do limite de gasto.")
+        return "Este conserto já foi pedido. Veja o estado em Consertar."
+
+    def _consertar_pedir(self):
+        """O botao "Consertar com IA": enfileira o conserto de UMA pendencia.
+
+        O pedido traz so o id. Regra, projeto e dono vem do estado DA CONTA de
+        quem pediu (`_estado`), nunca do corpo: o navegador nao escolhe o que
+        vai para a fila. "Nao existe" e "nao e seu" dao a MESMA resposta (404).
+        """
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="consertar",
+                                           teto=self.TETO_DE_CONSERTOS):
+            return self._json(429, self.RECUSA)
+        pid = self._id_de_pendencia(corpo)
+        if pid is None:
+            return
+        uid = sessao["usuario_id"]
+        alvo = next((x for x in self._estado(uid)["pendencias"]
+                     if x.get("id") == pid), None)
+        if alvo is None:
+            return self._json(404, {"erro": "alerta nao encontrado"})
+        regra = alvo.get("regra") or ""
+        projeto = alvo.get("projeto") or ""
+        if regra not in tarefas.REGRAS_CONSERTAVEIS_PELA_TELA:
+            return self._json(403, {"erro": "esta regra nao e consertada por aqui"})
+        if projeto.lower() in tarefas.PROJETOS_BLOQUEADOS:
+            return self._json(403, {"erro": "projeto bloqueado"})
+        # O dono entra NO ID (fila.id e TEXT PRIMARY KEY global): sem ele, duas
+        # contas com projeto de mesmo nome colidem e a segunda "pede" sem entrar.
+        id_fila = "%s:%s:%s" % (regra, uid, pid)
+        entrou = banco.enfileirar([{
+            "id": id_fila,
+            "usuario_id": uid,
+            "projeto": projeto,
+            "regra": regra,
+            "gravidade": alvo.get("gravidade") or "media",
+            "risco": alvo.get("risco") or 0,
+            "trilho": "claude",
+            "executor": "claude",
+        }])
+        if entrou:
+            aviso = self._aviso_do_conserto(uid)
+        else:
+            # `INSERT OR IGNORE` devolve 0 para uma linha que ja existe em
+            # QUALQUER estado. Dizer "ja estava na fila" para um conserto que
+            # falhou ou terminou seria mentira: a tela le a frase daqui.
+            aviso = self._aviso_do_pedido_repetido(banco.tarefa(id_fila, uid))
+        return self._json(200, {
+            "ok": True, "pedido": bool(entrou), "tarefa": id_fila,
+            "aviso": aviso})
+
     def _maquina_autorizar(self):
         """Liga ou desliga o direito desta maquina de trabalhar sozinha.
 
@@ -3003,6 +3109,7 @@ ROTAS = {
     # codigo-fonte privado do dono.
     "/api/auditoria":           Rota("GET",  Hub._auditoria,        "dado"),
     "/api/auditoria/pedir":     Rota("POST", Hub._auditoria_pedir,  "dado"),
+    "/api/consertar":           Rota("POST", Hub._consertar_pedir,  "dado"),
 }
 # A capa e servida a qualquer visitante, entao a folha de estilo e o teclado da
 # cortina precisam ser abertos. Estes dois nao: quem os carrega e o

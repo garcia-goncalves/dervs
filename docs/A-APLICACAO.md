@@ -259,6 +259,14 @@ Isto é tão parte do produto quanto o que ele faz.
 - **Nunca virar bot de WhatsApp.** A biblioteca disponível é uma sessão não oficial,
   frágil e contra os termos de uso. Descartado do produto, não adiado. Telegram fica.
 
+> **Menu enxuto (29/09/2026).** O menu do alto tem **quatro** lugares, e não
+> sete: **Painel**, **Consertar** (Trabalho + Auditoria, em abas), **Conectar**
+> (Conectar projeto + Computadores) e **Conta** (Consumo + Formas de entrar).
+> Projeto e Alerta continuam telas, sem item de menu. Os endereços antigos
+> (`#/consumo`, `#/entrada`, `#/computadores`) redirecionam. A lista abaixo é a
+> das telas que existem; o menu é como se chega a elas. Briefing e plano:
+> `docs/esteira/menu-e-consertar/` e `docs/superpowers/plans/menu-e-consertar.md`.
+
 ## 8. As telas — nove, e o porquê das novas
 
 Direção visual escolhida: **Torre de Controle**. Preto, branco e verde.

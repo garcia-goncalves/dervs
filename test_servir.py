@@ -3986,5 +3986,287 @@ class OQueOServidorEntregaSatisfazAChecagemDoAgente(unittest.TestCase):
                               " agente: %s" % motivo)
 
 
+class OBotaoConsertarComIA(BaseServidorDeVerdade):
+    """`consertavel` em `/api/dados`, `POST /api/consertar` e `pr_url`.
+
+    Cada caso foi sabotado de proposito (ver o relatorio da etapa): tirar a
+    conferencia de dono, a trava de regra, a de projeto bloqueado, o dono do id
+    da fila e cada aviso faz o caso correspondente reprovar.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.limpar)
+
+    def limpar(self):
+        self.limpar_fila()
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM maquina")
+            con.execute("DELETE FROM gasto")
+            con.commit()
+        finally:
+            con.close()
+
+    def com_projeto(self, nome, usuario_id=None, **extra):
+        dados = {"nome": nome}
+        dados.update(extra)
+        con = banco.conectar()
+        try:
+            banco.gravar(nome, "local", dados, con=con,
+                         usuario_id=usuario_id or self.uid)
+            con.commit()
+        finally:
+            con.close()
+
+    def outra_conta_com_sessao(self):
+        OBotaoConsertarComIA._n = getattr(OBotaoConsertarComIA, "_n", 0) + 1
+        con = banco.conectar()
+        try:
+            uid = banco.criar_usuario("conserta%d@teste.local" % self._n, con=con)
+            con.commit()
+            cookie = banco.novo_token()
+            banco.abrir_sessao(uid, cookie, banco.prazo(3600), con=con)
+            final = banco.confirmar_segundo_fator(cookie, banco.novo_token(),
+                                                  con=con)
+            s = banco.sessao_valida(final, con=con)
+        finally:
+            con.close()
+        return uid, {"sessao": final}, servir.Hub._csrf_da_sessao(s)
+
+    def consertar(self, pid, sessao=None):
+        cookies, csrf = sessao or self.sessao_e_token()
+        return self.pedir("/api/consertar", "POST", {"id": pid},
+                          cookies=cookies, cabecalhos={"X-Token": csrf})
+
+    def dados(self):
+        cookies, _ = self.sessao_e_token()
+        return json.loads(self.pedir("/api/dados", cookies=cookies).corpo)
+
+    def linhas_da_fila(self):
+        con = banco.conectar()
+        try:
+            return [dict(l) for l in con.execute("SELECT * FROM fila")]
+        finally:
+            con.close()
+
+    # ------------------------------------------------------------- consertavel
+    def test_dados_marca_consertavel_so_nas_regras_da_lista(self):
+        self.com_projeto("cv-crlf", memoria_crlf=["a.md"])
+        self.com_projeto("cv-env", env_drift={"faltando": ["X"], "sobrando": []})
+        # `dependencia_insegura` nasce do `alertas` do GitHub; aqui basta uma
+        # pendencia de regra FORA da lista para provar o False.
+        pend = {p["id"]: p for p in self.dados()["pendencias"]}
+        self.assertIs(pend["memoria_crlf:cv-crlf"]["consertavel"], True)
+        self.assertIs(pend["env_drift:cv-env"]["consertavel"], True)
+        fora = [p for p in pend.values()
+                if p["regra"] not in tarefas.REGRAS_CONSERTAVEIS_PELA_TELA]
+        self.assertTrue(fora, "o caso nao tem pendencia de regra fora da lista")
+        for p in fora:
+            self.assertIs(p["consertavel"], False, p["id"])
+
+    def test_projeto_bloqueado_nao_e_consertavel_nem_com_caixa_diferente(self):
+        # A rota recusa com 403; a tela nao pode oferecer um botao que sempre falha.
+        self.com_projeto("Ajudei-Saude", memoria_crlf=["a.md"])
+        pend = {p["id"]: p for p in self.dados()["pendencias"]}
+        self.assertIs(pend["memoria_crlf:Ajudei-Saude"]["consertavel"], False)
+
+    def test_a_poda_e_depois_do_motor_montar_estado_ainda_tem_os_alertas(self):
+        """Terceiro teste da poda (CLAUDE.md): `consertavel` e posto sobre o
+        resultado do motor; o estado cru continua entregando o dado."""
+        self.com_projeto("cv-motor", memoria_crlf=["a.md"])
+        con = banco.conectar()
+        try:
+            e = banco.montar_estado(con, usuario_id=self.uid)
+        finally:
+            con.close()
+        proj = next(p for p in e["projetos"] if p["nome"] == "cv-motor")
+        self.assertEqual(proj["memoria_crlf"], ["a.md"])
+        self.assertNotIn("consertavel", proj)
+
+    # ----------------------------------------------------------- o fluxo todo
+    def test_fluxo_completo_200_e_linha_na_fila_com_o_dono(self):
+        self.com_projeto("cv-fluxo", memoria_crlf=["a.md"])
+        self.maquina_com_token()
+        r = self.consertar("memoria_crlf:cv-fluxo")
+        self.assertEqual(r.status, 200, r.corpo)
+        j = json.loads(r.corpo)
+        self.assertIs(j["ok"], True)
+        self.assertIs(j["pedido"], True)
+        self.assertIsNone(j["aviso"])
+        linhas = self.linhas_da_fila()
+        self.assertEqual(len(linhas), 1)
+        self.assertEqual(linhas[0]["id"], j["tarefa"])
+        self.assertEqual(linhas[0]["usuario_id"], self.uid)
+        self.assertEqual(linhas[0]["regra"], "memoria_crlf")
+        self.assertEqual(linhas[0]["projeto"], "cv-fluxo")
+        self.assertEqual(linhas[0]["id"].split(":")[0], "memoria_crlf")
+        self.assertIn(":%d:" % self.uid, linhas[0]["id"])
+
+    def test_segundo_pedido_diz_que_ja_estava_na_fila(self):
+        self.com_projeto("cv-dupla", memoria_crlf=["a.md"])
+        self.maquina_com_token()
+        primeira = json.loads(self.consertar("memoria_crlf:cv-dupla").corpo)
+        r = self.consertar("memoria_crlf:cv-dupla")
+        self.assertEqual(r.status, 200, r.corpo)
+        j = json.loads(r.corpo)
+        self.assertIs(j["pedido"], False)
+        self.assertIn("já está na fila", j["aviso"])
+        self.assertEqual(j["tarefa"], primeira["tarefa"])
+        self.assertEqual(len(self.linhas_da_fila()), 1)
+
+    def _repetir_com_estado(self, nome, **campos):
+        self.com_projeto(nome, memoria_crlf=["a.md"])
+        self.maquina_com_token()
+        primeira = json.loads(self.consertar("memoria_crlf:" + nome).corpo)
+        banco.marcar_fila(primeira["tarefa"], **campos)
+        r = self.consertar("memoria_crlf:" + nome)
+        self.assertEqual(r.status, 200, r.corpo)
+        return json.loads(r.corpo)
+
+    def test_repetido_com_conserto_ja_feito_nao_diz_que_esta_na_fila(self):
+        j = self._repetir_com_estado("cv-feito", estado="ok")
+        self.assertIs(j["pedido"], False)
+        self.assertIn("já foi feito", j["aviso"])
+        self.assertNotIn("na fila", j["aviso"])
+
+    def test_repetido_que_falhou_e_pode_tentar_de_novo_diz_amanha(self):
+        j = self._repetir_com_estado("cv-falhou", estado="falha", tentativas=1)
+        self.assertIn("tenta de novo amanhã", j["aviso"])
+
+    def test_repetido_que_falhou_no_teto_de_tentativas_diz_que_desistiu(self):
+        j = self._repetir_com_estado("cv-desistiu", estado="falha",
+                                     tentativas=tarefas.MAX_TENTATIVAS)
+        self.assertIn("não deu certo", j["aviso"])
+        self.assertNotIn("amanhã", j["aviso"])
+
+    def test_repetido_rodando_diz_que_esta_sendo_feito(self):
+        j = self._repetir_com_estado("cv-rodando", estado="rodando")
+        self.assertIn("sendo feito agora", j["aviso"])
+
+    def test_a_rota_e_acesso_dado_e_exige_sessao_e_token(self):
+        self.assertEqual(servir.ROTAS["/api/consertar"].acesso, "dado")
+        self.assertEqual(self.pedir("/api/consertar", "POST",
+                                    {"id": "x"}).status, 401)
+        r = self.pedir("/api/consertar", "POST", {"id": "x"},
+                       cookies=self.com_sessao())
+        self.assertEqual(r.status, 403)
+
+    def test_sem_id_e_400(self):
+        cookies, csrf = self.sessao_e_token()
+        r = self.pedir("/api/consertar", "POST", {}, cookies=cookies,
+                       cabecalhos={"X-Token": csrf})
+        self.assertEqual(r.status, 400)
+
+    def test_o_balcao_proprio_tranca_no_teto(self):
+        cookies, csrf = self.sessao_e_token()
+        ultimo = None
+        for _ in range(servir.Hub.TETO_DE_CONSERTOS + 1):
+            ultimo = self.pedir("/api/consertar", "POST", {"id": "nada:nada"},
+                                cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertEqual(ultimo.status, 429)
+
+    def test_esgotar_o_balcao_consertar_nao_tranca_a_auditoria(self):
+        # Prova que o balcao e PROPRIO: trocar `balcao="consertar"` por
+        # `"auditoria"` faria as duas rotas dividirem o mesmo teto.
+        cookies, csrf = self.sessao_e_token()
+        for _ in range(servir.Hub.TETO_DE_CONSERTOS + 1):
+            self.pedir("/api/consertar", "POST", {"id": "nada:nada"},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        r = self.pedir("/api/auditoria/pedir", "POST", {"projeto": "nao-existe"},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertNotEqual(r.status, 429, r.corpo)
+
+    # ------------------------------------------------------------- duas contas
+    def test_alerta_de_outra_conta_e_inexistente_dao_a_MESMA_resposta(self):
+        vizinho, _, _ = self.outra_conta_com_sessao()
+        self.com_projeto("cv-do-vizinho", usuario_id=vizinho,
+                         memoria_crlf=["a.md"])
+        alheio = self.consertar("memoria_crlf:cv-do-vizinho")
+        inexistente = self.consertar("memoria_crlf:cv-que-nao-existe")
+        self.assertEqual(alheio.status, 404, alheio.corpo)
+        self.assertEqual(alheio.status, inexistente.status)
+        self.assertEqual(alheio.corpo, inexistente.corpo)
+        self.assertEqual(json.loads(alheio.corpo),
+                         {"erro": "alerta nao encontrado"})
+        self.assertEqual(self.linhas_da_fila(), [],
+                         "o alerta da outra conta virou linha na fila")
+
+    def test_duas_contas_com_projeto_de_mesmo_nome_nao_colidem_no_id(self):
+        vizinho, sessao_v, csrf_v = self.outra_conta_com_sessao()
+        self.com_projeto("cv-igual", memoria_crlf=["a.md"])
+        self.com_projeto("cv-igual", usuario_id=vizinho, memoria_crlf=["a.md"])
+        a = self.consertar("memoria_crlf:cv-igual")
+        b = self.consertar("memoria_crlf:cv-igual", sessao=(sessao_v, csrf_v))
+        self.assertTrue(json.loads(a.corpo)["pedido"])
+        self.assertTrue(json.loads(b.corpo)["pedido"],
+                        "a conta B recebeu pedido sem a tarefa entrar")
+        donos = sorted(l["usuario_id"] for l in self.linhas_da_fila())
+        self.assertEqual(donos, sorted([self.uid, vizinho]))
+
+    # ----------------------------------------------------------------- travas
+    def test_regra_fora_da_lista_e_403_e_nao_entra_na_fila(self):
+        # `sem_memoria` nao serve: precisa ser uma regra REAL e fora da lista.
+        # `git.versionado is False` gera `sem_git`; qualquer regra basta.
+        self.com_projeto("cv-fora", git={"versionado": False})
+        fora = [p for p in self.dados()["pendencias"]
+                if p["projeto"] == "cv-fora"]
+        self.assertTrue(fora, "o caso nao produziu pendencia nenhuma")
+        alvo = fora[0]
+        self.assertNotIn(alvo["regra"], tarefas.REGRAS_CONSERTAVEIS_PELA_TELA)
+        r = self.consertar(alvo["id"])
+        self.assertEqual(r.status, 403, r.corpo)
+        self.assertEqual(json.loads(r.corpo),
+                         {"erro": "esta regra nao e consertada por aqui"})
+        self.assertEqual(self.linhas_da_fila(), [])
+
+    def test_projeto_bloqueado_com_maiuscula_e_403(self):
+        nome = sorted(tarefas.PROJETOS_BLOQUEADOS)[0].title()
+        self.com_projeto(nome, memoria_crlf=["a.md"])
+        r = self.consertar("memoria_crlf:%s" % nome)
+        self.assertEqual(r.status, 403, r.corpo)
+        self.assertEqual(json.loads(r.corpo), {"erro": "projeto bloqueado"})
+        self.assertEqual(self.linhas_da_fila(), [])
+
+    # ------------------------------------------------------------------ avisos
+    def aviso_de(self, nome):
+        self.com_projeto(nome, memoria_crlf=["a.md"])
+        r = self.consertar("memoria_crlf:%s" % nome)
+        self.assertEqual(r.status, 200, r.corpo)
+        j = json.loads(r.corpo)
+        self.assertIs(j["pedido"], True)
+        return j["aviso"]
+
+    def test_aviso_sem_computador_pareado(self):
+        aviso = self.aviso_de("cv-av1")
+        self.assertIn("Nenhum computador", aviso)
+
+    def test_aviso_computador_sem_autorizacao(self):
+        self.maquina_com_token(autorizada=False)
+        aviso = self.aviso_de("cv-av2")
+        self.assertIn("autorizados", aviso)
+        self.assertNotIn("Nenhum computador", aviso)
+
+    def test_aviso_teto_do_dia_estourado(self):
+        self.maquina_com_token()
+        banco.registrar_gasto(100000.0, origem="teste")
+        aviso = self.aviso_de("cv-av3")
+        self.assertIn("limite de gasto", aviso)
+
+    # ------------------------------------------------------------------ pr_url
+    def test_detalhe_da_tarefa_devolve_pr_url_quando_o_desfecho_tem(self):
+        token, _mid = self.maquina_com_token()
+        self.enfileirar_tarefa(id_="pr:1", regra="memoria_crlf")
+        self.como_agente(token, "/agente/relatorio", {"projetos": []})
+        self.como_agente(token, "/agente/resultado", {
+            "tipo": "desfecho", "id": "pr:1", "estado": "ok",
+            "pr_url": "https://github.com/x/y/pull/7"})
+        cookies, _ = self.sessao_e_token()
+        r = self.pedir("/api/tarefas?id=pr:1", cookies=cookies)
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertEqual(json.loads(r.corpo)["tarefa"]["pr_url"],
+                         "https://github.com/x/y/pull/7")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)

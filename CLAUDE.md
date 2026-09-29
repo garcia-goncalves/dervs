@@ -262,6 +262,34 @@ A sugestão de autodetecção por padrão de subdomínio **propõe e para**: a r
 vez por servidor por sessão (nunca a cada repintura — cada medição pode levar até
 ~23s, e um servidor com padrão pode ter até 3 candidatos por chamada).
 
+## O botão "Consertar com IA" e o menu de quatro (29/09/2026)
+
+`POST /api/consertar` só **enfileira**; quem roda é o braço executor, depois do
+"Pode fazer". Quatro coisas que quebram em silêncio se mexidas:
+
+- **A lista de regras mora em `tarefas.REGRAS_CONSERTAVEIS_PELA_TELA`**, não em
+  `fila.py`: `servir.py` não pode importar `fila`. `fila.py` reexporta o mesmo
+  objeto (teste de identidade). Fica **fora** dela `dependencia_insegura`,
+  `auditoria_vencida` e todo achado de segurança — IA em segurança só com revisão.
+- **`consertavel` em `/api/dados` é posto DEPOIS do motor** e sai falso em projeto
+  de `PROJETOS_BLOQUEADOS`. Botão que o servidor sempre recusaria é botão que mente.
+- **O id da fila leva o dono** (`regra:usuario:id_da_pendência`), pelo mesmo
+  motivo da auditoria. `INSERT OR IGNORE` devolve 0 para linha existente em
+  QUALQUER estado; por isso o pedido repetido lê a linha (com `usuario_id` no
+  `WHERE`) e diz o estado real. Antes dizia "já estava na fila" para conserto
+  que falhou ou terminou — achado de dois revisores, independentes.
+- **Balcão próprio** (`consertar`, teto 10): um teste esgota o dele e exige que a
+  auditoria ainda responda.
+
+O menu tem **exatamente quatro** itens e `test_menu.py` cobra isso, mais que cada
+endereço antigo (`#/consumo`, `#/entrada`, `#/computadores`) redirecione. Item
+novo no menu exige mexer no teste — de propósito.
+
+**Pendente de propósito:** `memoria_crlf` vai ao braço `claude`, embora
+`fila.REGRAS_MECANICAS` a mapeie para `mecanico` (Haiku, mais barato); e
+`fila.trabalhar` usa o id `regra:projeto`, sem o dono — hoje ninguém o chama em
+produção, mas quem o ligar duplica a tarefa.
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em

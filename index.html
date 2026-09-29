@@ -62,12 +62,9 @@ __FAIXA__
     </a>
     <nav class="mapa" aria-label="Telas">
       <a href="#/painel" data-tela="painel">Painel</a>
-      <a href="#/trabalho" data-tela="trabalho">Trabalho</a>
-      <a href="#/auditoria" data-tela="auditoria">Auditoria</a>
-      <a href="#/consumo" data-tela="consumo">Consumo</a>
-      <a href="#/conectar" data-tela="conectar">Conectar projeto</a>
-      <a href="#/computadores" data-tela="computadores">Computadores</a>
-      <a href="#/entrada" data-tela="entrada">Formas de entrar</a>
+      <a href="#/trabalho" data-tela="trabalho">Consertar</a>
+      <a href="#/conectar" data-tela="conectar">Conectar</a>
+      <a href="#/conta" data-tela="conta">Conta</a>
     </nav>
     <div class="canto">
       <button class="botao botao--secundario" type="button" id="btn-tema">Tema</button>
@@ -155,7 +152,7 @@ __FAIXA__
       <p class="carimbo" id="recomendada-carimbo"></p>
       <div class="acoes">
         <button class="botao" type="button" id="recomendada-abrir">
-          Ver o que gerou este alerta
+          Ver detalhes
         </button>
       </div>
     </div>
@@ -199,11 +196,16 @@ __FAIXA__
     <p class="carimbo" id="alerta-carimbo"></p>
     <div class="receita" id="alerta-detalhe" hidden></div>
     <div class="acoes" id="alerta-acoes"></div>
+    <div class="cartao" id="alerta-consertar-resposta" aria-live="polite" hidden>
+      <p id="alerta-consertar-texto"></p>
+      <p class="mole" id="alerta-consertar-aviso" hidden></p>
+      <p><a href="#/trabalho" id="alerta-consertar-link">Ir para Consertar</a></p>
+    </div>
   </section>
 
   <!-- ============================================ 4. Conectar projeto === -->
   <section id="tela-conectar" hidden>
-    <h1>Conectar projeto</h1>
+    <h1>Conectar</h1>
     <p>
       O navegador não enxerga o disco do seu computador, e o DERVS roda num
       servidor. Quem lista as pastas com Git é o <strong>agente</strong> — o
@@ -214,7 +216,7 @@ __FAIXA__
 
   <!-- ============================================== 5. Computadores ===== -->
   <section id="tela-computadores" hidden>
-    <h1>Computadores</h1>
+    <h2>Computadores</h2>
     <p class="mole">
       Quais estão conectados, e quando cada um deu notícia pela última vez.
     </p>
@@ -235,7 +237,7 @@ __FAIXA__
         <strong>Pode rodar de qualquer pasta.</strong> A única coisa a trocar na
         linha é <code>&lt;CAMINHO DO DERVS&gt;</code>, pela pasta onde o DERVS
         está naquele computador. Quem não quer trocar nada usa o conectador, em
-        <strong>Conectar projeto</strong>.
+        <strong>Conectar</strong>, no alto desta tela.
       </p>
       <button class="botao" type="button" id="btn-gerar-numero">Gerar o número</button>
       <div id="pareamento" hidden>
@@ -259,7 +261,11 @@ __FAIXA__
 
   <!-- ================================================== 6. Trabalho ===== -->
   <section id="tela-trabalho" hidden>
-    <h1>Trabalho</h1>
+    <h1>Consertar</h1>
+    <div class="abas" role="group" aria-label="O que consertar">
+      <a href="#/trabalho" data-aba="trabalho">Tarefas</a>
+      <a href="#/auditoria" data-aba="auditoria">Auditoria</a>
+    </div>
     <p class="mole">
       O que o DERVS já consertou, o que está fazendo agora, e o que espera o
       seu clique.
@@ -277,6 +283,9 @@ __FAIXA__
         <div id="tarefa-selo"></div>
         <p class="mole" id="tarefa-frase"></p>
         <p class="carimbo" id="tarefa-numeros"></p>
+        <p id="tarefa-pr-caixa" hidden>
+          <a id="tarefa-pr" href="#" target="_blank" rel="noopener noreferrer">Ver o pedido de alteração</a>
+        </p>
       </div>
 
       <!-- O que a sessão foi dizendo, ao vivo. -->
@@ -319,7 +328,12 @@ __FAIXA__
   <!-- O quarto estado da tela e o proprio selo `sem_dados` -- nao ha CSS
        novo aqui, so o vocabulario reusado de `#moldes-de-selo`. -->
   <section id="tela-auditoria" hidden>
-    <h1>Auditoria</h1>
+    <h1>Consertar</h1>
+    <div class="abas" role="group" aria-label="O que consertar">
+      <a href="#/trabalho" data-aba="trabalho">Tarefas</a>
+      <a href="#/auditoria" data-aba="auditoria">Auditoria</a>
+    </div>
+    <h2>Auditoria</h2>
     <p class="mole">
       A auditoria lê o código por dentro — não só o que está em volta dele —
       e aponta o que merece atenção, agrupado por gravidade.
@@ -348,7 +362,11 @@ __FAIXA__
 
   <!-- ================================================== 7. Consumo ====== -->
   <section id="tela-consumo" hidden>
-    <h1>Consumo</h1>
+    <h1>Conta</h1>
+    <div class="abas" role="group" aria-label="A sua conta">
+      <a href="#/conta" data-aba="consumo">Consumo</a>
+      <a href="#/conta/entrada" data-aba="entrada">Formas de entrar</a>
+    </div>
     <p class="mole">
       Quanto o DERVS trabalhou nos últimos sete dias. O que acaba é a cota da
       assinatura, e ela se mede em sessões e rodadas — o valor em reais está
@@ -375,7 +393,12 @@ __FAIXA__
 
   <!-- ========================================== Formas de entrar ======== -->
   <section id="tela-entrada" hidden>
-    <h1>Formas de entrar</h1>
+    <h1>Conta</h1>
+    <div class="abas" role="group" aria-label="A sua conta">
+      <a href="#/conta" data-aba="consumo">Consumo</a>
+      <a href="#/conta/entrada" data-aba="entrada">Formas de entrar</a>
+    </div>
+    <h2>Formas de entrar</h2>
     <p class="mole">
       Não há recuperação por e-mail aqui, de propósito: quem perde todas as
       formas de entrar não abre a conta. Por isso vale ter duas.

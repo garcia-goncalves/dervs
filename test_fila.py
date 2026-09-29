@@ -677,5 +677,31 @@ class TravaDePublicacao(unittest.TestCase):
         self.assertEqual(fila.reprovar(diff, "memoria_crlf"), "")
 
 
+class ARegrasConsertaveisPelaTela(unittest.TestCase):
+    """A constante que o botao "Consertar com IA" obedece."""
+
+    def test_e_subconjunto_das_regras_mecanicas(self):
+        import fila
+        self.assertTrue(
+            set(fila.REGRAS_CONSERTAVEIS_PELA_TELA) <= set(fila.REGRAS_MECANICAS),
+            "regra fora de REGRAS_MECANICAS nao tem trilho na fila")
+
+    def test_nao_tem_auditoria_vencida_nem_dependencia_insegura(self):
+        import fila
+        for proibida in ("auditoria_vencida", "dependencia_insegura"):
+            self.assertNotIn(proibida, fila.REGRAS_CONSERTAVEIS_PELA_TELA)
+
+    def test_nenhum_achado_de_auditoria_entra(self):
+        import fila
+        for regra in fila.REGRAS_CONSERTAVEIS_PELA_TELA:
+            self.assertFalse(regra.startswith("auditoria_"), regra)
+
+    def test_e_o_mesmo_objeto_de_tarefas(self):
+        import fila
+        import tarefas
+        self.assertIs(fila.REGRAS_CONSERTAVEIS_PELA_TELA,
+                      tarefas.REGRAS_CONSERTAVEIS_PELA_TELA)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
