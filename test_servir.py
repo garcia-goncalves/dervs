@@ -4111,7 +4111,7 @@ class OBotaoConsertarComIA(BaseServidorDeVerdade):
         self.assertEqual(r.status, 200, r.corpo)
         j = json.loads(r.corpo)
         self.assertIs(j["pedido"], False)
-        self.assertIn("ja esta na fila", j["aviso"])
+        self.assertIn("já está na fila", j["aviso"])
         self.assertEqual(j["tarefa"], primeira["tarefa"])
         self.assertEqual(len(self.linhas_da_fila()), 1)
 
@@ -4127,18 +4127,18 @@ class OBotaoConsertarComIA(BaseServidorDeVerdade):
     def test_repetido_com_conserto_ja_feito_nao_diz_que_esta_na_fila(self):
         j = self._repetir_com_estado("cv-feito", estado="ok")
         self.assertIs(j["pedido"], False)
-        self.assertIn("ja foi feito", j["aviso"])
+        self.assertIn("já foi feito", j["aviso"])
         self.assertNotIn("na fila", j["aviso"])
 
     def test_repetido_que_falhou_e_pode_tentar_de_novo_diz_amanha(self):
         j = self._repetir_com_estado("cv-falhou", estado="falha", tentativas=1)
-        self.assertIn("tenta de novo amanha", j["aviso"])
+        self.assertIn("tenta de novo amanhã", j["aviso"])
 
     def test_repetido_que_falhou_no_teto_de_tentativas_diz_que_desistiu(self):
         j = self._repetir_com_estado("cv-desistiu", estado="falha",
                                      tentativas=tarefas.MAX_TENTATIVAS)
-        self.assertIn("nao deu certo", j["aviso"])
-        self.assertNotIn("amanha", j["aviso"])
+        self.assertIn("não deu certo", j["aviso"])
+        self.assertNotIn("amanhã", j["aviso"])
 
     def test_repetido_rodando_diz_que_esta_sendo_feito(self):
         j = self._repetir_com_estado("cv-rodando", estado="rodando")

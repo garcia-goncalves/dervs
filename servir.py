@@ -2714,15 +2714,15 @@ class Hub(SimpleHTTPRequestHandler):
         """
         maquinas = banco.maquinas_do_usuario(usuario_id)
         if not maquinas:
-            return ("Nenhum computador esta conectado a sua conta. Conecte um "
+            return ("Nenhum computador está conectado à sua conta. Conecte um "
                     "em Conectar para o conserto poder rodar.")
         if not any(int(m.get("executa") or 0) for m in maquinas):
-            return ("Seus computadores ainda nao foram autorizados a consertar. "
+            return ("Seus computadores ainda não foram autorizados a consertar. "
                     "Em Conectar, ligue \"Deixar consertar aqui\".")
         janela = tarefas.janela_local_em_utc(tarefas.hoje_local())
         if not tarefas.cabe_no_teto(banco.gasto_entre(*janela)):
-            return ("O limite de gasto de hoje ja foi alcancado. O conserto "
-                    "fica na fila e so roda quando o limite renovar.")
+            return ("O limite de gasto de hoje já foi alcançado. O conserto "
+                    "fica na fila e só roda quando o limite renovar.")
         return None
 
     @staticmethod
@@ -2730,20 +2730,20 @@ class Hub(SimpleHTTPRequestHandler):
         """O que dizer ao dono quando o conserto JA existe, segundo o estado real."""
         estado = (linha or {}).get("estado") or ""
         if estado in ("esperando", "aguardando_aprovacao"):
-            return "Este conserto ja esta na fila. Aprove em Consertar."
+            return "Este conserto já está na fila. Aprove em Consertar."
         if estado == "rodando":
-            return "Este conserto esta sendo feito agora. Acompanhe em Consertar."
+            return "Este conserto está sendo feito agora. Acompanhe em Consertar."
         if estado == "ok":
-            return ("Este conserto ja foi feito. Se o alerta continua, o pedido "
-                    "de alteracao pode estar esperando a sua revisao no GitHub "
-                    "- veja em Consertar.")
+            return ("Este conserto já foi feito. Se o alerta continua, o pedido "
+                    "de alteração pode estar esperando a sua revisão no GitHub "
+                    "— veja em Consertar.")
         if estado == "falha":
             if int(linha.get("tentativas") or 0) >= tarefas.MAX_TENTATIVAS:
-                return ("Este conserto ja foi tentado %d vezes e nao deu certo. "
+                return ("Este conserto já foi tentado %d vezes e não deu certo. "
                         "Veja o motivo em Consertar." % tarefas.MAX_TENTATIVAS)
-            return ("A ultima tentativa deste conserto falhou. A fila tenta de "
-                    "novo amanha, dentro do limite de gasto.")
-        return "Este conserto ja foi pedido. Veja o estado em Consertar."
+            return ("A última tentativa deste conserto falhou. A fila tenta de "
+                    "novo amanhã, dentro do limite de gasto.")
+        return "Este conserto já foi pedido. Veja o estado em Consertar."
 
     def _consertar_pedir(self):
         """O botao "Consertar com IA": enfileira o conserto de UMA pendencia.
