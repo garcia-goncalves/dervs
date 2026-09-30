@@ -74,6 +74,7 @@ DERVS-VOZ** — aprovar no painel não basta.
 | `POST /agente/voz/estado` | o VOZ (token de computador) | o VOZ conta o que mediu e quais cérebros tem |
 | `GET /agente/voz/recados` | o VOZ (token de computador) | o VOZ pergunta se há recado para ele |
 | `POST /agente/voz/resultado` | o VOZ (token de computador) | o VOZ devolve o resultado de um recado |
+| `POST /agente/voz/pedido` | o VOZ (token de computador) | o VOZ pede que o painel enfileire o conserto de um alerta (`{"tipo":"enfileirar_conserto","alerta_id":"...","resumo":"..."}`). Mesma regra e mesmas travas do botão "Consertar com IA": só regras mecânicas, nunca segurança nem projeto bloqueado, e só alertas do dono daquele computador. A tarefa nasce esperando o "Pode fazer" do dono; nunca roda sozinha. Balcão próprio (10 pedidos por 15 min) |
 
 **O painel também avisa sozinho (tipo `avisar`).** Um recado `avisar` é sempre
 `leitura` (com `muda_estado`, a rota responde 400 e o banco recusa) e só o painel o

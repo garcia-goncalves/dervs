@@ -295,7 +295,9 @@ produção, mas quem o ligar duplica a tarefa.
 O DERVS-VOZ é outro repositório (`repos\dervs-voz`, programa de voz no PC do dono).
 Ele fala com este servidor por **três rotas de máquina**, sempre **de saída** (o VOZ
 nunca escuta porta): `POST /agente/voz/estado`, `GET /agente/voz/recados`,
-`POST /agente/voz/resultado`; e o dono usa `GET /api/voz` e `POST /api/voz/recado`.
+`POST /agente/voz/resultado`, mais `POST /agente/voz/pedido` (o VOZ pede conserto de um
+alerta; o miolo é `Hub._enfileirar_conserto`, o MESMO do botão da tela, e a tarefa nasce
+esperando o "Pode fazer" do dono); e o dono usa `GET /api/voz` e `POST /api/voz/recado`.
 Mesmo token de máquina pareada do agente. Quatro coisas quebram em silêncio:
 
 - **`/estado` NÃO é sinal de vida.** `test_nao_existe_rota_de_sinal_de_vida_separada`

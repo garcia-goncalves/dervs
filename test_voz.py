@@ -576,6 +576,85 @@ class AServidorDeVerdade(unittest.TestCase):
             r = self.maquina(self.t_a1, "/agente/voz/resultado", "POST", corpo)
             self.assertEqual(r.status, 400, campo)
 
+    # ------------------------------------------------- o VOZ pede um conserto
+    def _pend(self, pid="memoria_crlf:dervs", regra="memoria_crlf",
+              projeto="dervs"):
+        return {"id": pid, "regra": regra, "projeto": projeto,
+                "gravidade": "media", "risco": 1}
+
+    def _pedir_conserto(self, token, corpo, pendencias=None, so_para=None):
+        """Pede pelo VOZ com o `_estado` do servidor trocado: a pendencia so
+        existe para a conta `so_para`, como no motor de verdade."""
+        from unittest import mock
+        pend = [self._pend()] if pendencias is None else pendencias
+
+        def estado(_hub, uid):
+            return {"pendencias": pend if so_para in (None, uid) else []}
+        with mock.patch.object(servir.Hub, "_estado", estado):
+            return self.maquina(token, "/agente/voz/pedido", "POST", corpo)
+
+    def test_o_voz_pede_conserto_e_nasce_pendente_de_aprovacao(self):
+        r = self._pedir_conserto(self.t_a1, {"tipo": "enfileirar_conserto",
+                                             "alerta_id": "memoria_crlf:dervs",
+                                             "resumo": "CRLF no CLAUDE.md"})
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertEqual(r.json["tarefa_id"],
+                         "memoria_crlf:%d:memoria_crlf:dervs" % self.uid)
+        self.assertTrue(r.json["pedido"])
+        t = banco.tarefa(r.json["tarefa_id"], self.uid)
+        self.assertIsNotNone(t)
+        self.assertIsNone(t.get("aprovado_em"))       # espera o "Pode fazer"
+        # Pedir de novo nao duplica e diz a verdade.
+        r2 = self._pedir_conserto(self.t_a1, {"tipo": "enfileirar_conserto",
+                                              "alerta_id": "memoria_crlf:dervs"})
+        self.assertEqual(r2.status, 200)
+        self.assertFalse(r2.json["pedido"])
+
+    def test_o_voz_so_pede_para_o_dono_da_propria_maquina(self):
+        """O VOZ da conta B nao enfileira o alerta da conta A, e a resposta e a
+        mesma de um alerta que nao existe."""
+        corpo = {"tipo": "enfileirar_conserto", "alerta_id": "memoria_crlf:dervs"}
+        cruzado = self._pedir_conserto(self.t_b1, corpo, so_para=self.uid)
+        inexistente = self._pedir_conserto(self.t_b1, dict(
+            corpo, alerta_id="nao-existe"), so_para=self.uid)
+        self.assertEqual(cruzado.status, 404)
+        self.assertEqual((cruzado.status, cruzado.corpo),
+                         (inexistente.status, inexistente.corpo))
+
+    def test_o_voz_nao_conserta_regra_de_seguranca_nem_projeto_bloqueado(self):
+        r = self._pedir_conserto(
+            self.t_a1, {"tipo": "enfileirar_conserto", "alerta_id": "x"},
+            pendencias=[self._pend("x", regra="dependencia_insegura")])
+        self.assertEqual(r.status, 403, r.corpo)
+        r = self._pedir_conserto(
+            self.t_a1, {"tipo": "enfileirar_conserto", "alerta_id": "y"},
+            pendencias=[self._pend("y", projeto="ajudei-saude")])
+        self.assertEqual(r.status, 403, r.corpo)
+
+    def test_o_pedido_do_voz_valida_tudo_e_exige_token(self):
+        ok = {"tipo": "enfileirar_conserto", "alerta_id": "memoria_crlf:dervs"}
+        self.assertEqual(self.pedir("/agente/voz/pedido", "POST", ok).status, 401)
+        for ruim in ({**ok, "tipo": "rodar_comando"},
+                     {**ok, "extra": 1},
+                     {**ok, "alerta_id": ""},
+                     {**ok, "alerta_id": "a" * 201},
+                     {**ok, "alerta_id": "\ud800"},
+                     {**ok, "resumo": "r" * 301},
+                     {"tipo": "enfileirar_conserto"}):
+            with self.subTest(ruim=str(ruim)[:40]):
+                self.assertEqual(
+                    self._pedir_conserto(self.t_a1, ruim).status, 400)
+
+    def test_o_pedido_do_voz_tem_balcao_proprio(self):
+        corpo = {"tipo": "enfileirar_conserto", "alerta_id": "memoria_crlf:dervs"}
+        ultimo = None
+        for _ in range(servir.Hub.TETO_DE_PEDIDOS_DO_VOZ + 2):
+            ultimo = self._pedir_conserto(self.t_b1, corpo, so_para=self.outro)
+        self.assertEqual(ultimo.status, 429)
+        # O balcao dele esgotou; o estado da mesma maquina ainda responde.
+        self.assertEqual(self.maquina(self.t_b1, "/agente/voz/estado", "POST",
+                                      _estado_bom()).status, 200)
+
     # ------------------------------------------------------------- resultado
     def _recado_entregue(self, uid=None, token=None, mid=None):
         r = self.recado(uid or self.uid, mid or self.m_a1)
@@ -756,6 +835,7 @@ class AsRotasDaPonte(unittest.TestCase):
         "/agente/voz/estado": ("POST", "maquina"),
         "/agente/voz/recados": ("GET", "maquina"),
         "/agente/voz/resultado": ("POST", "maquina"),
+        "/agente/voz/pedido": ("POST", "maquina"),
         "/api/voz": ("GET", "dado"),
         "/api/voz/recado": ("POST", "dado"),
     }

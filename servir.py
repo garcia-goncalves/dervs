@@ -2847,17 +2847,25 @@ class Hub(SimpleHTTPRequestHandler):
         pid = self._id_de_pendencia(corpo)
         if pid is None:
             return
-        uid = sessao["usuario_id"]
+        status, resposta = self._enfileirar_conserto(sessao["usuario_id"], pid)
+        return self._json(status, resposta)
+
+    def _enfileirar_conserto(self, uid, pid):
+        """O miolo do conserto, UM so para a tela e para o DERVS-VOZ.
+
+        Devolve `(status, corpo)`. Quem chama decide de quem e o `uid` (da
+        sessao, na tela; do dono da maquina, na ponte) e nunca do corpo.
+        """
         alvo = next((x for x in self._estado(uid)["pendencias"]
                      if x.get("id") == pid), None)
         if alvo is None:
-            return self._json(404, {"erro": "alerta nao encontrado"})
+            return 404, {"erro": "alerta nao encontrado"}
         regra = alvo.get("regra") or ""
         projeto = alvo.get("projeto") or ""
         if regra not in tarefas.REGRAS_CONSERTAVEIS_PELA_TELA:
-            return self._json(403, {"erro": "esta regra nao e consertada por aqui"})
+            return 403, {"erro": "esta regra nao e consertada por aqui"}
         if projeto.lower() in tarefas.PROJETOS_BLOQUEADOS:
-            return self._json(403, {"erro": "projeto bloqueado"})
+            return 403, {"erro": "projeto bloqueado"}
         # O dono entra NO ID (fila.id e TEXT PRIMARY KEY global): sem ele, duas
         # contas com projeto de mesmo nome colidem e a segunda "pede" sem entrar.
         id_fila = "%s:%s:%s" % (regra, uid, pid)
@@ -2878,9 +2886,44 @@ class Hub(SimpleHTTPRequestHandler):
             # QUALQUER estado. Dizer "ja estava na fila" para um conserto que
             # falhou ou terminou seria mentira: a tela le a frase daqui.
             aviso = self._aviso_do_pedido_repetido(banco.tarefa(id_fila, uid))
-        return self._json(200, {
-            "ok": True, "pedido": bool(entrou), "tarefa": id_fila,
-            "aviso": aviso})
+        return 200, {"ok": True, "pedido": bool(entrou), "tarefa": id_fila,
+                     "aviso": aviso}
+
+    TIPOS_DE_PEDIDO_DO_VOZ = ("enfileirar_conserto",)
+
+    def _voz_pedido(self):
+        """O VOZ pede ao painel que enfileire o conserto de UM alerta.
+
+        A tarefa nasce PENDENTE do "Pode fazer" do dono no painel e nunca roda
+        sozinha (mesma regra e mesmas travas do botao da tela). O dono e o da
+        MAQUINA autenticada, nunca algo que venha no corpo; "nao existe" e "nao e
+        seu" dao a mesma resposta (404). `resumo` e so contexto do VOZ: dado, e
+        nao vai para lugar nenhum.
+        """
+        maquina = self._voz_maquina()
+        if maquina is None:
+            return
+        corpo = self._corpo_json(teto=16 * 1024)
+        if corpo is None:
+            return self._json(400, {"erro": "corpo invalido"})
+        resumo = corpo.get("resumo", "")
+        if (set(corpo) - {"tipo", "alerta_id", "resumo"}
+                or corpo.get("tipo") not in self.TIPOS_DE_PEDIDO_DO_VOZ
+                or not self._texto_gravavel(corpo.get("alerta_id"))
+                or not 0 < len(corpo["alerta_id"]) <= 200
+                or not self._texto_gravavel(resumo) or len(resumo) > 300):
+            return self._json(400, {"erro": "pedido invalido"})
+        if not cortina.registrar_tentativa(
+                "maquina:%d" % maquina["id"], time.time(), balcao="vozpedido",
+                teto=self.TETO_DE_PEDIDOS_DO_VOZ):
+            return self._json(429, {"erro": "pedidos demais"})
+        status, resposta = self._enfileirar_conserto(
+            maquina["usuario_id"], corpo["alerta_id"])
+        if status != 200:
+            return self._json(status, resposta)
+        return self._json(200, {"ok": True, "tarefa_id": resposta["tarefa"],
+                                "pedido": resposta["pedido"],
+                                "aviso": resposta["aviso"]})
 
     def _maquina_autorizar(self):
         """Liga ou desliga o direito desta maquina de trabalhar sozinha.
@@ -2913,6 +2956,7 @@ class Hub(SimpleHTTPRequestHandler):
     # Balcao PROPRIO `voz`: nunca `TETO_DE_ENDERECOS` nem o de `relatorio`.
     TETO_DE_RECADOS = 30          # pedidos do dono por origem e janela
     TETO_DA_VOZ = 600             # pedidos da maquina: um a cada 1,5 s
+    TETO_DE_PEDIDOS_DO_VOZ = 10   # conserto pedido pelo VOZ: balcao proprio
     TETO_DE_PENDENTES = 20        # recados pendentes por conta
     RECADOS_POR_ENTREGA = 10
     # `avisar` so o painel gera (`_varrer_vigilia`); a tela nao o oferece, e com
@@ -3379,6 +3423,7 @@ ROTAS = {
     "/agente/voz/estado":       Rota("POST", Hub._voz_estado,       "maquina"),
     "/agente/voz/recados":      Rota("GET",  Hub._voz_recados,      "maquina"),
     "/agente/voz/resultado":    Rota("POST", Hub._voz_resultado,    "maquina"),
+    "/agente/voz/pedido":       Rota("POST", Hub._voz_pedido,       "maquina"),
     "/api/voz":                 Rota("GET",  Hub._voz,              "dado"),
     "/api/voz/recado":          Rota("POST", Hub._voz_recado,       "dado"),
 }
