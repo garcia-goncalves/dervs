@@ -24,6 +24,7 @@ As constantes de dinheiro e de tempo MUDARAM DE CASA para ca (Fatia 2). Nao
 ficaram copias em `fila.py` nem em `execucao.py`: os dois passaram a importar
 daqui. Duas copias de um teto divergem, e a que diverge mente com autoridade.
 """
+import re
 from datetime import datetime, timedelta, timezone
 
 # ---------------------------------------------------------------------------
@@ -189,12 +190,18 @@ def teto_da_auditoria(gasto_usd) -> float:
 FIM_DO_BLOCO = "</dados-coletados-nao-confiaveis>"
 
 
+# Qualquer forma de abrir ou fechar o bloco: caixa diferente, espaco (ou quebra de
+# linha) dentro da tag, `< /dados...>`. Compilado AQUI, no topo: `test_rotas`
+# reprova `compile` dentro de funcao alcancavel de rota.
+_ETIQUETA_DO_BLOCO = re.compile(
+    r"<\s*/?\s*dados-coletados-nao-confiaveis\s*>", re.IGNORECASE)
+
+
 def so_dado(texto) -> str:
-    """Tira do campo qualquer tentativa de fechar o bloco de dados na marra."""
+    """Tira do campo qualquer tentativa de abrir ou fechar o bloco de dados na
+    marra. O resto do texto fica como esta: legivel."""
     limpo = str(texto or "")
-    for marca in (FIM_DO_BLOCO, FIM_DO_BLOCO.replace("/", "")):
-        limpo = limpo.replace(marca, "[etiqueta removida]")
-    return limpo
+    return _ETIQUETA_DO_BLOCO.sub("[etiqueta removida]", limpo)
 
 
 # ---------------------------------------------------------------------------
@@ -233,20 +240,31 @@ PROJETOS_SEM_DESENVOLVIMENTO = frozenset({
 # Apagar a linha da repintura volta ao seguro, em vez de abrir o caminho.
 
 
+def _nome_normalizado(nome: str) -> str:
+    """Minusculas, e `_`, espaco e `.` viram `-`: "Ajudei_Saude" e "ajudei.saude"
+    sao o mesmo projeto que "ajudei-saude" para quem quer contornar a lista."""
+    return re.sub(r"[_\s.]+", "-", nome.strip().lower())
+
+
 def projeto_pode_desenvolver(nome) -> bool:
     """O DERVS pode desenvolver neste projeto? Falha fechada: duvida e NAO.
 
     Nome que nao e texto, vazio, bloqueado, da TineHost, do Andre (qualquer
-    nome com "nexa") ou o `aninha-site` dao `False`. A comparacao e sempre em
-    minusculas: houve um teste provando que `Ajudei-Saude` escapava de outra
-    lista igual a esta.
+    nome com "nexa") ou o `aninha-site` dao `False` — igual ao nome da lista OU
+    comecando por ele na fronteira do `-` (`ajudei-saude-web`, `aninha-site-v2`).
+    A comparacao e sempre normalizada: houve um teste provando que
+    `Ajudei-Saude` escapava de outra lista igual a esta. A fronteira do `-`
+    poupa os parecidos legitimos (`ccvpx`, `sophiana`).
     """
     if not isinstance(nome, str):
         return False
-    n = nome.strip().lower()
+    n = _nome_normalizado(nome)
     if not n or "nexa" in n:
         return False
-    return n not in PROJETOS_BLOQUEADOS and n not in PROJETOS_SEM_DESENVOLVIMENTO
+    for bloqueado in PROJETOS_BLOQUEADOS | PROJETOS_SEM_DESENVOLVIMENTO:
+        if n == bloqueado or n.startswith(bloqueado + "-"):
+            return False
+    return True
 
 
 def cor_da_regra(regra: str, repinturas=None) -> str:

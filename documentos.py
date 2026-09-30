@@ -50,6 +50,7 @@ MAX_TEXTO = 300
 MAX_PROVA = 200
 MAX_ARQUIVO = 256 * 1024
 MAX_ERROS = 10              # por documento
+MAX_VARRIDOS = 120          # briefings ABERTOS por leitura, com ou sem criterio
 # O projeto INTEIRO e descartado pelo servidor acima de 64 KiB
 # (`banco.MAX_BYTES_POR_PROJETO`), e uma chave gorda derruba todas as outras
 # medidas junto. Esta chave nunca passa de 24 KiB.
@@ -235,10 +236,30 @@ def ler_projeto(raiz) -> dict:
     nao entra. Um arquivo que nao deu para ler e pulado sem derrubar o resto.
     Quem chama trata excecao como "nao sei" e OMITE a chave.
     """
-    base = Path(raiz) / "docs" / "esteira"
+    raiz = Path(raiz)
+    base = raiz / "docs" / "esteira"
     docs = []
     if base.is_dir():
+        # `resolve()` segue link simbolico E junction do Windows (que
+        # `is_symlink()` nao ve). Tudo o que for lido tem de continuar DENTRO do
+        # repositorio depois de resolvido, senao o conteudo de fora entraria no
+        # relatorio. Recusar e dizer: calar apagaria o motivo do "sem documentacao".
+        try:
+            dentro = raiz.resolve()
+            esteira = base.resolve()
+            if not (esteira.is_relative_to(dentro / "docs")
+                    and (dentro / "docs").resolve().is_relative_to(dentro)):
+                raise OSError("fora do repositório")
+        except (OSError, ValueError, RuntimeError):
+            return {"versao": VERSAO, "documentos": [{
+                "slug": "docs", "arquivo": "docs/esteira", "aprovado_em": "",
+                "erros": ["a pasta docs/esteira aponta para fora do "
+                          "repositório (link): não foi lida"],
+                "cortado": False, "criterios": []}]}
+        varridos = 0
         for pasta in sorted(base.iterdir(), key=lambda p: p.name):
+            if len(docs) > MAX_DOCUMENTOS:
+                break              # o 31o so prova que ha mais; nao abre o resto
             if not SLUG.fullmatch(pasta.name):
                 continue
             arquivo = pasta / "briefing.md"
@@ -247,6 +268,17 @@ def ler_projeto(raiz) -> dict:
             if (pasta.is_symlink() or not pasta.is_dir()
                     or arquivo.is_symlink() or not arquivo.is_file()):
                 continue
+            try:
+                if not (arquivo.resolve().is_relative_to(esteira)
+                        and pasta.resolve().is_relative_to(esteira)):
+                    continue
+            except (OSError, ValueError, RuntimeError):
+                continue
+            # Briefing sem criterio nao vira documento, mas abrir custa igual:
+            # o teto de aberturas vale para quem so tem arquivo antigo.
+            if varridos >= MAX_VARRIDOS:
+                break
+            varridos += 1
             try:
                 with arquivo.open("rb") as f:
                     bruto = f.read(MAX_ARQUIVO + 1)

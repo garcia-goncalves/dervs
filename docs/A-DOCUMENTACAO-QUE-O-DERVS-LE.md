@@ -100,6 +100,18 @@ rodar.
 Passou do teto: o leitor corta, marca o documento como **cortado** e segue. Nunca
 falha em silêncio por causa do tamanho.
 
+O leitor também **para de abrir arquivo** ao chegar ao 31º documento, e abre no
+máximo 120 briefings por leitura (com ou sem critério): um repositório com milhares
+de pastas não faz o agente ler milhares de arquivos.
+
+### Só lê o que está dentro do repositório
+
+`docs` e `docs/esteira` (e cada pasta e arquivo dentro) são resolvidos antes de
+lidos, e precisam continuar **dentro do repositório**. Um link simbólico (ou
+*junction* do Windows) que aponte para fora é **recusado**: o projeto aparece com um
+documento `docs/esteira` e o erro "aponta para fora do repositório (link): não foi
+lida", em vez de "sem documentação" calado.
+
 ## O que a tela mostra
 
 Na tela do projeto, a seção **Quanto já foi desenvolvido** tem quatro faces. O
@@ -167,9 +179,20 @@ tarefa `desenvolver` que **sempre espera o seu "Pode fazer"** em Consertar e nun
 anda sozinha. O servidor recusa quando:
 
 - o documento ainda não tem `Aprovado em:`;
-- o projeto é bloqueado (do André, da TineHost ou com dado de paciente);
+- o projeto é bloqueado (do André, da TineHost ou com dado de paciente). O nome é
+  comparado em minúsculas, com `_`, espaço e `.` tratados como `-`, e vale também
+  para o que **começa** com um nome bloqueado seguido de `-` (`ajudei-saude-web`,
+  `aninha-site-v2`, `Ajudei_Saude`); qualquer nome com `nexa` também. Nomes
+  parecidos que não são o mesmo (`sophiana`, `ccvpx`) não são bloqueados;
 - o critério trata de segurança, senha, pagamento ou dado de paciente;
 - o critério já está marcado com `[x]`.
+
+Em **Consertar**, a linha da tarefa mostra **"O que foi pedido:"** (o texto do
+critério, cortado em 300 caracteres) ao lado do botão **Pode fazer**: você lê o que
+vai ser feito antes de aprovar. O texto vem de um documento de outro repositório e
+aparece sempre como texto, nunca como HTML. Por dentro, o pedido que desce ao agente
+vai dentro de um bloco de dados, e qualquer tentativa de abrir ou fechar esse bloco
+(maiúsculas, espaços dentro da etiqueta) é trocada por "[etiqueta removida]".
 
 O resultado de um desenvolvimento é um ramo para você revisar; o DERVS não publica
 nada sozinho.

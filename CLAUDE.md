@@ -345,6 +345,19 @@ a próxima sessão erraria:
   nunca rodaria): mora em `tarefas.SEMPRE_VERMELHA`. O botão só existe atrás de
   `c.desenvolvivel === true`, o corpo do POST é só `{criterio: c.id}`, e o servidor
   acha o critério no estado DA CONTA.
+- **O leitor não sai do repositório nem abre tudo.** `documentos.ler_projeto`
+  resolve `docs/esteira` (e cada pasta e arquivo) com `resolve()` e recusa, com erro
+  visível, o que cair fora do repo (link simbólico **e** junction, que
+  `is_symlink()` não vê); para no 31º documento e abre no máximo `MAX_VARRIDOS`
+  (120) briefings. Sem o `break` ou sem o `resolve`, os testes reprovam.
+- **`desenvolver` mostra o pedido antes do clique.** `banco.tarefas_do_painel` traz
+  `detalhe` (cortado em 300 no SQL) e `linhaDeTarefa` o escreve por `textContent`,
+  com o rótulo "O que foi pedido:". `banco.enfileirar` corta o `detalhe` em 4096.
+  `tarefas.so_dado` neutraliza a etiqueta do bloco por regex (caixa, espaço,
+  `< /...>`), e `projeto_pode_desenvolver` normaliza `_`/espaço/`.` para `-` e
+  bloqueia por prefixo na fronteira do `-`. `test_progresso_fio.py` prova o fio
+  inteiro (briefing real -> `/agente/relatorio` -> `/api/dados` e `/api/progresso`
+  -> campos que o `painel.js` lê): renomear um campo de um lado só reprova.
 - **Não nomeie rota nem função `documentacao`:** `test_rotas.PROIBIDO` casa
   `acao|exec|comando|shell`, e "documentACAO" casa.
 - **Projeto acima de 64 KiB é descartado INTEIRO** em `banco.receber_relatorio`: o

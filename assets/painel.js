@@ -2779,6 +2779,15 @@ function linhaDeTarefa(t) {
 
   li.append(marcaDeCor(t.cor));
 
+  /* O dono clica em "Pode fazer" sem abrir a tarefa: precisa ler o que foi
+     pedido. É texto de um documento de outro repositório: só textContent. */
+  if (typeof t.detalhe === "string" && t.detalhe) {
+    const pedido = document.createElement("span");
+    pedido.className = "linha__motivo";
+    pedido.textContent = "O que foi pedido: " + t.detalhe;
+    li.append(pedido);
+  }
+
   if (t.estado === "aguardando_aprovacao" || (t.cor === "vermelho"
       && t.estado === "esperando" && !t.aprovado_em)) {
     const ok = document.createElement("button");

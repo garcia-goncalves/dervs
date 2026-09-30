@@ -268,6 +268,11 @@ jobs:
       - name: A tela do progresso
         run: python test_progresso_tela.py
 
+      # O fio inteiro: briefing no disco -> leitor -> /agente/relatorio ->
+      # /api/dados e /api/progresso -> os campos que o painel.js le.
+      - name: O fio do progresso
+        run: python test_progresso_fio.py
+
       # ETAPA 16 — a lista de copia do Dockerfile acompanha o que servir.py
       # importa. Entre a etapa 9 e a 14 nasceram sete arquivos de runtime e
       # nenhum entrou na imagem: ela morria no primeiro `import autenticacao` e
