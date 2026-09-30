@@ -1801,6 +1801,12 @@ VERMELHO = "vermelho"
 VERDE = "verde"
 
 
+# O `detalhe` desce ao prompt do agente: o que entra na fila tem teto, e a lista do
+# painel mostra um pedaco ainda menor (ela e lida a cada abertura de tela).
+TETO_DETALHE = 4096
+TETO_DETALHE_NA_LISTA = 300
+
+
 def enfileirar(pendencias: list, con=None) -> int:
     """Insere as pendencias que ainda nao estao na fila. Devolve quantas entraram."""
     fechar = con is None
@@ -1816,7 +1822,7 @@ def enfileirar(pendencias: list, con=None) -> int:
                  p.get("projeto") or "", p.get("regra") or "",
                  p.get("gravidade") or "media", float(p.get("risco") or 0),
                  p.get("trilho") or "", agora(), p.get("executor") or "claude",
-                 p.get("detalhe") or None))
+                 (p.get("detalhe") or "")[:TETO_DETALHE] or None))
             entraram += cur.rowcount or 0
         con.commit()
     finally:
@@ -2376,9 +2382,10 @@ def tarefas_do_painel(usuario_id: int, limite: int = 50, con=None) -> list:
             "SELECT id, projeto, regra, gravidade, trilho, estado, cor,"
             "       tentativas, criado_em, iniciado_em, terminado_em,"
             "       custo_usd, rodadas, ramo, resumo, frase, visto_em,"
-            "       aprovado_em, parada_pedida_em, maquina_id, executor, erro"
+            "       aprovado_em, parada_pedida_em, maquina_id, executor, erro,"
+            "       substr(detalhe, 1, ?) AS detalhe"
             "  FROM fila WHERE usuario_id = ? ORDER BY criado_em DESC LIMIT ?",
-            (int(usuario_id), int(limite))).fetchall()
+            (TETO_DETALHE_NA_LISTA, int(usuario_id), int(limite))).fetchall()
         return [dict(l) for l in linhas]
     finally:
         if fechar:

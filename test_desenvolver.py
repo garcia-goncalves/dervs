@@ -153,6 +153,32 @@ class OPedidoDeDesenvolvimento(BaseServidorDeVerdade):
         self.assertIn(TEXTO, l["detalhe"])
         self.assertIn("docs/esteira/alfa/briefing.md", l["detalhe"])
 
+    def test_a_lista_de_tarefas_mostra_o_que_foi_pedido_cortado_em_300(self):
+        """O dono clica em "Pode fazer" em Consertar: tem de ler o QUE vai ser
+        feito, e a lista nao pode ficar gorda."""
+        longo = "Mostrar a barra " + "z" * (documentos.MAX_TEXTO - 16)
+        d = documento([criterio(1, longo)])
+        self.com_projeto("dv-detalhe", documentacao(d))
+        cid = id_de("dv-detalhe", "alfa", 1, longo)
+        self.assertEqual(self.desenvolver(cid).status, 200)
+        r = self.pedir("/api/tarefas", cookies=self.sessao_e_token()[0])
+        self.assertEqual(r.status, 200, r.corpo)
+        t = json.loads(r.corpo)["tarefas"][0]
+        self.assertIn("detalhe", t)
+        self.assertTrue(t["detalhe"].startswith("Crit"))
+        self.assertEqual(len(t["detalhe"]), 300)
+        # o banco guarda inteiro: o corte e so da lista
+        self.assertGreater(len(self.linhas_da_fila()[0]["detalhe"]), 300)
+
+    def test_o_detalhe_de_uma_conta_nao_aparece_na_lista_de_outra(self):
+        cid = self.projeto_pronto("dv-detalhe-dono")
+        self.assertEqual(self.desenvolver(cid).status, 200)
+        _uid, cookies, _csrf = self.outra_conta_com_sessao()
+        r = self.pedir("/api/tarefas", cookies=cookies)
+        j = json.loads(r.corpo)
+        self.assertEqual(j["tarefas"], [])
+        self.assertNotIn(TEXTO, r.corpo)
+
     def test_segundo_pedido_diz_que_ja_estava_na_fila(self):
         cid = self.projeto_pronto("dv-dupla")
         self.maquina_com_token()
@@ -701,6 +727,78 @@ class OsFatosDaTarefaDesenvolver(unittest.TestCase):
             finally:
                 banco.BANCO = antigo
         self.assertIn("detalhe", colunas)
+
+
+class AMigracaoDaFilaAntigaSemDetalhe(unittest.TestCase):
+    """Um hub.db de ANTES da coluna `detalhe`, com uma tarefa dentro. Produção
+    tem linhas assim: a migração não pode perdê-las nem quebrar a entrega."""
+
+    ANTIGA = """
+    CREATE TABLE fila (
+        id TEXT PRIMARY KEY,
+        usuario_id INTEGER NOT NULL DEFAULT 0,
+        projeto TEXT NOT NULL DEFAULT '',
+        regra TEXT NOT NULL DEFAULT '',
+        gravidade TEXT NOT NULL DEFAULT 'media',
+        risco REAL NOT NULL DEFAULT 0,
+        trilho TEXT NOT NULL DEFAULT '',
+        estado TEXT NOT NULL DEFAULT 'esperando',
+        tentativas INTEGER NOT NULL DEFAULT 0,
+        criado_em TEXT NOT NULL,
+        iniciado_em TEXT, terminado_em TEXT,
+        custo_usd REAL NOT NULL DEFAULT 0.0,
+        pr_url TEXT, erro TEXT,
+        cor TEXT NOT NULL DEFAULT 'vermelho',
+        aprovado_por INTEGER, aprovado_em TEXT, maquina_id INTEGER, ramo TEXT,
+        executor TEXT NOT NULL DEFAULT 'claude',
+        rodadas INTEGER NOT NULL DEFAULT 0,
+        parada_pedida_em TEXT, visto_em TEXT, frase TEXT, resumo TEXT, diff TEXT
+    );"""
+
+    def test_a_linha_antiga_sobrevive_e_a_entrega_cai_no_erro(self):
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as d:
+            caminho = Path(d) / "hub.db"
+            bruto = sqlite3.connect(str(caminho))
+            bruto.execute(self.ANTIGA)
+            bruto.execute(
+                "INSERT INTO fila (id, usuario_id, projeto, regra, trilho,"
+                " criado_em, erro, aprovado_em) VALUES ('antiga:1', 1, 'dervs',"
+                " 'env_drift', 'claude', ?, 'o que a falha escreveu', ?)",
+                (banco.agora(), banco.agora()))
+            bruto.commit()
+            bruto.close()
+            antigo, banco.BANCO = banco.BANCO, caminho
+            try:
+                con = banco.conectar()          # e aqui que a migracao roda
+                try:
+                    uid = banco.criar_usuario("antigo@teste.local", con=con)
+                    self.assertEqual(uid, 1)
+                    colunas = {l[1] for l in
+                               con.execute("PRAGMA table_info(fila)")}
+                    self.assertIn("detalhe", colunas)
+                    linha = banco.tarefa("antiga:1", con=con)
+                    self.assertIsNotNone(linha, "a migracao perdeu a linha")
+                    self.assertIsNone(linha["detalhe"])
+                    self.assertEqual(linha["projeto"], "dervs")
+                    codigo = banco.novo_codigo(6)
+                    banco.abrir_pareamento(uid, codigo, banco.prazo(600),
+                                           con=con)
+                    token = banco.usar_pareamento(codigo, "pc", con=con)
+                    maq = banco.maquina_por_token(token, con=con)
+                    banco.ligar_execucao(maq["id"], uid, True, con=con)
+                    maq = banco.maquina_por_token(token, con=con)
+                finally:
+                    con.close()
+                falso = SimpleNamespace(_varrer_mudas=lambda: None)
+                pendente = servir.Hub._tarefa_pendente(falso, maq)
+            finally:
+                banco.BANCO = antigo
+        self.assertIsNotNone(pendente, "a tarefa antiga nao foi entregue")
+        self.assertEqual(pendente["id"], "antiga:1")
+        self.assertEqual(pendente["detalhe"], "o que a falha escreveu")
 
 
 if __name__ == "__main__":

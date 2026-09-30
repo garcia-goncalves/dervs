@@ -410,5 +410,54 @@ class OBotaoEOPedidoPorDentro(unittest.TestCase):
                 self.assertGreater(len(r["texto"]), 30)
 
 
+class ODetalheApareceAoLadoDoPodeFazer(unittest.TestCase):
+    """Em Consertar o dono clica em "Pode fazer" e precisa ler O QUE foi
+    pedido. O texto vem de um documento de outro repositorio: so textContent."""
+
+    def _linha(self, **t):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("sem node")
+        base = {"id": "desenvolver:1:c1", "projeto": "dervs",
+                "regra": "desenvolver", "estado": "esperando", "cor": "vermelho",
+                "aprovado_em": None, "criado_em": AGORA}
+        base.update(t)
+        a = JS.index("function haQuanto(")
+        b = JS.index("function hora(", a)
+        prog = (PRELUDIO + JS[a:b] + funcao("linhaDeTarefa") + funcao("marcaDeCor")
+                + """
+        const ANDAMENTO = {}; const CORES = { vermelho: { glifo: "x", rotulo: "Vermelho" } };
+        function irPara() {} function aprovarTarefa() {}
+        const li = linhaDeTarefa(%s);
+        console.log(JSON.stringify({ botoes: acha(li, "button").map(b => b._t),
+                                     texto: achata(li) }));
+        """ % json.dumps(base))
+        r = subprocess.run([node, "-"], input=prog, capture_output=True,
+                           text=True, timeout=30, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_o_pedido_aparece_com_o_rotulo_ao_lado_do_botao(self):
+        r = self._linha(detalhe="Critério 1 de docs/x: mostrar a barra")
+        self.assertIn("O que foi pedido:", r["texto"])
+        self.assertIn("mostrar a barra", r["texto"])
+        self.assertIn("Pode fazer", r["botoes"])
+
+    def test_html_no_pedido_fica_como_texto(self):
+        r = self._linha(detalhe="<img src=x onerror=alert(1)>")
+        self.assertIn("<img src=x onerror=alert(1)>", r["texto"])
+
+    def test_sem_detalhe_nao_escreve_rotulo_vazio(self):
+        for v in (None, "", 7, {}):
+            with self.subTest(v=v):
+                self.assertNotIn("O que foi pedido", self._linha(detalhe=v)["texto"])
+
+    def test_no_codigo_so_textcontent_e_sem_Number(self):
+        corpo = sem_comentarios(funcao("linhaDeTarefa"))
+        self.assertIn("O que foi pedido:", corpo)
+        self.assertNotIn("innerHTML", corpo)
+        self.assertNotRegex(corpo, r"Number\(|parseInt\(")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1846,6 +1846,21 @@ class TarefaNoBanco(unittest.TestCase):
         mudas = banco.tarefas_sem_noticia(15, daqui(minutes=20), con=self.con)
         self.assertEqual([t["id"] for t in mudas], ["d:1"])
 
+    def test_enfileirar_corta_o_detalhe_em_4096(self):
+        """O `detalhe` desce ao prompt do agente: sem teto, quem grava enche o
+        banco e o prompt."""
+        banco.enfileirar([{"id": "d:gordo", "usuario_id": 7, "projeto": "dervs",
+                           "regra": "desenvolver", "trilho": "claude",
+                           "detalhe": "x" * 10000 + "FIM"}], con=self.con)
+        t = banco.tarefa("d:gordo", con=self.con)
+        self.assertEqual(len(t["detalhe"]), 4096)
+        self.assertNotIn("FIM", t["detalhe"])
+        # e o que cabe entra inteiro
+        banco.enfileirar([{"id": "d:ok", "usuario_id": 7, "projeto": "dervs",
+                           "regra": "desenvolver", "detalhe": "y" * 4096}],
+                         con=self.con)
+        self.assertEqual(len(banco.tarefa("d:ok", con=self.con)["detalhe"]), 4096)
+
     def test_tarefas_do_painel_nao_carrega_o_diff(self):
         """A lista e lida a cada abertura de tela; o diff tem dezenas de
         milhares de caracteres. Quem quer o diff pede a tarefa."""
