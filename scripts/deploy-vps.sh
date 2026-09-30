@@ -41,5 +41,5 @@ git -c core.autocrlf=false -c core.eol=lf archive --format=tar.gz -o "$tmp" HEAD
 # 3. Envia e publica.
 echo "Enviando $commit para o servidor..."
 ssh "$servidor" "mkdir -p ~/.deploy-envios" || parar "nao consegui conectar no servidor '$servidor' (veja o ~/.ssh/config)."
-scp -q "$tmp" "$servidor:.deploy-envios/$arquivo" || parar "falha ao enviar o arquivo."
+scp -O -q "$tmp" "$servidor:.deploy-envios/$arquivo" || parar "falha ao enviar o arquivo."
 ssh -t "$servidor" "sudo deploy $projeto ~/.deploy-envios/$arquivo $commit"

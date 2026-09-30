@@ -51,7 +51,7 @@ if ($LASTEXITCODE -ne 0) { Parar "falha ao empacotar o codigo." }
 Write-Host "Enviando $commit para o servidor..."
 ssh $servidor "mkdir -p ~/.deploy-envios"
 if ($LASTEXITCODE -ne 0) { Remove-Item $tmp; Parar "nao consegui conectar no servidor '$servidor' (veja o ~/.ssh/config)." }
-scp -q $tmp "${servidor}:.deploy-envios/$arquivo"
+scp -O -q $tmp "${servidor}:.deploy-envios/$arquivo"
 $ok = $LASTEXITCODE
 Remove-Item $tmp
 if ($ok -ne 0) { Parar "falha ao enviar o arquivo." }
