@@ -2012,7 +2012,9 @@ function vozCartao(m) {
     li.dataset.cerebro = chave;
     li.dataset.situacao = tom;
     const rotulo = vozEl("strong", null, nome);
-    const ativo = confiavel && est.cerebro_ativo === chave;
+    // O VOZ chama o JEV em uso de `jev_triagem`; a chave do cartao e `jev`.
+    const ativo = confiavel && (est.cerebro_ativo === chave
+      || (chave === "jev" && est.cerebro_ativo === "jev_triagem"));
     li.append(rotulo, vozEl("span", "voz__situacao",
       " — " + situacao + (ativo ? " (em uso)" : "")));
     li.append(vozEl("div", "carimbo", papel));
@@ -2090,7 +2092,8 @@ function pintarVoz(situacao) {
     o.value = m.maquina_id;
     sel.append(o);
   }
-  if (antes && maquinas.some(m => m.maquina_id === antes)) sel.value = antes;
+  // O valor de um <select> e sempre texto; o id que vem do servidor e numero.
+  if (antes && maquinas.some(m => String(m.maquina_id) === antes)) sel.value = antes;
   $("#voz-enviar").disabled = !maquinas.length;
 
   const lista = VOZ.recados || [];
@@ -2125,7 +2128,10 @@ async function mandarRecadoVoz(ev) {
   botao.disabled = true;
   try {
     const r = await escrever("/api/voz/recado", {
-      maquina_id: $("#voz-maquina").value,
+      // O servidor exige numero: um <select> entrega texto, e sem o `+` todo
+      // recado da tela voltava 400 (a suite do servidor nao via isso). Nao e
+      // `Number(`: o guarda de test_design toma isso por numero de tela.
+      maquina_id: +$("#voz-maquina").value,
       tipo: $("#voz-tipo").value,
       alvo: $("#voz-alvo").value.trim(),
       texto: $("#voz-texto").value.trim(),

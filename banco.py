@@ -3080,9 +3080,20 @@ def criar_voz_recado(usuario_id: int, maquina_id: int, tipo: str, alvo: str,
         ).fetchone() is None:
             con.rollback()
             return None, "sem_maquina"
+        # Recado que ninguem buscou em 24 h nao e pendencia, e estado que nunca
+        # expira tranca o dono (PC desligado ou revogado = teto cheio para sempre).
+        limite = (datetime.fromisoformat(agora_iso or agora())
+                  - timedelta(hours=24)).isoformat(timespec="seconds")
+        con.execute(
+            "UPDATE voz_recado SET estado = 'falhou', terminado_em = ?,"
+            " resumo = 'Venceu: o DERVS-VOZ nao buscou este recado em 24 horas.'"
+            " WHERE usuario_id = ? AND estado = 'pendente' AND criado_em < ?",
+            (agora_iso or agora(), usuario_id, limite))
+        # So conta recado de computador vivo: o de um revogado nunca sera buscado.
         pendentes = con.execute(
-            "SELECT COUNT(*) FROM voz_recado WHERE usuario_id = ?"
-            " AND estado = 'pendente'", (usuario_id,)).fetchone()[0]
+            "SELECT COUNT(*) FROM voz_recado r JOIN maquina m ON m.id = r.maquina_id"
+            " WHERE r.usuario_id = ? AND r.estado = 'pendente'"
+            " AND m.revogada_em IS NULL", (usuario_id,)).fetchone()[0]
         if pendentes >= teto_pendentes:
             con.rollback()
             return None, "teto"

@@ -2851,8 +2851,12 @@ class Hub(SimpleHTTPRequestHandler):
     @staticmethod
     def _numero_finito(valor) -> bool:
         """Numero >= 0, finito, e nao booleano (`True` e int em Python)."""
-        return (isinstance(valor, (int, float)) and not isinstance(valor, bool)
-                and math.isfinite(valor) and valor >= 0)
+        if not isinstance(valor, (int, float)) or isinstance(valor, bool):
+            return False
+        try:
+            return math.isfinite(valor) and valor >= 0
+        except OverflowError:   # 10**400 e JSON valido e nao cabe em float
+            return False
 
     def _voz_maquina(self):
         """A maquina autenticada, depois do balcao; ou None com 401/429 dado."""

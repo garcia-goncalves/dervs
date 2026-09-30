@@ -507,6 +507,58 @@ class AServidorDeVerdade(unittest.TestCase):
         self.maquina(self.t_a1, "/agente/voz/recados", "GET")
         self.assertEqual(self.recado(self.uid, self.m_a1).status, 200)
 
+    def _limpar_pendentes(self):
+        con = banco.conectar()
+        try:
+            con.execute("UPDATE voz_recado SET estado = 'entregue'"
+                        " WHERE estado = 'pendente'")
+            con.commit()
+        finally:
+            con.close()
+
+    def test_pendente_de_computador_revogado_nao_tranca_o_dono(self):
+        """20 recados para um PC que foi revogado nunca serao buscados; se
+        contassem, o dono ficava sem mandar recado a NENHUM computador."""
+        _, mid = self._parear(self.uid, "vai-ser-revogado")
+        try:
+            for n in range(servir.Hub.TETO_DE_PENDENTES):
+                self.assertEqual(self.recado(self.uid, mid).status, 200, n)
+            self.assertEqual(self.recado(self.uid, self.m_a1).status, 429)
+            banco.revogar_maquina(mid, self.uid)
+            self.assertEqual(self.recado(self.uid, self.m_a1).status, 200)
+        finally:
+            self._limpar_pendentes()
+
+    def test_recado_que_ninguem_buscou_em_24h_vence_e_libera_a_vaga(self):
+        try:
+            for n in range(servir.Hub.TETO_DE_PENDENTES):
+                self.assertEqual(self.recado(self.uid, self.m_a1).status, 200, n)
+            self.assertEqual(self.recado(self.uid, self.m_a1).status, 429)
+            con = banco.conectar()
+            try:
+                con.execute("UPDATE voz_recado SET criado_em = ?"
+                            " WHERE estado = 'pendente'",
+                            ("2020-01-01T00:00:00+00:00",))
+                con.commit()
+            finally:
+                con.close()
+            self.assertEqual(self.recado(self.uid, self.m_a1).status, 200)
+            con = banco.conectar()
+            try:
+                vencidos = con.execute("SELECT COUNT(*) FROM voz_recado"
+                                       " WHERE estado = 'falhou'").fetchone()[0]
+            finally:
+                con.close()
+            self.assertGreaterEqual(vencidos, servir.Hub.TETO_DE_PENDENTES)
+        finally:
+            self._limpar_pendentes()
+
+    def test_inteiro_que_nao_cabe_em_float_e_400_e_nao_500(self):
+        """`10**400` e JSON valido; `math.isfinite` estourava OverflowError."""
+        bruto = json.dumps(_estado_bom()).replace("1.25", "1" + "0" * 400)
+        r = self.maquina(self.t_a1, "/agente/voz/estado", "POST", bruto=bruto.encode())
+        self.assertEqual(r.status, 400, r.corpo)
+
     # ------------------------------------------------------------- resultado
     def _recado_entregue(self, uid=None, token=None, mid=None):
         r = self.recado(uid or self.uid, mid or self.m_a1)

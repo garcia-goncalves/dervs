@@ -73,6 +73,30 @@ class ASecaoExisteDentroDeConectar(unittest.TestCase):
         self.assertEqual(len(itens), 4, itens)
 
 
+class OPedidoQueATelaMontaESatisfazOServidor(unittest.TestCase):
+    """O <select> entrega TEXTO e o servidor exige NUMERO em `maquina_id`.
+
+    A suite do servidor monta o corpo a mao, com inteiro, e ficou verde com a
+    tela mandando `"7"` (400 em todo recado). Este guarda le o que a tela monta.
+    """
+
+    def test_o_maquina_id_que_a_tela_manda_e_numero(self):
+        m = re.search(r"maquina_id:\s*([^,\n]+),", TRECHO)
+        self.assertIsNotNone(m, "a tela nao monta maquina_id")
+        self.assertTrue(m.group(1).strip().startswith("+$("), m.group(1))
+
+    def test_o_seletor_compara_texto_com_texto(self):
+        # `m.maquina_id === antes` compara numero com texto e nunca casa: a
+        # escolha do dono voltava para o primeiro computador a cada repintura.
+        self.assertNotRegex(TRECHO, r"m\.maquina_id\s*===\s*antes")
+        self.assertIn("String(m.maquina_id) === antes", TRECHO)
+
+    def test_o_servidor_segue_exigindo_inteiro(self):
+        """Se o servidor passar a aceitar texto, o guarda de cima perde o motivo."""
+        fonte = (AQUI / "servir.py").read_text(encoding="utf-8")
+        self.assertRegex(fonte, r"isinstance\(mid, int\)")
+
+
 class OAvisoDoCliqueNaoSome(unittest.TestCase):
     FRASE = ("O que muda alguma coisa só acontece depois do seu clique no\n"
              "          DERVS-VOZ. Aprovar aqui não basta.")
