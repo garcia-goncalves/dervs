@@ -3120,10 +3120,13 @@ def _inserir_voz_recado(con, usuario_id, maquina_id, tipo, alvo, texto, nivel,
         " WHERE usuario_id = ? AND estado = 'pendente' AND criado_em < ?",
         (agora_iso or agora(), usuario_id, limite))
     # So conta recado de computador vivo: o de um revogado nunca sera buscado.
+    # E os avisos do painel tem o PROPRIO teto: uma fila de avisos nao pode
+    # trancar o dono para mandar recado, nem o contrario.
     pendentes = con.execute(
         "SELECT COUNT(*) FROM voz_recado r JOIN maquina m ON m.id = r.maquina_id"
         " WHERE r.usuario_id = ? AND r.estado = 'pendente'"
-        " AND m.revogada_em IS NULL", (usuario_id,)).fetchone()[0]
+        " AND m.revogada_em IS NULL AND (r.tipo = 'avisar') = ?",
+        (usuario_id, 1 if tipo == "avisar" else 0)).fetchone()[0]
     if pendentes >= teto_pendentes:
         return None, "teto"
     id_ = str(uuid.uuid4())

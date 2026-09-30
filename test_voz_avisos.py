@@ -228,6 +228,26 @@ class OsAvisos(_Base):
             20, agora_iso=AGORA, con=self.con), (None, "nivel"))
         self.assertEqual(self.avisos(), [])
 
+    def test_avisos_e_recados_do_dono_tem_tetos_separados(self):
+        """Fila cheia de avisos nao tranca o dono, e recado do dono nao cala os
+        avisos: cada um paga o proprio teto."""
+        voz = self.maquina(self.uid, "voz", voz=True)
+        for n in range(3):
+            self.assertEqual(banco.criar_voz_recado(
+                self.uid, voz, "avisar", "vigilia", "t%d" % n, "leitura",
+                "auto", 3, agora_iso=AGORA, con=self.con)[1], None)
+        self.assertEqual(banco.criar_voz_recado(
+            self.uid, voz, "avisar", "vigilia", "t", "leitura", "auto", 3,
+            agora_iso=AGORA, con=self.con), (None, "teto"))
+        # Os 3 avisos pendentes NAO contam para o dono.
+        for n in range(3):
+            self.assertEqual(banco.criar_voz_recado(
+                self.uid, voz, "status", "dervs", "t", "leitura", "auto", 3,
+                agora_iso=AGORA, con=self.con)[1], None)
+        self.assertEqual(banco.criar_voz_recado(
+            self.uid, voz, "status", "dervs", "t", "leitura", "auto", 3,
+            agora_iso=AGORA, con=self.con), (None, "teto"))
+
     def test_a_varredura_nunca_levanta(self):
         self.maquina(self.uid, "voz", voz=True)
         with mock.patch.object(banco, "montar_estado",
