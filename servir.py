@@ -2138,6 +2138,89 @@ class Hub(SimpleHTTPRequestHandler):
             banco.marcar_fila(muda["id"], estado="falha",
                               terminado_em=agora_iso,
                               erro="o computador parou de dar noticia")
+        self._varrer_vigilia()
+
+    # No maximo uma varredura por minuto: `_varrer_mudas` roda a cada relatorio
+    # de cada computador, e o motor de regras nao e de graca.
+    _VIGILIA_CADA_S = 60
+    _vigilia_varrida_em = 0.0
+    TETO_DE_AVISOS = 5            # avisos NOVOS por varredura e por conta
+
+    @staticmethod
+    def _limpo(valor, teto: int) -> str:
+        """Texto que e dado (nome de computador, de projeto): sem caractere de
+        controle, cortado."""
+        return "".join(c if c.isprintable() else " "
+                       for c in str(valor))[:teto].strip()
+
+    def _varrer_vigilia(self, agora_iso: str = None, forcar: bool = False):
+        """Gera os avisos do painel para o DERVS-VOZ. NUNCA levanta e nunca
+        executa comando: so grava recados `avisar` (nivel `leitura`).
+
+        So avisa conta com VOZ de estado fresco, porque aviso que ninguem ouve
+        nao se acumula. Um aviso por ocorrencia (`banco.avisar_uma_vez`), no
+        maximo `TETO_DE_AVISOS` novos por conta por varredura.
+        """
+        agora_t = time.time()
+        if not forcar and agora_t - Hub._vigilia_varrida_em < self._VIGILIA_CADA_S:
+            return
+        Hub._vigilia_varrida_em = agora_t
+        try:
+            agora_iso = agora_iso or banco.agora()
+            for uid, destino in banco.voz_destinos_de_aviso(agora_iso).items():
+                try:
+                    self._avisos_da_conta(uid, destino, agora_iso)
+                except Exception as erro:               # noqa: BLE001
+                    print("[%s] aviso: varredura da vigilia falhou (%s)"
+                          % (time.strftime("%H:%M:%S"), erro))
+        except Exception as erro:                       # noqa: BLE001
+            print("[%s] aviso: varredura da vigilia falhou (%s)"
+                  % (time.strftime("%H:%M:%S"), erro))
+
+    def _avisos_da_conta(self, uid: int, destino: int, agora_iso: str):
+        novos = 0
+        # (a) computador que calou: so os OUTROS, o do VOZ esta falando.
+        for m in banco.maquinas_que_calaram(uid, agora_iso):
+            if m["maquina_id"] == destino:
+                continue
+            if novos >= self.TETO_DE_AVISOS:
+                return
+            try:
+                dia = datetime.fromisoformat(m["visto_em"]).date().isoformat()
+            except ValueError:
+                continue
+            texto = ("O computador %s parou de medir há %d minutos. "
+                     "Não sei como ele está."
+                     % (self._limpo(m["nome"], 80), m["atraso_s"] // 60))
+            if banco.avisar_uma_vez(
+                    uid, destino, "calou:%d:%s" % (m["maquina_id"], dia),
+                    "vigilia", texto, agora_iso):
+                novos += 1
+        # (b) pendencia de gravidade alta, como o motor ja calcula para a conta.
+        con = banco.conectar()
+        try:
+            e = banco.montar_estado(con, usuario_id=uid)
+            pend = regras.avaliar(e["projetos"], quota=e["quota"],
+                                  silenciadas=banco.silenciadas(
+                                      con, usuario_id=uid),
+                                  arquivadas=banco.arquivadas(
+                                      usuario_id=uid, con=con))
+        finally:
+            con.close()
+        for p in pend:
+            if p.get("gravidade") != "alta":
+                continue
+            if novos >= self.TETO_DE_AVISOS:
+                return
+            projeto = self._limpo(p.get("projeto") or "", 100)
+            alvo = (projeto if self._ALVO_DE_RECADO.fullmatch(projeto)
+                    and ".." not in projeto else "vigilia")
+            texto = self._limpo(
+                ("%s: %s" % (projeto, p.get("texto") or "")) if projeto
+                else (p.get("texto") or ""), 300)
+            if banco.avisar_uma_vez(uid, destino, "pend:%s" % p["id"],
+                                    alvo, texto, agora_iso):
+                novos += 1
 
     def _tarefa_pendente(self, maquina):
         """O que ESTA maquina deve fazer agora, ou `None`.
@@ -2832,7 +2915,9 @@ class Hub(SimpleHTTPRequestHandler):
     TETO_DA_VOZ = 600             # pedidos da maquina: um a cada 1,5 s
     TETO_DE_PENDENTES = 20        # recados pendentes por conta
     RECADOS_POR_ENTREGA = 10
-    TIPOS_DE_RECADO = ("analisar", "status", "propor")
+    # `avisar` so o painel gera (`_varrer_vigilia`); a tela nao o oferece, e com
+    # `muda_estado` a rota e o banco o recusam.
+    TIPOS_DE_RECADO = ("analisar", "status", "propor", "avisar")
     NIVEIS_DE_RECADO = ("leitura", "muda_estado")
     CEREBROS_PEDIDOS = ("auto", "claude_code", "hermes")
     # Nome de projeto: sem barra, contrabarra, dois-pontos nem `..`.
@@ -2978,6 +3063,7 @@ class Hub(SimpleHTTPRequestHandler):
                 or not -2**63 <= mid < 2**63
                 or corpo.get("tipo") not in self.TIPOS_DE_RECADO
                 or corpo.get("nivel") not in self.NIVEIS_DE_RECADO
+                or (corpo["tipo"] == "avisar" and corpo["nivel"] != "leitura")
                 or corpo.get("cerebro_pedido") not in self.CEREBROS_PEDIDOS
                 or not isinstance(alvo, str)
                 or not self._ALVO_DE_RECADO.fullmatch(alvo) or ".." in alvo

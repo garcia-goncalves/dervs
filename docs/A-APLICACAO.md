@@ -213,6 +213,10 @@ uma ponte autenticada com o mesmo token de computador do agente:
   Conectar, seção **Vigília e cérebros**;
 - o VOZ **executa** o que o dono aprova **clicando no VOZ**, e devolve o resultado.
 
+- o painel **avisa sozinho**: quando um computador para de medir ou surge pendência
+  de gravidade alta, deixa um recado `avisar` (só leitura) para o VOZ falar ao dono.
+  Só se o VOZ estiver vivo, uma vez por ocorrência, no máximo 5 por rodada.
+
 **O terminal SSH mora no VOZ e nunca no painel web.** Decisão de segurança: terminal
 dentro de um painel exposto à internet é a porta que este sistema jurou não abrir
 (§7). Nenhuma rota do servidor abre shell, terminal ou SSH, e os testes que varrem as
