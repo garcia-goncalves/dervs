@@ -290,6 +290,37 @@ novo no menu exige mexer no teste — de propósito.
 `fila.trabalhar` usa o id `regra:projeto`, sem o dono — hoje ninguém o chama em
 produção, mas quem o ligar duplica a tarefa.
 
+## A ponte com o DERVS-VOZ (30/09/2026)
+
+O DERVS-VOZ é outro repositório (`repos\dervs-voz`, programa de voz no PC do dono).
+Ele fala com este servidor por **três rotas de máquina**, sempre **de saída** (o VOZ
+nunca escuta porta): `POST /agente/voz/estado`, `GET /agente/voz/recados`,
+`POST /agente/voz/resultado`; e o dono usa `GET /api/voz` e `POST /api/voz/recado`.
+Mesmo token de máquina pareada do agente. Quatro coisas quebram em silêncio:
+
+- **`/estado` NÃO é sinal de vida.** `test_nao_existe_rota_de_sinal_de_vida_separada`
+  proíbe, e a razão vale: "estou vivo" separado deixa a máquina parecer saudável
+  com a medição parada. A vigília é julgada só por `maquina.visto_em`, carimbado
+  pelo `/agente/relatorio`; `voz_estado` não o toca (há guarda de código-fonte).
+- **A tela manda `maquina_id` como número com `+$(...)`, nunca `Number(`.** Um
+  `<select>` entrega texto e o servidor exige `int`: sem a conversão todo recado
+  voltava 400, e `test_voz.py` (corpo montado à mão) ficou verde com a função
+  morta. O `+` é de propósito: `test_design` toma `Number(`/`parseInt(` por
+  "número na tela sem carimbo". O guarda é `test_voz_tela.OPedidoQueATelaMonta...`.
+- **Entrada válida em JSON que o SQLite recusa tem de dar 400, não 500**: inteiro
+  fora de 64 bits (`10**30`), `10**400` em float, e surrogate solto (`"\ud800"`)
+  em texto. `_texto_gravavel` e `_numero_finito` existem por isso.
+- **Estado que nunca expira tranca o dono.** O teto de 20 recados pendentes só
+  conta computador vivo e vence em 24 h (`criar_voz_recado`).
+
+**O terminal SSH mora no DERVS-VOZ e NUNCA no painel web** (o `vivo/` tinha um
+terminal sem autenticação e foi removido de propósito). O recado `nivel=muda_estado`
+só anda com clique do dono **no VOZ**; aprovar no painel não basta.
+
+**JEV (typesafe.ai) não é cérebro de conversa**: é um classificador rápido
+(`POST https://api.typesafe.ai/v1/systemone`, `TYPESAFE_API_KEY`, perguntas
+`noul`/`choice`/`score`). Serve para triagem; Claude Code e Hermes são os que trabalham.
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em
