@@ -61,7 +61,7 @@ jobs:
           exit $erro
 
       - name: Compila
-        run: python -m py_compile banco.py github_app.py regras.py memoria.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py tarefas.py agente/__init__.py agente/enviar.py agente/executor.py
+        run: python -m py_compile banco.py github_app.py regras.py memoria.py documentos.py coletar.py coletar_github.py coletar_pesado.py servir.py execucao.py barreira.py fila.py tarefas.py agente/__init__.py agente/enviar.py agente/executor.py
 
       # Os testes abaixo sao listados A MAO, um passo cada, porque cada nome na
       # tela do GitHub diz o que quebrou sem ninguem abrir o log. O preco disso
@@ -249,6 +249,24 @@ jobs:
       # teto de 5, so para VOZ vivo, duas contas nunca se cruzam.
       - name: Os avisos do painel para o VOZ
         run: python test_voz_avisos.py
+
+      # O PROGRESSO POR DOCUMENTACAO: o formato dos briefings, a lista fechada de
+      # provas (nenhum comando hostil passa), a conta (nao verificado nunca entra
+      # no percentual; sem documentacao nunca e 0 nem 100) e o teto de tamanho
+      # que protege o relatorio do agente.
+      - name: A documentacao que o DERVS le
+        run: python test_documentos.py
+
+      # O botao "Desenvolver isto": duas contas nao se cruzam, a tarefa
+      # `desenvolver` e sempre vermelha MAS roda quando o dono aprova, o pedido
+      # desce ao agente, e o selo de saude nao muda por causa do progresso.
+      - name: Desenvolver a partir da documentacao
+        run: python test_desenvolver.py
+
+      # A tela do progresso (Executor B): textContent, botao atras de
+      # `desenvolvivel`, "sem documentacao" nunca escreve "%".
+      - name: A tela do progresso
+        run: python test_progresso_tela.py
 
       # ETAPA 16 — a lista de copia do Dockerfile acompanha o que servir.py
       # importa. Entre a etapa 9 e a 14 nasceram sete arquivos de runtime e

@@ -64,6 +64,9 @@ COPY auditoria.py     /app/
 COPY autenticacao.py  /app/
 COPY banco.py         /app/
 COPY cortina.py       /app/
+# O leitor de documentacao e a conta do progresso (puro, so stdlib). Entra
+# porque `servir.py` e `coletar.py` o importam; `test_imagem.py` cobra.
+COPY documentos.py    /app/
 COPY memoria.py       /app/
 COPY p256.py          /app/
 COPY passkey.py       /app/

@@ -198,7 +198,11 @@ CREATE TABLE IF NOT EXISTS fila (
     visto_em         TEXT,
     frase            TEXT,
     resumo           TEXT,
-    diff             TEXT
+    diff             TEXT,
+    -- O pedido da tarefa `desenvolver` (copia do criterio do documento). Coluna
+    -- PROPRIA, e nao `erro`: `erro` e o que a falha da sessao escreve, e o
+    -- `detalhe` que desce ao agente e o pedido, nao o resto da ultima tentativa.
+    detalhe          TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_fila_dia ON fila (terminado_em);
 CREATE INDEX IF NOT EXISTS ix_fila_maquina ON fila (maquina_id, estado);
@@ -707,6 +711,7 @@ _COLUNAS_SEMAFORO = (
     ("frase",            "TEXT"),
     ("resumo",           "TEXT"),
     ("diff",             "TEXT"),
+    ("detalhe",          "TEXT"),
 )
 
 
@@ -1805,12 +1810,13 @@ def enfileirar(pendencias: list, con=None) -> int:
         for p in pendencias or []:
             cur = con.execute(
                 "INSERT OR IGNORE INTO fila (id, usuario_id, projeto, regra,"
-                " gravidade, risco, trilho, criado_em, executor)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
+                " gravidade, risco, trilho, criado_em, executor, detalhe)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (p.get("id") or "", int(p.get("usuario_id") or 0),
                  p.get("projeto") or "", p.get("regra") or "",
                  p.get("gravidade") or "media", float(p.get("risco") or 0),
-                 p.get("trilho") or "", agora(), p.get("executor") or "claude"))
+                 p.get("trilho") or "", agora(), p.get("executor") or "claude",
+                 p.get("detalhe") or None))
             entraram += cur.rowcount or 0
         con.commit()
     finally:

@@ -97,6 +97,9 @@ import regras
 # IMAGEM (`Dockerfile:62-74`) por causa desta linha. `servir.py` continua sem
 # importar `execucao` nem `fila` — `test_rotas.AMPUTADOS` cobra os dois nomes.
 import auditoria
+# `documentos.py` e puro (stdlib, ver o topo dele) e ENTRA NA IMAGEM por causa
+# desta linha. Conta o progresso a partir dos criterios crus que o agente sobe.
+import documentos
 
 
 # A TELINHA PISCANDO NA TELA DO DONO (24/08/2026). O painel roda sob pythonw.exe,
@@ -792,7 +795,15 @@ class Hub(SimpleHTTPRequestHandler):
     # ------------------------------------------------------------- as rotas
     def _dados(self):
         # O dono da sessao, e nao o dono da MAQUINA. Ver `_estado`.
-        return self._json(200, self._estado(self._sessao()["usuario_id"]))
+        estado = self._estado(self._sessao()["usuario_id"])
+        # A chave crua `documentacao` (todos os criterios, ate 24 KiB por
+        # projeto) NAO vai no poll de 60 s de toda aba: a tela recebe a CONTA
+        # (`progresso`) e busca os criterios em `/api/progresso` quando abre o
+        # projeto. A poda e aqui, e nao em `_estado`: `_progresso` e
+        # `_desenvolver_pedir` leem os criterios crus do estado da conta.
+        for p in estado["projetos"]:
+            p.pop("documentacao", None)
+        return self._json(200, estado)
 
     def _estatico(self):
         """Os quatro arquivos de ESTATICOS_OK, e mais nenhum."""
@@ -873,6 +884,14 @@ class Hub(SimpleHTTPRequestHandler):
             if isinstance(camada, dict):
                 p["auditoria"] = {k: v for k, v in camada.items()
                                   if k != "achados"}
+            # O PROGRESSO POR DOCUMENTACAO entra DEPOIS do selo, e o selo nunca
+            # o le (`test_desenvolver.test_o_selo_nao_muda_com_ou_sem_documentacao`).
+            # O servidor RECALCULA a conta dos criterios crus: um percentual que
+            # o agente mandasse no meio e ignorado. `medido_em` e o da camada
+            # local, a mesma que carimbou a chave `documentacao`.
+            p["progresso"] = documentos.progresso(
+                p.get("documentacao"), p.get("nome") or "",
+                (p.get("medido_em") or {}).get("local"))
         return {
             "agora": agora_iso,
             "pendencias": pend,
@@ -2265,7 +2284,10 @@ class Hub(SimpleHTTPRequestHandler):
             "regra": candidata.get("regra") or "",
             "trilho": candidata.get("trilho") or "",
             "executor": executor,
-            "detalhe": candidata.get("erro") or "",
+            # `detalhe` (o pedido da tarefa `desenvolver`) vale mais que `erro`
+            # (o que a falha da ultima tentativa escreveu). Sem esta linha a
+            # sessao abre sem saber o que desenvolver.
+            "detalhe": candidata.get("detalhe") or candidata.get("erro") or "",
             "cor": candidata.get("cor") or tarefas.VERMELHO,
             "teto_usd": teto_usd,
             "rodadas": int(candidata.get("rodadas") or 0),
@@ -2456,7 +2478,7 @@ class Hub(SimpleHTTPRequestHandler):
         return self._json(200, {
             "tarefas": banco.tarefas_do_painel(sessao["usuario_id"]),
             "cores": banco.cores_das_regras(),
-            "nunca_verde": sorted(tarefas.NUNCA_VERDE),
+            "nunca_verde": sorted(tarefas.NUNCA_VERDE | tarefas.SEMPRE_VERMELHA),
             "medido_em": banco.agora()})
 
     # ------------------------------------------------------ o fluxo ao vivo
@@ -2693,6 +2715,10 @@ class Hub(SimpleHTTPRequestHandler):
                 return self._json(409, {
                     "erro": "a regra \"%s\" nunca anda sozinha, e isso nao se "
                             "repinta" % regra})
+            if regra in tarefas.SEMPRE_VERMELHA:
+                return self._json(409, {
+                    "erro": "a regra \"%s\" sempre espera o seu clique, e "
+                            "isso nao se repinta" % regra})
             return self._json(400, {"erro": "cor invalida"})
         return self._json(200, {"ok": True, "cor": cor})
 
@@ -2797,44 +2823,50 @@ class Hub(SimpleHTTPRequestHandler):
     # da auditoria — nunca emprestado de outra rota.
     TETO_DE_CONSERTOS = 10
 
-    def _aviso_do_conserto(self, usuario_id):
+    def _aviso_do_conserto(self, usuario_id, coisa="conserto"):
         """Por que o conserto entrou na fila mas NAO roda agora, ou `None`.
 
         Texto para leigo. Ordem: sem computador, computador sem autorizacao,
-        teto do dia.
+        teto do dia. `coisa` e a palavra do trabalho ("conserto", ou
+        "desenvolvimento" para o botao Desenvolver isto).
         """
         maquinas = banco.maquinas_do_usuario(usuario_id)
         if not maquinas:
             return ("Nenhum computador está conectado à sua conta. Conecte um "
-                    "em Conectar para o conserto poder rodar.")
+                    "em Conectar para o %s poder rodar." % coisa)
         if not any(int(m.get("executa") or 0) for m in maquinas):
             return ("Seus computadores ainda não foram autorizados a consertar. "
                     "Em Conectar, ligue \"Deixar consertar aqui\".")
         janela = tarefas.janela_local_em_utc(tarefas.hoje_local())
         if not tarefas.cabe_no_teto(banco.gasto_entre(*janela)):
-            return ("O limite de gasto de hoje já foi alcançado. O conserto "
-                    "fica na fila e só roda quando o limite renovar.")
+            return ("O limite de gasto de hoje já foi alcançado. O %s "
+                    "fica na fila e só roda quando o limite renovar." % coisa)
         return None
 
     @staticmethod
-    def _aviso_do_pedido_repetido(linha):
-        """O que dizer ao dono quando o conserto JA existe, segundo o estado real."""
+    def _aviso_do_pedido_repetido(linha, coisa="conserto"):
+        """O que dizer ao dono quando o conserto JA existe, segundo o estado real.
+
+        `coisa` e a palavra do trabalho, como em `_aviso_do_conserto`.
+        """
         estado = (linha or {}).get("estado") or ""
         if estado in ("esperando", "aguardando_aprovacao"):
-            return "Este conserto já está na fila. Aprove em Consertar."
+            return "Este %s já está na fila. Aprove em Consertar." % coisa
         if estado == "rodando":
-            return "Este conserto está sendo feito agora. Acompanhe em Consertar."
+            return ("Este %s está sendo feito agora. Acompanhe em Consertar."
+                    % coisa)
         if estado == "ok":
-            return ("Este conserto já foi feito. Se o alerta continua, o pedido "
+            return ("Este %s já foi feito. Se nada mudou, o pedido "
                     "de alteração pode estar esperando a sua revisão no GitHub "
-                    "— veja em Consertar.")
+                    "— veja em Consertar." % coisa)
         if estado == "falha":
             if int(linha.get("tentativas") or 0) >= tarefas.MAX_TENTATIVAS:
-                return ("Este conserto já foi tentado %d vezes e não deu certo. "
-                        "Veja o motivo em Consertar." % tarefas.MAX_TENTATIVAS)
-            return ("A última tentativa deste conserto falhou. A fila tenta de "
-                    "novo amanhã, dentro do limite de gasto.")
-        return "Este conserto já foi pedido. Veja o estado em Consertar."
+                return ("Este %s já foi tentado %d vezes e não deu certo. "
+                        "Veja o motivo em Consertar."
+                        % (coisa, tarefas.MAX_TENTATIVAS))
+            return ("A última tentativa deste %s falhou. A fila tenta de "
+                    "novo amanhã, dentro do limite de gasto." % coisa)
+        return "Este %s já foi pedido. Veja o estado em Consertar." % coisa
 
     def _consertar_pedir(self):
         """O botao "Consertar com IA": enfileira o conserto de UMA pendencia.
@@ -2894,6 +2926,116 @@ class Hub(SimpleHTTPRequestHandler):
             aviso = self._aviso_do_pedido_repetido(banco.tarefa(id_fila, uid))
         return 200, {"ok": True, "pedido": bool(entrou), "tarefa": id_fila,
                      "aviso": aviso}
+
+    # ------------------------------------ o progresso por documentacao (Fatia 3)
+    #
+    # O agente LE os briefings e sobe os criterios crus (`documentacao`); o
+    # servidor recalcula a conta a cada pedido (`documentos.progresso`) e nunca
+    # aceita percentual pronto. Nenhuma prova roda nesta entrega: todo criterio
+    # sai "nao verificado". Duas rotas, ambas `dado` e ambas recortadas ao
+    # estado DA CONTA de quem pediu.
+
+    def _criterios_da_conta(self, uid, projeto=None):
+        """`[(nome, documentacao, medido_em)]` dos projetos DESTA conta.
+
+        Com `projeto`, so aquele (lista vazia se nao existir OU nao for seu —
+        as duas respostas sao a mesma). O estado e o CRU (`montar_estado`): e
+        de la que sai a chave `documentacao`, que `_dados` poda depois.
+        """
+        con = banco.conectar()
+        try:
+            e = banco.montar_estado(con, usuario_id=uid)
+        finally:
+            con.close()
+        return [(p.get("nome") or "", p.get("documentacao"),
+                 (p.get("medido_em") or {}).get("local"))
+                for p in e["projetos"]
+                if projeto is None or p.get("nome") == projeto]
+
+    @staticmethod
+    def _bloqueio_de_desenvolvimento(nome):
+        """"" se o DERVS pode desenvolver neste projeto, senao o motivo."""
+        return "" if tarefas.projeto_pode_desenvolver(nome) else "projeto bloqueado"
+
+    def _progresso(self):
+        """A conta e os criterios de UM projeto da conta, para a tela abrir."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        consulta = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(self.path).query)
+        nome = (consulta.get("projeto") or [""])[0][:200]
+        achados = self._criterios_da_conta(sessao["usuario_id"], nome) \
+            if nome else []
+        if not achados:
+            return self._json(404, {"erro": "projeto nao encontrado"})
+        nome, doc, medido_em = achados[0]
+        pr = documentos.progresso(doc, nome, medido_em)
+        return self._json(200, {
+            "projeto": nome, "progresso": pr,
+            "documentos": documentos.detalhar(
+                doc, nome, bloqueio=self._bloqueio_de_desenvolvimento(nome)),
+            "medido_em": pr["medido_em"]})
+
+    # Desenvolver gasta dinheiro e escreve em repositorio: balcao PROPRIO, como
+    # o do conserto e o da auditoria — nunca emprestado de outra rota.
+    TETO_DE_DESENVOLVIMENTOS = 10
+
+    def _desenvolver_pedir(self):
+        """O botao "Desenvolver isto": enfileira UM criterio documentado.
+
+        O pedido traz so o id do criterio. Projeto, documento, texto e dono vem
+        do estado DA CONTA de quem pediu, nunca do corpo; a regra da tarefa e
+        sempre `desenvolver` (vermelha, espera o "Pode fazer"). "Nao existe" e
+        "nao e seu" dao a MESMA resposta (404). Quem decide se o criterio pode
+        ser desenvolvido e `documentos.detalhar` — a MESMA funcao que diz a
+        tela se o botao aparece, para o botao nunca oferecer o que aqui se
+        recusa.
+        """
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="desenvolver",
+                                           teto=self.TETO_DE_DESENVOLVIMENTOS):
+            return self._json(429, self.RECUSA)
+        cid = corpo.get("criterio")
+        if not cid or not isinstance(cid, str):
+            return self._json(400, {"erro": "faltou o id do criterio"})
+        if len(cid) > 64:
+            return self._json(400, {"erro": "id longo demais"})
+        uid = sessao["usuario_id"]
+        achado = projeto = None
+        for nome, doc, _ in self._criterios_da_conta(uid):
+            achado = documentos.achar_criterio(
+                doc, nome, cid, bloqueio=self._bloqueio_de_desenvolvimento(nome))
+            if achado:
+                projeto = nome
+                break
+        if achado is None:
+            return self._json(404, {"erro": "criterio nao encontrado"})
+        documento, c = achado
+        if c["motivo"]:
+            return self._json(403, {"erro": c["motivo"]})
+        # O dono entra NO ID (fila.id e TEXT PRIMARY KEY global): sem ele, duas
+        # contas com projeto de mesmo nome colidem e a segunda "pede" sem entrar.
+        id_fila = "desenvolver:%s:%s" % (uid, cid)
+        detalhe = "Critério %d de %s: %s" % (c["n"], documento["arquivo"],
+                                             c["texto"])
+        if c["prova_aceita"]:
+            detalhe += "\nProva do critério: %s" % c["prova"]
+        entrou = banco.enfileirar([{
+            "id": id_fila, "usuario_id": uid, "projeto": projeto,
+            "regra": "desenvolver", "gravidade": "media", "risco": 0,
+            "trilho": "claude", "executor": "claude", "detalhe": detalhe,
+        }])
+        if entrou:
+            aviso = self._aviso_do_conserto(uid, "desenvolvimento")
+        else:
+            aviso = self._aviso_do_pedido_repetido(
+                banco.tarefa(id_fila, uid), "desenvolvimento")
+        return self._json(200, {"ok": True, "pedido": bool(entrou),
+                                "tarefa": id_fila, "aviso": aviso})
 
     TIPOS_DE_PEDIDO_DO_VOZ = ("enfileirar_conserto",)
     _ID_DE_ALERTA = re.compile(r"[A-Za-z0-9._:-]{1,200}")
@@ -3423,6 +3565,12 @@ ROTAS = {
     "/api/auditoria":           Rota("GET",  Hub._auditoria,        "dado"),
     "/api/auditoria/pedir":     Rota("POST", Hub._auditoria_pedir,  "dado"),
     "/api/consertar":           Rota("POST", Hub._consertar_pedir,  "dado"),
+
+    # O progresso por documentacao. `/api/progresso` LE (a conta e os criterios
+    # de um projeto da conta); `/api/desenvolver` so ENFILEIRA, e quem roda e o
+    # braco executor, depois do "Pode fazer". Nenhuma das duas roda prova.
+    "/api/progresso":           Rota("GET",  Hub._progresso,        "dado"),
+    "/api/desenvolver":         Rota("POST", Hub._desenvolver_pedir, "dado"),
 
     # A ponte com o DERVS-VOZ. As tres `/agente/voz/*` sao `maquina` (token do
     # agente, so conexao de saida); as duas `/api/voz*` sao do dono. O servidor
