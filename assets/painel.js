@@ -485,6 +485,7 @@ function pintarProjeto(nome) {
       "Este projeto não está na última medição. Ele pode ter sido desconectado, "
       + "ou o computador que o reportava não dá notícia.";
     $("#projeto-arquivados").textContent = "";
+    $("#projeto-progresso").hidden = true;
     return;
   }
 
@@ -609,6 +610,7 @@ function pintarProjeto(nome) {
       marca, JSON.stringify(dep, null, 1)));
   }
 
+  pintarProgresso(p);
   pintarAlertasDoProjeto(p.nome);
   pintarArquivados(p.nome);
 }
@@ -707,6 +709,308 @@ function pintarArquivados(projeto) {
   }
   onde.append(ul);
 }
+
+/* ================================ Progresso pela documentação ============== */
+/* Tudo o que vem do servidor aqui (texto de critério, prova, erro de formato,
+   nome de documento) nasceu num arquivo de OUTRO repositório: dado hostil. Só
+   `textContent`, nunca HTML. O selo de saúde não lê nada disto: progresso é
+   outra pergunta ("quanto falta?"), e misturá-la ao selo faria o selo mentir. */
+const PROGRESSO_SITUACAO = {
+  comprovado:     { rotulo: "Comprovado",     glifo: "✓" },
+  prova_falhou:   { rotulo: "Prova falhou",   glifo: "✕" },
+  nao_verificado: { rotulo: "Não verificado", glifo: "?" },
+  falta:          { rotulo: "Falta",          glifo: "○" }
+};
+let PROGRESSO_VEZ = 0;        // a cada pintura; resposta atrasada não repinta
+const PROGRESSO_CACHE = {};   // nome -> { medido_em, corpo }
+
+/* Inteiro não negativo, ou 0. O `+` é de propósito: test_design toma
+   `Number(`/`parseInt(` por "número na tela sem carimbo". */
+function inteiroDoProgresso(v) {
+  const n = +v;
+  return isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+}
+
+function linhaDoProgresso(texto, classe) {
+  const p = document.createElement("p");
+  if (classe) p.className = classe;
+  p.textContent = texto;
+  return p;
+}
+
+/* As quatro faces. O número grande e a barra só existem em "medido": nos
+   outros três, o percentual não existe e escrever 0% ou 100% seria inventar. */
+function pintarProgresso(p) {
+  const sec = $("#projeto-progresso");
+  const resumo = $("#progresso-resumo");
+  $("#progresso-lista").textContent = "";
+  $("#progresso-recado-caixa").hidden = true;
+  resumo.textContent = "";
+  PROGRESSO_VEZ += 1;
+  sec.hidden = false;
+
+  const pr = p && p.progresso ? p.progresso : { estado: "sem_dados" };
+  const carimbo = "medido " + haQuanto(pr.medido_em);
+  const tem = x => inteiroDoProgresso(pr[x]);
+  const lido = pr.estado === "medido" && typeof pr.percentual === "number"
+    ? "medido"
+    : (pr.estado === "nao_verificado" || pr.estado === "sem_documentacao"
+        ? pr.estado : "sem_dados");
+  sec.dataset.estado = lido;
+
+  if (lido === "sem_dados") {
+    resumo.append(nada("O agente deste computador ainda não lê a documentação do "
+                       + "projeto (ou é uma versão antiga). Reinicie o agente.",
+                       pr.medido_em));
+    return;
+  }
+
+  if (lido === "sem_documentacao") {
+    const v = document.createElement("div");
+    v.className = "vazio";
+    v.append(
+      linhaDoProgresso("Sem documentação. O projeto não tem critérios de "
+                       + "aceitação em docs/esteira, então não há o que medir."),
+      linhaDoProgresso("Escreva um briefing com a lista de critérios (veja "
+                       + "docs/A-DOCUMENTACAO-QUE-O-DERVS-LE.md) e o número "
+                       + "aparece aqui.", "mole"),
+      linhaDoProgresso(carimbo, "carimbo"));
+    resumo.append(v);
+    return;
+  }
+
+  const contas = document.createElement("ul");
+  contas.className = "progresso__contas";
+  const conta = (n, frase) => {
+    if (!n) return;
+    const li = document.createElement("li");
+    li.textContent = n + " " + frase;
+    contas.append(li);
+  };
+
+  if (lido === "medido") {
+    const pct = Math.min(100, inteiroDoProgresso(pr.percentual));
+    const grande = document.createElement("p");
+    grande.className = "progresso__numero";
+    grande.textContent = pct + "%";
+    const barra = document.createElement("progress");
+    barra.className = "progresso__barra";
+    barra.max = 100;
+    barra.value = pct;
+    barra.setAttribute("aria-label", "Critérios comprovados");
+    resumo.append(grande, barra);
+    const base = document.createElement("li");
+    base.textContent = tem("comprovados") + " de " + tem("total") + " critérios comprovados";
+    contas.append(base);
+    conta(tem("falhos"), "com a prova falhando");
+    conta(tem("nao_verificados"), "não verificados (prova ainda não rodou)");
+    conta(tem("faltam"), "faltam");
+  } else {
+    resumo.append(linhaDoProgresso("Nenhuma prova rodou ainda.", "progresso__destaque"));
+    conta(tem("total"), "critérios documentados, nenhum comprovado");
+  }
+  conta(tem("declarados"), "marcados no documento, sem prova");
+  resumo.append(contas);
+  if (tem("erros_n")) {
+    resumo.append(linhaDoProgresso(
+      tem("erros_n") + " erro(s) de formato nos documentos. Eles estão indicados "
+      + "abaixo e ficam de fora da conta.", "mole"));
+  }
+  resumo.append(linhaDoProgresso(
+    carimbo + " · " + tem("documentos_n") + " documento(s) lido(s)", "carimbo"));
+
+  carregarProgresso(p.nome, pr.medido_em);
+}
+
+async function carregarProgresso(nome, medidoEm) {
+  const vez = PROGRESSO_VEZ;
+  const lista = $("#progresso-lista");
+  const cache = PROGRESSO_CACHE[nome];
+  if (cache && cache.medido_em === medidoEm) { pintarCriterios(cache.corpo); return; }
+  lista.textContent = "";
+  lista.append(linhaDoProgresso("Carregando os critérios…", "mole"));
+
+  const falhou = (frase) => {
+    if (vez !== PROGRESSO_VEZ) return;
+    lista.textContent = "";
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "botao botao--secundario";
+    b.textContent = "Tentar de novo";
+    b.addEventListener("click", () => carregarProgresso(nome, medidoEm));
+    lista.append(linhaDoProgresso(frase), b);
+  };
+
+  let r;
+  try {
+    r = await fetch("/api/progresso?projeto=" + encodeURIComponent(nome));
+  } catch {
+    falhou("Não deu para falar com o servidor. Os números acima continuam valendo; a lista de critérios não chegou.");
+    return;
+  }
+  let corpo = null;
+  try { corpo = await r.json(); } catch {}
+  if (!r.ok) {
+    falhou(r.status === 404
+      ? "Este projeto não está mais na lista. Volte ao painel."
+      : "Não deu para ler os critérios agora (erro " + r.status + ").");
+    return;
+  }
+  if (!corpo || !Array.isArray(corpo.documentos)) {
+    falhou("O servidor respondeu de um jeito que não entendi.");
+    return;
+  }
+  if (vez !== PROGRESSO_VEZ) return;
+  PROGRESSO_CACHE[nome] = { medido_em: medidoEm, corpo };
+  pintarCriterios(corpo);
+}
+
+function pintarCriterios(corpo) {
+  const lista = $("#progresso-lista");
+  lista.textContent = "";
+  for (const d of corpo.documentos) {
+    const sec = document.createElement("section");
+    sec.className = "progresso__doc";
+    const h = document.createElement("h3");
+    h.textContent = d.slug || "documento";
+    const dia = dataDoDocumento(d.aprovado_em);
+    sec.append(h, linhaDoProgresso(
+      dia ? "Aprovado em " + dia + "."
+          : "Ainda não aprovado: falta a linha «Aprovado em: AAAA-MM-DD» no documento.",
+      "metadado"));
+    for (const e of (d.erros || [])) {
+      sec.append(linhaDoProgresso("Erro de formato: " + e, "progresso__erro"));
+    }
+    const ul = document.createElement("ul");
+    ul.className = "progresso__criterios";
+    for (const c of (d.criterios || [])) ul.append(linhaDeCriterio(c));
+    sec.append(ul);
+    lista.append(sec);
+  }
+}
+
+function dataDoDocumento(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(typeof iso === "string" ? iso : "");
+  return m ? m[3] + "/" + m[2] + "/" + m[1] : "";
+}
+
+function linhaDeCriterio(c) {
+  const li = document.createElement("li");
+  li.className = "progresso__criterio";
+  /* Situação desconhecida cai em "não verificado", nunca em "comprovado". */
+  const sit = PROGRESSO_SITUACAO[c.situacao] ? c.situacao : "nao_verificado";
+  const marca = document.createElement("span");
+  marca.className = "progresso__situacao";
+  marca.dataset.situacao = sit;
+  marca.textContent = PROGRESSO_SITUACAO[sit].glifo + " " + PROGRESSO_SITUACAO[sit].rotulo;
+  const texto = document.createElement("span");
+  texto.className = "progresso__texto";
+  texto.textContent = c.texto;
+  li.append(marca, texto);
+
+  if (c.prova) {
+    const pv = document.createElement("p");
+    pv.className = "metadado progresso__prova";
+    const cmd = document.createElement("code");
+    cmd.textContent = c.prova;
+    pv.append("Prova: ", cmd);
+    if (c.prova_aceita !== true) {
+      pv.append(" (comando fora da lista permitida: nunca roda)");
+    } else if (sit === "nao_verificado") {
+      pv.append(" (ainda não rodou)");
+    }
+    li.append(pv);
+  }
+
+  if (c.desenvolvivel === true) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "botao botao--secundario";
+    b.textContent = "Desenvolver isto";
+    b.setAttribute("aria-label", "Desenvolver isto: " + c.texto);
+    b.addEventListener("click", () => desenvolverCriterio(c, b));
+    li.append(b);
+  } else if (typeof c.motivo === "string" && c.motivo) {
+    li.append(linhaDoProgresso(c.motivo, "metadado"));
+  }
+  return li;
+}
+
+/* O que o dono lê quando o pedido não entra. O servidor fala pela própria boca
+   só nos quatro 403; o resto é frase nossa. */
+function frasePorQueNaoDesenvolveu(status, corpo) {
+  const erro = corpo && typeof corpo.erro === "string" ? corpo.erro : "";
+  if (status === 401) return "Sua sessão acabou. Recarregue a página e entre de novo.";
+  if (status === 403 && erro === "documento nao aprovado") {
+    return "O documento deste critério ainda não foi aprovado. Acrescente a linha "
+      + "«Aprovado em: AAAA-MM-DD» ao briefing e tente de novo.";
+  }
+  if (status === 403 && erro === "projeto bloqueado") {
+    return "Este projeto não pode ser desenvolvido pelo DERVS.";
+  }
+  if (status === 403 && erro === "criterio sensivel") {
+    return "Este critério trata de segurança, senha, pagamento ou dado de paciente. "
+      + "O DERVS não desenvolve isso sozinho.";
+  }
+  if (status === 403 && erro === "criterio ja marcado") {
+    return "Este critério já está marcado como cumprido no documento.";
+  }
+  if (status === 403) return "Este critério não pode ser desenvolvido por aqui.";
+  if (status === 404) return "Este critério não está mais no documento. Recarregue a tela.";
+  if (status === 400) return "O pedido saiu incompleto. Recarregue a tela e tente de novo.";
+  if (status === 429) return "Você pediu desenvolvimento demais em pouco tempo. Espere um pouco e tente de novo.";
+  return "Não deu para pedir o desenvolvimento agora (erro " + status + "). Tente de novo em instantes.";
+}
+
+async function desenvolverCriterio(c, botao) {
+  const caixa = $("#progresso-recado-caixa");
+  const texto = $("#progresso-recado-texto");
+  const aviso = $("#progresso-recado-aviso");
+  const link = $("#progresso-recado-link");
+  aviso.hidden = true;
+  aviso.textContent = "";
+  botao.disabled = true;
+
+  const mostrarFalha = (frase) => {
+    caixa.hidden = false;
+    link.hidden = true;
+    texto.textContent = frase;
+    botao.disabled = false;
+  };
+
+  let r;
+  try {
+    r = await escrever("/api/desenvolver", { criterio: c.id });
+  } catch {
+    mostrarFalha("Não deu para falar com o servidor. Confira a conexão e tente de novo.");
+    return;
+  }
+  let corpo = null;
+  try { corpo = await r.json(); } catch {}
+
+  if (!r.ok) { mostrarFalha(frasePorQueNaoDesenvolveu(r.status, corpo)); return; }
+  if (!corpo || corpo.ok !== true) {
+    mostrarFalha("O servidor respondeu de um jeito que não entendi. Confira em "
+                 + "Consertar se o pedido entrou na fila.");
+    link.hidden = false;
+    return;
+  }
+
+  caixa.hidden = false;
+  link.hidden = false;
+  const repetido = corpo.pedido === false;
+  texto.textContent = repetido
+    ? (typeof corpo.aviso === "string" && corpo.aviso
+        ? corpo.aviso : "Este desenvolvimento já foi pedido. Veja em Consertar.")
+    : "Na fila. Nada roda até você aprovar em Consertar.";
+  if (!repetido && typeof corpo.aviso === "string" && corpo.aviso) {
+    aviso.hidden = false;
+    aviso.textContent = corpo.aviso;
+  }
+  botao.disabled = true; /* já está na fila: outro clique só repetiria o pedido */
+  await carregarTarefas();
+}
+/* ============================ fim: Progresso pela documentação ============= */
 
 /* ================================================== 6. Alerta ============ */
 

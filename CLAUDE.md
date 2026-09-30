@@ -327,6 +327,32 @@ só anda com clique do dono **no VOZ**; aprovar no painel não basta.
 (`POST https://api.typesafe.ai/v1/systemone`, `TYPESAFE_API_KEY`, perguntas
 `noul`/`choice`/`score`). Serve para triagem; Claude Code e Hermes são os que trabalham.
 
+## Progresso pela documentação e "Desenvolver isto" (30/09/2026)
+
+Formato do documento: `docs/A-DOCUMENTACAO-QUE-O-DERVS-LE.md`; plano e contrato
+servidor↔tela: `docs/superpowers/plans/dervs-progresso-por-documentacao.md`. O que
+a próxima sessão erraria:
+
+- **Percentual só em `estado === "medido"`.** `nao_verificado`, `sem_documentacao`
+  e `sem_dados` têm `percentual: null`, e a tela nunca escreve `%` nem `0` ali.
+  `declarados` (`[x]` sem prova rodada) nunca entra em `comprovados`: o servidor
+  **recalcula** dos critérios crus e ignora qualquer percentual que o agente mande.
+- **O selo de saúde não lê `progresso`.** A conta entra em `_estado` DEPOIS do motor
+  e do selo; `regras.py` não lê a chave `documentacao`.
+- **Texto de critério é dado de outro repositório:** só `textContent`; a prova nunca
+  vai a um terminal (só a lista fechada, sem shell) e nesta entrega nem roda.
+- **`desenvolver` não entra em `NUNCA_VERDE`** (seria recusado antes da aprovação e
+  nunca rodaria): mora em `tarefas.SEMPRE_VERMELHA`. O botão só existe atrás de
+  `c.desenvolvivel === true`, o corpo do POST é só `{criterio: c.id}`, e o servidor
+  acha o critério no estado DA CONTA.
+- **Não nomeie rota nem função `documentacao`:** `test_rotas.PROIBIDO` casa
+  `acao|exec|comando|shell`, e "documentACAO" casa.
+- **Projeto acima de 64 KiB é descartado INTEIRO** em `banco.receber_relatorio`: o
+  agente limita o tamanho da chave (24 KiB) e marca `cortado`.
+- **`test_progresso_tela.py` executa as funções de montagem em node** com um DOM de
+  mentira (como `test_voz_tela.py`); sem node ele pula só esses casos. Mais o
+  `test_design`: `Number(`/`parseInt(` são proibidos (use `+x`).
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em

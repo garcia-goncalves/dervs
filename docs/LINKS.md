@@ -91,6 +91,21 @@ O VOZ contar que está bem não conta: um VOZ com a coleta travada continuaria
 shell nem SSH nestas rotas, e não haverá: o terminal SSH mora no VOZ.
 Roteiro de pareamento: [`operacao/parear-o-voz.md`](operacao/parear-o-voz.md).
 
+## Progresso pela documentação (30/09/2026)
+
+Não é tela nova nem item de menu (o menu tem quatro): é a seção **Quanto já foi
+desenvolvido** da tela do projeto (`#/projeto/<nome>`). Formato da documentação que
+ela lê: [`A-DOCUMENTACAO-QUE-O-DERVS-LE.md`](A-DOCUMENTACAO-QUE-O-DERVS-LE.md).
+
+| Rota | Quem chama | O que faz |
+|---|---|---|
+| `GET /api/dados` | o painel (sessão) | cada projeto traz `progresso` (estado, percentual só se medido, contagens, `medido_em`) |
+| `GET /api/progresso?projeto=<nome>` | o painel (sessão) | os documentos e critérios do projeto, com `situacao` e `desenvolvivel` |
+| `POST /api/desenvolver` | o painel (sessão + `X-Token`) | `{"criterio": "<id>"}`: enfileira uma tarefa `desenvolver`, que espera o "Pode fazer" |
+
+**Se a seção diz "Não consegui medir":** o agente do computador ainda não envia a
+documentação (versão antiga). Reinicie o agente e espere a próxima medição.
+
 ## As três portas (01/09/2026)
 
 A tela **Conectar projeto** deixou de mandar você para outra tela. Cada porta

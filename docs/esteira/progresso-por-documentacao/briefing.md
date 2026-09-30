@@ -1,5 +1,7 @@
 # Briefing — o DERVS mede quanto cada projeto está desenvolvido, pela documentação, e desenvolve a partir dela
 
+Aprovado em: 2026-09-30
+
 ## pedido_original
 
 "Quero que consiga analisar e consertar tudo. E também desenvolver coisas. As documentações serão usadas como base para o DERVS saber quantos % a aplicação está desenvolvida e quanto falta para desenvolver. Sempre que eu precisar implementar e desenvolver mais coisas, teremos que documentar tudo primeiro e depois começamos o desenvolvimento... sim, quero sim te dar permissão para vc desenvolver sozinho (deixar consertar aqui e tudo mais o que precisar). Quero ver a aplicação funcionando (analisando e consertando)... e também quero ver desenvolvendo..."
@@ -14,13 +16,18 @@ Dono e desenvolvedores (Thiago e André) que descrevem a intenção e querem ver
 
 ## criterio_de_aceitacao
 
-1. O formato está escrito em um só lugar (`docs/A-DOCUMENTACAO-QUE-O-DERVS-LE.md`): cada critério é uma linha `- [ ] texto` ou `- [x] texto` dentro de `## criterio_de_aceitacao` de um `docs/esteira/<slug>/briefing.md`, com linha opcional `Prova: <comando>`. Prova: o leitor de documentação tem testes com arquivos de exemplo válidos e quebrados.
-2. O percentual de um projeto é critérios com prova rodada e verde, dividido pelo total de critérios. Critério sem `Prova:` ou com prova não rodada conta como "não verificado" e aparece separado. Projeto sem documentação aparece como "sem documentação": nunca 0% e nunca 100% (Lei 2 do painel). Prova: testes que reprovam quando um critério não verificado entra na conta de cumpridos (sabotado de propósito).
-3. O painel mostra, por projeto, a barra de progresso com o número, os critérios que faltam e os não verificados, em português, e não muda a cor do selo de saúde por causa disso. Prova: teste de tela mais clique real no navegador.
-4. Provas declaradas em documentação são dado de fora e nunca executam qualquer comando. Só rodam comandos de uma lista fechada (`python test_<nome>.py`, `python -m pytest <arquivo>`, `npm test`), só no computador com "Pode consertar aqui" ligado, sem shell, com prazo, e nunca em projeto bloqueado ou do André. Prova: testes com comandos hostis (`; rm`, `&&`, `$(...)`, caminho fora do projeto) todos recusados.
-5. O botão "Desenvolver isto" só existe para critério de documento já aprovado; cria tarefa `desenvolver`, sempre vermelha, que nunca anda sozinha; o servidor recusa o que não vier de documento aprovado. Prova: teste de servidor cruzando duas contas e regra fora da lista.
-6. O DERVS usa a própria documentação: o percentual do DERVS, calculado de `docs/esteira/*/briefing.md` deste repositório, aparece na tela com os critérios que faltam. Prova: clique real mostrando o número e conferência manual de uma conta por extenso.
-7. As suítes existentes continuam verdes, todo `test_*.py` novo entra no `ci.yml`, e a documentação do projeto reflete a mudança no mesmo commit.
+- [ ] O formato está escrito em um só lugar (`docs/A-DOCUMENTACAO-QUE-O-DERVS-LE.md`): cada critério é uma linha de checklist dentro de `## criterio_de_aceitacao` de um `docs/esteira/<slug>/briefing.md`, com linha opcional `Prova:` logo abaixo. O leitor tem testes com exemplos válidos e quebrados.
+Prova: python test_documentos.py
+- [ ] O percentual de um projeto é critérios com prova rodada e verde, dividido pelo total. Critério sem prova, ou com prova não rodada, conta como "não verificado" e aparece separado. Projeto sem documentação aparece como "sem documentação": nunca 0% e nunca 100% (Lei 2 do painel).
+Prova: python test_documentos.py
+- [ ] O painel mostra, por projeto, a barra de progresso com o número, os critérios que faltam e os não verificados, em português, e não muda a cor do selo de saúde por causa disso. Também conferido por clique real no navegador.
+Prova: python test_progresso_tela.py
+- [ ] Provas declaradas em documentação são dado de fora e nunca executam qualquer comando. Só rodam comandos de uma lista fechada (`python test_<nome>.py`, `python -m pytest <arquivo>`, `npm test`), só no computador com "Pode consertar aqui" ligado, sem shell, com prazo, e nunca em projeto bloqueado ou do André.
+Prova: python test_documentos.py
+- [ ] O botão "Desenvolver isto" só existe para critério de documento já aprovado; cria tarefa `desenvolver`, sempre vermelha, que nunca anda sozinha; o servidor recusa o que não vier de documento aprovado. Conferido cruzando duas contas e com regra fora da lista.
+Prova: python test_desenvolver.py
+- [ ] O DERVS usa a própria documentação: o percentual do DERVS, calculado de `docs/esteira/*/briefing.md` deste repositório, aparece na tela com os critérios que faltam. Conferido por clique real e por conta feita por extenso.
+- [ ] As suítes existentes continuam verdes, todo `test_*.py` novo entra no `ci.yml`, e a documentação do projeto reflete a mudança no mesmo commit.
 
 ## fora_de_escopo
 
