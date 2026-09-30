@@ -235,6 +235,32 @@ Dado de paciente, chave e caminho protegido não vão para cérebro de terceiros
 o VOZ cala, o painel diz **sem dados** — nunca "Vigiando" sem medição recente (20
 minutos). O briefing é `docs/esteira/ecossistema-voz/briefing.md`.
 
+### 5.6. O progresso pela documentação, e o "Desenvolver isto" (30/09/2026)
+
+Toda coisa nova nasce documentada: uma lista de critérios marcáveis, escrita e
+aprovada antes do código. O DERVS lê essa lista em cada projeto
+(`docs/esteira/*/briefing.md`) e a tela do projeto mostra **quanto já está
+cumprido e o que falta**, na seção "Quanto já foi desenvolvido". O formato está
+escrito em um só lugar: [`A-DOCUMENTACAO-QUE-O-DERVS-LE.md`](A-DOCUMENTACAO-QUE-O-DERVS-LE.md).
+
+- **Quatro faces, e só a primeira tem número.** *Medido* (percentual e barra),
+  *não verificado* ("Nenhuma prova rodou ainda"), *sem documentação* (nunca 0% e
+  nunca 100%) e *sem dados*. Critério marcado com `[x]` mas sem prova rodada
+  aparece como "marcado no documento, sem prova" e **nunca** entra na conta de
+  cumpridos (Lei 2: o painel não pode mentir).
+- **O selo de saúde não muda por causa do progresso.** São perguntas diferentes:
+  "está funcionando?" e "quanto falta construir?".
+- **Nenhuma prova roda ainda** (fase 2). Só existe o validador da lista fechada
+  (`python test_<nome>.py`, `python -m pytest <arquivo>`, `npm test`); prova é dado
+  de fora e nunca vai a um terminal.
+- **"Desenvolver isto"** só aparece para critério de documento com a linha
+  `Aprovado em: AAAA-MM-DD`. Cria uma tarefa `desenvolver` que **sempre espera o
+  "Pode fazer"** e nunca anda sozinha; o resultado é um ramo para revisão. O
+  servidor recusa documento não aprovado, projeto bloqueado, critério de segurança
+  ou de dado de paciente e critério já marcado.
+- **Fora desta entrega:** rodar as provas, migrar briefings antigos (aparecem
+  "sem documentação") e aprovar pela tela.
+
 ## 6. Como é feito por dentro
 
 **Três peças, com fronteira dura entre elas.** A fronteira é o desenho principal, não
