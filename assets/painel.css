@@ -867,3 +867,68 @@ main { padding-bottom: var(--e12); }
   outline: var(--foco-largura) solid var(--acao);
   outline-offset: var(--foco-afastamento);
 }
+
+/* ====================== Progresso pela documentação ======================
+   Só layout e tokens existentes. A barra usa --acao (cor de destaque), NUNCA um
+   --estado-*: progresso não é o selo de saúde. Em 360px tudo quebra linha. */
+.progresso { margin-top: var(--e8); }
+.progresso > h2 { margin-bottom: var(--e2); }
+.progresso__numero {
+  margin: 0;
+  font-size: var(--fs-pagina);
+  font-weight: var(--peso-forte);
+  line-height: var(--lh-apertada);
+}
+.progresso__destaque { margin: 0; font-size: var(--fs-titulo); font-weight: var(--peso-forte); }
+.progresso__barra {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  height: var(--e3);
+  margin: var(--e2) 0;
+  appearance: none;
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+  background: var(--fundo-elevado);
+  color: var(--acao);
+}
+.progresso__barra::-webkit-progress-bar { background: var(--fundo-elevado); }
+.progresso__barra::-webkit-progress-value { background: var(--acao); }
+.progresso__barra::-moz-progress-bar { background: var(--acao); }
+.progresso__contas { margin: var(--e2) 0; padding-left: var(--e4); }
+.progresso__doc { margin-top: var(--e6); }
+.progresso__doc > h3 { margin: 0 0 var(--e1); overflow-wrap: anywhere; }
+.progresso__erro {
+  margin: var(--e2) 0;
+  padding: var(--e2) var(--e3);
+  border: var(--traco-forte) solid var(--borda-forte);
+  border-radius: var(--raio);
+  overflow-wrap: anywhere;
+}
+.progresso__criterios { list-style: none; margin: var(--e2) 0 0; padding: 0; }
+.progresso__criterio {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--e1) var(--e3);
+  padding: var(--e3) 0;
+  border-bottom: var(--traco) solid var(--borda);
+}
+.progresso__situacao {
+  flex: none;
+  font-size: var(--fs-etiqueta);
+  font-weight: var(--peso-forte);
+  letter-spacing: var(--rastreio-etiqueta);
+  text-transform: uppercase;
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+  padding: var(--e1) var(--e2);
+}
+.progresso__situacao[data-situacao="comprovado"] { border-width: var(--traco-forte); }
+.progresso__texto { flex: 1 1 14rem; min-width: 0; overflow-wrap: anywhere; }
+.progresso__prova { flex: 1 0 100%; margin: 0; overflow-wrap: anywhere; }
+.progresso__criterio .botao { min-height: 44px; }
+.progresso button:focus-visible, .progresso a:focus-visible {
+  outline: var(--foco-largura) solid var(--acao);
+  outline-offset: var(--foco-afastamento);
+}
