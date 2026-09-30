@@ -1960,6 +1960,8 @@ const VOZ_CEREBROS = [
   ["jev", "JEV", "triagem rápida: decide se algo é urgente; não conversa."]
 ];
 
+// Tipo que o PAINEL gera sozinho; os do dono aparecem como o servidor os chama.
+const VOZ_TIPOS = { avisar: "Aviso do painel" };
 const VOZ_ESTADOS = {
   pendente:   "pendente, ainda não chegou ao VOZ",
   entregue:   "entregue ao VOZ",
@@ -2033,7 +2035,7 @@ function vozRecado(r) {
   const li = vozEl("li");
   li.style.display = "block";
   const cab = vozEl("div", "nome",
-    (r.tipo || "recado") + (r.alvo ? " — " + r.alvo : ""));
+    (VOZ_TIPOS[r.tipo] || r.tipo || "recado") + (r.alvo ? " — " + r.alvo : ""));
   const est = VOZ_ESTADOS[r.estado] || ("estado: " + (r.estado || "desconhecido"));
   const meta = vozEl("div", "carimbo",
     est + " · " + haQuanto(r.criado_em)

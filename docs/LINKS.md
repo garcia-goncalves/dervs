@@ -75,6 +75,14 @@ DERVS-VOZ** — aprovar no painel não basta.
 | `GET /agente/voz/recados` | o VOZ (token de computador) | o VOZ pergunta se há recado para ele |
 | `POST /agente/voz/resultado` | o VOZ (token de computador) | o VOZ devolve o resultado de um recado |
 
+**O painel também avisa sozinho (tipo `avisar`).** Um recado `avisar` é sempre
+`leitura` (com `muda_estado`, a rota responde 400 e o banco recusa) e só o painel o
+gera: a varredura `_varrer_vigilia` (no máximo uma por minuto, a cada relatório) cria
+um aviso para (a) computador que já mediu e parou há mais de 20 minutos e (b) pendência
+de gravidade alta. Um aviso por ocorrência (tabela `voz_aviso`), no máximo 5 novos por
+varredura e por conta, e **só para conta com VOZ de estado fresco** — sem VOZ ouvindo,
+nada é gerado nem acumulado. Computador que nunca mediu não "calou".
+
 **O `/estado` NÃO é sinal de vida.** Quem diz se o computador está vigiando é o
 carimbo da **medição** (`visto_em`), que só anda quando medição de verdade chega.
 O VOZ contar que está bem não conta: um VOZ com a coleta travada continuaria

@@ -621,6 +621,15 @@ CREATE INDEX IF NOT EXISTS ix_voz_recado_maquina
     ON voz_recado (maquina_id, estado, criado_em);
 CREATE INDEX IF NOT EXISTS ix_voz_recado_dono
     ON voz_recado (usuario_id, criado_em);
+
+-- Um aviso do painel por OCORRENCIA. `voz_recado.tipo` nao tem CHECK, entao o
+-- tipo `avisar` nao exigiu migracao; esta tabela so lembra o que ja foi dito.
+CREATE TABLE IF NOT EXISTS voz_aviso (
+    usuario_id INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    chave      TEXT    NOT NULL,
+    criado_em  TEXT    NOT NULL,
+    PRIMARY KEY (usuario_id, chave)
+);
 """
 
 
@@ -3074,40 +3083,136 @@ def criar_voz_recado(usuario_id: int, maquina_id: int, tipo: str, alvo: str,
     con = con or conectar()
     try:
         con.execute("BEGIN IMMEDIATE")
-        if con.execute(
-                "SELECT 1 FROM maquina WHERE id = ? AND usuario_id = ?"
-                " AND revogada_em IS NULL", (maquina_id, usuario_id)
-        ).fetchone() is None:
+        id_, motivo = _inserir_voz_recado(
+            con, usuario_id, maquina_id, tipo, alvo, texto, nivel,
+            cerebro_pedido, teto_pendentes, agora_iso)
+        if motivo is not None:
             con.rollback()
-            return None, "sem_maquina"
-        # Recado que ninguem buscou em 24 h nao e pendencia, e estado que nunca
-        # expira tranca o dono (PC desligado ou revogado = teto cheio para sempre).
-        # Em UTC: `criado_em` e comparado como texto, e so vale com o mesmo fuso.
-        limite = (datetime.fromisoformat(agora_iso or agora())
-                  .astimezone(timezone.utc)
-                  - timedelta(hours=24)).isoformat(timespec="seconds")
-        con.execute(
-            "UPDATE voz_recado SET estado = 'falhou', terminado_em = ?,"
-            " resumo = 'Venceu: o DERVS-VOZ nao buscou este recado em 24 horas.'"
-            " WHERE usuario_id = ? AND estado = 'pendente' AND criado_em < ?",
-            (agora_iso or agora(), usuario_id, limite))
-        # So conta recado de computador vivo: o de um revogado nunca sera buscado.
-        pendentes = con.execute(
-            "SELECT COUNT(*) FROM voz_recado r JOIN maquina m ON m.id = r.maquina_id"
-            " WHERE r.usuario_id = ? AND r.estado = 'pendente'"
-            " AND m.revogada_em IS NULL", (usuario_id,)).fetchone()[0]
-        if pendentes >= teto_pendentes:
+        else:
+            con.commit()
+        return id_, motivo
+    finally:
+        if fechar:
+            con.close()
+
+
+def _inserir_voz_recado(con, usuario_id, maquina_id, tipo, alvo, texto, nivel,
+                        cerebro_pedido, teto_pendentes, agora_iso):
+    """O miolo de `criar_voz_recado`, DENTRO de uma transacao que o chamador
+    abriu e fecha (commit se `motivo` for None, rollback se nao)."""
+    # `avisar` e o painel falando com o dono: nunca muda nada.
+    if tipo == "avisar" and nivel != "leitura":
+        return None, "nivel"
+    if con.execute(
+            "SELECT 1 FROM maquina WHERE id = ? AND usuario_id = ?"
+            " AND revogada_em IS NULL", (maquina_id, usuario_id)
+    ).fetchone() is None:
+        return None, "sem_maquina"
+    # Recado que ninguem buscou em 24 h nao e pendencia, e estado que nunca
+    # expira tranca o dono (PC desligado ou revogado = teto cheio para sempre).
+    # Em UTC: `criado_em` e comparado como texto, e so vale com o mesmo fuso.
+    limite = (datetime.fromisoformat(agora_iso or agora())
+              .astimezone(timezone.utc)
+              - timedelta(hours=24)).isoformat(timespec="seconds")
+    con.execute(
+        "UPDATE voz_recado SET estado = 'falhou', terminado_em = ?,"
+        " resumo = 'Venceu: o DERVS-VOZ nao buscou este recado em 24 horas.'"
+        " WHERE usuario_id = ? AND estado = 'pendente' AND criado_em < ?",
+        (agora_iso or agora(), usuario_id, limite))
+    # So conta recado de computador vivo: o de um revogado nunca sera buscado.
+    pendentes = con.execute(
+        "SELECT COUNT(*) FROM voz_recado r JOIN maquina m ON m.id = r.maquina_id"
+        " WHERE r.usuario_id = ? AND r.estado = 'pendente'"
+        " AND m.revogada_em IS NULL", (usuario_id,)).fetchone()[0]
+    if pendentes >= teto_pendentes:
+        return None, "teto"
+    id_ = str(uuid.uuid4())
+    con.execute(
+        "INSERT INTO voz_recado (id, usuario_id, maquina_id, criado_em,"
+        " tipo, alvo, texto, nivel, cerebro_pedido)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        (id_, usuario_id, maquina_id, agora_iso or agora(), tipo, alvo,
+         texto, nivel, cerebro_pedido))
+    return id_, None
+
+
+def avisar_uma_vez(usuario_id: int, maquina_id_do_voz: int, chave: str,
+                   alvo: str, texto: str, agora_iso: str = None, con=None,
+                   teto_pendentes: int = 20) -> bool:
+    """Um aviso do painel por OCORRENCIA. True se criou, False se ja existia
+    (ou se nao coube: maquina de outro dono, teto de pendentes).
+
+    A chave e o recado entram na MESMA transacao: recado que nao coube desfaz
+    a chave tambem, e a proxima varredura tenta de novo. `nivel` e sempre
+    `leitura` — o painel avisa, nunca pede que o VOZ mude algo.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        novo = con.execute(
+            "INSERT OR IGNORE INTO voz_aviso (usuario_id, chave, criado_em)"
+            " VALUES (?,?,?)", (usuario_id, chave, agora_iso or agora())
+        ).rowcount == 1
+        if not novo:
             con.rollback()
-            return None, "teto"
-        id_ = str(uuid.uuid4())
-        con.execute(
-            "INSERT INTO voz_recado (id, usuario_id, maquina_id, criado_em,"
-            " tipo, alvo, texto, nivel, cerebro_pedido)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
-            (id_, usuario_id, maquina_id, agora_iso or agora(), tipo, alvo,
-             texto, nivel, cerebro_pedido))
+            return False
+        _id, motivo = _inserir_voz_recado(
+            con, usuario_id, maquina_id_do_voz, "avisar", alvo, texto,
+            "leitura", "auto", teto_pendentes, agora_iso)
+        if motivo is not None:
+            con.rollback()
+            return False
         con.commit()
-        return id_, None
+        return True
+    finally:
+        if fechar:
+            con.close()
+
+
+def voz_destinos_de_aviso(agora_iso: str, con=None) -> dict:
+    """`{usuario_id: maquina_id}`: para cada conta, o computador vivo (nao
+    revogado) cujo estado do VOZ e FRESCO — o mais recente se houver varios.
+    Conta sem VOZ fresco nao aparece: aviso que ninguem ouve nao se acumula."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        destinos, recebido = {}, {}
+        for l in con.execute(
+                "SELECT e.usuario_id, e.maquina_id, e.recebido_em"
+                "  FROM voz_estado e JOIN maquina m ON m.id = e.maquina_id"
+                "   AND m.usuario_id = e.usuario_id"
+                " WHERE m.revogada_em IS NULL"):
+            idade = _segundos_desde(l["recebido_em"], agora_iso)
+            if idade is None or idade > VIGILIA_LIMITE_S:
+                continue
+            uid = l["usuario_id"]
+            if uid not in destinos or idade < recebido[uid]:
+                destinos[uid], recebido[uid] = l["maquina_id"], idade
+        return destinos
+    finally:
+        if fechar:
+            con.close()
+
+
+def maquinas_que_calaram(usuario_id: int, agora_iso: str, con=None) -> list:
+    """Computadores vivos da conta que JA mediram e pararam de medir ha mais de
+    `VIGILIA_LIMITE_S`: `[{maquina_id, nome, visto_em, atraso_s}]`. Quem nunca
+    mediu (`visto_em` nulo) ou tem carimbo ilegivel nao entra: nao ha "parou"
+    sem um "mediu"."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        achadas = []
+        for m in con.execute(
+                "SELECT id, nome, visto_em FROM maquina"
+                " WHERE usuario_id = ? AND revogada_em IS NULL"
+                "   AND visto_em IS NOT NULL ORDER BY id", (usuario_id,)):
+            atraso = _segundos_desde(m["visto_em"], agora_iso)
+            if atraso is not None and atraso > VIGILIA_LIMITE_S:
+                achadas.append({"maquina_id": m["id"], "nome": m["nome"],
+                                "visto_em": m["visto_em"], "atraso_s": atraso})
+        return achadas
     finally:
         if fechar:
             con.close()
