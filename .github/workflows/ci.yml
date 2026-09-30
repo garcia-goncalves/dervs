@@ -234,6 +234,12 @@ jobs:
       - name: O menu de quatro lugares e o botao Consertar
         run: python test_menu.py
 
+      # A ponte com o DERVS-VOZ: o servidor so guarda e entrega, o estado do
+      # VOZ nao e sinal de vida (so o relatorio carimba `visto_em`), e duas
+      # contas nao se enxergam em nenhuma das cinco rotas.
+      - name: A ponte com o DERVS-VOZ
+        run: python test_voz.py
+
       # ETAPA 16 — a lista de copia do Dockerfile acompanha o que servir.py
       # importa. Entre a etapa 9 e a 14 nasceram sete arquivos de runtime e
       # nenhum entrou na imagem: ela morria no primeiro `import autenticacao` e

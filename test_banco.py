@@ -150,7 +150,8 @@ class Esquema(unittest.TestCase):
             "historico", "instalacao", "instalacao_github",
             "maquina", "medida", "pareamento", "pendencia_arquivada",
             "pendencia_estado", "pendencia_vida", "projeto_conectado",
-            "servidor", "sessao", "tarefa_linha", "usuario"])
+            "servidor", "sessao", "tarefa_linha", "usuario",
+            "voz_estado", "voz_recado"])
 
     def test_as_seis_tabelas_antigas_nao_perderam_coluna(self):
         """A etapa 8 acrescenta. So `pendencia_estado` muda, e so ganhando dono."""

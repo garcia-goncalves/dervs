@@ -59,7 +59,9 @@ import hmac
 import http.cookies
 import ipaddress
 import json
+import math
 import os
+import re
 import secrets
 import sqlite3
 import subprocess
@@ -2818,6 +2820,162 @@ class Hub(SimpleHTTPRequestHandler):
             return self._json(404, {"erro": "nao existe"})
         return self._json(200, {"ok": True, "ligado": ligado})
 
+    # ------------------------------------------------- a ponte com o DERVS-VOZ
+    #
+    # O servidor SO GUARDA E ENTREGA. Nenhuma das cinco rotas abaixo executa
+    # nada, abre shell ou SSH: o VOZ vem buscar o recado (conexao de saida dele)
+    # e quem age e ele, no computador do dono. E NENHUMA carimba `visto_em` —
+    # sinal de vida e so o relatorio (ver `_relatorio`).
+    #
+    # Balcao PROPRIO `voz`: nunca `TETO_DE_ENDERECOS` nem o de `relatorio`.
+    TETO_DE_RECADOS = 30          # pedidos do dono por origem e janela
+    TETO_DA_VOZ = 600             # pedidos da maquina: um a cada 1,5 s
+    TETO_DE_PENDENTES = 20        # recados pendentes por conta
+    RECADOS_POR_ENTREGA = 10
+    TIPOS_DE_RECADO = ("analisar", "status", "propor")
+    NIVEIS_DE_RECADO = ("leitura", "muda_estado")
+    CEREBROS_PEDIDOS = ("auto", "claude_code", "hermes")
+    # Nome de projeto: sem barra, contrabarra, dois-pontos nem `..`.
+    _ALVO_DE_RECADO = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+
+    @staticmethod
+    def _iso_valido(valor) -> bool:
+        if not isinstance(valor, str) or len(valor) > 40:
+            return False
+        try:
+            datetime.fromisoformat(valor)
+        except ValueError:
+            return False
+        return True
+
+    @staticmethod
+    def _numero_finito(valor) -> bool:
+        """Numero >= 0, finito, e nao booleano (`True` e int em Python)."""
+        return (isinstance(valor, (int, float)) and not isinstance(valor, bool)
+                and math.isfinite(valor) and valor >= 0)
+
+    def _voz_maquina(self):
+        """A maquina autenticada, depois do balcao; ou None com 401/429 dado."""
+        maquina = getattr(self, "_maquina", None)
+        if maquina is None:            # cinto, alem do guarda do despacho
+            self._json(401, {"erro": "token de maquina invalido"})
+            return None
+        if not cortina.registrar_tentativa(
+                "maquina:%d" % maquina["id"], time.time(), balcao="voz",
+                teto=self.TETO_DA_VOZ):
+            self._json(429, {"erro": "pedidos demais"})
+            return None
+        return maquina
+
+    def _voz_estado(self):
+        """O VOZ conta como esta (qual cerebro, o que esta disponivel, gasto)."""
+        maquina = self._voz_maquina()
+        if maquina is None:
+            return
+        corpo = self._corpo_json(teto=64 * 1024)
+        if corpo is None:
+            return self._json(400, {"erro": "corpo invalido"})
+        if set(corpo) != {"versao", "enviado_em", "cerebro_ativo", "cerebros",
+                          "gasto_dia_usd"}:
+            return self._json(400, {"erro": "campos desconhecidos ou faltando"})
+        cerebros = corpo["cerebros"]
+        if (corpo["versao"] != 1 or isinstance(corpo["versao"], bool)
+                or not self._iso_valido(corpo["enviado_em"])
+                or corpo["cerebro_ativo"] not in banco.VOZ_CEREBRO_ATIVO
+                or not self._numero_finito(corpo["gasto_dia_usd"])
+                or not isinstance(cerebros, dict)
+                or not set(cerebros) <= set(banco.VOZ_CEREBROS)):
+            return self._json(400, {"erro": "estado invalido"})
+        limpo = {}
+        for nome, c in cerebros.items():
+            if (not isinstance(c, dict)
+                    or not set(c) <= {"disponivel", "motivo"}
+                    or not isinstance(c.get("disponivel"), bool)
+                    or not isinstance(c.get("motivo", ""), str)
+                    or len(c.get("motivo", "")) > 200):
+                return self._json(400, {"erro": "cerebro invalido: %s" % nome})
+            limpo[nome] = {"disponivel": c["disponivel"],
+                           "motivo": c.get("motivo", "")}
+        banco.guardar_voz_estado(maquina["id"], maquina["usuario_id"], {
+            "versao": 1, "enviado_em": corpo["enviado_em"],
+            "cerebro_ativo": corpo["cerebro_ativo"], "cerebros": limpo,
+            "gasto_dia_usd": float(corpo["gasto_dia_usd"])})
+        return self._json(200, {"ok": True})
+
+    def _voz_recados(self):
+        """Os recados pendentes DESTA maquina; cada um sai uma vez so."""
+        maquina = self._voz_maquina()
+        if maquina is None:
+            return
+        return self._json(200, {"recados": banco.entregar_voz_recados(
+            maquina["id"], maquina["usuario_id"], self.RECADOS_POR_ENTREGA)})
+
+    def _voz_resultado(self):
+        """O que o VOZ fez com um recado. So responde recado DA PROPRIA maquina
+        e dono; o resto e 404, igual a inexistente."""
+        maquina = self._voz_maquina()
+        if maquina is None:
+            return
+        corpo = self._corpo_json(teto=16 * 1024)
+        if corpo is None:
+            return self._json(400, {"erro": "corpo invalido"})
+        id_, resumo = corpo.get("id"), corpo.get("resumo", "")
+        custo, duracao = corpo.get("custo_usd", 0), corpo.get("duracao_s", 0)
+        terminado = corpo.get("terminado_em") or banco.agora()
+        if (not isinstance(id_, str) or not 0 < len(id_) <= 64
+                or corpo.get("cerebro") not in banco.VOZ_CEREBRO_RESULTADO
+                or corpo.get("estado") not in banco.VOZ_ESTADOS_DE_RESULTADO
+                or not isinstance(resumo, str) or len(resumo) > 1000
+                or not self._numero_finito(custo)
+                or not self._numero_finito(duracao)
+                or not self._iso_valido(terminado)):
+            return self._json(400, {"erro": "resultado invalido"})
+        if not banco.registrar_voz_resultado(
+                id_, maquina["id"], maquina["usuario_id"], corpo["cerebro"],
+                corpo["estado"], resumo, float(custo), float(duracao),
+                terminado):
+            return self._json(404, {"erro": "nao existe"})
+        return self._json(200, {"ok": True})
+
+    def _voz(self):
+        """A ponte como o dono ve: maquinas (vigilia + estado) e recados."""
+        sessao = self._sessao()
+        if sessao is None:
+            return self._json(403, {"erro": "entre de novo"})
+        return self._json(200, banco.voz_do_usuario(sessao["usuario_id"]))
+
+    def _voz_recado(self):
+        """O dono deixa um recado para o VOZ de uma das maquinas dele.
+
+        `texto` e DADO: e guardado e entregue, nunca interpretado aqui.
+        """
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="voz",
+                                           teto=self.TETO_DE_RECADOS):
+            return self._json(429, {"erro": "recados demais; espere alguns minutos"})
+        mid, alvo, texto = corpo.get("maquina_id"), corpo.get("alvo"), corpo.get("texto", "")
+        if (not isinstance(mid, int) or isinstance(mid, bool)
+                or corpo.get("tipo") not in self.TIPOS_DE_RECADO
+                or corpo.get("nivel") not in self.NIVEIS_DE_RECADO
+                or corpo.get("cerebro_pedido") not in self.CEREBROS_PEDIDOS
+                or not isinstance(alvo, str)
+                or not self._ALVO_DE_RECADO.fullmatch(alvo) or ".." in alvo
+                or not isinstance(texto, str) or len(texto) > 500
+                or "\x00" in texto):
+            return self._json(400, {"erro": "recado invalido"})
+        id_, motivo = banco.criar_voz_recado(
+            sessao["usuario_id"], mid, corpo["tipo"], alvo, texto,
+            corpo["nivel"], corpo["cerebro_pedido"], self.TETO_DE_PENDENTES)
+        if motivo == "sem_maquina":
+            return self._json(404, {"erro": "nao existe"})
+        if motivo == "teto":
+            return self._json(429, {"erro": "ha recados demais esperando o VOZ; "
+                                            "espere ele responder"})
+        return self._json(200, {"id": id_})
+
     def _sair(self):
         # `SameSite=Lax` ja impede o cookie de acompanhar um POST de outro site,
         # entao um pedido forjado chegaria sem sessao e nao encerraria nada. O
@@ -3110,6 +3268,15 @@ ROTAS = {
     "/api/auditoria":           Rota("GET",  Hub._auditoria,        "dado"),
     "/api/auditoria/pedir":     Rota("POST", Hub._auditoria_pedir,  "dado"),
     "/api/consertar":           Rota("POST", Hub._consertar_pedir,  "dado"),
+
+    # A ponte com o DERVS-VOZ. As tres `/agente/voz/*` sao `maquina` (token do
+    # agente, so conexao de saida); as duas `/api/voz*` sao do dono. O servidor
+    # so guarda e entrega — nada daqui executa, e nenhuma carimba `visto_em`.
+    "/agente/voz/estado":       Rota("POST", Hub._voz_estado,       "maquina"),
+    "/agente/voz/recados":      Rota("GET",  Hub._voz_recados,      "maquina"),
+    "/agente/voz/resultado":    Rota("POST", Hub._voz_resultado,    "maquina"),
+    "/api/voz":                 Rota("GET",  Hub._voz,              "dado"),
+    "/api/voz/recado":          Rota("POST", Hub._voz_recado,       "dado"),
 }
 # A capa e servida a qualquer visitante, entao a folha de estilo e o teclado da
 # cortina precisam ser abertos. Estes dois nao: quem os carrega e o

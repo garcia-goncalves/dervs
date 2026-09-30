@@ -23,6 +23,7 @@ import json
 import os
 import secrets
 import sqlite3
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -584,6 +585,42 @@ CREATE TABLE IF NOT EXISTS achado (
 );
 CREATE INDEX IF NOT EXISTS ix_achado_aberto
     ON achado (usuario_id, projeto, fechado_em);
+
+-- A ponte com o DERVS-VOZ. O servidor SO GUARDA E ENTREGA: nenhuma destas
+-- linhas vira comando aqui. `voz_estado` e a ultima foto que o VOZ mandou de
+-- si mesmo (uma por maquina) e NAO e sinal de vida — `maquina.visto_em` so
+-- anda quando chega relatorio. `voz_recado` e o recado que o dono deixou para
+-- o VOZ e o que o VOZ respondeu. Toda leitura filtra por `usuario_id`.
+CREATE TABLE IF NOT EXISTS voz_estado (
+    maquina_id  INTEGER PRIMARY KEY REFERENCES maquina(id) ON DELETE CASCADE,
+    usuario_id  INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    recebido_em TEXT    NOT NULL,
+    dados       TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS voz_recado (
+    id            TEXT    PRIMARY KEY,
+    usuario_id    INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    maquina_id    INTEGER NOT NULL REFERENCES maquina(id) ON DELETE CASCADE,
+    criado_em     TEXT    NOT NULL,
+    tipo          TEXT    NOT NULL,
+    alvo          TEXT    NOT NULL,
+    texto         TEXT    NOT NULL DEFAULT '',
+    nivel         TEXT    NOT NULL,
+    cerebro_pedido TEXT   NOT NULL,
+    estado        TEXT    NOT NULL DEFAULT 'pendente'
+                  CHECK (estado IN ('pendente', 'entregue', 'feito', 'recusado',
+                                    'falhou', 'aguardando_clique')),
+    cerebro       TEXT    NOT NULL DEFAULT '',
+    resumo        TEXT    NOT NULL DEFAULT '',
+    custo_usd     REAL    NOT NULL DEFAULT 0,
+    duracao_s     REAL    NOT NULL DEFAULT 0,
+    terminado_em  TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_voz_recado_maquina
+    ON voz_recado (maquina_id, estado, criado_em);
+CREATE INDEX IF NOT EXISTS ix_voz_recado_dono
+    ON voz_recado (usuario_id, criado_em);
 """
 
 
@@ -2973,6 +3010,201 @@ def maquinas_do_usuario(usuario_id: int, con=None) -> list:
             "  FROM maquina m"
             " WHERE m.usuario_id = ? AND m.revogada_em IS NULL"
             " ORDER BY m.criado_em", (usuario_id,))]
+    finally:
+        if fechar:
+            con.close()
+
+
+# ---------------------------------------------------------- a ponte com o VOZ
+#
+# O servidor so guarda e entrega. Nada aqui executa, e nada aqui carimba
+# `maquina.visto_em`: a vigilia e o relatorio, nunca o estado do VOZ.
+
+# Acima disto a maquina e "sem dados" — o dobro do intervalo de coleta (600 s).
+VIGILIA_LIMITE_S = 1200
+VOZ_CEREBROS = ("claude_code", "hermes", "jev")
+VOZ_CEREBRO_ATIVO = ("claude_code", "hermes", "jev_triagem")
+# `jev` tambem responde como autor de um resultado: e ele que classifica.
+VOZ_CEREBRO_RESULTADO = VOZ_CEREBRO_ATIVO + ("jev",)
+VOZ_ESTADOS_FINAIS = ("feito", "recusado", "falhou")
+VOZ_ESTADOS_DE_RESULTADO = VOZ_ESTADOS_FINAIS + ("aguardando_clique",)
+
+
+def _segundos_desde(iso, agora_iso: str):
+    """Segundos entre `iso` e `agora_iso`, ou None se nao der para saber."""
+    try:
+        t = datetime.fromisoformat(iso)
+        a = datetime.fromisoformat(agora_iso)
+        if t.tzinfo is None or a.tzinfo is None:
+            return None
+        return max(0, int((a - t).total_seconds()))
+    except (TypeError, ValueError):
+        return None
+
+
+def guardar_voz_estado(maquina_id: int, usuario_id: int, dados: dict,
+                       agora_iso: str = None, con=None) -> None:
+    """Guarda o ULTIMO estado do VOZ daquela maquina. Nao toca `visto_em`."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute(
+            "INSERT INTO voz_estado (maquina_id, usuario_id, recebido_em, dados)"
+            " VALUES (?,?,?,?)"
+            " ON CONFLICT(maquina_id) DO UPDATE SET"
+            "   recebido_em = excluded.recebido_em, dados = excluded.dados",
+            (maquina_id, usuario_id, agora_iso or agora(),
+             json.dumps(dados, ensure_ascii=False)))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def criar_voz_recado(usuario_id: int, maquina_id: int, tipo: str, alvo: str,
+                     texto: str, nivel: str, cerebro_pedido: str,
+                     teto_pendentes: int, agora_iso: str = None, con=None):
+    """Enfileira um recado. `(id, None)` se entrou; `(None, motivo)` se nao.
+
+    Motivos: `"sem_maquina"` (nao existe, e de outra conta ou foi revogada — a
+    MESMA resposta para as tres) e `"teto"` (pendentes demais). A conferencia
+    de dono e a contagem estao na mesma transacao que o INSERT.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        if con.execute(
+                "SELECT 1 FROM maquina WHERE id = ? AND usuario_id = ?"
+                " AND revogada_em IS NULL", (maquina_id, usuario_id)
+        ).fetchone() is None:
+            con.rollback()
+            return None, "sem_maquina"
+        pendentes = con.execute(
+            "SELECT COUNT(*) FROM voz_recado WHERE usuario_id = ?"
+            " AND estado = 'pendente'", (usuario_id,)).fetchone()[0]
+        if pendentes >= teto_pendentes:
+            con.rollback()
+            return None, "teto"
+        id_ = str(uuid.uuid4())
+        con.execute(
+            "INSERT INTO voz_recado (id, usuario_id, maquina_id, criado_em,"
+            " tipo, alvo, texto, nivel, cerebro_pedido)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (id_, usuario_id, maquina_id, agora_iso or agora(), tipo, alvo,
+             texto, nivel, cerebro_pedido))
+        con.commit()
+        return id_, None
+    finally:
+        if fechar:
+            con.close()
+
+
+def entregar_voz_recados(maquina_id: int, usuario_id: int, limite: int = 10,
+                         con=None) -> list:
+    """Os recados pendentes DESTA maquina (no maximo `limite`), ja marcados
+    `entregue`. Quem chama recebe cada recado uma vez so."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        linhas = [dict(l) for l in con.execute(
+            "SELECT id, criado_em, tipo, alvo, texto, nivel, cerebro_pedido"
+            "  FROM voz_recado WHERE maquina_id = ? AND usuario_id = ?"
+            "   AND estado = 'pendente' ORDER BY criado_em, rowid LIMIT ?",
+            (maquina_id, usuario_id, limite))]
+        for l in linhas:
+            con.execute("UPDATE voz_recado SET estado = 'entregue'"
+                        " WHERE id = ? AND estado = 'pendente'", (l["id"],))
+        con.commit()
+        return linhas
+    finally:
+        if fechar:
+            con.close()
+
+
+def registrar_voz_resultado(id_: str, maquina_id: int, usuario_id: int,
+                            cerebro: str, estado: str, resumo: str,
+                            custo_usd: float, duracao_s: float,
+                            terminado_em: str, con=None) -> bool:
+    """Grava a resposta do VOZ. False se o recado nao e desta maquina e dono.
+
+    IDEMPOTENTE: recado em estado final (`feito`, `recusado`, `falhou`) nao e
+    sobrescrito — o repetido devolve True sem mudar nada. `aguardando_clique`
+    ainda pode virar `feito`.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        achou = con.execute(
+            "SELECT estado FROM voz_recado WHERE id = ? AND maquina_id = ?"
+            " AND usuario_id = ?", (id_, maquina_id, usuario_id)).fetchone()
+        if achou is None:
+            con.rollback()
+            return False
+        if achou["estado"] not in VOZ_ESTADOS_FINAIS:
+            con.execute(
+                "UPDATE voz_recado SET estado = ?, cerebro = ?, resumo = ?,"
+                " custo_usd = ?, duracao_s = ?, terminado_em = ?"
+                " WHERE id = ? AND maquina_id = ? AND usuario_id = ?",
+                (estado, cerebro, resumo, custo_usd, duracao_s, terminado_em,
+                 id_, maquina_id, usuario_id))
+        con.commit()
+        return True
+    finally:
+        if fechar:
+            con.close()
+
+
+def voz_do_usuario(usuario_id: int, agora_iso: str = None, con=None) -> dict:
+    """O que o painel mostra da ponte: maquinas vivas da conta e 20 recados.
+
+    LEI 2: `vigilia` so diz `viva` quando ha `visto_em` de ate
+    `VIGILIA_LIMITE_S`. Sem carimbo, ou carimbo velho, ou carimbo ilegivel, e
+    `sem_dados` — nunca um verde sem dado e nunca um "morta" inventado.
+    `fresco` do estado segue a mesma regra sobre `recebido_em`.
+    """
+    agora_iso = agora_iso or agora()
+    fechar = con is None
+    con = con or conectar()
+    try:
+        maquinas = []
+        for m in con.execute(
+                "SELECT m.id, m.nome, m.visto_em, e.recebido_em, e.dados"
+                "  FROM maquina m LEFT JOIN voz_estado e"
+                "    ON e.maquina_id = m.id AND e.usuario_id = m.usuario_id"
+                " WHERE m.usuario_id = ? AND m.revogada_em IS NULL"
+                " ORDER BY m.criado_em, m.id", (usuario_id,)):
+            atraso = _segundos_desde(m["visto_em"], agora_iso)
+            estado = None
+            if m["recebido_em"] is not None:
+                try:
+                    d = json.loads(m["dados"])
+                except ValueError:
+                    d = None
+                if isinstance(d, dict):
+                    idade = _segundos_desde(m["recebido_em"], agora_iso)
+                    estado = {
+                        "recebido_em": m["recebido_em"],
+                        "cerebro_ativo": d.get("cerebro_ativo"),
+                        "cerebros": d.get("cerebros"),
+                        "gasto_dia_usd": d.get("gasto_dia_usd"),
+                        "fresco": idade is not None and idade <= VIGILIA_LIMITE_S,
+                    }
+            maquinas.append({
+                "maquina_id": m["id"], "nome": m["nome"],
+                "visto_em": m["visto_em"], "atraso_s": atraso,
+                "vigilia": ("viva" if atraso is not None
+                            and atraso <= VIGILIA_LIMITE_S else "sem_dados"),
+                "estado": estado})
+        recados = [dict(l) for l in con.execute(
+            "SELECT id, criado_em, maquina_id, tipo, alvo, nivel,"
+            "       cerebro_pedido, estado, cerebro, resumo, custo_usd,"
+            "       terminado_em"
+            "  FROM voz_recado WHERE usuario_id = ?"
+            " ORDER BY criado_em DESC, rowid DESC LIMIT 20", (usuario_id,))]
+        return {"maquinas": maquinas, "recados": recados}
     finally:
         if fechar:
             con.close()
