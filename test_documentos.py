@@ -587,6 +587,126 @@ class OLeitorDoProjeto(unittest.TestCase):
                          "nao_verificado")
 
 
+class OLeitorParaDeAbrirArquivoAoChegarNoTeto(unittest.TestCase):
+    """Achado de revisao: o leitor abria TODOS os briefings e so depois cortava
+    em 30. Um repositorio com 5.000 pastas de slug valido faria o agente ler
+    5.000 arquivos por coleta."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.raiz = Path(self.tmp.name)
+
+    def pastas(self, n, texto):
+        base = self.raiz / "docs" / "esteira"
+        for i in range(n):
+            pasta = base / ("p%04d" % i)
+            pasta.mkdir(parents=True)
+            (pasta / "briefing.md").write_bytes(texto.encode("utf-8"))
+
+    def contar_aberturas(self):
+        abertos = []
+        original = Path.open
+
+        def espia(self, *a, **k):
+            if self.name == "briefing.md":
+                abertos.append(self)
+            return original(self, *a, **k)
+
+        Path.open = espia
+        try:
+            r = documentos.ler_projeto(self.raiz)
+        finally:
+            Path.open = original
+        return r, len(abertos)
+
+    def test_500_pastas_com_criterio_abrem_no_maximo_31(self):
+        self.pastas(500, "## criterio_de_aceitacao\n- [ ] c\n")
+        r, abertos = self.contar_aberturas()
+        self.assertLessEqual(abertos, documentos.MAX_DOCUMENTOS + 1)
+        self.assertEqual(len(r["documentos"]), documentos.MAX_DOCUMENTOS)
+        self.assertTrue(r["documentos"][-1]["cortado"])
+
+    def test_500_pastas_sem_criterio_tambem_tem_teto_de_abertura(self):
+        """Briefing antigo nao entra na lista, mas abrir custa igual."""
+        self.pastas(500, "# Briefing antigo\n\nsem secao nenhuma\n")
+        r, abertos = self.contar_aberturas()
+        self.assertLessEqual(abertos, documentos.MAX_VARRIDOS)
+        self.assertEqual(r["documentos"], [])
+
+
+class OLeitorNaoSaiDoRepositorio(unittest.TestCase):
+    """`docs` ou `docs/esteira` como link simbolico (ou junction no Windows)
+    levariam o leitor a um diretorio de FORA, e o conteudo de la entraria no
+    relatorio."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.raiz = base / "repo"
+        self.fora = base / "fora"
+        (self.fora / "x").mkdir(parents=True)
+        (self.fora / "x" / "briefing.md").write_bytes(VALIDO.encode("utf-8"))
+        self.raiz.mkdir()
+
+    def recusou(self, r):
+        self.assertEqual([c for d in r["documentos"] for c in d["criterios"]],
+                         [], "leu briefing de fora do repositorio")
+        self.assertEqual(len(r["documentos"]), 1)
+        self.assertTrue(r["documentos"][0]["erros"], "recusou calado")
+
+    def test_esteira_como_link_para_fora_e_recusada_com_erro(self):
+        (self.raiz / "docs").mkdir()
+        try:
+            (self.raiz / "docs" / "esteira").symlink_to(
+                self.fora, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("sem privilegio para criar link simbolico")
+        self.recusou(documentos.ler_projeto(self.raiz))
+
+    def test_docs_como_link_para_fora_e_recusada_com_erro(self):
+        (self.fora / "esteira").mkdir()
+        (self.fora / "esteira" / "x").mkdir()
+        (self.fora / "esteira" / "x" / "briefing.md").write_bytes(
+            VALIDO.encode("utf-8"))
+        try:
+            (self.raiz / "docs").symlink_to(self.fora,
+                                            target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("sem privilegio para criar link simbolico")
+        self.recusou(documentos.ler_projeto(self.raiz))
+
+    def test_resolve_que_aponta_para_fora_e_recusado(self):
+        """Nao depende de privilegio: o `resolve()` e que e simulado (e o que
+        uma junction do Windows, ou um `..`, faria)."""
+        (self.raiz / "docs" / "esteira" / "x").mkdir(parents=True)
+        (self.raiz / "docs" / "esteira" / "x" / "briefing.md").write_bytes(
+            VALIDO.encode("utf-8"))
+        original = Path.resolve
+        fora = self.fora
+
+        def resolve_mentiroso(self, *a, **k):
+            if self.name == "esteira":
+                return original(fora, *a, **k)
+            return original(self, *a, **k)
+
+        Path.resolve = resolve_mentiroso
+        try:
+            r = documentos.ler_projeto(self.raiz)
+        finally:
+            Path.resolve = original
+        self.recusou(r)
+
+    def test_repositorio_normal_segue_lendo(self):
+        (self.raiz / "docs" / "esteira" / "x").mkdir(parents=True)
+        (self.raiz / "docs" / "esteira" / "x" / "briefing.md").write_bytes(
+            VALIDO.encode("utf-8"))
+        r = documentos.ler_projeto(self.raiz)
+        self.assertEqual(len(r["documentos"][0]["criterios"]), 3)
+        self.assertEqual(r["documentos"][0]["erros"], [])
+
+
 class OModuloNaoImportaOQueNaoPode(unittest.TestCase):
     def test_importa_sem_banco_execucao_fila(self):
         """Em processo novo: `servir.py` e `coletar.py` importam este modulo, e
