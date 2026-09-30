@@ -829,3 +829,41 @@ main { padding-bottom: var(--e12); }
      espremerem o nome até ele virar uma coluna de letras. */
   .linha__nome { flex: 1 1 100%; }
 }
+
+/* ------------------------------------------------ Vigília e cérebros (VOZ)
+   Só layout e peso. Nenhuma cor nova: o selo de vigília é o MESMO selo de
+   saúde (`saudavel` para "Vigiando", `sem_dados` para o resto), e o destaque
+   do aviso de clique é por CONTORNO e PESO, não por `--estado-*`. */
+.voz { margin-top: var(--e8); }
+.voz .nome { word-break: break-word; font-size: var(--fs-destaque); font-weight: var(--peso-medio); }
+.voz__maquina { display: flex; flex-direction: column; gap: var(--e2); min-width: 0; }
+.voz__vigilia { display: flex; gap: var(--e3); flex-wrap: wrap; align-items: center; }
+.voz__cerebros { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--e2); }
+.voz__cerebros li { min-width: 0; word-break: break-word; }
+.voz__form { display: flex; flex-direction: column; gap: var(--e3); margin: var(--e6) 0; max-width: 40rem; }
+.voz__form select, .voz__form input, .voz__form textarea { min-height: 44px; max-width: 100%; }
+.voz__aviso {
+  margin: 0;
+  padding: var(--e3);
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: var(--raio);
+  background: var(--fundo);
+}
+.voz__aviso[data-forte="sim"] {
+  border-width: var(--traco-forte);
+  font-weight: var(--peso-forte);
+  color: var(--texto);
+}
+.voz__erro {
+  margin: 0;
+  padding: var(--e3);
+  border: var(--traco-forte) solid var(--borda-forte);
+  border-radius: var(--raio);
+  font-weight: var(--peso-forte);
+}
+.voz__recados > li { flex-direction: column; align-items: flex-start; gap: var(--e1); word-break: break-word; }
+.voz__resumo { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.voz select:focus-visible, .voz input:focus-visible, .voz textarea:focus-visible {
+  outline: var(--foco-largura) solid var(--acao);
+  outline-offset: var(--foco-afastamento);
+}

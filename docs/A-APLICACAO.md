@@ -202,6 +202,35 @@ recomendada por vez, com o porquê junto**, e a lista completa atrás de um cliq
 
 Uma lista de 203 alertas não é informação: é ruído que ensina o dono a fechar a aba.
 
+### 5.5. O DERVS-VOZ — o braço de voz e de terminal (30/09/2026)
+
+O **DERVS-VOZ** é um programa à parte, no computador do dono, que conversa por voz
+e tem o **terminal SSH** do sistema. O painel e o VOZ são um sistema só, ligado por
+uma ponte autenticada com o mesmo token de computador do agente:
+
+- o VOZ **vigia**: manda ao painel o que mediu e quais cérebros tem à mão;
+- o painel **enfileira recados** para ele (analisar, dar o estado, propor), na tela
+  Conectar, seção **Vigília e cérebros**;
+- o VOZ **executa** o que o dono aprova **clicando no VOZ**, e devolve o resultado.
+
+**O terminal SSH mora no VOZ e nunca no painel web.** Decisão de segurança: terminal
+dentro de um painel exposto à internet é a porta que este sistema jurou não abrir
+(§7). Nenhuma rota do servidor abre shell, terminal ou SSH, e os testes que varrem as
+rotas cobram isso. O painel só deixa um recado na fila; **aprovar no painel não basta**
+para nada que mude alguma coisa — o clique final é no VOZ.
+
+Os três **cérebros** que o VOZ pode usar, cada um no papel que faz bem:
+
+| Cérebro | Papel |
+|---|---|
+| **Claude Code** | o cérebro que lê e mexe no código |
+| **Hermes Agent** | cérebro alternativo atrás do mesmo contrato; desligado até alguém instalá-lo |
+| **JEV** | **triagem rápida**: decide se algo é urgente. Não conversa, e não é cérebro de trabalho |
+
+Dado de paciente, chave e caminho protegido não vão para cérebro de terceiros. Quando
+o VOZ cala, o painel diz **sem dados** — nunca "Vigiando" sem medição recente (20
+minutos). O briefing é `docs/esteira/ecossistema-voz/briefing.md`.
+
 ## 6. Como é feito por dentro
 
 **Três peças, com fronteira dura entre elas.** A fronteira é o desenho principal, não

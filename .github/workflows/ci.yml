@@ -234,6 +234,11 @@ jobs:
       - name: O menu de quatro lugares e o botao Consertar
         run: python test_menu.py
 
+      # A SECAO "Vigilia e cerebros" (ponte com o DERVS-VOZ): sem_dados nunca
+      # verde, cerebro so disponivel com dado fresco, aviso do clique, textContent.
+      - name: A tela Vigilia e cerebros
+        run: python test_voz_tela.py
+
       # ETAPA 16 — a lista de copia do Dockerfile acompanha o que servir.py
       # importa. Entre a etapa 9 e a 14 nasceram sete arquivos de runtime e
       # nenhum entrou na imagem: ela morria no primeiro `import autenticacao` e

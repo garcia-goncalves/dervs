@@ -180,7 +180,7 @@ function navegar() {
                          pintarConectar();
                          olharOsComputadores(); olharOsServidores();
                          olharOsEnderecos(); olharOGithub();
-                         carregarComputadores(); break;
+                         carregarComputadores(); carregarVoz(); break;
     default:             mostrar("painel"); pintarPainel(); break;
   }
   window.scrollTo(0, 0);
@@ -1941,6 +1941,217 @@ async function gerarNumero() {
     $("#numero-prazo").textContent = "Este código venceu. Gere outro.";
   }, Math.max(1, d.minutos) * 60000);
 }
+
+/* ============================================ Vigília e cérebros ========= */
+/* A ponte com o DERVS-VOZ. Regras desta seção, todas de propósito:
+
+   - TUDO que vem de `/api/voz` é dado hostil (o nome do computador, o motivo de
+     um cérebro, o resumo de um recado saem do OUTRO computador): entra só por
+     `textContent`, nunca por `innerHTML`.
+   - A vigília tem dois estados e só um deles é verde. Qualquer valor que não
+     seja exatamente "viva" é "sem dados" — falha fechada.
+   - Cérebro só aparece como disponível se o VOZ disse isso E a informação é
+     fresca. Sem isso, é "sem informação do VOZ", nunca "disponível".
+   - Esta tela só manda recado. Nada aqui executa coisa alguma. */
+
+const VOZ_CEREBROS = [
+  ["claude_code", "Claude Code", "o cérebro que lê e mexe no código."],
+  ["hermes", "Hermes Agent", "cérebro alternativo, atrás do mesmo contrato do Claude Code."],
+  ["jev", "JEV", "triagem rápida: decide se algo é urgente; não conversa."]
+];
+
+const VOZ_ESTADOS = {
+  pendente:   "pendente, ainda não chegou ao VOZ",
+  entregue:   "entregue ao VOZ",
+  feito:      "feito",
+  recusado:   "recusado",
+  falhou:     "falhou",
+  aguardando: "aguardando seu clique no VOZ",
+  aguardando_clique: "aguardando seu clique no VOZ"
+};
+
+let VOZ = null;   // o último /api/voz inteiro; null = nunca chegou
+
+function vozEl(tag, classe, texto) {
+  const e = document.createElement(tag);
+  if (classe) e.className = classe;
+  if (texto !== undefined) e.textContent = texto;   // textContent: dado hostil
+  return e;
+}
+
+function vozCartao(m) {
+  const cartao = vozEl("div", "cartao voz__maquina");  cartao.append(vozEl("div", "nome", m.nome || "computador sem nome"));
+
+  /* A VIGÍLIA. Três casos e só um é verde. */
+  const est = m.estado || null;
+  const nunca = !m.visto_em;
+  const viva = !nunca && m.vigilia === "viva";
+  const linha = vozEl("div", "voz__vigilia");
+  linha.append(selo(viva ? "saudavel" : "sem_dados",
+    { como: "span", texto: nunca ? "Ainda não mediu" : viva ? "Vigiando" : "Sem dados" }));
+  linha.append(vozEl("span", "carimbo",
+    nunca ? "este computador ainda não mandou nenhuma medição"
+          : "última medição " + haQuanto(m.visto_em)));
+  cartao.append(linha);
+  if (!nunca && !viva) {
+    cartao.append(vozEl("p", "mole",
+      "Não recebi medição nos últimos 20 minutos. Isso não quer dizer que está "
+      + "tudo bem — quer dizer que não sei. Abra o DERVS-VOZ nesse computador."));
+  }
+
+  /* OS CÉREBROS. Só vale o que o VOZ disse E é fresco. */
+  const confiavel = !!(est && est.fresco === true && est.cerebros);
+  const ul = vozEl("ul", "voz__cerebros");
+  for (const [chave, nome, papel] of VOZ_CEREBROS) {
+    const li = vozEl("li");
+    const c = confiavel ? est.cerebros[chave] : null;
+    let situacao, tom;
+    if (!c) { situacao = "sem informação do VOZ"; tom = "sem_info"; }
+    else if (c.disponivel === true) { situacao = "disponível"; tom = "ok"; }
+    else { situacao = "indisponível" + (c.motivo ? ": " + c.motivo : ""); tom = "fora"; }
+    li.dataset.cerebro = chave;
+    li.dataset.situacao = tom;
+    const rotulo = vozEl("strong", null, nome);
+    const ativo = confiavel && est.cerebro_ativo === chave;
+    li.append(rotulo, vozEl("span", "voz__situacao",
+      " — " + situacao + (ativo ? " (em uso)" : "")));
+    li.append(vozEl("div", "carimbo", papel));
+    ul.append(li);
+  }
+  cartao.append(ul);
+  if (confiavel && typeof est.gasto_dia_usd === "number") {
+    cartao.append(vozEl("p", "carimbo",
+      "gasto de hoje: US$ " + est.gasto_dia_usd.toLocaleString("pt-BR",
+        { minimumFractionDigits: 2, maximumFractionDigits: 4 })));
+  }
+  return cartao;
+}
+
+function vozRecado(r) {
+  const li = vozEl("li");
+  li.style.display = "block";
+  const cab = vozEl("div", "nome",
+    (r.tipo || "recado") + (r.alvo ? " — " + r.alvo : ""));
+  const est = VOZ_ESTADOS[r.estado] || ("estado: " + (r.estado || "desconhecido"));
+  const meta = vozEl("div", "carimbo",
+    est + " · " + haQuanto(r.criado_em)
+    + (r.cerebro ? " · respondeu: " + r.cerebro : "")
+    + (typeof r.custo_usd === "number"
+        ? " · US$ " + r.custo_usd.toLocaleString("pt-BR",
+            { minimumFractionDigits: 2, maximumFractionDigits: 4 })
+        : ""));
+  li.dataset.estado = r.estado || "";
+  li.append(cab, meta);
+  if (r.resumo) li.append(vozEl("p", "voz__resumo", r.resumo));
+  return li;
+}
+
+function pintarVoz(situacao) {
+  const cartoes = $("#voz-computadores");
+  const recados = $("#voz-recados");
+  const sel = $("#voz-maquina");
+  cartoes.textContent = "";
+  recados.textContent = "";
+
+  if (situacao === "carregando") {
+    cartoes.append(vozEl("p", "mole", "Carregando o que o DERVS-VOZ contou…"));
+    recados.append(vozEl("li", "mole", "Carregando…"));
+    return;
+  }
+  if (situacao === "erro" || !VOZ) {
+    const aviso = vozEl("div", "vazio");
+    aviso.append(vozEl("p", null,
+      "Não consegui ler a vigília. Isso não quer dizer que o VOZ está parado — "
+      + "quer dizer que não olhei."));
+    const b = vozEl("button", "botao", "Tentar de novo");
+    b.type = "button";
+    b.addEventListener("click", carregarVoz);
+    aviso.append(b);
+    cartoes.append(aviso);
+    recados.append(vozEl("li", "mole", "Não consegui ler os recados."));
+    $("#voz-carimbo").textContent = "";
+    return;
+  }
+
+  const maquinas = VOZ.maquinas || [];
+  if (!maquinas.length) {
+    cartoes.append(vozEl("p", "mole",
+      "Nenhum computador pareado. Gere o número acima e rode o agente; "
+      + "depois o DERVS-VOZ aparece aqui."));
+  }
+  for (const m of maquinas) cartoes.append(vozCartao(m));
+  $("#voz-carimbo").textContent = "lido " + haQuanto(new Date().toISOString());
+
+  /* O seletor do formulário acompanha a lista, sem perder a escolha. */
+  const antes = sel.value;
+  sel.textContent = "";
+  for (const m of maquinas) {
+    const o = vozEl("option", null, m.nome || "computador sem nome");
+    o.value = m.maquina_id;
+    sel.append(o);
+  }
+  if (antes && maquinas.some(m => m.maquina_id === antes)) sel.value = antes;
+  $("#voz-enviar").disabled = !maquinas.length;
+
+  const lista = VOZ.recados || [];
+  if (!lista.length) recados.append(vozEl("li", "mole", "Nenhum recado mandado ainda."));
+  for (const r of lista) recados.append(vozRecado(r));
+}
+
+async function carregarVoz() {
+  if (!VOZ) pintarVoz("carregando");
+  try {
+    const r = await fetch("/api/voz");
+    if (!r.ok) throw new Error("status " + r.status);
+    VOZ = await r.json();
+    pintarVoz();
+  } catch {
+    VOZ = null;
+    pintarVoz("erro");
+  }
+}
+
+/* Nível `muda_estado` põe o aviso em destaque (contorno forte e negrito, não
+   cor: `--estado-*` é do selo de saúde). O aviso existe nos dois níveis. */
+function atualizarAvisoVoz() {
+  $("#voz-aviso").dataset.forte = $("#voz-nivel").value === "muda_estado" ? "sim" : "nao";
+}
+
+async function mandarRecadoVoz(ev) {
+  ev.preventDefault();
+  const erro = $("#voz-erro");
+  erro.hidden = true;
+  const botao = $("#voz-enviar");
+  botao.disabled = true;
+  try {
+    const r = await escrever("/api/voz/recado", {
+      maquina_id: $("#voz-maquina").value,
+      tipo: $("#voz-tipo").value,
+      alvo: $("#voz-alvo").value.trim(),
+      texto: $("#voz-texto").value.trim(),
+      nivel: $("#voz-nivel").value,
+      cerebro_pedido: $("#voz-cerebro").value
+    });
+    if (!r.ok) {
+      let d = {};
+      try { d = await r.json(); } catch { /* corpo não-JSON: cai na frase padrão */ }
+      erro.textContent = d.erro || "Não consegui mandar o recado. Tente de novo.";
+      erro.hidden = false;
+      return;
+    }
+    $("#voz-texto").value = "";
+    recado("recado mandado. Ele chega ao VOZ na próxima vez que ele perguntar.");
+    await carregarVoz();
+  } catch {
+    erro.textContent = "Não consegui falar com o servidor. Tente de novo.";
+    erro.hidden = false;
+  } finally {
+    botao.disabled = !(VOZ && (VOZ.maquinas || []).length);
+  }
+}
+
+$("#voz-form").addEventListener("submit", mandarRecadoVoz);
+$("#voz-nivel").addEventListener("change", atualizarAvisoVoz);
 
 /* ========================================== Formas de entrar ============= */
 /* Portado da etapa 9 sem mudar a criptografia: só o vocabulário e o visual. */
