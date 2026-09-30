@@ -214,9 +214,39 @@ CORES = (VERMELHO, VERDE)
 # `test_tarefas_nao_publicam.py` fica vermelho.
 NUNCA_VERDE = frozenset({"publicar"})
 
+# Duas familias DIFERENTES, e misturar as duas e o erro que este conjunto
+# existe para evitar. `NUNCA_VERDE` e recusado em `pode_rodar` ANTES da
+# aprovacao: a regra nunca anda, nem com o clique do dono. `desenvolver` tem de
+# andar COM o clique — so nao pode andar sem ele, e nao pode ser repintada de
+# verde. Por isso ela NAO entra em `NUNCA_VERDE` (nunca rodaria): entra aqui.
+SEMPRE_VERMELHA = frozenset({"desenvolver"})
+
+# Projetos em que o DERVS nao desenvolve nada (mais todo nome com "nexa", que e
+# do Andre). Somam-se a `PROJETOS_BLOQUEADOS`: dado de paciente, os cinco da
+# TineHost (revenda, sem runner) e o `aninha-site`. Comparacao em minusculas.
+PROJETOS_SEM_DESENVOLVIMENTO = frozenset({
+    "ajudei-saude", "medconsultoria", "ccvp", "zacareli", "sophia",
+    "camargo-e-soares", "aninha-site"})
+
 # Toda regra nasce vermelha. Nao ha lista de regras verdes escrita aqui: o
 # padrao e a recusa, e o que existe e o registro do que o dono REPINTOU.
 # Apagar a linha da repintura volta ao seguro, em vez de abrir o caminho.
+
+
+def projeto_pode_desenvolver(nome) -> bool:
+    """O DERVS pode desenvolver neste projeto? Falha fechada: duvida e NAO.
+
+    Nome que nao e texto, vazio, bloqueado, da TineHost, do Andre (qualquer
+    nome com "nexa") ou o `aninha-site` dao `False`. A comparacao e sempre em
+    minusculas: houve um teste provando que `Ajudei-Saude` escapava de outra
+    lista igual a esta.
+    """
+    if not isinstance(nome, str):
+        return False
+    n = nome.strip().lower()
+    if not n or "nexa" in n:
+        return False
+    return n not in PROJETOS_BLOQUEADOS and n not in PROJETOS_SEM_DESENVOLVIMENTO
 
 
 def cor_da_regra(regra: str, repinturas=None) -> str:
@@ -226,7 +256,7 @@ def cor_da_regra(regra: str, repinturas=None) -> str:
     Regra ausente, cor desconhecida, dicionario vazio, `None` — tudo vermelho.
     """
     nome = (regra or "").strip()
-    if not nome or nome in NUNCA_VERDE:
+    if not nome or nome in NUNCA_VERDE or nome in SEMPRE_VERMELHA:
         return VERMELHO
     cor = (repinturas or {}).get(nome)
     return VERDE if cor == VERDE else VERMELHO
@@ -241,7 +271,7 @@ def pode_repintar(regra: str, cor: str) -> bool:
     nome = (regra or "").strip()
     if not nome or cor not in CORES:
         return False
-    if cor == VERDE and nome in NUNCA_VERDE:
+    if cor == VERDE and (nome in NUNCA_VERDE or nome in SEMPRE_VERMELHA):
         return False
     return True
 
@@ -348,6 +378,12 @@ def pode_rodar(tarefa: dict, gasto_usd=0.0, agora_iso: str = "",
     # levanta o NUNCA_VERDE. Achado pelo vigia irmao em 29/08/2026.
     if regra in NUNCA_VERDE:
         return (False, "a regra \"%s\" nunca anda sozinha" % regra)
+    # A segunda barreira de `desenvolver`: o servidor ja recusou o projeto ao
+    # receber o pedido, mas o AGENTE pergunta de novo aqui, e nao abre sessao em
+    # projeto que nao se desenvolve mesmo que a linha da fila diga o contrario.
+    if regra in SEMPRE_VERMELHA and not projeto_pode_desenvolver(
+            t.get("projeto")):
+        return (False, "o DERVS nao desenvolve neste projeto")
     cor = cor_da_regra(regra, repinturas)
     if cor != VERDE and not (t.get("aprovado_em") or "").strip():
         return (False, "esta tarefa esta vermelha e espera o seu clique")

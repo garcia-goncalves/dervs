@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import banco
+import documentos
 
 
 # A TELINHA PISCANDO NA TELA DO DONO (24/08/2026). O painel roda sob pythonw.exe,
@@ -870,6 +871,22 @@ def coleta_esteira(repo: Path) -> list:
     return trabalhos
 
 
+def coleta_documentacao(repo: Path):
+    """Os criterios de aceitacao documentados no repositorio, ou `None`.
+
+    `None` quer dizer "nao consegui ler", e o chamador OMITE a chave: o painel
+    mostra "sem dados", que e outra coisa que "sem documentacao" (que e a
+    resposta `{"documentos": []}`). Zerar uma leitura que falhou apagaria o
+    problema real — a Lei 2 do painel. O formato, os tetos (o JSON da chave
+    nunca passa de 24 KiB, porque o servidor descarta o projeto INTEIRO acima
+    de 64 KiB) e a lista de provas moram em `documentos.py`.
+    """
+    try:
+        return documentos.ler_projeto(repo)
+    except Exception:                      # noqa: BLE001 — medir vale mais
+        return None
+
+
 # ------------------------------------------------------------------ infra ao vivo
 def coleta_docker(executor=None) -> list | None:
     """Os conteineres de pe. None quando NAO DEU para perguntar ao Docker.
@@ -1027,6 +1044,7 @@ def medir() -> dict:
                                   for t in alvos))
                 or repo.name.lower().replace("-", "") == (c["projeto"] or "").lower().replace("-", "")]
 
+        documentacao = coleta_documentacao(repo)
         projetos.append({
             "nome": repo.name,
             "caminho": str(repo),
@@ -1054,6 +1072,9 @@ def medir() -> dict:
             "portas": [{"porta": p, "vivo": deve_testar(p, portas) and porta_viva(p)}
                        for p in caso.get("portas", [])],
         })
+        # A chave so existe quando a leitura deu certo: ausente e "sem dados".
+        if documentacao is not None:
+            projetos[-1]["documentacao"] = documentacao
 
     avisos = avisos_das_raizes()
     if portas is None:

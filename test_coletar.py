@@ -2104,6 +2104,73 @@ class OColetorLEOEnderecoDoBancoDeVerdade(unittest.TestCase):
                         "com endereco gravado, a publicacao passa a ser cobrada")
 
 
+class ADocumentacaoEntraNaMedicao(unittest.TestCase):
+    """A chave `documentacao` de cada projeto, pelo `coletar.medir()` de verdade.
+
+    Ausente quer dizer "nao consegui ler" (o painel mostra "sem dados"); presente
+    e vazia quer dizer "li, e nao ha documentacao". Confundir as duas e a
+    mentira que a Lei 2 proibe: por isso o caso da leitura que FALHA existe.
+    """
+
+    def _medir(self, ler_projeto=None):
+        import banco
+        import documentos
+        casa = tempfile.TemporaryDirectory()
+        self.addCleanup(casa.cleanup)
+        projeto = Path(casa.name) / "projeto-d"
+        pasta = projeto / "docs" / "esteira" / "coisa"
+        pasta.mkdir(parents=True)
+        (pasta / "briefing.md").write_text(
+            "Aprovado em: 2026-09-30\n## criterio_de_aceitacao\n"
+            "- [ ] primeiro\n- [x] segundo\n", encoding="utf-8")
+        arquivo_casos = Path(casa.name) / "casos.json"
+        arquivo_casos.write_text("{}", encoding="utf-8")
+        trocas = [
+            (coletar, "CASOS", arquivo_casos),
+            (coletar, "pastas_de_projeto", lambda: [projeto]),
+            (coletar, "coleta_docker", lambda: []),
+            (coletar, "portas_escutando", lambda: set()),
+            (coletar, "abertos_no_editor", lambda: set()),
+            (banco, "conectar", lambda *a, **k: _ConexaoDeMentira()),
+            (banco, "conta_local", lambda *a, **k: 1),
+            (banco, "um_endereco_por_projeto", lambda uid, con=None: {})]
+        if ler_projeto is not None:
+            trocas.append((documentos, "ler_projeto", ler_projeto))
+        for alvo, nome, valor in trocas:
+            self.addCleanup(setattr, alvo, nome, getattr(alvo, nome))
+            setattr(alvo, nome, valor)
+        return coletar.medir()["projetos"][0]
+
+    def test_a_medicao_leva_os_criterios_crus_e_nenhum_percentual(self):
+        p = self._medir()
+        doc = p["documentacao"]
+        self.assertEqual(doc["versao"], 1)
+        self.assertEqual([d["slug"] for d in doc["documentos"]], ["coisa"])
+        c = doc["documentos"][0]["criterios"]
+        self.assertEqual([(x["texto"], x["marcado"]) for x in c],
+                         [("primeiro", False), ("segundo", True)])
+        self.assertNotIn("percentual", json.dumps(doc))
+
+    def test_leitura_que_falha_omite_a_chave_e_nao_zera(self):
+        def quebra(raiz):
+            raise OSError("disco sumiu")
+        p = self._medir(ler_projeto=quebra)
+        self.assertNotIn("documentacao", p,
+                         "leitura que falhou virou 'sem documentacao'")
+
+    def test_sem_pasta_de_esteira_e_lista_vazia_e_nao_ausente(self):
+        def vazio(raiz):
+            return {"versao": 1, "documentos": []}
+        p = self._medir(ler_projeto=vazio)
+        self.assertEqual(p["documentacao"], {"versao": 1, "documentos": []})
+
+    def test_o_projeto_cabe_no_teto_do_servidor(self):
+        import banco
+        p = self._medir()
+        self.assertLess(len(json.dumps(p["documentacao"]).encode("utf-8")),
+                        banco.MAX_BYTES_POR_PROJETO)
+
+
 class OIpEFIXADOEntreAPeneiraEAConexao(unittest.TestCase):
     """O achado bloqueante da revisao de seguranca de 01/09/2026.
 
