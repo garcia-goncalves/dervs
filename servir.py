@@ -2849,6 +2849,18 @@ class Hub(SimpleHTTPRequestHandler):
         return True
 
     @staticmethod
+    def _texto_gravavel(valor) -> bool:
+        """Texto que o SQLite aceita: um surrogate solto (`"\ud800"`) e JSON
+        valido, passa pelo tamanho, e estoura UnicodeEncodeError no INSERT."""
+        if not isinstance(valor, str):
+            return False
+        try:
+            valor.encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+        return True
+
+    @staticmethod
     def _numero_finito(valor) -> bool:
         """Numero >= 0, finito, e nao booleano (`True` e int em Python)."""
         if not isinstance(valor, (int, float)) or isinstance(valor, bool):
@@ -2895,7 +2907,7 @@ class Hub(SimpleHTTPRequestHandler):
             if (not isinstance(c, dict)
                     or not set(c) <= {"disponivel", "motivo"}
                     or not isinstance(c.get("disponivel"), bool)
-                    or not isinstance(c.get("motivo", ""), str)
+                    or not self._texto_gravavel(c.get("motivo", ""))
                     or len(c.get("motivo", "")) > 200):
                 return self._json(400, {"erro": "cerebro invalido: %s" % nome})
             limpo[nome] = {"disponivel": c["disponivel"],
@@ -2926,10 +2938,10 @@ class Hub(SimpleHTTPRequestHandler):
         id_, resumo = corpo.get("id"), corpo.get("resumo", "")
         custo, duracao = corpo.get("custo_usd", 0), corpo.get("duracao_s", 0)
         terminado = corpo.get("terminado_em") or banco.agora()
-        if (not isinstance(id_, str) or not 0 < len(id_) <= 64
+        if (not self._texto_gravavel(id_) or not 0 < len(id_) <= 64
                 or corpo.get("cerebro") not in banco.VOZ_CEREBRO_RESULTADO
                 or corpo.get("estado") not in banco.VOZ_ESTADOS_DE_RESULTADO
-                or not isinstance(resumo, str) or len(resumo) > 1000
+                or not self._texto_gravavel(resumo) or len(resumo) > 1000
                 or not self._numero_finito(custo)
                 or not self._numero_finito(duracao)
                 or not self._iso_valido(terminado)):
@@ -2961,13 +2973,15 @@ class Hub(SimpleHTTPRequestHandler):
                                            teto=self.TETO_DE_RECADOS):
             return self._json(429, {"erro": "recados demais; espere alguns minutos"})
         mid, alvo, texto = corpo.get("maquina_id"), corpo.get("alvo"), corpo.get("texto", "")
+        # A faixa de INTEGER do SQLite: `10**30` e int valido e estourava no banco.
         if (not isinstance(mid, int) or isinstance(mid, bool)
+                or not -2**63 <= mid < 2**63
                 or corpo.get("tipo") not in self.TIPOS_DE_RECADO
                 or corpo.get("nivel") not in self.NIVEIS_DE_RECADO
                 or corpo.get("cerebro_pedido") not in self.CEREBROS_PEDIDOS
                 or not isinstance(alvo, str)
                 or not self._ALVO_DE_RECADO.fullmatch(alvo) or ".." in alvo
-                or not isinstance(texto, str) or len(texto) > 500
+                or not self._texto_gravavel(texto) or len(texto) > 500
                 or "\x00" in texto):
             return self._json(400, {"erro": "recado invalido"})
         id_, motivo = banco.criar_voz_recado(

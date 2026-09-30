@@ -559,6 +559,23 @@ class AServidorDeVerdade(unittest.TestCase):
         r = self.maquina(self.t_a1, "/agente/voz/estado", "POST", bruto=bruto.encode())
         self.assertEqual(r.status, 400, r.corpo)
 
+    def test_entrada_que_o_sqlite_nao_aceita_e_400_e_nao_500(self):
+        """JSON valido que estourava no banco: id fora da faixa de INTEGER do
+        SQLite e surrogate solto em texto (UnicodeEncodeError no INSERT)."""
+        self.assertEqual(self.recado(self.uid, 10 ** 30).status, 400)
+        self.assertEqual(self.recado(self.uid, -(10 ** 30)).status, 400)
+        self.assertEqual(self.recado(self.uid, self.m_a1, texto="\ud800").status, 400)
+        ruim = _estado_bom()
+        ruim["cerebros"]["hermes"]["motivo"] = "\ud800"
+        self.assertEqual(self.maquina(self.t_a1, "/agente/voz/estado", "POST",
+                                      ruim).status, 400)
+        for campo in ("resumo", "id"):
+            corpo = {"id": "x", "cerebro": "claude_code", "estado": "feito",
+                     "resumo": ""}
+            corpo[campo] = "\ud800"
+            r = self.maquina(self.t_a1, "/agente/voz/resultado", "POST", corpo)
+            self.assertEqual(r.status, 400, campo)
+
     # ------------------------------------------------------------- resultado
     def _recado_entregue(self, uid=None, token=None, mid=None):
         r = self.recado(uid or self.uid, mid or self.m_a1)

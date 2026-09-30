@@ -3082,7 +3082,9 @@ def criar_voz_recado(usuario_id: int, maquina_id: int, tipo: str, alvo: str,
             return None, "sem_maquina"
         # Recado que ninguem buscou em 24 h nao e pendencia, e estado que nunca
         # expira tranca o dono (PC desligado ou revogado = teto cheio para sempre).
+        # Em UTC: `criado_em` e comparado como texto, e so vale com o mesmo fuso.
         limite = (datetime.fromisoformat(agora_iso or agora())
+                  .astimezone(timezone.utc)
                   - timedelta(hours=24)).isoformat(timespec="seconds")
         con.execute(
             "UPDATE voz_recado SET estado = 'falhou', terminado_em = ?,"
