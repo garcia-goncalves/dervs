@@ -2215,9 +2215,15 @@ class Hub(SimpleHTTPRequestHandler):
             projeto = self._limpo(p.get("projeto") or "", 100)
             alvo = (projeto if self._ALVO_DE_RECADO.fullmatch(projeto)
                     and ".." not in projeto else "vigilia")
-            texto = self._limpo(
+            # `[alerta:<id>]` no comeco: e por ele que o VOZ oferece "pedir
+            # conserto" ao dono. O id vem de nome de projeto (dado de fora):
+            # so entra se tiver caracteres seguros, senao o aviso vai sem ele.
+            pid = str(p.get("id") or "")
+            prefixo = ("[alerta:%s] " % pid
+                       if self._ID_DE_ALERTA.fullmatch(pid) else "")
+            texto = prefixo + self._limpo(
                 ("%s: %s" % (projeto, p.get("texto") or "")) if projeto
-                else (p.get("texto") or ""), 300)
+                else (p.get("texto") or ""), min(300, 500 - len(prefixo)))
             if banco.avisar_uma_vez(uid, destino, "pend:%s" % p["id"],
                                     alvo, texto, agora_iso):
                 novos += 1
@@ -2890,6 +2896,7 @@ class Hub(SimpleHTTPRequestHandler):
                      "aviso": aviso}
 
     TIPOS_DE_PEDIDO_DO_VOZ = ("enfileirar_conserto",)
+    _ID_DE_ALERTA = re.compile(r"[A-Za-z0-9._:-]{1,200}")
 
     def _voz_pedido(self):
         """O VOZ pede ao painel que enfileire o conserto de UM alerta.

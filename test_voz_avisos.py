@@ -129,6 +129,31 @@ class OsAvisos(_Base):
         self.assertIn("dervs", a["texto"])
         self.assertIn("problema 1", a["texto"])
 
+    def test_o_aviso_de_alerta_leva_o_id_no_comeco_no_formato_combinado(self):
+        """`[alerta:<id>] frase`: e por ele que o VOZ oferece "pedir conserto"."""
+        import re
+        voz = self.maquina(self.uid, "voz", voz=True)
+        self.varrer([_alta(1)])
+        a, = self.avisos(voz)
+        m = re.match(r"\[alerta:([A-Za-z0-9._:-]{1,200})\] (.+)$", a["texto"])
+        self.assertIsNotNone(m, a["texto"])
+        self.assertEqual(m.group(1), "vulnerabilidade:dervs:1")
+        self.assertLessEqual(len(a["texto"]), 500)
+
+    def test_id_com_caractere_estranho_vai_sem_prefixo_e_nunca_passa_de_500(self):
+        """O id vem de nome de projeto (dado de fora): `]`, espaco ou quebra de
+        linha no id nao podem forjar o marcador que o VOZ le."""
+        voz = self.maquina(self.uid, "voz", voz=True)
+        ruim = dict(_alta(2), id="x] [alerta:outro\nid", texto="t" * 900)
+        longo = dict(_alta(3), id="a" * 200, texto="t" * 900)
+        self.varrer([ruim, longo])
+        textos = [a["texto"] for a in self.avisos(voz)]
+        self.assertEqual(len(textos), 2)
+        self.assertFalse(textos[0].startswith("[alerta:"), textos[0])
+        self.assertTrue(textos[1].startswith("[alerta:" + "a" * 200 + "] "))
+        for t in textos:
+            self.assertLessEqual(len(t), 500)
+
     def test_pendencia_que_nao_e_alta_nao_avisa(self):
         voz = self.maquina(self.uid, "voz", voz=True)
         media = dict(_alta(1), gravidade="media")

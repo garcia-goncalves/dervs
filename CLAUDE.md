@@ -314,7 +314,7 @@ Mesmo token de máquina pareada do agente. Quatro coisas quebram em silêncio:
   em texto. `_texto_gravavel` e `_numero_finito` existem por isso.
 - **Estado que nunca expira tranca o dono.** O teto de 20 recados pendentes só
   conta computador vivo e vence em 24 h (`criar_voz_recado`).
-- **`avisar` é só do painel e só `leitura`** (`_varrer_vigilia`, chamada por
+- **`avisar` é só do painel e só `leitura`** (aviso de alerta começa com `[alerta:<id>] `, id só com caracteres seguros, total <=500) (`_varrer_vigilia`, chamada por
   `_varrer_mudas`, no máximo 1x/min). Um aviso por ocorrência (`voz_aviso`), teto 5 por
   varredura, nada para conta sem VOZ fresco, e a chave e o recado entram na MESMA
   transação (`avisar_uma_vez`). `test_voz_avisos.py` cobra; a varredura nunca levanta.
