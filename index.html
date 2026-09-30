@@ -257,6 +257,73 @@ __FAIXA__
     <h2>Conectados</h2>
     <ul class="lista computadores" id="lista-computadores"></ul>
     <p class="carimbo" id="computadores-carimbo"></p>
+
+    <!-- VIGÍLIA E CÉREBROS (ponte com o DERVS-VOZ). Mora DENTRO da tela
+         Conectar, e não num item novo de menu: o menu tem quatro lugares e
+         test_menu cobra isso. Tudo que vem do servidor entra por `textContent`
+         no painel.js — a página só tem a casca. -->
+    <div id="voz" class="voz">
+      <h2 id="voz-titulo">Vigília e cérebros</h2>
+      <p class="mole">
+        O <strong>DERVS-VOZ</strong> é o programa do seu computador que vigia
+        os projetos e executa o que você aprova. Aqui você vê se ele está
+        medindo, quais cérebros ele tem à mão, e manda recados a ele.
+      </p>
+      <div class="pilha" id="voz-computadores" aria-live="polite"></div>
+      <p class="carimbo" id="voz-carimbo"></p>
+
+      <form class="cartao voz__form" id="voz-form" aria-labelledby="voz-form-titulo" novalidate>
+        <h3 id="voz-form-titulo">Mandar um recado ao DERVS-VOZ</h3>
+        <div class="campo">
+          <label for="voz-maquina">Computador</label>
+          <select id="voz-maquina" name="maquina_id" required></select>
+        </div>
+        <div class="campo">
+          <label for="voz-tipo">O que você quer</label>
+          <select id="voz-tipo" name="tipo">
+            <option value="analisar">Analisar um projeto</option>
+            <option value="status">Pedir o estado de um projeto</option>
+            <option value="propor">Propor uma mudança</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label for="voz-alvo">Projeto</label>
+          <input id="voz-alvo" name="alvo" type="text" maxlength="200" autocomplete="off">
+          <span class="ajuda">O nome do projeto, como aparece no painel.</span>
+        </div>
+        <div class="campo">
+          <label for="voz-texto">Recado</label>
+          <textarea id="voz-texto" name="texto" rows="3" maxlength="500"></textarea>
+          <span class="ajuda">Até 500 caracteres.</span>
+        </div>
+        <div class="campo">
+          <label for="voz-nivel">O que o recado pode fazer</label>
+          <select id="voz-nivel" name="nivel">
+            <option value="leitura">Só ler e responder</option>
+            <option value="muda_estado">Mudar alguma coisa</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label for="voz-cerebro">Cérebro</label>
+          <select id="voz-cerebro" name="cerebro_pedido">
+            <option value="auto">Automático (o VOZ escolhe)</option>
+            <option value="claude_code">Claude Code</option>
+            <option value="hermes">Hermes Agent</option>
+          </select>
+        </div>
+        <p class="voz__aviso" id="voz-aviso" data-forte="nao" role="note">
+          O que muda alguma coisa só acontece depois do seu clique no
+          DERVS-VOZ. Aprovar aqui não basta.
+        </p>
+        <p class="voz__erro" id="voz-erro" role="alert" hidden></p>
+        <div class="acoes">
+          <button class="botao" type="submit" id="voz-enviar">Mandar o recado</button>
+        </div>
+      </form>
+
+      <h3 id="voz-recados-titulo">Últimos recados</h3>
+      <ul class="lista voz__recados" id="voz-recados" aria-labelledby="voz-recados-titulo"></ul>
+    </div>
   </section>
 
   <!-- ================================================== 6. Trabalho ===== -->

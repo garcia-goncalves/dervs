@@ -56,6 +56,32 @@ O grafo de código (`codebase-memory-mcp`, porta 9749) **não é mais dependênc
 deste projeto**. O painel embutia a tela dele por procuração; esse proxy saiu na
 etapa 7. Ele continua existindo como ferramenta do Claude Code, à parte.
 
+## Vigília e cérebros — a ponte com o DERVS-VOZ (30/09/2026)
+
+Não é tela nova nem item de menu (o menu tem quatro): é uma seção da tela
+**Conectar** (`#/conectar`), embaixo dos computadores. Mostra, por computador,
+se o DERVS-VOZ está **Vigiando**, **Sem dados** (nenhuma medição nos últimos 20
+minutos) ou **Ainda não mediu**; quais cérebros ele tem (Claude Code, Hermes
+Agent, JEV) e, quando não tem, o motivo; e deixa mandar um **recado** ao VOZ e
+ver os últimos. Sem informação fresca do VOZ, nenhum cérebro aparece como
+disponível. O que muda alguma coisa **só acontece depois do clique no
+DERVS-VOZ** — aprovar no painel não basta.
+
+| Rota | Quem chama | O que faz |
+|---|---|---|
+| `GET /api/voz` | o painel (sessão) | os computadores com a vigília e os cérebros, mais os últimos recados |
+| `POST /api/voz/recado` | o painel (sessão + `X-Token`) | enfileira um recado; **nunca executa nada** no servidor |
+| `POST /agente/voz/estado` | o VOZ (token de computador) | o VOZ conta o que mediu e quais cérebros tem |
+| `GET /agente/voz/recados` | o VOZ (token de computador) | o VOZ pergunta se há recado para ele |
+| `POST /agente/voz/resultado` | o VOZ (token de computador) | o VOZ devolve o resultado de um recado |
+
+**O `/estado` NÃO é sinal de vida.** Quem diz se o computador está vigiando é o
+carimbo da **medição** (`visto_em`), que só anda quando medição de verdade chega.
+O VOZ contar que está bem não conta: um VOZ com a coleta travada continuaria
+"vivo" e o painel ficaria verde exatamente quando parou de olhar. Não há terminal,
+shell nem SSH nestas rotas, e não haverá: o terminal SSH mora no VOZ.
+Roteiro de pareamento: [`operacao/parear-o-voz.md`](operacao/parear-o-voz.md).
+
 ## As três portas (01/09/2026)
 
 A tela **Conectar projeto** deixou de mandar você para outra tela. Cada porta
