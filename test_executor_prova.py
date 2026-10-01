@@ -125,6 +125,29 @@ class Veredito(unittest.TestCase):
     def test_zero_e_verdadeiro(self):
         self.assertEqual(ex.veredito(["x"], 0, "")[0], True)
 
+    def test_zero_sem_teste_rodado_nao_e_comprovado(self):
+        py = ["python", "-m", "pytest", "a.py"]
+        un = ["python", "t.py"]
+        for argv, cauda in [
+                (py, "== 3 skipped in 0.01s =="),
+                (py, "== no tests ran in 0.01s =="),
+                (py, "== 0 passed in 0.01s =="),
+                (un, "Ran 0 tests in 0.000s\n\nOK"),
+                (un, "Ran 2 tests in 0.000s\n\nOK (skipped=2)")]:
+            v, motivo = ex.veredito(argv, 0, cauda)
+            self.assertIsNone(v, cauda)
+            self.assertIn("nenhum teste rodou", motivo)
+
+    def test_zero_com_teste_rodado_continua_verdadeiro(self):
+        py = ["python", "-m", "pytest", "a.py"]
+        un = ["python", "t.py"]
+        for argv, cauda in [
+                (py, "== 5 passed, 1 skipped in 0.01s =="),
+                (py, "== 10 passed in 0.01s =="),
+                (un, "Ran 5 tests in 0.001s\n\nOK"),
+                (un, "Ran 3 tests in 0.001s\n\nOK (skipped=1)")]:
+            self.assertIs(ex.veredito(argv, 0, cauda)[0], True, cauda)
+
     def test_pytest_1_com_falha_e_falso(self):
         self.assertIs(ex.veredito(["python", "-m", "pytest", "a.py"], 1,
                                   "1 failed in 0.1s")[0], False)
@@ -213,6 +236,44 @@ class RodaDeVerdade(Base):
         while vivo(pid) and time.time() < fim:
             time.sleep(0.2)
         self.assertFalse(vivo(pid), "o teste continuou vivo depois do prazo")
+
+    def test_unittest_todo_pulado_nao_e_comprovado(self):
+        pulado = ("import unittest\nclass T(unittest.TestCase):\n"
+                  "    @unittest.skip('x')\n    def test_a(self):\n        pass\n"
+                  "if __name__ == '__main__':\n    unittest.main()\n")
+        d = self.roda({"test_pulado.py": pulado}, ["python test_pulado.py"])
+        p = self.veredito_de(d, "python test_pulado.py")
+        self.assertIsNone(p["ok"], p)
+        self.assertIn("nenhum teste rodou", p["motivo"])
+
+    def test_filho_deixado_em_segundo_plano_morre_no_fim_normal(self):
+        marca = Path(self.raiz) / "filho.txt"
+        filho = "import os,time\nopen(%r,'w').write(str(os.getpid()))\ntime.sleep(120)\n" % str(marca)
+        pai = ("import subprocess, sys, time, pathlib\n"
+               "subprocess.Popen([sys.executable, '-c', %r])\n"
+               "for _ in range(100):\n"
+               "    if pathlib.Path(%r).exists(): break\n"
+               "    time.sleep(0.1)\n" % (filho, str(marca)))
+        self.ex.PRAZO_POR_PROVA = 30
+        self.roda({"test_pai.py": pai}, ["python test_pai.py"])
+        pid = int(marca.read_text())
+        fim = time.time() + 10
+        while vivo(pid) and time.time() < fim:
+            time.sleep(0.2)
+        self.assertFalse(vivo(pid), "o filho sobreviveu ao fim do teste")
+
+    def test_saida_grande_demais_mata_e_nao_sei(self):
+        enche = ("import sys\nwhile True:\n"
+                 "    sys.stdout.write('x' * 65536)\n    sys.stdout.flush()\n")
+        self.ex.PRAZO_POR_PROVA = 60
+        self.ex.SEGUNDOS_ENTRE_OLHADAS = 0.05
+        with mock.patch.object(ex, "TETO_DA_SAIDA", 256 * 1024):
+            inicio = time.time()
+            d = self.roda({"test_enche.py": enche}, ["python test_enche.py"])
+        self.assertLess(time.time() - inicio, 40)
+        p = self.veredito_de(d, "python test_enche.py")
+        self.assertIsNone(p["ok"])
+        self.assertIn("saida grande demais", p["motivo"])
 
     def test_segredo_e_variavel_do_dervs_nao_chegam_ao_filho(self):
         saida = Path(self.raiz) / "env.json"

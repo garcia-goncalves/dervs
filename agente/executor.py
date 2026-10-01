@@ -305,6 +305,9 @@ PRAZO_POR_PROVA = 600
 PRAZO_DA_TAREFA = 1500
 TETO_DO_RESUMO = 4000
 TETO_DA_CAUDA = 1500
+# Quanto o teste pode escrever antes de ser morto: a saida vai para um arquivo
+# temporario e, sem teto, um laço de print enche o disco.
+TETO_DA_SAIDA = 8 * 1024 * 1024
 
 # Alem do que `execucao.ambiente_da_filha` ja tira. A filha MANTEM `ANTHROPIC_*`
 # porque a sessao de IA precisa; um teste de terceiro nao precisa de nada disso.
@@ -337,10 +340,29 @@ def ambiente_da_prova(base=None) -> dict:
     return limpo
 
 
+def _nenhum_teste_rodou(cauda: str) -> bool:
+    """A cauda de um codigo 0 mostra que nada rodou de verdade? Sem resumo
+    reconhecivel, nao ha como dizer que nao rodou: devolve `False`."""
+    ran = re.search(r"\bRan (\d+) tests?\b", cauda)
+    if ran:
+        n = int(ran.group(1))
+        pulados = re.search(r"\bOK \(skipped=(\d+)", cauda)
+        return n == 0 or bool(pulados and int(pulados.group(1)) >= n)
+    if re.search(r"\bno tests ran\b", cauda):
+        return True
+    if re.search(r"\b\d+ (?:passed|skipped|deselected)\b", cauda):
+        return not re.search(r"\b[1-9]\d* passed\b", cauda)
+    return False
+
+
 def veredito(argv, codigo, cauda):
     """`(True|False|None, motivo)`. So `False` quando o proprio executor de
     testes disse que um teste falhou; qualquer outra coisa e `None`."""
     if codigo == 0:
+        # Saiu 0 nao quer dizer que algo foi provado: teste todo pulado ou
+        # nenhum coletado tambem sai 0 (Lei 2: nao vira "comprovado").
+        if _nenhum_teste_rodou(cauda or ""):
+            return None, "nenhum teste rodou de verdade"
         return True, ""
     pytest = "pytest" in (argv or [])
     if pytest:
@@ -393,6 +415,47 @@ class ExecutorProva(Executor):
         except Exception:                      # noqa: BLE001
             pass
 
+    @staticmethod
+    def _job_da_arvore(proc):
+        """Windows: `taskkill /T` nao acha filho de pai que ja saiu. Um Job
+        Object guarda a arvore inteira ate o fim; fora do Windows (o grupo
+        resolve) ou se falhar, `None`."""
+        if not sys.platform.startswith("win"):
+            return None
+        try:
+            import ctypes
+            from ctypes import wintypes
+            k = ctypes.WinDLL("kernel32", use_last_error=True)
+            k.CreateJobObjectW.restype = wintypes.HANDLE
+            k.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+            k.AssignProcessToJobObject.argtypes = [wintypes.HANDLE,
+                                                   wintypes.HANDLE]
+            job = k.CreateJobObjectW(None, None)
+            if not job:
+                return None
+            if not k.AssignProcessToJobObject(job, int(proc._handle)):
+                k.CloseHandle.argtypes = [wintypes.HANDLE]
+                k.CloseHandle(job)
+                return None
+            return job
+        except Exception:                      # noqa: BLE001
+            return None
+
+    @staticmethod
+    def _matar_job(job) -> None:
+        if job is None:
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+            k = ctypes.WinDLL("kernel32", use_last_error=True)
+            k.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            k.CloseHandle.argtypes = [wintypes.HANDLE]
+            k.TerminateJobObject(job, 1)
+            k.CloseHandle(job)
+        except Exception:                      # noqa: BLE001
+            pass
+
     def _rodar_uma(self, argv, copia, ate, ao_progredir):
         """`(codigo|None, cauda, motivo)`. `codigo None` = nao terminou/rodou;
         `motivo` diz por que."""
@@ -409,6 +472,7 @@ class ExecutorProva(Executor):
                     creationflags=flags, **extra)
             except OSError as e:
                 return None, "", "nao consegui iniciar o teste: %s" % e
+            job = self._job_da_arvore(proc)
             fim = time.time() + min(self.PRAZO_POR_PROVA, max(0, ate - time.time()))
             motivo = ""
             while proc.poll() is None:
@@ -421,10 +485,16 @@ class ExecutorProva(Executor):
                         pass
                 if not motivo and time.time() >= fim:
                     motivo = "o prazo da prova estourou"
+                if not motivo and saida.seek(0, 2) > TETO_DA_SAIDA:
+                    motivo = "saida grande demais"
                 if motivo:
                     self._matar(proc)
                     break
                 time.sleep(self.SEGUNDOS_ENTRE_OLHADAS)
+            if not motivo:
+                # Terminou sozinho: filho largado em segundo plano nao fica.
+                self._matar(proc)
+            self._matar_job(job)
             tamanho = saida.seek(0, 2)
             saida.seek(max(0, tamanho - TETO_DA_CAUDA))
             cauda = saida.read().decode("utf-8", "replace")
