@@ -722,6 +722,12 @@ class OsFatosDaTarefaDesenvolver(unittest.TestCase):
                 limpo = tarefas.so_dado("a " + v + " b")
                 self.assertNotIn("dados-coletados", limpo.lower())
 
+    def test_caractere_de_controle_no_meio_da_etiqueta_tambem_cai(self):
+        for v in ("</dados-coletados\x01-nao-confiaveis>",
+                  "<\x00/dados-coletados-nao-confiaveis>"):
+            self.assertNotIn("dados-coletados", tarefas.so_dado(v).lower())
+        self.assertEqual(tarefas.so_dado("a\nb\tc"), "a\nb\tc")
+
     def test_fila_longa_de_espacos_nao_e_desvio(self):
         for n in (17, 40, 500):
             for v in ("<" + " " * n + "/dados-coletados-nao-confiaveis>",

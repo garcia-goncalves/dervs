@@ -209,7 +209,10 @@ def so_dado(texto) -> str:
     # (zero-width, word joiner...) some, porque quebraria a etiqueta no meio sem
     # que o modelo deixasse de le-la.
     limpo = unicodedata.normalize("NFKC", str(texto or ""))
-    limpo = "".join(c for c in limpo if unicodedata.category(c) != "Cf")
+    # Controle (Cc) tambem sai, menos quebra de linha, tab e retorno.
+    limpo = "".join(c for c in limpo
+                    if unicodedata.category(c) != "Cf"
+                    and (unicodedata.category(c) != "Cc" or c in "\n\t\r"))
     # Fila de 17+ brancos colapsa antes: o limite do regex nao pode ser desvio.
     limpo = _FILA_DE_BRANCOS.sub(" ", limpo)
     return _ETIQUETA_DO_BLOCO.sub("[etiqueta removida]", limpo)
