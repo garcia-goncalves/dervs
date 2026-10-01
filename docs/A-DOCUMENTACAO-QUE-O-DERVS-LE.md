@@ -95,7 +95,7 @@ rodar.
 | texto de um critério | 300 caracteres |
 | texto de uma prova | 200 caracteres |
 | tamanho do arquivo | 256 KiB |
-| tamanho do que sobe ao painel, por projeto | 24 KiB |
+| tamanho do que sobe ao painel, por projeto | 32 KiB |
 
 Passou do teto: o leitor corta, marca o documento como **cortado** e segue. Nunca
 falha em silêncio por causa do tamanho.

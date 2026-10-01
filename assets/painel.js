@@ -2786,6 +2786,15 @@ function linhaDeTarefa(t) {
     pedido.className = "linha__motivo";
     pedido.textContent = "O que foi pedido: " + t.detalhe;
     li.append(pedido);
+    /* O corte do pedido esconde o fim, e o fim é o comando da prova: se não
+       coube no pedido, aparece à parte. */
+    if (typeof t.prova === "string" && t.prova
+        && !t.detalhe.includes(t.prova)) {
+      const prova = document.createElement("span");
+      prova.className = "linha__motivo";
+      prova.textContent = t.prova;
+      li.append(prova);
+    }
   }
 
   if (t.estado === "aguardando_aprovacao" || (t.cor === "vermelho"

@@ -375,7 +375,7 @@ def pode_resolver(pendencia: dict) -> bool:
     projeto = (pendencia.get("projeto") or "").strip()
     if not projeto:
         return False
-    return projeto.lower() not in PROJETOS_BLOQUEADOS
+    return not tarefas.projeto_bloqueado(projeto)
 
 
 def interpretar_linha(bruto):

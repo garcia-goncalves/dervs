@@ -45,55 +45,33 @@ opera terminal.
 
 **Porta 1 — o seu computador**
 
-- Baixar o conectador pela tela e dar dois cliques nele pareia a máquina, **sem digitar
-  nada e sem terminal**. Provado clicando, com o número real gerado pelo painel.
-- O conectador abre a janela nativa de escolher pasta antes de parear, já sugerindo
-  `%USERPROFILE%\source\repos` quando ela existe. A pasta escolhida é a que o agente
-  varre — provado apontando para uma pasta que **não** é `source\repos` e vendo os
-  projetos dela aparecerem no painel.
-- O conectador usa **só a biblioteca padrão** (`tkinter` incluído) e é **um arquivo só**.
-  `test_conectador.py` reprova se ele importar qualquer coisa de fora.
-- Fechar a janela de escolha sem escolher **não pareia e não deixa lixo** — nem token,
-  nem tarefa agendada. Falha fechada.
-- A máquina continua reportando depois que a janela fecha: o conectador registra a tarefa
-  agendada. `test_conectador.py` prova o comando montado; a checagem no relógio é do
-  roteiro de verificação.
-- A linha para quem prefere terminal roda **de qualquer pasta**, inclusive de
-  `C:\WINDOWS\system32`, e é **uma linha só**. Provado rodando de lá.
-- `coletar.RAIZ` deixa de ser caminho fixo: vira lista lida da configuração do agente,
-  com o valor de hoje só como último recurso. `test_coletar.py` prova as duas raízes e a
-  ausência de qualquer caminho absoluto desta máquina no arquivo.
-- Trocar a pasta depois, pela tela, sem baixar nada de novo: o painel navega as pastas da
-  máquina **pelo canal de sondagem que já existe**. O agente continua sem escutar porta —
-  `test_agente.py` prova que nenhum socket é aberto para escuta.
+- [ ] Baixar o conectador pela tela e dar dois cliques nele pareia a máquina, **sem digitar nada e sem terminal**. Provado clicando, com o número real gerado pelo painel.
+- [ ] O conectador abre a janela nativa de escolher pasta antes de parear, já sugerindo `%USERPROFILE%\source\repos` quando ela existe. A pasta escolhida é a que o agente varre — provado apontando para uma pasta que **não** é `source\repos` e vendo os projetos dela aparecerem no painel.
+- [ ] O conectador usa **só a biblioteca padrão** (`tkinter` incluído) e é **um arquivo só**. `test_conectador.py` reprova se ele importar qualquer coisa de fora.
+- [ ] Fechar a janela de escolha sem escolher **não pareia e não deixa lixo** — nem token, nem tarefa agendada. Falha fechada.
+- [ ] A máquina continua reportando depois que a janela fecha: o conectador registra a tarefa agendada. `test_conectador.py` prova o comando montado; a checagem no relógio é do roteiro de verificação.
+- [ ] A linha para quem prefere terminal roda **de qualquer pasta**, inclusive de `C:\WINDOWS\system32`, e é **uma linha só**. Provado rodando de lá.
+- [ ] `coletar.RAIZ` deixa de ser caminho fixo: vira lista lida da configuração do agente, com o valor de hoje só como último recurso. `test_coletar.py` prova as duas raízes e a ausência de qualquer caminho absoluto desta máquina no arquivo.
+- [ ] Trocar a pasta depois, pela tela, sem baixar nada de novo: o painel navega as pastas da máquina **pelo canal de sondagem que já existe**. O agente continua sem escutar porta — `test_agente.py` prova que nenhum socket é aberto para escuta.
 
 **Porta 2 — a sua conta do GitHub**
 
-- Um botão leva à instalação do aplicativo do GitHub e volta ao painel com a conta ligada,
-  sem o dono ver, copiar ou colar segredo nenhum.
-- O número da instalação passa a ser **por usuário**, não a linha global de hoje.
-  `test_banco.py` prova que duas contas guardam instalações diferentes e que uma não lê a
-  da outra.
-- Desconectar a conta pela tela apaga a instalação daquele usuário e só dela.
-- Nenhum segredo aparece em log, resposta HTTP ou mensagem de erro. `secret-scan.sh` passa.
+- [ ] Um botão leva à instalação do aplicativo do GitHub e volta ao painel com a conta ligada, sem o dono ver, copiar ou colar segredo nenhum.
+- [ ] O número da instalação passa a ser **por usuário**, não a linha global de hoje. `test_banco.py` prova que duas contas guardam instalações diferentes e que uma não lê a da outra.
+- [ ] Desconectar a conta pela tela apaga a instalação daquele usuário e só dela.
+- [ ] Nenhum segredo aparece em log, resposta HTTP ou mensagem de erro. `secret-scan.sh` passa.
 
 **Porta 3 — os seus servidores**
 
-- Um botão aceita a URL de um servidor, confere por HTTPS que ela responde e a guarda —
-  **sem chave SSH em lugar nenhum**, como manda a fonte única §5.1c.
-- A URL substitui o `url_prod` escrito à mão no `casos.json` para aquele projeto, e a
-  coluna "No ar" passa a sair dela.
-- Endereço interno é recusado: `localhost`, `127.0.0.0/8`, `10/8`, `172.16/12`,
-  `192.168/16`, `169.254/16` e `::1`. A recusa vale **depois** de resolver o nome, e vale
-  em todo redirecionamento. `test_servir.py` prova cada faixa e prova o redirecionamento
-  que sai de um endereço público para um interno.
+- [ ] Um botão aceita a URL de um servidor, confere por HTTPS que ela responde e a guarda — **sem chave SSH em lugar nenhum**, como manda a fonte única §5.1c.
+- [ ] A URL substitui o `url_prod` escrito à mão no `casos.json` para aquele projeto, e a coluna "No ar" passa a sair dela.
+- [ ] Endereço interno é recusado: `localhost`, `127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`, `169.254/16` e `::1`. A recusa vale **depois** de resolver o nome, e vale em todo redirecionamento. `test_servir.py` prova cada faixa e prova o redirecionamento que sai de um endereço público para um interno.
 
 **Vale para as três**
 
-- A tela cabe em 360px sem rolagem lateral, com alvo de toque de 44px.
-- Nenhum estado mente: cada porta mostra "conectado", "não conectado" ou **"não deu para
-  conferir"**, nunca um zero inventado — a lei nº 2 deste repositório.
-- Toda a suíte verde na CI, não só nesta máquina.
+- [ ] A tela cabe em 360px sem rolagem lateral, com alvo de toque de 44px.
+- [ ] Nenhum estado mente: cada porta mostra "conectado", "não conectado" ou **"não deu para conferir"**, nunca um zero inventado — a lei nº 2 deste repositório.
+- [ ] Toda a suíte verde na CI, não só nesta máquina.
 
 ## fora_de_escopo
 

@@ -358,10 +358,26 @@ a próxima sessão erraria:
   bloqueia por prefixo na fronteira do `-`. `test_progresso_fio.py` prova o fio
   inteiro (briefing real -> `/agente/relatorio` -> `/api/dados` e `/api/progresso`
   -> campos que o `painel.js` lê): renomear um campo de um lado só reprova.
+- **Quem pergunta "projeto bloqueado?" chama `tarefas.projeto_bloqueado`
+  (01/10/2026).** Cinco pontos comparavam `.lower() in PROJETOS_BLOQUEADOS` e
+  `Ajudei_Saude` escapava de auditoria, consertar, fila e execução. Comparação
+  nova só pelo helper (normaliza e bloqueia por prefixo na fronteira do `-`);
+  `test_desenvolver` lê o fonte e reprova a forma antiga. `so_dado` também
+  normaliza NFKC e tira caracteres Cf (`＜`, zero-width) e não tem mais
+  backtracking quadrático (`\s{0,16}`, não `\s*`).
+- **O corte do leitor nunca é mudo.** Passar de `MAX_VARRIDOS` abertos ou de
+  `MAX_PASTAS` listadas vira erro visível ("há mais briefings que o limite"),
+  senão o painel diria "sem documentação". O teto do JSON da chave subiu para
+  32 KiB: com os 11 briefings do próprio DERVS convertidos (115 critérios,
+  ~28 KiB) o último ficava sem critério nenhum. Os briefings antigos estão em
+  `- [ ]` (nada marcado `[x]`: marcar é julgamento por critério).
+- **Em Consertar, o comando da prova sai à parte** (`prova` em
+  `banco.tarefas_do_painel`): ele fica no fim do pedido e o corte em 300 o
+  esconderia — o dono aprovaria um comando que não leu.
 - **Não nomeie rota nem função `documentacao`:** `test_rotas.PROIBIDO` casa
   `acao|exec|comando|shell`, e "documentACAO" casa.
 - **Projeto acima de 64 KiB é descartado INTEIRO** em `banco.receber_relatorio`: o
-  agente limita o tamanho da chave (24 KiB) e marca `cortado`.
+  agente limita o tamanho da chave (32 KiB) e marca `cortado`.
 - **`test_progresso_tela.py` executa as funções de montagem em node** com um DOM de
   mentira (como `test_voz_tela.py`); sem node ele pula só esses casos. Mais o
   `test_design`: `Number(`/`parseInt(` são proibidos (use `+x`).

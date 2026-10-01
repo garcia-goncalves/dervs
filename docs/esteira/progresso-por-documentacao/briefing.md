@@ -22,7 +22,7 @@ Prova: python test_documentos.py
 Prova: python test_documentos.py
 - [ ] O painel mostra, por projeto, a barra de progresso com o número, os critérios que faltam e os não verificados, em português, e não muda a cor do selo de saúde por causa disso. Também conferido por clique real no navegador.
 Prova: python test_progresso_tela.py
-- [ ] Provas declaradas em documentação são dado de fora e nunca executam qualquer comando. Só rodam comandos de uma lista fechada (`python test_<nome>.py`, `python -m pytest <arquivo>`, `npm test`), só no computador com "Pode consertar aqui" ligado, sem shell, com prazo, e nunca em projeto bloqueado ou do André.
+- [ ] Prova declarada em documentação é dado de fora: só roda comando de lista fechada (`python test_<nome>.py`, `python -m pytest <arquivo>`, `npm test`), no computador com "Pode consertar aqui" ligado, sem shell, com prazo, e nunca em projeto bloqueado ou do André.
 Prova: python test_documentos.py
 - [ ] O botão "Desenvolver isto" só existe para critério de documento já aprovado; cria tarefa `desenvolver`, sempre vermelha, que nunca anda sozinha; o servidor recusa o que não vier de documento aprovado. Conferido cruzando duas contas e com regra fora da lista.
 Prova: python test_desenvolver.py

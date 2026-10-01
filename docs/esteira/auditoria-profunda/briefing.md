@@ -38,36 +38,15 @@ linha, para conferir o diagnóstico antes de aprovar.
 
 Cada item abaixo se prova por um comando, um teste ou uma olhada na tela.
 
-1. **A auditoria existe como tipo de tarefa.** Uma tarefa `auditar` dispara o agente
-   sobre um repositório e devolve uma lista estruturada de achados, cada um com
-   `arquivo`, `linha`, `gravidade`, `frase` (em português) e `o_que_fazer`.
-   *Prova:* `python test_auditoria.py` verde, com um repositório de mentira que contém
-   defeitos plantados, e a asserção exigindo que os defeitos plantados apareçam.
-2. **Saída malformada não vira número.** Se o agente devolver algo que não é a lista
-   esperada, o projeto fica em **sem dados** — nunca em "0 achados".
-   *Prova:* caso de teste com saída truncada, saída vazia e saída com JSON quebrado; os
-   três resultam em `sem dados`, nenhum resulta em zero.
-3. **Todo achado tem carimbo e ação.** Cada achado exibe quando foi medido, e nenhum
-   achado entra na lista sem uma ação que o dono possa executar.
-   *Prova:* `test_regras.py` estendido, cobrando os dois invariantes já existentes sobre
-   os achados de auditoria.
-4. **O id do achado é estável entre duas auditorias.** Silenciar um achado o mantém
-   silenciado na auditoria seguinte, mesmo que a ordem da lista mude.
-   *Prova:* teste que roda a mesma auditoria duas vezes com a ordem embaralhada e exige
-   ids iguais.
-5. **A auditoria respeita o teto de gasto.** Auditoria que estouraria os R$ 50 do dia
-   não dispara, e a tela diz por quê.
-   *Prova:* teste que fixa o gasto acumulado acima do teto e exige recusa com motivo.
-6. **A tela nova existe, em português, e cabe em 360px.**
-   *Prova:* `test_design.py` estendido + olhada na tela em `http://localhost:4777`.
-7. **Nenhuma fronteira foi afrouxada.** `servir.py` continua sem importar `execucao`,
-   `fila` ou `banco` a partir de `tarefas.py`; nenhuma rota executa comando.
-   *Prova:* `python test_rotas.py` e `python test_tarefas_nao_publicam.py` verdes, sem
-   nenhuma linha removida deles.
-8. **A suíte inteira verde na CI**, não apenas os arquivos tocados, e
-   `test_imagem.py` verde (a lista de cópia do `Dockerfile` acompanha os módulos novos).
-9. **Toda variável de ambiente nova aparece no `docker-compose.yml`.**
-   *Prova:* `test_publicar.py` verde — o guarda que compara as duas listas.
+- [ ] **A auditoria existe como tipo de tarefa.** Uma tarefa `auditar` dispara o agente sobre um repositório e devolve achados estruturados (`arquivo`, `linha`, `gravidade`, `frase`, `o_que_fazer`). *Prova:* `python test_auditoria.py` verde: defeitos plantados num repositório de mentira têm de aparecer.
+- [ ] **Saída malformada não vira número.** Se o agente devolver algo que não é a lista esperada, o projeto fica em **sem dados** — nunca em "0 achados". *Prova:* caso de teste com saída truncada, saída vazia e saída com JSON quebrado; os três resultam em `sem dados`, nenhum resulta em zero.
+- [ ] **Todo achado tem carimbo e ação.** Cada achado exibe quando foi medido, e nenhum achado entra na lista sem uma ação que o dono possa executar. *Prova:* `test_regras.py` estendido, cobrando os dois invariantes já existentes sobre os achados de auditoria.
+- [ ] **O id do achado é estável entre duas auditorias.** Silenciar um achado o mantém silenciado na auditoria seguinte, mesmo que a ordem da lista mude. *Prova:* teste que roda a mesma auditoria duas vezes com a ordem embaralhada e exige ids iguais.
+- [ ] **A auditoria respeita o teto de gasto.** Auditoria que estouraria os R$ 50 do dia não dispara, e a tela diz por quê. *Prova:* teste que fixa o gasto acumulado acima do teto e exige recusa com motivo.
+- [ ] **A tela nova existe, em português, e cabe em 360px.** *Prova:* `test_design.py` estendido + olhada na tela em `http://localhost:4777`.
+- [ ] **Nenhuma fronteira foi afrouxada.** `servir.py` continua sem importar `execucao`, `fila` ou `banco` a partir de `tarefas.py`; nenhuma rota executa comando. *Prova:* `python test_rotas.py` e `python test_tarefas_nao_publicam.py` verdes, sem nenhuma linha removida deles.
+- [ ] **A suíte inteira verde na CI**, não apenas os arquivos tocados, e `test_imagem.py` verde (a lista de cópia do `Dockerfile` acompanha os módulos novos).
+- [ ] **Toda variável de ambiente nova aparece no `docker-compose.yml`.** *Prova:* `test_publicar.py` verde — o guarda que compara as duas listas.
 
 ## fora_de_escopo
 

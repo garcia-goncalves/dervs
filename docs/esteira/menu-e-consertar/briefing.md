@@ -14,15 +14,15 @@ Desenvolvedor (Thiago e André, depois devs de equipes pequenas) que abre o pain
 
 ## criterio_de_aceitacao
 
-1. O menu superior tem exatamente 4 itens (Painel, Consertar, Conectar, Conta). Prova: olhada na tela e um teste que lê o `index.html`.
-2. Todas as rotas antigas (`#/trabalho`, `#/auditoria`, `#/consumo`, `#/computadores`, `#/entrada`) continuam abrindo a tela certa. Prova: teste de rotas e clique no navegador.
-3. Na tela de um alerta de regra mecânica (`memoria_crlf`, `env_drift`) existe o botão "Consertar com IA". Um clique cria uma tarefa na fila; um segundo clique, "Pode fazer", aprova. Prova: teste de servidor que percorre o fluxo, e clique real no navegador local.
-4. O botão só aceita alerta do próprio dono. Alerta de outra conta e alerta inexistente dão a mesma resposta (mesma regra da auditoria). Prova: teste cruzando duas contas, sabotado de propósito para provar que reprova.
-5. Alerta de regra que não é mecânica (ex.: `dependencia_insegura`, achados de segurança) NÃO mostra o botão e o servidor recusa o pedido. Prova: teste.
-6. Quando o conserto não pode rodar (computador não pareado, não autorizado, teto do dia estourado) a tela diz qual é o motivo, em português. Prova: teste de cada motivo e olhada na tela.
-7. O detalhe da tarefa mostra o link do pedido de alteração (`pr_url`) quando existir. Prova: teste.
-8. As suítes existentes continuam verdes e todo `test_*.py` novo está listado no `ci.yml`. Prova: rodar todas.
-9. `docs/A-APLICACAO.md`, `docs/LINKS.md` e `CLAUDE.md` refletem o menu novo no mesmo commit. Prova: leitura do diff.
+- [ ] O menu superior tem exatamente 4 itens (Painel, Consertar, Conectar, Conta). Prova: olhada na tela e um teste que lê o `index.html`.
+- [ ] Todas as rotas antigas (`#/trabalho`, `#/auditoria`, `#/consumo`, `#/computadores`, `#/entrada`) continuam abrindo a tela certa. Prova: teste de rotas e clique no navegador.
+- [ ] Na tela de um alerta de regra mecânica (`memoria_crlf`, `env_drift`) existe o botão "Consertar com IA". Um clique cria uma tarefa na fila; um segundo clique, "Pode fazer", aprova. Prova: teste de servidor que percorre o fluxo, e clique real no navegador local.
+- [ ] O botão só aceita alerta do próprio dono. Alerta de outra conta e alerta inexistente dão a mesma resposta (mesma regra da auditoria). Prova: teste cruzando duas contas, sabotado de propósito para provar que reprova.
+- [ ] Alerta de regra que não é mecânica (ex.: `dependencia_insegura`, achados de segurança) NÃO mostra o botão e o servidor recusa o pedido. Prova: teste.
+- [ ] Quando o conserto não pode rodar (computador não pareado, não autorizado, teto do dia estourado) a tela diz qual é o motivo, em português. Prova: teste de cada motivo e olhada na tela.
+- [ ] O detalhe da tarefa mostra o link do pedido de alteração (`pr_url`) quando existir. Prova: teste.
+- [ ] As suítes existentes continuam verdes e todo `test_*.py` novo está listado no `ci.yml`. Prova: rodar todas.
+- [ ] `docs/A-APLICACAO.md`, `docs/LINKS.md` e `CLAUDE.md` refletem o menu novo no mesmo commit. Prova: leitura do diff.
 
 ## fora_de_escopo
 

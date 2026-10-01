@@ -40,20 +40,13 @@ críticos do `workspace-medconsultoria`. O defeito custa a ordem do dia dele.
 
 ## criterio_de_aceitacao
 
-1. A coleta grava, por projeto, a contagem por severidade (`critical` / `high` /
-   `moderate` / `low`) na **mesma consulta GraphQL de hoje**, sem chamada de rede
-   adicional. Verificável: `traduz()` de um nó com 6 CRITICAL devolve
-   `vulns["sev"]["critical"] == 6`.
-2. A coleta grava **pacotes distintos** e **defeitos distintos** (par
-   pacote+aviso), além do total bruto.
-3. A frase da pendência diz severidade e tamanho real. Verificável: um projeto
-   com 19 alertas e 6 críticos produz frase contendo `6 crítico`.
-4. Gravidade `alta` só quando há crítico ou alto; projeto só com moderado/baixo
-   vira `media`. Verificável em `regras.avaliar()`.
-5. Rodada que **não conseguiu** ler severidade não apaga nem inventa a anterior â€”
-   a mesma proteção que hoje já existe para o total.
-6. Projeto sem alerta nenhum continua sem pendência.
-7. As 5 suítes verdes; suíte nova nomeada no `ci.yml` **e** no `py_compile`.
+- [ ] A coleta grava, por projeto, a contagem por severidade (`critical` / `high` / `moderate` / `low`) na **mesma consulta GraphQL de hoje**, sem chamada de rede adicional. Verificável: `traduz()` de um nó com 6 CRITICAL devolve `vulns["sev"]["critical"] == 6`.
+- [ ] A coleta grava **pacotes distintos** e **defeitos distintos** (par pacote+aviso), além do total bruto.
+- [ ] A frase da pendência diz severidade e tamanho real. Verificável: um projeto com 19 alertas e 6 críticos produz frase contendo `6 crítico`.
+- [ ] Gravidade `alta` só quando há crítico ou alto; projeto só com moderado/baixo vira `media`. Verificável em `regras.avaliar()`.
+- [ ] Rodada que **não conseguiu** ler severidade não apaga nem inventa a anterior â€” a mesma proteção que hoje já existe para o total.
+- [ ] Projeto sem alerta nenhum continua sem pendência.
+- [ ] As 5 suítes verdes; suíte nova nomeada no `ci.yml` **e** no `py_compile`.
 
 ## fora_de_escopo
 

@@ -66,30 +66,18 @@ nenhum dos dois tenha de atravessar a experiência do outro.
 
 Verificáveis um a um, na tela ou por comando:
 
-1. Cada pendência da caixa exibe um botão **"Resolver"** ao lado da ação atual.
-2. Clicar em "Resolver" numa CI vermelha faz aparecer, na própria tela, o que a
-   sessão está fazendo **enquanto acontece** — não só no fim.
-3. A sessão trabalha numa cópia isolada (`git worktree`): `git status` na pasta
-   original do projeto continua limpo durante e depois da execução.
-4. Ao terminar bem, existe um pedido de alteração aberto no GitHub, e o painel
-   mostra o link clicável.
-5. O painel **nunca** salva no ramo principal por conta própria: nenhum commit
-   novo aparece em `main` sem o dono clicar em aprovar.
-6. Existe um botão **"Parar"** visível durante a execução, e clicar nele
-   encerra o processo em até 5 segundos (verificável: o processo some da lista
-   de processos da máquina).
-7. O custo da execução aparece na tela em reais, ao vivo e ao final.
-8. Falha é dita com o motivo real e a saída crua acessível — nunca "algo deu
-   errado".
-9. O resultado tem **dois modos, alternáveis por um clique**: "resumo" (uma
-   frase em português por arquivo tocado, para o dono) e "diff" (o antes e o
-   depois completo, para o sócio).
-10. Duas execuções simultâneas no mesmo projeto são impedidas com uma mensagem
-    clara, em vez de corromperem a cópia.
-11. `/api/acao` continua exigindo token de sessão, Origin e Host — a superfície
-    nova não afrouxa a existente.
-12. As três suítes de teste continuam verdes, e a execução do Claude tem teste
-    das partes puras (montagem do comando, leitura do fluxo, estados).
+- [ ] Cada pendência da caixa exibe um botão **"Resolver"** ao lado da ação atual.
+- [ ] Clicar em "Resolver" numa CI vermelha faz aparecer, na própria tela, o que a sessão está fazendo **enquanto acontece** — não só no fim.
+- [ ] A sessão trabalha numa cópia isolada (`git worktree`): `git status` na pasta original do projeto continua limpo durante e depois da execução.
+- [ ] Ao terminar bem, existe um pedido de alteração aberto no GitHub, e o painel mostra o link clicável.
+- [ ] O painel **nunca** salva no ramo principal por conta própria: nenhum commit novo aparece em `main` sem o dono clicar em aprovar.
+- [ ] Existe um botão **"Parar"** visível durante a execução, e clicar nele encerra o processo em até 5 segundos (verificável: o processo some da lista de processos da máquina).
+- [ ] O custo da execução aparece na tela em reais, ao vivo e ao final.
+- [ ] Falha é dita com o motivo real e a saída crua acessível — nunca "algo deu errado".
+- [ ] O resultado tem **dois modos, alternáveis por um clique**: "resumo" (uma frase em português por arquivo tocado, para o dono) e "diff" (o antes e o depois completo, para o sócio).
+- [ ] Duas execuções simultâneas no mesmo projeto são impedidas com uma mensagem clara, em vez de corromperem a cópia.
+- [ ] `/api/acao` continua exigindo token de sessão, Origin e Host — a superfície nova não afrouxa a existente.
+- [ ] As três suítes de teste continuam verdes, e a execução do Claude tem teste das partes puras (montagem do comando, leitura do fluxo, estados).
 
 ## fora_de_escopo
 

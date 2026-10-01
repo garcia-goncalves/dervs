@@ -579,7 +579,7 @@ class OLeitorDoProjeto(unittest.TestCase):
         r = documentos.ler_projeto(self.raiz)
         tamanho = len(json.dumps(r, ensure_ascii=False).encode("utf-8"))
         self.assertLessEqual(tamanho, documentos.MAX_JSON)
-        self.assertLessEqual(documentos.MAX_JSON, 24 * 1024)
+        self.assertLessEqual(documentos.MAX_JSON, 32 * 1024)
         self.assertTrue(r["documentos"], "cortou tudo, nao sobrou nada")
         self.assertTrue(any(d["cortado"] for d in r["documentos"]))
         # e o que sobrou e lido pelo servidor sem reclamar
@@ -632,7 +632,18 @@ class OLeitorParaDeAbrirArquivoAoChegarNoTeto(unittest.TestCase):
         self.pastas(500, "# Briefing antigo\n\nsem secao nenhuma\n")
         r, abertos = self.contar_aberturas()
         self.assertLessEqual(abertos, documentos.MAX_VARRIDOS)
-        self.assertEqual(r["documentos"], [])
+        # O corte NAO pode ser mudo (Lei 2): sem erro visivel o painel diria
+        # "sem documentacao" para um projeto que so tem briefing demais.
+        self.assertEqual(len(r["documentos"]), 1)
+        self.assertTrue(any("limite" in e for e in r["documentos"][0]["erros"]))
+
+    def test_diretorio_gigante_nao_e_listado_inteiro(self):
+        """`sorted(iterdir())` lia a pasta toda antes de qualquer teto."""
+        self.pastas(documentos.MAX_PASTAS + 50, "# antigo\n")
+        r, abertos = self.contar_aberturas()
+        self.assertLessEqual(abertos, documentos.MAX_VARRIDOS)
+        self.assertTrue(any("limite" in e
+                            for d in r["documentos"] for e in d["erros"]))
 
 
 class OLeitorNaoSaiDoRepositorio(unittest.TestCase):

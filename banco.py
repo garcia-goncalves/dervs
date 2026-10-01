@@ -1805,6 +1805,8 @@ VERDE = "verde"
 # painel mostra um pedaco ainda menor (ela e lida a cada abertura de tela).
 TETO_DETALHE = 4096
 TETO_DETALHE_NA_LISTA = 300
+# A frase que `servir` poe antes do comando da prova, no fim do `detalhe`.
+MARCA_DA_PROVA = "Prova do critério: "
 
 
 def enfileirar(pendencias: list, con=None) -> int:
@@ -2383,9 +2385,14 @@ def tarefas_do_painel(usuario_id: int, limite: int = 50, con=None) -> list:
             "       tentativas, criado_em, iniciado_em, terminado_em,"
             "       custo_usd, rodadas, ramo, resumo, frase, visto_em,"
             "       aprovado_em, parada_pedida_em, maquina_id, executor, erro,"
-            "       substr(detalhe, 1, ?) AS detalhe"
+            "       substr(detalhe, 1, ?) AS detalhe,"
+            # A linha da prova fica no FIM do pedido e e o que o corte em 300
+            # esconderia: o dono aprova um comando que nao leu. Sai a parte.
+            "       CASE WHEN instr(detalhe, ?) > 0"
+            "            THEN substr(detalhe, instr(detalhe, ?), ?) END AS prova"
             "  FROM fila WHERE usuario_id = ? ORDER BY criado_em DESC LIMIT ?",
-            (TETO_DETALHE_NA_LISTA, int(usuario_id), int(limite))).fetchall()
+            (TETO_DETALHE_NA_LISTA, MARCA_DA_PROVA, MARCA_DA_PROVA,
+             TETO_DETALHE_NA_LISTA, int(usuario_id), int(limite))).fetchall()
         return [dict(l) for l in linhas]
     finally:
         if fechar:

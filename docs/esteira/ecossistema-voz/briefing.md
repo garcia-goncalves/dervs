@@ -15,18 +15,18 @@ Dono e desenvolvedores (Thiago e André) que não operam terminal: falam com o V
 ## criterio_de_aceitacao
 
 Fatia A — lado do DERVS web (esta janela):
-1. O painel mostra o estado da "vigília": quando cada computador pareado mediu pela última vez e se está atrasado. Um computador calado há mais que o dobro do intervalo aparece como *sem dados*, nunca como verde. Prova: teste de `regras.py` e clique no painel local.
-2. O painel mostra o seletor de cérebro de cada computador e o registro de qual cérebro fez cada tarefa. Prova: teste de servidor e tela.
-3. Uma rota nova de "recado para o VOZ" aceita só sessão do dono, enfileira no mesmo balcão próprio e nunca executa nada no servidor. Prova: teste cruzando duas contas e teste de balcão.
-4. Nenhuma rota nova abre terminal, shell ou SSH no servidor. Prova: `test_rotas` e `test_tarefas_nao_publicam` continuam verdes, com caso novo que procura por essas palavras.
-5. As suítes existentes ficam verdes e todo `test_*.py` novo entra no `ci.yml`. Prova: rodar todas.
+- [ ] O painel mostra o estado da "vigília": quando cada computador pareado mediu pela última vez e se está atrasado. Um computador calado há mais que o dobro do intervalo aparece como *sem dados*, nunca como verde. Prova: teste de `regras.py` e clique no painel local.
+- [ ] O painel mostra o seletor de cérebro de cada computador e o registro de qual cérebro fez cada tarefa. Prova: teste de servidor e tela.
+- [ ] Uma rota nova de "recado para o VOZ" aceita só sessão do dono, enfileira no mesmo balcão próprio e nunca executa nada no servidor. Prova: teste cruzando duas contas e teste de balcão.
+- [ ] Nenhuma rota nova abre terminal, shell ou SSH no servidor. Prova: `test_rotas` e `test_tarefas_nao_publicam` continuam verdes, com caso novo que procura por essas palavras.
+- [ ] As suítes existentes ficam verdes e todo `test_*.py` novo entra no `ci.yml`. Prova: rodar todas.
 
 Fatia B — lado do DERVS-VOZ (a outra janela, por recado na caixa):
-6. O VOZ tem um seletor de cérebro com três encaixes: `claude_code` (já existe), `hermes` e `jev`. Trocar de cérebro não muda as travas de segurança do VOZ: aprovação só por clique, caminhos protegidos, Fachada sem Motor. Prova: testes do VOZ.
-7. O JEV entra como **triagem rápida**, não como conversa: ele classifica ("isso é urgente?", "qual cérebro resolve?", "é seguro agir sozinho?") pela API `POST https://api.typesafe.ai/v1/systemone`, com a chave em `TYPESAFE_API_KEY` fora do repositório. Sem chave, o encaixe fica desligado e diz isso. Prova: teste com servidor de mentira, sem rede.
-8. O Hermes Agent entra como cérebro alternativo atrás do mesmo contrato do Claude Code, desligado até alguém instalá-lo, e com o motivo escrito. Prova: teste do contrato com dublê.
-9. O terminal SSH do VOZ abre só a partir do computador do dono, usa a chave do próprio usuário (nunca guarda senha), lista o que foi digitado no registro de ações e recusa o que as travas recusam. Prova: teste do porteiro e uma sessão real num servidor de teste.
-10. O VOZ e o painel trocam uma mensagem de ponta a ponta: um alerta aprovado no painel chega ao VOZ, que o executa e devolve o resultado. Prova: um teste que sobe os dois lados de verdade, não dublê.
+- [ ] O VOZ tem um seletor de cérebro com três encaixes: `claude_code` (já existe), `hermes` e `jev`. Trocar de cérebro não muda as travas de segurança do VOZ: aprovação só por clique, caminhos protegidos, Fachada sem Motor. Prova: testes do VOZ.
+- [ ] O JEV entra como **triagem rápida**, não como conversa: classifica ("é urgente?", "qual cérebro resolve?") pela API `POST https://api.typesafe.ai/v1/systemone`, com a chave em `TYPESAFE_API_KEY` fora do repositório. Sem chave, o encaixe fica desligado. Prova: teste com servidor de mentira.
+- [ ] O Hermes Agent entra como cérebro alternativo atrás do mesmo contrato do Claude Code, desligado até alguém instalá-lo, e com o motivo escrito. Prova: teste do contrato com dublê.
+- [ ] O terminal SSH do VOZ abre só a partir do computador do dono, usa a chave do próprio usuário (nunca guarda senha), lista o que foi digitado no registro de ações e recusa o que as travas recusam. Prova: teste do porteiro e uma sessão real num servidor de teste.
+- [ ] O VOZ e o painel trocam uma mensagem de ponta a ponta: um alerta aprovado no painel chega ao VOZ, que o executa e devolve o resultado. Prova: um teste que sobe os dois lados de verdade, não dublê.
 
 ## fora_de_escopo
 

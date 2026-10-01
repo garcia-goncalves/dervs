@@ -24,29 +24,15 @@ operam o próprio parque de projetos e conhecem os termos do painel (selo, sem d
 etc.) — a lente DX se aplica.
 
 ## criterio_de_aceitacao
-- Em "Conectar projeto", é possível cadastrar mais de um servidor (nome + endereço
-  público), ver a lista dos já cadastrados e apagar um.
-- Em cada servidor cadastrado, o dono pode gravar um endereço por projeto (como já
-  existe hoje), e o mesmo projeto pode ter endereço gravado em mais de um servidor ao
-  mesmo tempo.
-- Cadastrar um servidor com um padrão de subdomínio (ex. `*.tinehost.com.br`) faz o
-  DERVS testar esse padrão contra os nomes de projeto já conhecidos (do computador ou do
-  GitHub) e preencher sozinho quando o endereço responder — sem exigir clique a mais do
-  dono para esse caso.
-- Projeto cujo domínio não segue nenhum padrão cadastrado continua aceitando endereço
-  manual por servidor, exatamente como hoje.
-- Na tela do projeto e no card do painel, os três selos aparecem separados e legíveis:
-  computador local, GitHub, e a lista de servidores onde ele responde (ou "não está em
-  nenhum servidor cadastrado", nunca um selo genérico fundindo os três).
-- Nenhuma rota nova aceita, grava, loga ou pede senha, chave, token ou qualquer segredo
-  de acesso a servidor — só endereço público. Teste automatizado cobre isso.
-- Endereço de rede interna continua recusado nas rotas novas, do mesmo jeito que já é
-  recusado hoje (reaproveitando `coletar_github.url_segura`/`enderecos_publicos`, nunca
-  uma segunda peneira).
-- Teste automatizado sobe dois servidores cadastrados, com o mesmo projeto respondendo
-  nos dois, e confere que o selo lista os dois nomes.
-- CI verde nos testes novos e nos já existentes, sem novo `requirements.txt` nem
-  `pyproject.toml` (biblioteca padrão pura, como o resto do repositório).
+- [ ] Em "Conectar projeto", é possível cadastrar mais de um servidor (nome + endereço público), ver a lista dos já cadastrados e apagar um.
+- [ ] Em cada servidor cadastrado, o dono pode gravar um endereço por projeto (como já existe hoje), e o mesmo projeto pode ter endereço gravado em mais de um servidor ao mesmo tempo.
+- [ ] Cadastrar um servidor com um padrão de subdomínio (ex. `*.tinehost.com.br`) faz o DERVS testar esse padrão contra os nomes de projeto já conhecidos (do computador ou do GitHub) e preencher sozinho quando o endereço responder — sem exigir clique a mais do dono para esse caso.
+- [ ] Projeto cujo domínio não segue nenhum padrão cadastrado continua aceitando endereço manual por servidor, exatamente como hoje.
+- [ ] Na tela do projeto e no card do painel, os três selos aparecem separados e legíveis: computador local, GitHub, e a lista de servidores onde ele responde (ou "não está em nenhum servidor cadastrado", nunca um selo genérico fundindo os três).
+- [ ] Nenhuma rota nova aceita, grava, loga ou pede senha, chave, token ou qualquer segredo de acesso a servidor — só endereço público. Teste automatizado cobre isso.
+- [ ] Endereço de rede interna continua recusado nas rotas novas, do mesmo jeito que já é recusado hoje (reaproveitando `coletar_github.url_segura`/`enderecos_publicos`, nunca uma segunda peneira).
+- [ ] Teste automatizado sobe dois servidores cadastrados, com o mesmo projeto respondendo nos dois, e confere que o selo lista os dois nomes.
+- [ ] CI verde nos testes novos e nos já existentes, sem novo `requirements.txt` nem `pyproject.toml` (biblioteca padrão pura, como o resto do repositório).
 
 ## fora_de_escopo
 - Varrer o servidor por SSH, API do provedor ou qualquer credencial para descobrir

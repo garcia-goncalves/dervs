@@ -38,6 +38,7 @@ import json
 import re
 import unicodedata
 from datetime import datetime
+from itertools import islice
 from pathlib import Path
 
 VERSAO = 1
@@ -51,10 +52,12 @@ MAX_PROVA = 200
 MAX_ARQUIVO = 256 * 1024
 MAX_ERROS = 10              # por documento
 MAX_VARRIDOS = 120          # briefings ABERTOS por leitura, com ou sem criterio
+MAX_PASTAS = 1000           # entradas LISTADAS em docs/esteira (antes de abrir)
 # O projeto INTEIRO e descartado pelo servidor acima de 64 KiB
 # (`banco.MAX_BYTES_POR_PROJETO`), e uma chave gorda derruba todas as outras
-# medidas junto. Esta chave nunca passa de 24 KiB.
-MAX_JSON = 24 * 1024
+# medidas junto. Esta chave nunca passa de 32 KiB (eram 24: com os 10 briefings
+# do proprio DERVS convertidos, o ultimo ficava sem criterio nenhum).
+MAX_JSON = 32 * 1024
 
 SECAO = "## criterio_de_aceitacao"
 
@@ -222,7 +225,7 @@ def _caber(docs: list) -> None:
     ultimo = docs[-1]
     ultimo["cortado"] = True
     ultimo["erros"].append("critérios cortados para caber no relatório "
-                           "(24 KiB por projeto)")
+                           "(32 KiB por projeto)")
     if tirados:
         ultimo["erros"].append("%d documento(s) não couberam no relatório"
                                % tirados)
@@ -239,6 +242,7 @@ def ler_projeto(raiz) -> dict:
     raiz = Path(raiz)
     base = raiz / "docs" / "esteira"
     docs = []
+    cortou_varredura = False
     if base.is_dir():
         # `resolve()` segue link simbolico E junction do Windows (que
         # `is_symlink()` nao ve). Tudo o que for lido tem de continuar DENTRO do
@@ -257,7 +261,13 @@ def ler_projeto(raiz) -> dict:
                           "repositório (link): não foi lida"],
                 "cortado": False, "criterios": []}]}
         varridos = 0
-        for pasta in sorted(base.iterdir(), key=lambda p: p.name):
+        # `islice`: um diretorio enorme nao e listado inteiro so para ser podado
+        # depois. Passou do teto: ordem arbitraria, e o corte vira erro visivel.
+        entradas = list(islice(base.iterdir(), MAX_PASTAS + 1))
+        if len(entradas) > MAX_PASTAS:
+            entradas = entradas[:MAX_PASTAS]
+            cortou_varredura = True
+        for pasta in sorted(entradas, key=lambda p: p.name):
             if len(docs) > MAX_DOCUMENTOS:
                 break              # o 31o so prova que ha mais; nao abre o resto
             if not SLUG.fullmatch(pasta.name):
@@ -277,6 +287,7 @@ def ler_projeto(raiz) -> dict:
             # Briefing sem criterio nao vira documento, mas abrir custa igual:
             # o teto de aberturas vale para quem so tem arquivo antigo.
             if varridos >= MAX_VARRIDOS:
+                cortou_varredura = True
                 break
             varridos += 1
             try:
@@ -294,6 +305,17 @@ def ler_projeto(raiz) -> dict:
             if not d["criterios"] and not d["erros"]:
                 continue
             docs.append(d)
+    if cortou_varredura:
+        # Calar aqui viraria "sem documentacao" (Lei 2): o corte tem de aparecer.
+        aviso = ("há mais briefings que o limite (%d abertos, %d pastas): o "
+                 "resto não foi lido" % (MAX_VARRIDOS, MAX_PASTAS))
+        if docs:
+            docs[-1]["erros"].append(aviso)
+            docs[-1]["cortado"] = True
+        else:
+            docs.append({"slug": "docs", "arquivo": "docs/esteira",
+                         "aprovado_em": "", "erros": [aviso], "cortado": True,
+                         "criterios": []})
     if len(docs) > MAX_DOCUMENTOS:
         docs = docs[:MAX_DOCUMENTOS]
         docs[-1]["cortado"] = True

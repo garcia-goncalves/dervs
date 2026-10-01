@@ -84,34 +84,24 @@ poucos botões e ver o Claude resolver.
 Fatia 1 — a fundação. Cada item é verificável por comando, teste ou olhada na tela.
 
 **Segurança (a fatia não entrega sem estes cinco):**
-- `curl -si https://dervs.com.br/api/dados` sem sessão devolve 401 ou 302, nunca dado.
-- Conta sem segundo fator configurado não alcança nenhuma rota de dados: teste automatizado
-  prova o 403.
-- O cadastro público está desligado: `POST /api/registro` devolve 403 e existe teste que
-  prova.
-- Nenhuma rota expõe terminal, PTY ou execução de comando nesta fatia: teste varre as rotas
-  registradas e falha se encontrar qualquer uma.
-- O `grep -r "dangerously-skip-permissions"` no código publicado não retorna nada.
+- [ ] `curl -si https://dervs.com.br/api/dados` sem sessão devolve 401 ou 302, nunca dado.
+- [ ] Conta sem segundo fator configurado não alcança nenhuma rota de dados: teste automatizado prova o 403.
+- [ ] O cadastro público está desligado: `POST /api/registro` devolve 403 e existe teste que prova.
+- [ ] Nenhuma rota expõe terminal, PTY ou execução de comando nesta fatia: teste varre as rotas registradas e falha se encontrar qualquer uma.
+- [ ] O `grep -r "dangerously-skip-permissions"` no código publicado não retorna nada.
 
 **Função:**
-- O agente local, rodando na máquina do dono, aparece na tela com "visto por último" abaixo
-  de 2 minutos.
-- Cada projeto mostra um selo verde, amarelo ou vermelho, e clicar abre a conta que gerou o
-  selo (CI, publicação por botão, drift, segredo, teste).
-- O drift entre servidor e GitHub aparece corretamente para pelo menos um projeto real —
-  o Ajudei-Saúde tem 10 commits não publicados desde 11/08/2026 e precisa aparecer vermelho
-  nesse quesito.
-- Conectar um projeto novo é feito **pela tela**, não editando arquivo: escolher pasta local,
-  conta do GitHub e servidor. Provado abrindo a tela e conectando um repositório qualquer.
-- Os 452 testes herdados do `painel-projetos` continuam passando, rodados **duas vezes
-  seguidas** (a segunda corrida pega teste que lê banco real e passa por sorte).
-- A CI do repositório novo fica verde no GitHub.
+- [ ] O agente local, rodando na máquina do dono, aparece na tela com "visto por último" abaixo de 2 minutos.
+- [ ] Cada projeto mostra um selo verde, amarelo ou vermelho, e clicar abre a conta que gerou o selo (CI, publicação por botão, drift, segredo, teste).
+- [ ] O drift entre servidor e GitHub aparece corretamente para pelo menos um projeto real — o Ajudei-Saúde tem 10 commits não publicados desde 11/08/2026 e precisa aparecer vermelho nesse quesito.
+- [ ] Conectar um projeto novo é feito **pela tela**, não editando arquivo: escolher pasta local, conta do GitHub e servidor. Provado abrindo a tela e conectando um repositório qualquer.
+- [ ] Os 452 testes herdados do `painel-projetos` continuam passando, rodados **duas vezes seguidas** (a segunda corrida pega teste que lê banco real e passa por sorte).
+- [ ] A CI do repositório novo fica verde no GitHub.
 
 **Tela:**
-- Nenhum texto em inglês visível.
-- Em 360px de largura, o selo de cada projeto é legível sem rolagem horizontal.
-- A tela funciona nos dois temas do sistema (claro e escuro) sem cor definida só dentro de
-  um deles.
+- [ ] Nenhum texto em inglês visível.
+- [ ] Em 360px de largura, o selo de cada projeto é legível sem rolagem horizontal.
+- [ ] A tela funciona nos dois temas do sistema (claro e escuro) sem cor definida só dentro de um deles.
 
 ## fora_de_escopo
 

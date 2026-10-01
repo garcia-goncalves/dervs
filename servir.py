@@ -796,7 +796,7 @@ class Hub(SimpleHTTPRequestHandler):
     def _dados(self):
         # O dono da sessao, e nao o dono da MAQUINA. Ver `_estado`.
         estado = self._estado(self._sessao()["usuario_id"])
-        # A chave crua `documentacao` (todos os criterios, ate 24 KiB por
+        # A chave crua `documentacao` (todos os criterios, ate 32 KiB por
         # projeto) NAO vai no poll de 60 s de toda aba: a tela recebe a CONTA
         # (`progresso`) e busca os criterios em `/api/progresso` quando abre o
         # projeto. A poda e aqui, e nao em `_estado`: `_progresso` e
@@ -845,8 +845,7 @@ class Hub(SimpleHTTPRequestHandler):
                 # um botao que sempre falha e um botao que mente.
                 x["consertavel"] = (
                     x.get("regra") in tarefas.REGRAS_CONSERTAVEIS_PELA_TELA
-                    and (x.get("projeto") or "").lower()
-                    not in tarefas.PROJETOS_BLOQUEADOS)
+                    and not tarefas.projeto_bloqueado(x.get("projeto")))
             tend = memoria.tendencia(con, agora_iso)
             guardadas = banco.arquivadas_detalhe(usuario_id=usuario_id, con=con)
         finally:
@@ -2795,7 +2794,7 @@ class Hub(SimpleHTTPRequestHandler):
                           for p in estado["projetos"]}
         if projeto.lower() not in nomes_da_conta:
             return self._json(404, {"erro": "projeto nao encontrado"})
-        if projeto.lower() in tarefas.PROJETOS_BLOQUEADOS:
+        if tarefas.projeto_bloqueado(projeto):
             return self._json(403, {"erro": "projeto bloqueado"})
         # O DONO entra NO ID, e nao so na coluna. `fila.id` continua sendo
         # TEXT PRIMARY KEY global (nao (usuario_id, id), como `achado`), e
@@ -2902,7 +2901,7 @@ class Hub(SimpleHTTPRequestHandler):
         projeto = alvo.get("projeto") or ""
         if regra not in tarefas.REGRAS_CONSERTAVEIS_PELA_TELA:
             return 403, {"erro": "esta regra nao e consertada por aqui"}
-        if projeto.lower() in tarefas.PROJETOS_BLOQUEADOS:
+        if tarefas.projeto_bloqueado(projeto):
             return 403, {"erro": "projeto bloqueado"}
         # O dono entra NO ID (fila.id e TEXT PRIMARY KEY global): sem ele, duas
         # contas com projeto de mesmo nome colidem e a segunda "pede" sem entrar.
@@ -3023,7 +3022,7 @@ class Hub(SimpleHTTPRequestHandler):
         detalhe = "Critério %d de %s: %s" % (c["n"], documento["arquivo"],
                                              c["texto"])
         if c["prova_aceita"]:
-            detalhe += "\nProva do critério: %s" % c["prova"]
+            detalhe += "\n%s%s" % (banco.MARCA_DA_PROVA, c["prova"])
         entrou = banco.enfileirar([{
             "id": id_fila, "usuario_id": uid, "projeto": projeto,
             "regra": "desenvolver", "gravidade": "media", "risco": 0,

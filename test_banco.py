@@ -1861,6 +1861,23 @@ class TarefaNoBanco(unittest.TestCase):
                          con=self.con)
         self.assertEqual(len(banco.tarefa("d:ok", con=self.con)["detalhe"]), 4096)
 
+    def test_a_lista_traz_a_linha_da_prova_mesmo_depois_do_corte(self):
+        """O pedido na lista e cortado em 300; a prova fica no FIM dele e o
+        dono aprovaria um comando que nao leu."""
+        pedido = "x" * 500 + "\n" + banco.MARCA_DA_PROVA + "python test_x.py"
+        banco.enfileirar([{"id": "d:prova", "usuario_id": 7,
+                           "projeto": "dervs", "regra": "desenvolver",
+                           "detalhe": pedido}], con=self.con)
+        achada = [t for t in banco.tarefas_do_painel(7, con=self.con)
+                  if t["id"] == "d:prova"][0]
+        self.assertEqual(len(achada["detalhe"]), banco.TETO_DETALHE_NA_LISTA)
+        self.assertNotIn("python test_x.py", achada["detalhe"])
+        self.assertEqual(achada["prova"],
+                         banco.MARCA_DA_PROVA + "python test_x.py")
+        sem = [t for t in banco.tarefas_do_painel(7, con=self.con)
+               if t["id"] == "d:1"][0]
+        self.assertIsNone(sem["prova"])
+
     def test_tarefas_do_painel_nao_carrega_o_diff(self):
         """A lista e lida a cada abertura de tela; o diff tem dezenas de
         milhares de caracteres. Quem quer o diff pede a tarefa."""

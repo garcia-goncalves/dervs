@@ -264,7 +264,9 @@ class OResumoNaoMente(unittest.TestCase):
         r = _pinta(pr("sem_documentacao", percentual=0))
         self.assertIn("Sem documentação", r["resumo"])
         self.assertNotIn("%", r["resumo"])
-        self.assertNotIn("0", r["resumo"])
+        # Um "0" SOZINHO (numero). Nao `assertNotIn("0", ...)`: o carimbo
+        # "medido em 30/09/2026" tem zero na data e o dado de teste envelhece.
+        self.assertIsNone(re.search(r"(?<![\w/])0(?![\w/])", r["resumo"]))
         self.assertEqual(r["barras"], 0)
         self.assertEqual(r["chamadas"], [])  # nada a buscar
 
@@ -442,6 +444,16 @@ class ODetalheApareceAoLadoDoPodeFazer(unittest.TestCase):
         self.assertIn("O que foi pedido:", r["texto"])
         self.assertIn("mostrar a barra", r["texto"])
         self.assertIn("Pode fazer", r["botoes"])
+
+    def test_a_prova_cortada_do_pedido_aparece_a_parte(self):
+        longo = "criterio " * 40            # passa dos 300 do corte
+        prova = "Prova do critério: python test_x.py"
+        r = self._linha(detalhe=longo[:300], prova=prova)
+        self.assertIn("python test_x.py", r["texto"])
+        # Se ja coube no pedido, nao repete.
+        r = self._linha(detalhe="faca X\n" + prova, prova=prova)
+        self.assertEqual(r["texto"].count("python test_x.py"), 1)
+        self.assertNotIn("Prova do", self._linha(detalhe="x")["texto"])
 
     def test_html_no_pedido_fica_como_texto(self):
         r = self._linha(detalhe="<img src=x onerror=alert(1)>")

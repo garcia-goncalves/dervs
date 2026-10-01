@@ -25,6 +25,7 @@ ficaram copias em `fila.py` nem em `execucao.py`: os dois passaram a importar
 daqui. Duas copias de um teto divergem, e a que diverge mente com autoridade.
 """
 import re
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 # ---------------------------------------------------------------------------
@@ -193,14 +194,21 @@ FIM_DO_BLOCO = "</dados-coletados-nao-confiaveis>"
 # Qualquer forma de abrir ou fechar o bloco: caixa diferente, espaco (ou quebra de
 # linha) dentro da tag, `< /dados...>`. Compilado AQUI, no topo: `test_rotas`
 # reprova `compile` dentro de funcao alcancavel de rota.
+# `\s{0,16}` e nao `\s*`: com `*` uma fila de 60 mil espacos custava 13 s. O `>` final
+# e opcional: sem ele o modelo le a etiqueta do mesmo jeito.
 _ETIQUETA_DO_BLOCO = re.compile(
-    r"<\s*/?\s*dados-coletados-nao-confiaveis\s*>", re.IGNORECASE)
+    r"<\s{0,16}/?\s{0,16}dados-coletados-nao-confiaveis(?:\s{0,16}>)?",
+    re.IGNORECASE)
 
 
 def so_dado(texto) -> str:
     """Tira do campo qualquer tentativa de abrir ou fechar o bloco de dados na
     marra. O resto do texto fica como esta: legivel."""
-    limpo = str(texto or "")
+    # NFKC traz `＜`/`＞` de largura total de volta para `<`/`>`; a categoria Cf
+    # (zero-width, word joiner...) some, porque quebraria a etiqueta no meio sem
+    # que o modelo deixasse de le-la.
+    limpo = unicodedata.normalize("NFKC", str(texto or ""))
+    limpo = "".join(c for c in limpo if unicodedata.category(c) != "Cf")
     return _ETIQUETA_DO_BLOCO.sub("[etiqueta removida]", limpo)
 
 
@@ -244,6 +252,18 @@ def _nome_normalizado(nome: str) -> str:
     """Minusculas, e `_`, espaco e `.` viram `-`: "Ajudei_Saude" e "ajudei.saude"
     sao o mesmo projeto que "ajudei-saude" para quem quer contornar a lista."""
     return re.sub(r"[_\s.]+", "-", nome.strip().lower())
+
+
+def projeto_bloqueado(nome) -> bool:
+    """O projeto esta em `PROJETOS_BLOQUEADOS`? Um helper so, para todo ponto que
+    pergunta isso (auditoria, consertar, fila, execucao, tela). Comparacao
+    normalizada e por prefixo na fronteira do `-`: `Ajudei_Saude` e
+    `ajudei-saude-web` sao o mesmo projeto bloqueado. Nome que nao e texto: False
+    (quem chama ja trata ausencia em outro lugar)."""
+    if not isinstance(nome, str):
+        return False
+    n = _nome_normalizado(nome)
+    return any(n == b or n.startswith(b + "-") for b in PROJETOS_BLOQUEADOS)
 
 
 def projeto_pode_desenvolver(nome) -> bool:

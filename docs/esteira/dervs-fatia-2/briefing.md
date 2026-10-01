@@ -75,34 +75,16 @@ Dois perfis, os mesmos da Fatia 1, em momentos diferentes:
 Cada item abaixo tem de ser provável por comando, teste ou olhada na tela. Nenhum vale por
 leitura de código.
 
-1. **O trabalhador executa.** Um teste sobe um repositório de mentira, enfileira uma tarefa
-   e prova que o processo `claude` foi disparado, que a saída em `stream-json` foi lida
-   linha a linha, e que o resultado chegou ao banco. Comando: `python test_executor.py`.
-2. **Zero dependência externa continua valendo.** A verificação automática segue verde: não
-   existe `requirements.txt` nem `pyproject.toml`, e nenhum `import` fora da biblioteca
-   padrão. O SDK oficial em Python está **proibido** (traz 4 dependências para embrulhar um
-   subprocesso). Comando: o passo de CI que já existe.
-3. **O semáforo obedece.** Um teste prova que tarefa marcada vermelha **não** executa sem
-   registro de aprovação no banco, e que tarefa verde executa sem ele. Prova nos dois
-   sentidos: o teste tem de ficar vermelho se a guarda for removida.
-4. **Publicar continua sendo só do dono.** Nenhuma tarefa, de nenhuma cor, dispara o
-   workflow de publicação. O teste que hoje varre as rotas ganha um irmão que varre as
-   tarefas.
-5. **O teto trava antes, não depois.** Um teste prova que, com o teto do dia já consumido,
-   a tarefa é recusada **sem** o processo `claude` chegar a ser disparado.
-6. **A caixa é isolada.** A tarefa que roda na VPS acontece dentro de um container
-   descartável, sem nenhum segredo do painel no ambiente, com saída de rede permitida só
-   para uma lista curta. Prova: um teste tenta alcançar um endereço fora da lista de dentro
-   do container e falha.
-7. **Nada de `vivo/` entra na imagem.** A trava atual (`.dockerignore` + `Dockerfile` que
-   nunca usa `COPY . .`) continua provada pelo `test_imagem.py`.
-8. **O dono vê o trabalho acontecendo.** Na tela, uma tarefa em andamento mostra o que está
-   sendo feito, ao vivo, em português. Verificado clicando, não lendo código — e a evidência
-   colada em `verificacao.md`.
-9. **O diff é apresentado antes de virar commit.** Toda tarefa termina num branch, nunca na
-   `main`, e a tela mostra o que mudou em linguagem que o Thiago entende.
-10. **Todo texto de tela em português do Brasil**, conferido pelo vigia de vocabulário que
-    já existe.
+- [ ] **O trabalhador executa.** Um teste sobe um repositório de mentira, enfileira uma tarefa e prova que o processo `claude` foi disparado, que a saída em `stream-json` foi lida linha a linha, e que o resultado chegou ao banco. Comando: `python test_executor.py`.
+- [ ] **Zero dependência externa continua valendo.** A verificação automática segue verde: nem `requirements.txt` nem `pyproject.toml`, e nenhum `import` fora da biblioteca padrão. O SDK oficial em Python está **proibido** (4 dependências para embrulhar um subprocesso). Comando: o passo de CI existente.
+- [ ] **O semáforo obedece.** Um teste prova que tarefa marcada vermelha **não** executa sem registro de aprovação no banco, e que tarefa verde executa sem ele. Prova nos dois sentidos: o teste tem de ficar vermelho se a guarda for removida.
+- [ ] **Publicar continua sendo só do dono.** Nenhuma tarefa, de nenhuma cor, dispara o workflow de publicação. O teste que hoje varre as rotas ganha um irmão que varre as tarefas.
+- [ ] **O teto trava antes, não depois.** Um teste prova que, com o teto do dia já consumido, a tarefa é recusada **sem** o processo `claude` chegar a ser disparado.
+- [ ] **A caixa é isolada.** A tarefa que roda na VPS acontece dentro de um container descartável, sem nenhum segredo do painel no ambiente, com saída de rede permitida só para uma lista curta. Prova: um teste tenta alcançar um endereço fora da lista de dentro do container e falha.
+- [ ] **Nada de `vivo/` entra na imagem.** A trava atual (`.dockerignore` + `Dockerfile` que nunca usa `COPY . .`) continua provada pelo `test_imagem.py`.
+- [ ] **O dono vê o trabalho acontecendo.** Na tela, uma tarefa em andamento mostra o que está sendo feito, ao vivo, em português. Verificado clicando, não lendo código — e a evidência colada em `verificacao.md`.
+- [ ] **O diff é apresentado antes de virar commit.** Toda tarefa termina num branch, nunca na `main`, e a tela mostra o que mudou em linguagem que o Thiago entende.
+- [ ] **Todo texto de tela em português do Brasil**, conferido pelo vigia de vocabulário que já existe.
 
 ## fora_de_escopo
 

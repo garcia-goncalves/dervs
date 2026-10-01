@@ -30,41 +30,16 @@ Liga a lente DX.
 
 ## criterio_de_aceitacao
 
-1. **A tabela `historico` cresce a cada coleta local.** Prova:
-   `python -c "import sqlite3;print(sqlite3.connect('hub.db').execute('select count(*) from historico').fetchone())"`
-   sobe entre duas coletas separadas por mais de 60 s. Hoje tem **1 linha só**.
-2. **Cada pendência sabe a própria idade.** O JSON de `/api/dados` traz
-   `visto_em` e `dias` em toda pendência, e a tela mostra "nova" para quem nasceu
-   nas últimas 24 h. Prova: `curl -s localhost:4777/api/dados | python -c "..."`
-   imprime `dias` para as 27.
-3. **O painel diz quantas o dono fechou.** `/api/dados` traz
-   `tendencia: {resolvidas_7d, novas_24h, abertas_por_gravidade, serie}`, e o
-   número de resolvidas é maior que zero depois de resolver uma pendência de
-   mentira e recoletar. Prova: teste automatizado sobre o motor, sem depender do
-   relógio real.
-4. **O briefing matinal é uma frase de verdade, nunca genérica.** Aparece no topo
-   da tela, cita número e nome de projeto, e muda quando o dado muda. Prova:
-   teste com três estados diferentes (dia limpo, dia com alta, dia piorando)
-   produz três textos distintos, e nenhum deles contém "tudo certo" quando
-   existe pendência alta.
-5. **Dez linhas de "grafo velho" viram uma.** A lista agrupa pendências da mesma
-   regra em uma linha com contagem e uma ação que serve para todas. Prova: com os
-   dados de hoje, a contagem visível cai de 27 para **18 ou menos**, e nenhuma
-   pendência some da conta (o agrupado diz "10 projetos").
-6. **Site fora do ar vira pendência alta.** Regra nova: `url_prod` que não
-   responde em 8 s ou devolve 5xx. Prova: teste com servidor de mentira
-   respondendo 200, 503 e recusando conexão — só os dois últimos geram pendência.
-7. **Divergência local × servidor aparece.** Regra nova: commits na `main` do
-   GitHub mais novos que o último deploy bem-sucedido. Prova: teste com dados de
-   deploy sintéticos (mesmo sha = sem pendência; sha atrasado = pendência com o
-   número de commits).
-8. **Nada quebrou.** `python test_regras.py`, `python test_coletar.py`,
-   `python test_servir.py` e `python test_execucao.py` passam, e a soma de testes
-   é maior que os 203 de hoje.
-9. **A CI fica verde** no GitHub, e as suítes novas estão listadas no
-   `.github/workflows/ci.yml` (o arquivo não descobre suíte sozinho).
-10. **A documentação anda junto.** `README.md` ganha seção das quatro entregas no
-    mesmo commit, incluindo o que a regra de servidor **não** garante.
+- [ ] **A tabela `historico` cresce a cada coleta local.** Prova: `python -c "import sqlite3;print(sqlite3.connect('hub.db').execute('select count(*) from historico').fetchone())"` sobe entre duas coletas separadas por mais de 60 s. Hoje tem **1 linha só**.
+- [ ] **Cada pendência sabe a própria idade.** O JSON de `/api/dados` traz `visto_em` e `dias` em toda pendência, e a tela mostra "nova" para quem nasceu nas últimas 24 h. Prova: `curl -s localhost:4777/api/dados | python -c "..."` imprime `dias` para as 27.
+- [ ] **O painel diz quantas o dono fechou.** `/api/dados` traz `tendencia: {resolvidas_7d, novas_24h, abertas_por_gravidade, serie}`, e o número de resolvidas é maior que zero depois de resolver uma pendência de mentira e recoletar. Prova: teste automatizado sobre o motor, sem depender do relógio real.
+- [ ] **O briefing matinal é uma frase de verdade, nunca genérica.** Aparece no topo da tela, cita número e nome de projeto, e muda quando o dado muda. Prova: três estados (dia limpo, com alta, piorando) dão três textos distintos, e nenhum diz "tudo certo" havendo pendência alta.
+- [ ] **Dez linhas de "grafo velho" viram uma.** A lista agrupa pendências da mesma regra em uma linha com contagem e uma ação que serve para todas. Prova: com os dados de hoje, a contagem visível cai de 27 para **18 ou menos**, e nenhuma pendência some da conta (o agrupado diz "10 projetos").
+- [ ] **Site fora do ar vira pendência alta.** Regra nova: `url_prod` que não responde em 8 s ou devolve 5xx. Prova: teste com servidor de mentira respondendo 200, 503 e recusando conexão — só os dois últimos geram pendência.
+- [ ] **Divergência local × servidor aparece.** Regra nova: commits na `main` do GitHub mais novos que o último deploy bem-sucedido. Prova: teste com dados de deploy sintéticos (mesmo sha = sem pendência; sha atrasado = pendência com o número de commits).
+- [ ] **Nada quebrou.** `python test_regras.py`, `python test_coletar.py`, `python test_servir.py` e `python test_execucao.py` passam, e a soma de testes é maior que os 203 de hoje.
+- [ ] **A CI fica verde** no GitHub, e as suítes novas estão listadas no `.github/workflows/ci.yml` (o arquivo não descobre suíte sozinho).
+- [ ] **A documentação anda junto.** `README.md` ganha seção das quatro entregas no mesmo commit, incluindo o que a regra de servidor **não** garante.
 
 ## fora_de_escopo
 
