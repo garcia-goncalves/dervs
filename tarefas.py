@@ -196,6 +196,7 @@ FIM_DO_BLOCO = "</dados-coletados-nao-confiaveis>"
 # reprova `compile` dentro de funcao alcancavel de rota.
 # `\s{0,16}` e nao `\s*`: com `*` uma fila de 60 mil espacos custava 13 s. O `>` final
 # e opcional: sem ele o modelo le a etiqueta do mesmo jeito.
+_FILA_DE_BRANCOS = re.compile(r"\s{17,}")
 _ETIQUETA_DO_BLOCO = re.compile(
     r"<\s{0,16}/?\s{0,16}dados-coletados-nao-confiaveis(?:\s{0,16}>)?",
     re.IGNORECASE)
@@ -209,6 +210,8 @@ def so_dado(texto) -> str:
     # que o modelo deixasse de le-la.
     limpo = unicodedata.normalize("NFKC", str(texto or ""))
     limpo = "".join(c for c in limpo if unicodedata.category(c) != "Cf")
+    # Fila de 17+ brancos colapsa antes: o limite do regex nao pode ser desvio.
+    limpo = _FILA_DE_BRANCOS.sub(" ", limpo)
     return _ETIQUETA_DO_BLOCO.sub("[etiqueta removida]", limpo)
 
 

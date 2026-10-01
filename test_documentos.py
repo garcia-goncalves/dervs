@@ -638,10 +638,13 @@ class OLeitorParaDeAbrirArquivoAoChegarNoTeto(unittest.TestCase):
         self.assertTrue(any("limite" in e for e in r["documentos"][0]["erros"]))
 
     def test_diretorio_gigante_nao_e_listado_inteiro(self):
-        """`sorted(iterdir())` lia a pasta toda antes de qualquer teto."""
-        self.pastas(documentos.MAX_PASTAS + 50, "# antigo\n")
+        """`sorted(iterdir())` lia a pasta toda antes de qualquer teto. Pastas
+        VAZIAS: nenhuma abre briefing, entao so o MAX_PASTAS pode acusar."""
+        base = self.raiz / "docs" / "esteira"
+        for i in range(documentos.MAX_PASTAS + 50):
+            (base / ("p%04d" % i)).mkdir(parents=True)
         r, abertos = self.contar_aberturas()
-        self.assertLessEqual(abertos, documentos.MAX_VARRIDOS)
+        self.assertEqual(abertos, 0)
         self.assertTrue(any("limite" in e
                             for d in r["documentos"] for e in d["erros"]))
 

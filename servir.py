@@ -3019,8 +3019,10 @@ class Hub(SimpleHTTPRequestHandler):
         # O dono entra NO ID (fila.id e TEXT PRIMARY KEY global): sem ele, duas
         # contas com projeto de mesmo nome colidem e a segunda "pede" sem entrar.
         id_fila = "desenvolver:%s:%s" % (uid, cid)
-        detalhe = "Critério %d de %s: %s" % (c["n"], documento["arquivo"],
-                                             c["texto"])
+        # A marca da prova NAO pode vir do texto do criterio (dado de fora): o
+        # banco ancora a coluna `prova` na primeira ocorrencia dela.
+        texto = c["texto"].replace(banco.MARCA_DA_PROVA.strip(), "Prova (citada)")
+        detalhe = "Critério %d de %s: %s" % (c["n"], documento["arquivo"], texto)
         if c["prova_aceita"]:
             detalhe += "\n%s%s" % (banco.MARCA_DA_PROVA, c["prova"])
         entrou = banco.enfileirar([{
