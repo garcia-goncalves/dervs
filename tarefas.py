@@ -242,6 +242,13 @@ NUNCA_VERDE = frozenset({"publicar"})
 # verde. Por isso ela NAO entra em `NUNCA_VERDE` (nunca rodaria): entra aqui.
 SEMPRE_VERMELHA = frozenset({"desenvolver"})
 
+# A prova de um criterio (regra `provar`) roda um comando da lista fechada, sem IA:
+# o executor dela e um so, e ela pede o clique do dono mesmo se alguem a repintar.
+# NAO entra em `SEMPRE_VERMELHA` de proposito (`test_desenvolver` cobra aquele
+# conjunto igual a {"desenvolver"}); a exigencia do clique mora em `pode_rodar`.
+PROVAR = "provar"
+EXECUTOR_DA_PROVA = "prova"
+
 # Projetos em que o DERVS nao desenvolve nada (mais todo nome com "nexa", que e
 # do Andre). Somam-se a `PROJETOS_BLOQUEADOS`: dado de paciente, os cinco da
 # TineHost (revenda, sem runner) e o `aninha-site`. Comparacao em minusculas.
@@ -428,6 +435,16 @@ def pode_rodar(tarefa: dict, gasto_usd=0.0, agora_iso: str = "",
     if regra in SEMPRE_VERMELHA and not projeto_pode_desenvolver(
             t.get("projeto")):
         return (False, "o DERVS nao desenvolve neste projeto")
+    # Prova: mesmo projeto-filtro do `desenvolver`, e executor SO o da prova —
+    # uma tarefa `provar` com executor `claude` abriria sessao de IA. Sempre
+    # pede o clique, qualquer que seja a cor.
+    if regra == PROVAR:
+        if not projeto_pode_desenvolver(t.get("projeto")):
+            return (False, "o DERVS nao roda provas neste projeto")
+        if (t.get("executor") or "") != EXECUTOR_DA_PROVA:
+            return (False, "a prova so roda no executor da prova")
+        if not (t.get("aprovado_em") or "").strip():
+            return (False, "esta tarefa esta vermelha e espera o seu clique")
     cor = cor_da_regra(regra, repinturas)
     if cor != VERDE and not (t.get("aprovado_em") or "").strip():
         return (False, "esta tarefa esta vermelha e espera o seu clique")
