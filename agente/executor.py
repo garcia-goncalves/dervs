@@ -33,7 +33,11 @@ pessoa parar de olhar para o lado que realmente decide, que e o servidor.
 """
 from __future__ import annotations
 
+import os
+import re
+import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -42,6 +46,8 @@ if str(AQUI.parent) not in sys.path:
     sys.path.insert(0, str(AQUI.parent))
 
 import auditoria  # noqa: E402
+import banco      # noqa: E402
+import documentos # noqa: E402
 import execucao   # noqa: E402
 import tarefas    # noqa: E402
 
@@ -284,6 +290,239 @@ class ExecutorAuditor(Executor):
         }
 
 
+# ---------------------------------------------------------------------------
+# O braco da PROVA (fase 2 do progresso por documentacao): roda os comandos da
+# lista fechada de `documentos.prova_permitida`, numa COPIA, sem shell, e
+# devolve um veredito por prova. Sem IA, sem custo.
+#
+# LEI 2: o veredito e `True`, `False` ou `None` ("nao sei"), e `None` NUNCA vira
+# falha. Prova que nao rodou (modulo ausente, nenhum teste coletado, prazo
+# estourado, executavel ausente) nao e criterio reprovado: e criterio sem
+# resposta. Zerar o que nao deu para medir apagaria um fato.
+# ---------------------------------------------------------------------------
+
+PRAZO_POR_PROVA = 600
+PRAZO_DA_TAREFA = 1500
+TETO_DO_RESUMO = 4000
+TETO_DA_CAUDA = 1500
+
+# Alem do que `execucao.ambiente_da_filha` ja tira. A filha MANTEM `ANTHROPIC_*`
+# porque a sessao de IA precisa; um teste de terceiro nao precisa de nada disso.
+_PREFIXOS_FORA = ("ANTHROPIC_", "CLAUDE_CODE_", "DERVS_")
+_NOMES_FORA = ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTEST_ADDOPTS",
+               "PYTEST_PLUGINS", "NODE_OPTIONS")
+
+
+def argv_da_prova(argv):
+    """O argv que roda de verdade, ou `None` se esta fase nao o roda.
+
+    `python` vira o interpretador DESTE processo, em caminho absoluto: a
+    palavra crua seria resolvida pelo PATH e pela pasta do repositorio, e um
+    `python.exe` plantado la dentro rodaria no lugar. `npm test` fica de fora.
+    """
+    if not isinstance(argv, (list, tuple)) or not argv:
+        return None
+    if argv[0] == "python":
+        return [execucao._python_com_console(sys.executable)] + list(argv[1:])
+    return None
+
+
+def ambiente_da_prova(base=None) -> dict:
+    limpo = execucao.ambiente_da_filha(base)
+    for nome in list(limpo):
+        alto = nome.upper()
+        if alto.startswith(_PREFIXOS_FORA) or alto in _NOMES_FORA:
+            del limpo[nome]
+    limpo["PYTHONDONTWRITEBYTECODE"] = "1"
+    return limpo
+
+
+def veredito(argv, codigo, cauda):
+    """`(True|False|None, motivo)`. So `False` quando o proprio executor de
+    testes disse que um teste falhou; qualquer outra coisa e `None`."""
+    if codigo == 0:
+        return True, ""
+    pytest = "pytest" in (argv or [])
+    if pytest:
+        # Codigo 1 tambem e o de `python -m pytest` SEM pytest instalado
+        # ("No module named pytest"): so o resumo "N failed" prova teste caindo.
+        if codigo == 1 and re.search(r"\b\d+ failed\b", cauda or ""):
+            return False, "o pytest apontou teste falhando"
+        return None, ("o pytest saiu com codigo %s (nao e falha de teste: "
+                      "nenhum teste coletado, erro de uso ou interrupcao)"
+                      % codigo)
+    if "FAILED (" in (cauda or ""):
+        return False, "o unittest apontou teste falhando"
+    return None, ("o teste saiu com codigo %s sem o resumo de falha do "
+                  "unittest (erro de importacao ou de ambiente?)" % codigo)
+
+
+class ExecutorProva(Executor):
+    """Roda as provas APROVADAS pelo dono, so as que ainda existem na copia."""
+
+    nome = tarefas.EXECUTOR_DA_PROVA
+
+    SEGUNDOS_ENTRE_OLHADAS = 1.0
+    PRAZO_POR_PROVA = PRAZO_POR_PROVA
+    PRAZO_DA_TAREFA = PRAZO_DA_TAREFA
+
+    def disponivel(self) -> bool:
+        return bool(sys.executable) and Path(sys.executable).exists()
+
+    @staticmethod
+    def _matar(proc) -> None:
+        """Mata a ARVORE: o teste pode ter filhos, e so o pai morreria."""
+        try:
+            comando = execucao.comando_para_matar(proc.pid)
+            if comando is not None:
+                subprocess.run(comando, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=30,
+                               shell=False, creationflags=execucao.SEM_JANELA)
+            else:
+                import signal
+                os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:                      # noqa: BLE001
+            pass
+        try:
+            proc.kill()
+        except Exception:                      # noqa: BLE001
+            pass
+        try:
+            proc.wait(timeout=10)
+        except Exception:                      # noqa: BLE001
+            pass
+
+    def _rodar_uma(self, argv, copia, ate, ao_progredir):
+        """`(codigo|None, cauda, motivo)`. `codigo None` = nao terminou/rodou;
+        `motivo` diz por que."""
+        extra = ({"start_new_session": True}
+                 if not sys.platform.startswith("win") else {})
+        flags = ((execucao.SEM_JANELA | execucao.GRUPO_PROPRIO)
+                 if sys.platform.startswith("win") else 0)
+        with tempfile.TemporaryFile() as saida:
+            try:
+                proc = subprocess.Popen(
+                    argv, cwd=str(copia), env=ambiente_da_prova(),
+                    stdin=subprocess.DEVNULL, stdout=saida,
+                    stderr=subprocess.STDOUT, shell=False,
+                    creationflags=flags, **extra)
+            except OSError as e:
+                return None, "", "nao consegui iniciar o teste: %s" % e
+            fim = time.time() + min(self.PRAZO_POR_PROVA, max(0, ate - time.time()))
+            motivo = ""
+            while proc.poll() is None:
+                if ao_progredir is not None:
+                    try:
+                        if ao_progredir({"estado": "rodando", "linhas": [],
+                                         "custo_usd": 0.0}):
+                            motivo = "voce pediu para parar"
+                    except Exception:          # noqa: BLE001
+                        pass
+                if not motivo and time.time() >= fim:
+                    motivo = "o prazo da prova estourou"
+                if motivo:
+                    self._matar(proc)
+                    break
+                time.sleep(self.SEGUNDOS_ENTRE_OLHADAS)
+            tamanho = saida.seek(0, 2)
+            saida.seek(max(0, tamanho - TETO_DA_CAUDA))
+            cauda = saida.read().decode("utf-8", "replace")
+        if motivo:
+            return None, cauda, motivo
+        return proc.returncode, cauda, ""
+
+    def rodar(self, tarefa: dict, teto_usd=None, ao_progredir=None,
+              gasto_usd=0.0, repinturas=None, maquina=None) -> dict:
+        recusa = self._recusar_se_nao_pode(tarefa, gasto_usd, repinturas,
+                                           maquina)
+        if recusa is not None:
+            return recusa
+
+        id_ = tarefa.get("id") or ""
+        projeto = tarefa.get("projeto") or ""
+
+        def falha(erro, **mais):
+            d = {"tipo": "desfecho", "id": id_, "estado": "falha", "ramo": "",
+                 "resumo": "", "diff": "", "pr_url": "", "rodadas": 0,
+                 "custo_usd": 0.0, "erro": erro}
+            d.update(mais)
+            return d
+
+        pedidas = documentos.provas_do_pedido(tarefa.get("detalhe") or "",
+                                              banco.MARCA_DA_PROVA)
+        if not pedidas:
+            return falha("o pedido nao traz nenhuma prova valida")
+        caminho = tarefa.get("caminho") or tarefa.get("projeto_caminho") or ""
+        if not caminho:
+            return falha("o computador nao sabe onde este projeto esta")
+
+        copia = Path(execucao.BASE_COPIAS) / ("dervs-prova-%s" % execucao.id_curto())
+        try:
+            ok, saida = execucao.criar_copia(caminho, copia, "dervs-prova")
+            if not ok:
+                return falha("nao consegui abrir a copia: %s" % saida[:300])
+            sha = execucao.sha_da_copia(copia)
+            try:
+                doc = documentos.ler_projeto(copia)
+            except Exception as e:             # noqa: BLE001
+                return falha("nao consegui ler a documentacao da copia: %s"
+                             % str(e)[:200], sha=sha)
+            aceitas = documentos.provas_aceitas(doc, projeto)
+
+            provas, linhas, parou = [], [], False
+            ate = time.time() + self.PRAZO_DA_TAREFA
+            for prova in pedidas:
+                criterios = aceitas.get(prova)
+                if criterios is None:
+                    provas.append({"prova": prova, "ok": None, "criterios": [],
+                                   "motivo": "a prova nao esta mais na "
+                                             "documentacao da copia"})
+                    continue
+                if parou or time.time() >= ate:
+                    provas.append({"prova": prova, "ok": None,
+                                   "criterios": criterios,
+                                   "motivo": "nao deu tempo ou a tarefa foi "
+                                             "parada"})
+                    continue
+                argv = argv_da_prova(documentos.prova_permitida(prova)[2])
+                if argv is None:
+                    provas.append({"prova": prova, "ok": None,
+                                   "criterios": criterios,
+                                   "motivo": "esta fase nao roda este tipo de "
+                                             "prova"})
+                    continue
+                codigo, cauda, motivo = self._rodar_uma(argv, copia, ate,
+                                                        ao_progredir)
+                if motivo:
+                    ok_, mot = None, motivo
+                    parou = parou or motivo == "voce pediu para parar"
+                elif codigo is None:
+                    ok_, mot = None, "nao rodou"
+                else:
+                    ok_, mot = veredito(argv, codigo, cauda)
+                provas.append({"prova": prova, "ok": ok_, "motivo": mot,
+                               "criterios": criterios})
+                if ok_ is not True:
+                    linhas.append((prova, cauda))
+        finally:
+            execucao.remover_copia(caminho, copia)
+
+        rotulo = {True: "passou", False: "FALHOU", None: "sem veredito"}
+        resumo = "\n".join("%s: %s" % (p["prova"], rotulo[p["ok"]])
+                           for p in provas)
+        for prova, cauda in linhas:
+            resumo += "\n\n--- %s ---\n%s" % (prova, cauda.strip())
+        return {
+            "tipo": "desfecho", "id": id_,
+            "estado": "falha" if parou else "ok",
+            "ramo": "", "diff": "", "pr_url": "", "rodadas": 0,
+            "custo_usd": 0.0, "resumo": resumo[:TETO_DO_RESUMO],
+            "erro": "voce pediu para parar" if parou else "",
+            "provas": provas, "sha": sha,
+        }
+
+
 class ExecutorCodex(Executor):
     """O segundo braco. Previsto, e desligado.
 
@@ -309,6 +548,7 @@ class ExecutorCodex(Executor):
 EXECUTORES = {
     ExecutorClaude.nome: ExecutorClaude,
     ExecutorAuditor.nome: ExecutorAuditor,
+    ExecutorProva.nome: ExecutorProva,
     ExecutorCodex.nome: ExecutorCodex,
 }
 
