@@ -818,6 +818,9 @@ function pintarProgresso(p) {
   }
   resumo.append(linhaDoProgresso(
     carimbo + " · " + tem("documentos_n") + " documento(s) lido(s)", "carimbo"));
+  if (lido === "medido" && pr.provado_em) {
+    resumo.append(linhaDoProgresso("provado " + haQuanto(pr.provado_em), "carimbo"));
+  }
 
   carregarProgresso(p.nome, pr.medido_em);
 }
@@ -868,6 +871,14 @@ async function carregarProgresso(nome, medidoEm) {
 function pintarCriterios(corpo) {
   const lista = $("#progresso-lista");
   lista.textContent = "";
+  if (corpo.provavel === true && typeof corpo.projeto === "string") {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "botao botao--secundario";
+    b.textContent = "Rodar as provas";
+    b.addEventListener("click", () => provarProjeto(corpo.projeto, b));
+    lista.append(b);
+  }
   for (const d of corpo.documentos) {
     const sec = document.createElement("section");
     sec.className = "progresso__doc";
@@ -1006,6 +1017,65 @@ async function desenvolverCriterio(c, botao) {
   if (!repetido && typeof corpo.aviso === "string" && corpo.aviso) {
     aviso.hidden = false;
     aviso.textContent = corpo.aviso;
+  }
+  botao.disabled = true; /* já está na fila: outro clique só repetiria o pedido */
+  await carregarTarefas();
+}
+/* O que o dono lê quando o pedido de prova não entra. Frase nossa: o texto cru
+   do servidor nunca vai para a tela. */
+function frasePorQueNaoProvou(status) {
+  if (status === 401) return "Sua sessão acabou. Recarregue a página e entre de novo.";
+  if (status === 403) return "Este projeto não pode ser provado pelo DERVS.";
+  if (status === 404) return "Este projeto não está mais na lista. Volte ao painel.";
+  if (status === 409) return "Nenhuma prova da documentação está na lista permitida. Não há o que rodar.";
+  if (status === 429) return "Você pediu provas demais em pouco tempo. Espere um pouco e tente de novo.";
+  return "Não deu para pedir as provas agora (erro " + status + "). Tente de novo em instantes.";
+}
+
+async function provarProjeto(nome, botao) {
+  const caixa = $("#progresso-recado-caixa");
+  const texto = $("#progresso-recado-texto");
+  const aviso = $("#progresso-recado-aviso");
+  const link = $("#progresso-recado-link");
+  aviso.hidden = true;
+  aviso.textContent = "";
+  botao.disabled = true;
+
+  const mostrarFalha = (frase) => {
+    caixa.hidden = false;
+    link.hidden = true;
+    texto.textContent = frase;
+    botao.disabled = false;
+  };
+
+  let r;
+  try {
+    r = await escrever("/api/provar", { projeto: nome });
+  } catch {
+    mostrarFalha("Não deu para falar com o servidor. Confira a conexão e tente de novo.");
+    return;
+  }
+  let corpo = null;
+  try { corpo = await r.json(); } catch {}
+
+  if (!r.ok) { mostrarFalha(frasePorQueNaoProvou(r.status)); return; }
+  if (!corpo || corpo.ok !== true) {
+    mostrarFalha("O servidor respondeu de um jeito que não entendi. Confira em "
+                 + "Consertar se o pedido entrou na fila.");
+    link.hidden = false;
+    return;
+  }
+
+  caixa.hidden = false;
+  link.hidden = false;
+  if (corpo.pedido === false) {
+    texto.textContent = "Já há uma prova deste projeto esperando ou rodando. Veja em Consertar.";
+  } else {
+    texto.textContent = "Na fila. Nada roda até você aprovar em Consertar.";
+    if (typeof corpo.aviso === "string" && corpo.aviso) {
+      aviso.hidden = false;
+      aviso.textContent = corpo.aviso;
+    }
   }
   botao.disabled = true; /* já está na fila: outro clique só repetiria o pedido */
   await carregarTarefas();

@@ -471,5 +471,94 @@ class ODetalheApareceAoLadoDoPodeFazer(unittest.TestCase):
         self.assertNotRegex(corpo, r"Number\(|parseInt\(")
 
 
+class OBotaoRodarAsProvas(unittest.TestCase):
+    """Fase 2: o botao so existe atras de `provavel === true`, o corpo do POST
+    e so o nome do projeto, e erro do servidor vira frase nossa."""
+
+    def _lista(self, **corpo):
+        base = {"projeto": "meu proj", "documentos": []}
+        base.update(corpo)
+        r = _roda("""
+        pintarCriterios(%s);
+        console.log(JSON.stringify({ botoes: acha($("#progresso-lista"), "button").map(b => b._t) }));
+        """ % json.dumps(base))
+        if r is None:
+            self.skipTest("sem node")
+        return r["botoes"]
+
+    def test_so_true_de_verdade_mostra_o_botao(self):
+        self.assertEqual(self._lista(provavel=True), ["Rodar as provas"])
+        for v in (False, None, "true", 1, "sim", [], {}):
+            with self.subTest(v=v):
+                self.assertEqual(self._lista(provavel=v), [])
+        self.assertEqual(self._lista(), [])
+
+    def test_o_if_do_provavel_guarda_o_botao(self):
+        corpo = sem_comentarios(funcao("pintarCriterios"))
+        i = corpo.index("corpo.provavel === true")
+        self.assertEqual(corpo.count('createElement("button")'), 1)
+        self.assertLess(i, corpo.index('createElement("button")'))
+        self.assertLess(corpo.index('createElement("button")'),
+                        corpo.index("for (const d of corpo.documentos)"))
+
+    def _clica(self, resposta):
+        r = _roda("""
+        RESPOSTA = %s;
+        const b = new El("button");
+        await provarProjeto("meu proj", b);
+        console.log(JSON.stringify({ chamadas: CHAMADAS, desabilitado: b.disabled,
+                                     texto: $("#progresso-recado-texto")._t,
+                                     aviso: $("#progresso-recado-aviso")._t }));
+        """ % json.dumps(resposta))
+        if r is None:
+            self.skipTest("sem node")
+        return r
+
+    def test_o_corpo_do_post_e_exatamente_o_projeto(self):
+        r = self._clica({"ok": True, "status": 200,
+                         "corpo": {"ok": True, "pedido": True, "aviso": "nenhum computador ligado"}})
+        self.assertEqual(r["chamadas"][0],
+                         {"url": "/api/provar", "corpo": {"projeto": "meu proj"}})
+        self.assertIn("Na fila", r["texto"])
+        self.assertTrue(r["desabilitado"])
+        self.assertNotIn("fetch(", sem_comentarios(funcao("provarProjeto")))
+
+    def test_pedido_falso_diz_que_ja_ha_prova_esperando(self):
+        r = self._clica({"ok": True, "status": 200,
+                         "corpo": {"ok": True, "pedido": False, "aviso": "texto cru"}})
+        self.assertIn("Já há uma prova", r["texto"])
+        self.assertNotIn("texto cru", r["texto"] + r["aviso"])
+
+    def test_cada_erro_vira_frase_sem_texto_cru(self):
+        vistas = set()
+        for status, cru in ((403, "projeto bloqueado"), (404, "projeto nao encontrado"),
+                            (409, "nenhuma prova para rodar"), (429, "pedidos demais")):
+            r = self._clica({"ok": False, "status": status, "corpo": {"erro": cru}})
+            with self.subTest(status=status):
+                self.assertFalse(r["desabilitado"])  # pode tentar de novo
+                self.assertGreater(len(r["texto"]), 30)
+                self.assertNotIn(cru, r["texto"])
+                vistas.add(r["texto"])
+        self.assertEqual(len(vistas), 4, vistas)
+
+    def test_provado_ha_usa_o_carimbo_e_so_em_medido(self):
+        antigo = "2020-01-01T00:00:00Z"
+        r = _pinta(pr("medido", percentual=50, total=2, comprovados=1, provado_em=antigo))
+        self.assertIn("provado em ", r["resumo"])   # haQuanto de data antiga
+        r = _pinta(pr("nao_verificado", total=2, provado_em=antigo))
+        self.assertNotRegex(r["resumo"], r"provado")
+        self.assertNotIn("%", r["resumo"])
+        r = _pinta(pr("medido", percentual=50, total=2, comprovados=1))
+        self.assertNotRegex(r["resumo"], r"provado")
+
+    def test_no_codigo_haQuanto_e_so_textcontent_e_sem_Number(self):
+        self.assertIn('"provado " + haQuanto(pr.provado_em)',
+                      sem_comentarios(funcao("pintarProgresso")))
+        for nome in ("provarProjeto", "frasePorQueNaoProvou", "pintarCriterios"):
+            corpo = sem_comentarios(funcao(nome))
+            self.assertNotIn("innerHTML", corpo)
+            self.assertNotRegex(corpo, r"Number\(|parseInt\(")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
