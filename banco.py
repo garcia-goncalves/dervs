@@ -590,6 +590,23 @@ CREATE TABLE IF NOT EXISTS achado (
 CREATE INDEX IF NOT EXISTS ix_achado_aberto
     ON achado (usuario_id, projeto, fechado_em);
 
+-- O resultado de rodar a prova de um criterio. A chave leva o DONO (mesmo
+-- molde de `achado`): duas contas com o mesmo projeto e o mesmo criterio_id
+-- nao se sobrescrevem. `ok` aceita NULL — "nao deu para rodar" e um estado
+-- de primeira classe, nunca zero.
+CREATE TABLE IF NOT EXISTS prova_rodada (
+    usuario_id  INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    projeto     TEXT    NOT NULL,
+    criterio_id TEXT    NOT NULL,
+    prova       TEXT    NOT NULL DEFAULT '',
+    ok          INTEGER,
+    motivo      TEXT    NOT NULL DEFAULT '',
+    sha         TEXT    NOT NULL DEFAULT '',
+    tarefa_id   TEXT    NOT NULL DEFAULT '',
+    medido_em   TEXT    NOT NULL,
+    PRIMARY KEY (usuario_id, projeto, criterio_id)
+);
+
 -- A ponte com o DERVS-VOZ. O servidor SO GUARDA E ENTREGA: nenhuma destas
 -- linhas vira comando aqui. `voz_estado` e a ultima foto que o VOZ mandou de
 -- si mesmo (uma por maquina) e NAO e sinal de vida — `maquina.visto_em` so
@@ -691,7 +708,7 @@ def migrar(con: sqlite3.Connection) -> None:
 FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento",
                      "chave_de_acesso", "codigo_recuperacao",
                      "servidor", "endereco_producao", "instalacao_github",
-                     "auditoria", "achado")
+                     "auditoria", "achado", "prova_rodada")
 
 
 # Fatia 2. Nome da coluna -> o pedaco de DDL do `ALTER TABLE`. A ordem e a do
@@ -2141,6 +2158,91 @@ def gravar_auditoria(usuario_id: int, projeto: str, estado: str, achados: list,
         if propria:
             con.rollback()
         raise
+    finally:
+        if fechar:
+            con.close()
+
+
+def gravar_provas(usuario_id: int, projeto: str, itens: list, tarefa_id: str,
+                  sha: str, agora_iso: str = "", con=None) -> int:
+    """Grava os resultados de prova NUMA UNICA TRANSACAO — tudo ou nada.
+    `itens`: dicts {criterio_id, prova, ok (True/False/None), motivo}.
+    Devolve quantos gravou. O `usuario_id` nunca entra no SET do upsert."""
+    fechar = con is None
+    con = con or conectar()
+    quando = agora_iso or agora()
+    propria = not con.in_transaction
+    try:
+        if propria:
+            con.execute("BEGIN IMMEDIATE")
+        for it in itens or []:
+            cid = str(it.get("criterio_id") or "")
+            if not cid:
+                raise ValueError("prova sem criterio_id: %r" % (it,))
+            ok = it.get("ok")
+            con.execute(
+                "INSERT INTO prova_rodada (usuario_id, projeto, criterio_id,"
+                " prova, ok, motivo, sha, tarefa_id, medido_em)"
+                " VALUES (?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(usuario_id, projeto, criterio_id) DO UPDATE SET"
+                "   prova = excluded.prova,"
+                "   ok = excluded.ok,"
+                "   motivo = excluded.motivo,"
+                "   sha = excluded.sha,"
+                "   tarefa_id = excluded.tarefa_id,"
+                "   medido_em = excluded.medido_em",
+                (usuario_id, projeto, cid, str(it.get("prova") or ""),
+                 None if ok is None else int(bool(ok)),
+                 str(it.get("motivo") or ""), sha or "", tarefa_id or "",
+                 quando))
+        if propria:
+            con.commit()
+        return len(itens or [])
+    except Exception:
+        if propria:
+            con.rollback()
+        raise
+    finally:
+        if fechar:
+            con.close()
+
+
+def provas_da_conta(usuario_id: int, projeto: str | None = None,
+                    con=None) -> dict:
+    """{projeto: [linhas]} das provas desta conta; `ok` volta True/False/None."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        sql = ("SELECT projeto, criterio_id, prova, ok, motivo, sha, tarefa_id,"
+               " medido_em FROM prova_rodada WHERE usuario_id = ?")
+        args = [usuario_id]
+        if projeto is not None:
+            sql += " AND projeto = ?"
+            args.append(projeto)
+        sql += " ORDER BY projeto, criterio_id"
+        saida: dict = {}
+        for r in con.execute(sql, args):
+            linha = dict(r)
+            nome = linha.pop("projeto")
+            linha["ok"] = None if linha["ok"] is None else bool(linha["ok"])
+            saida.setdefault(nome, []).append(linha)
+        return saida
+    finally:
+        if fechar:
+            con.close()
+
+
+def prova_aberta(usuario_id: int, projeto: str, con=None) -> bool:
+    """Ha tarefa de regra `provar` esperando, aguardando aprovacao ou rodando
+    para este projeto DESTA conta? O dono vem da coluna `fila.usuario_id`."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return con.execute(
+            "SELECT 1 FROM fila WHERE usuario_id = ? AND projeto = ?"
+            " AND regra = 'provar'"
+            " AND estado IN ('esperando', 'aguardando_aprovacao', 'rodando')"
+            " LIMIT 1", (usuario_id, projeto)).fetchone() is not None
     finally:
         if fechar:
             con.close()
