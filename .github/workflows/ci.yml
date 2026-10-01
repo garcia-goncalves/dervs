@@ -263,6 +263,11 @@ jobs:
       - name: Desenvolver a partir da documentacao
         run: python test_desenvolver.py
 
+      # O botao "Provar": pedido, resultado do agente e a conta que passa a
+      # ser medida; balcao proprio, duas contas nao se cruzam.
+      - name: Provar a documentacao
+        run: python test_provar.py
+
       # A tela do progresso (Executor B): textContent, botao atras de
       # `desenvolvivel`, "sem documentacao" nunca escreve "%".
       - name: A tela do progresso

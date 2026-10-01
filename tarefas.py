@@ -240,12 +240,11 @@ NUNCA_VERDE = frozenset({"publicar"})
 # aprovacao: a regra nunca anda, nem com o clique do dono. `desenvolver` tem de
 # andar COM o clique — so nao pode andar sem ele, e nao pode ser repintada de
 # verde. Por isso ela NAO entra em `NUNCA_VERDE` (nunca rodaria): entra aqui.
-SEMPRE_VERMELHA = frozenset({"desenvolver"})
+SEMPRE_VERMELHA = frozenset({"desenvolver", "provar"})
 
 # A prova de um criterio (regra `provar`) roda um comando da lista fechada, sem IA:
-# o executor dela e um so, e ela pede o clique do dono mesmo se alguem a repintar.
-# NAO entra em `SEMPRE_VERMELHA` de proposito (`test_desenvolver` cobra aquele
-# conjunto igual a {"desenvolver"}); a exigencia do clique mora em `pode_rodar`.
+# o executor dela e um so. Ela entra em `SEMPRE_VERMELHA` (nunca repintada de verde),
+# e por isso a exigencia do clique do dono vem da regra geral de `pode_rodar`.
 PROVAR = "provar"
 EXECUTOR_DA_PROVA = "prova"
 
@@ -429,22 +428,21 @@ def pode_rodar(tarefa: dict, gasto_usd=0.0, agora_iso: str = "",
     # levanta o NUNCA_VERDE. Achado pelo vigia irmao em 29/08/2026.
     if regra in NUNCA_VERDE:
         return (False, "a regra \"%s\" nunca anda sozinha" % regra)
+    # Prova: mesmo projeto-filtro do `desenvolver`, e executor SO o da prova —
+    # uma tarefa `provar` com executor `claude` abriria sessao de IA. (O clique vem
+    # da regra geral: `provar` esta em SEMPRE_VERMELHA.) Vem antes da barreira
+    # abaixo para a recusa dizer "provas".
+    if regra == PROVAR:
+        if not projeto_pode_desenvolver(t.get("projeto")):
+            return (False, "o DERVS nao roda provas neste projeto")
+        if (t.get("executor") or "") != EXECUTOR_DA_PROVA:
+            return (False, "a prova so roda no executor da prova")
     # A segunda barreira de `desenvolver`: o servidor ja recusou o projeto ao
     # receber o pedido, mas o AGENTE pergunta de novo aqui, e nao abre sessao em
     # projeto que nao se desenvolve mesmo que a linha da fila diga o contrario.
     if regra in SEMPRE_VERMELHA and not projeto_pode_desenvolver(
             t.get("projeto")):
         return (False, "o DERVS nao desenvolve neste projeto")
-    # Prova: mesmo projeto-filtro do `desenvolver`, e executor SO o da prova —
-    # uma tarefa `provar` com executor `claude` abriria sessao de IA. Sempre
-    # pede o clique, qualquer que seja a cor.
-    if regra == PROVAR:
-        if not projeto_pode_desenvolver(t.get("projeto")):
-            return (False, "o DERVS nao roda provas neste projeto")
-        if (t.get("executor") or "") != EXECUTOR_DA_PROVA:
-            return (False, "a prova so roda no executor da prova")
-        if not (t.get("aprovado_em") or "").strip():
-            return (False, "esta tarefa esta vermelha e espera o seu clique")
     cor = cor_da_regra(regra, repinturas)
     if cor != VERDE and not (t.get("aprovado_em") or "").strip():
         return (False, "esta tarefa esta vermelha e espera o seu clique")

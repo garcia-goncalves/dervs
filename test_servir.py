@@ -3899,6 +3899,30 @@ class OQueOServidorEntregaSatisfazAChecagemDoAgente(unittest.TestCase):
         self.assertTrue(pode, "o agente recusaria o que o servidor entregou:"
                               " %s" % motivo)
 
+    def test_tarefa_provar_aprovada_e_entregue_e_o_agente_a_aceita(self):
+        """A `provar` aprovada devolvida por `_tarefa_pendente` passa em
+        `pode_rodar`: o executor da prova e a aprovacao tem de chegar dentro."""
+        tarefa_id = "provar:%d:abc:1" % self.uid
+        banco.enfileirar([{"id": tarefa_id, "usuario_id": self.uid,
+                           "projeto": "dervs", "regra": tarefas.PROVAR,
+                           "gravidade": "media", "risco": 0.0,
+                           "trilho": "prova",
+                           "executor": tarefas.EXECUTOR_DA_PROVA,
+                           "detalhe": "Rodar as provas de dervs."}],
+                         con=self.con)
+        self.con.execute("UPDATE fila SET aprovado_em = ? WHERE id = ?",
+                         (banco.agora(), tarefa_id))
+        self.con.commit()
+
+        entregue = self._entregar()
+        self.assertIsNotNone(entregue, "o servidor nem entregou a tarefa")
+        self.assertEqual(entregue["executor"], tarefas.EXECUTOR_DA_PROVA)
+        pode, motivo = tarefas.pode_rodar(
+            entregue, 0.0, banco.agora(), banco.cores_das_regras(),
+            {"id": self.maquina_id, "executa": 1})
+        self.assertTrue(pode, "o agente recusaria o que o servidor entregou:"
+                              " %s" % motivo)
+
     def test_o_aprovado_em_entregue_e_o_DO_BANCO_e_nao_um_inventado(self):
         """O campo entregue e o da COLUNA, e nao um valor montado na entrega.
 
