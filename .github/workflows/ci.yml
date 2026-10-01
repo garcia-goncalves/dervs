@@ -82,6 +82,10 @@ jobs:
       - name: A tomada dos braços
         run: python test_executor.py
 
+      # O braco da prova: roda so as provas aprovadas, numa copia, sem shell.
+      - name: O braço da prova
+        run: python test_executor_prova.py
+
       # O vigia irmao do test_rotas: aquele varre as ROTAS, este varre as
       # TAREFAS. Nenhuma tarefa, de nenhuma cor, altera o caminho que publica.
       - name: Nenhuma tarefa publica

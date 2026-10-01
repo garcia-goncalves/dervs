@@ -23,9 +23,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("DERVS_AMBIENTE", "local")
 os.environ.setdefault("DERVS_COFRE",
@@ -33,6 +35,7 @@ os.environ.setdefault("DERVS_COFRE",
 
 import banco         # noqa: E402
 import documentos    # noqa: E402
+from agente import enviar, executor  # noqa: E402
 from test_servir import BaseServidorDeVerdade  # noqa: E402
 
 AQUI = Path(__file__).resolve().parent
@@ -207,6 +210,99 @@ def _criterios_por_extenso(raiz: Path):
             total += len(linhas)
             marcados += sum(1 for m in linhas if m in "xX")
     return total, marcados
+
+
+class UmaProvaDeVerdadeVirapercentual(BaseServidorDeVerdade):
+    """Do clique ao percentual, SEM nenhum dicionario montado a mao.
+
+    Cada etapa da fase 2 foi provada contra duble (o executor contra uma
+    tarefa escrita a mao, o servidor contra um resultado escrito a mao). Com
+    `provas` fora do desfecho do executor, ou ignorado por `_resultado`, as
+    duas metades continuam verdes e o painel nunca sai de "nao verificado".
+    Aqui o repositorio e git de verdade, o relatorio sai de `ler_projeto`, a
+    tarefa e a que o SERVIDOR entrega e o desfecho e o do `ExecutorProva` real.
+    """
+    PROJETO = "fio-prova"
+    BOM = ("import unittest\n\n\nclass T(unittest.TestCase):\n"
+           "    def test_a(self):\n        self.assertTrue(True)\n\n\n"
+           "if __name__ == '__main__':\n    unittest.main()\n")
+    RUIM = BOM.replace("assertTrue(True)", "assertTrue(False)")
+    ESPERA = 120
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.limpar)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name) / "repo"
+        pasta = self.repo / "docs" / "esteira" / "x"
+        pasta.mkdir(parents=True)
+        (self.repo / "test_bom.py").write_text(self.BOM, encoding="utf-8")
+        (self.repo / "test_ruim.py").write_text(self.RUIM, encoding="utf-8")
+        (pasta / "briefing.md").write_text(
+            "# Briefing - x\n\nAprovado em: 2026-09-30\n\n"
+            "## criterio_de_aceitacao\n\n"
+            "- [ ] O primeiro passa\nProva: python test_bom.py\n"
+            "- [ ] O segundo falha\nProva: python test_ruim.py\n",
+            encoding="utf-8")
+        for args in (("init", "-q"), ("add", "-A"), ("commit", "-q", "-m", "x")):
+            subprocess.run(["git", "-c", "user.name=x", "-c", "user.email=x@x",
+                            *args], cwd=str(self.repo), check=True,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=60)
+
+    def limpar(self):
+        self.limpar_fila()
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM maquina")
+            con.execute("DELETE FROM prova_rodada")
+            con.execute("DELETE FROM medida")
+            con.execute("DELETE FROM historico")
+            con.commit()
+        finally:
+            con.close()
+
+    def test_o_clique_vira_percentual_pelo_fio_inteiro(self):
+        documentacao = documentos.ler_projeto(str(self.repo))
+        self.assertEqual(len(documentacao["documentos"][0]["criterios"]), 2)
+        token, mid = self.maquina_com_token()
+        r = self.como_agente(token, "/agente/relatorio", {"projetos": [
+            {"nome": self.PROJETO, "documentacao": documentacao}]})
+        self.assertEqual(r.status, 200, r.corpo)
+
+        cookies, csrf = self.sessao_e_token()
+        r = self.pedir("/api/provar", "POST", {"projeto": self.PROJETO},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertEqual(r.status, 200, r.corpo)
+        tarefa_id = json.loads(r.corpo)["tarefa"]
+        r = self.pedir("/api/tarefas/aprovar", "POST", {"id": tarefa_id},
+                       cookies=cookies, cabecalhos={"X-Token": csrf})
+        self.assertEqual(r.status, 200, r.corpo)
+
+        # A tarefa vem do SERVIDOR, como o agente a recebe.
+        r = self.como_agente(token, "/agente/relatorio", {"projetos": [
+            {"nome": self.PROJETO, "documentacao": documentacao}]})
+        entregue = json.loads(r.corpo)["tarefa"]
+        self.assertIsNotNone(entregue, "o servidor nao entregou a prova")
+
+        medicao = {"projetos": [{"nome": self.PROJETO,
+                                 "caminho": str(self.repo)}]}
+        with mock.patch.object(executor.ExecutorProva, "PRAZO_POR_PROVA", 60), \
+                mock.patch.object(executor.ExecutorProva, "PRAZO_DA_TAREFA",
+                                  self.ESPERA):
+            desfecho = enviar.fazer_a_tarefa(
+                "http://127.0.0.1:%d" % self.porta, token, entregue, medicao)
+        self.assertEqual(desfecho["estado"], "ok", desfecho)
+
+        r = self.pedir("/api/progresso?projeto=%s" % self.PROJETO,
+                       cookies=cookies)
+        self.assertEqual(r.status, 200, r.corpo)
+        pr = json.loads(r.corpo)
+        pr = pr.get("progresso", pr)
+        self.assertEqual(pr["estado"], "medido", pr)
+        self.assertEqual(pr["percentual"], 50, pr)
+        self.assertEqual((pr["comprovados"], pr["falhos"]), (1, 1), pr)
 
 
 class AContaDosDocumentosReaisDoDervs(unittest.TestCase):
