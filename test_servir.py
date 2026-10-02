@@ -3373,6 +3373,21 @@ class AAuditoriaNoServidorDeVerdade(BaseServidorDeVerdade):
         alvo = [p for p in corpo["projetos"] if p["projeto"] == "dervs"][0]
         self.assertEqual(len(alvo["auditoria"]["achados"]), 3)
 
+    def test_a_rota_entrega_a_chave_corrida_que_a_tela_le(self):
+        """Medido em producao em 02/10/2026: a auditoria gravou o achado e a
+        tela dizia 'ainda nao foi auditado', porque `pintarAuditoria` le
+        `auditoria.corrida` e a rota so entregava os campos soltos. Os testes
+        de rota e de tela passavam cada um com o seu dicionario."""
+        self._projeto_com_achados()
+        corpo = json.loads(
+            self.pedir("/api/auditoria", cookies=self.com_sessao()).corpo)
+        alvo = [p for p in corpo["projetos"] if p["projeto"] == "dervs"][0]
+        corrida = alvo["auditoria"].get("corrida")
+        self.assertIsInstance(corrida, dict, "a tela le auditoria.corrida")
+        self.assertEqual(corrida["estado"], "ok")
+        self.assertTrue(corrida["medido_em"], "a tela escreve 'ha quanto tempo'")
+        self.assertEqual(len(alvo["auditoria"]["achados"]), 3)
+
     def test_o_motor_de_regras_ainda_enxerga_os_achados(self):
         """A terceira ponta: a poda e DEPOIS do motor, nunca antes.
 

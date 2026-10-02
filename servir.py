@@ -2822,8 +2822,24 @@ class Hub(SimpleHTTPRequestHandler):
             estado = banco.montar_estado(con, usuario_id=sessao["usuario_id"])
         finally:
             con.close()
-        projetos = [{"projeto": p.get("nome") or "", "auditoria": p.get("auditoria")}
-                    for p in estado["projetos"]]
+        projetos = []
+        for p in estado["projetos"]:
+            camada = p.get("auditoria")
+            if camada:
+                # A tela (`painel.js`, `pintarAuditoria`) le `corrida` e
+                # `achados`. Sem a chave `corrida` ela dizia "nunca foi
+                # auditado" para uma auditoria gravada com achados.
+                camada = dict(camada)
+                camada["corrida"] = {
+                    "estado": camada.get("estado"),
+                    "motivo": camada.get("motivo") or "",
+                    "medido_em": (p.get("medido_em") or {}).get("auditoria"),
+                    "arquivos_n": camada.get("arquivos_n") or 0,
+                    "custo_usd": camada.get("custo_usd") or 0,
+                    "achados_n": camada.get("achados_n") or 0,
+                    "rodadas": camada.get("rodadas") or 0,
+                }
+            projetos.append({"projeto": p.get("nome") or "", "auditoria": camada})
         return self._json(200, {"projetos": projetos})
 
     # Auditoria e cara: um pedido em laco esvaziaria o teto do dia sozinho.
