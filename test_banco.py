@@ -3490,6 +3490,26 @@ class AsProvasRodadas(unittest.TestCase):
         self.assertEqual(self.con.execute(
             "SELECT COUNT(*) FROM prova_rodada").fetchone()[0], 0)
 
+    def test_rerodada_sem_resposta_nao_apaga_o_veredito_da_mesma_prova(self):
+        for antigo in (True, False):
+            self.con.execute("DELETE FROM prova_rodada")
+            banco.gravar_provas(self.a, "dervs", [self._item(antigo)], "t1",
+                                "s", con=self.con)
+            banco.gravar_provas(self.a, "dervs", [self._item(None)], "t2",
+                                "s", con=self.con)
+            lin = banco.provas_da_conta(self.a, con=self.con)["dervs"][0]
+            self.assertIs(lin["ok"], antigo)
+            self.assertEqual(lin["tarefa_id"], "t2")
+
+    def test_prova_trocada_sem_resposta_nao_herda_o_veredito_antigo(self):
+        banco.gravar_provas(self.a, "dervs", [self._item(True, prova="a")],
+                            "t1", "s", con=self.con)
+        banco.gravar_provas(self.a, "dervs", [self._item(None, prova="b")],
+                            "t2", "s", con=self.con)
+        lin = banco.provas_da_conta(self.a, con=self.con)["dervs"][0]
+        self.assertIsNone(lin["ok"])
+        self.assertEqual(lin["prova"], "b")
+
     def test_ok_nulo_fica_nulo(self):
         banco.gravar_provas(self.a, "dervs", [self._item(None)], "t", "s",
                             con=self.con)

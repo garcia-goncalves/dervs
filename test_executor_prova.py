@@ -122,8 +122,14 @@ class Base(unittest.TestCase):
 
 
 class Veredito(unittest.TestCase):
-    def test_zero_e_verdadeiro(self):
-        self.assertEqual(ex.veredito(["x"], 0, "")[0], True)
+    def test_zero_sem_nenhum_resumo_nao_e_comprovado(self):
+        # arquivo vazio / sem classe / `__main__` fora do lugar: sai 0 mudo
+        for argv in (["x"], ["python", "t.py"],
+                     ["python", "-m", "pytest", "a.py"]):
+            for cauda in ("", "   \n", "oi"):
+                v, motivo = ex.veredito(argv, 0, cauda)
+                self.assertIsNone(v, (argv, cauda))
+                self.assertIn("nao deu para confirmar", motivo)
 
     def test_zero_sem_teste_rodado_nao_e_comprovado(self):
         py = ["python", "-m", "pytest", "a.py"]
@@ -136,7 +142,7 @@ class Veredito(unittest.TestCase):
                 (un, "Ran 2 tests in 0.000s\n\nOK (skipped=2)")]:
             v, motivo = ex.veredito(argv, 0, cauda)
             self.assertIsNone(v, cauda)
-            self.assertIn("nenhum teste rodou", motivo)
+            self.assertIn("nao deu para confirmar", motivo)
 
     def test_zero_com_teste_rodado_continua_verdadeiro(self):
         py = ["python", "-m", "pytest", "a.py"]
@@ -244,7 +250,12 @@ class RodaDeVerdade(Base):
         d = self.roda({"test_pulado.py": pulado}, ["python test_pulado.py"])
         p = self.veredito_de(d, "python test_pulado.py")
         self.assertIsNone(p["ok"], p)
-        self.assertIn("nenhum teste rodou", p["motivo"])
+        self.assertIn("nao deu para confirmar", p["motivo"])
+
+    def test_script_mudo_que_sai_zero_nao_e_comprovado(self):
+        d = self.roda({"test_mudo.py": "x = 1\n"}, ["python test_mudo.py"])
+        p = self.veredito_de(d, "python test_mudo.py")
+        self.assertIsNone(p["ok"], p)
 
     def test_filho_deixado_em_segundo_plano_morre_no_fim_normal(self):
         marca = Path(self.raiz) / "filho.txt"
@@ -277,8 +288,12 @@ class RodaDeVerdade(Base):
 
     def test_segredo_e_variavel_do_dervs_nao_chegam_ao_filho(self):
         saida = Path(self.raiz) / "env.json"
-        codigo = ("import json, os\nopen(%r, 'w').write(json.dumps("
-                  "dict(os.environ)))\n" % str(saida))
+        codigo = ("import json, os, unittest\n"
+                  "class T(unittest.TestCase):\n"
+                  "    def test_a(self):\n"
+                  "        open(%r, 'w').write(json.dumps(dict(os.environ)))\n"
+                  "if __name__ == '__main__':\n    unittest.main()\n"
+                  % str(saida))
         with mock.patch.dict(os.environ, {
                 "ANTHROPIC_API_KEY": "sk-de-mentira", "DERVS_X": "1",
                 "PYTHONPATH": "/nao/deve/chegar"}):

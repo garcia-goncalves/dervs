@@ -341,18 +341,18 @@ def ambiente_da_prova(base=None) -> dict:
 
 
 def _nenhum_teste_rodou(cauda: str) -> bool:
-    """A cauda de um codigo 0 mostra que nada rodou de verdade? Sem resumo
-    reconhecivel, nao ha como dizer que nao rodou: devolve `False`."""
+    """A cauda de um codigo 0 NAO mostra um teste que rodou de verdade?
+
+    Prova positiva, nao ausencia de prova: um arquivo vazio, sem classe ou
+    com o `if __name__` fora do lugar sai 0 e nao imprime resumo nenhum — e
+    isso nao e "comprovado" (Lei 2). So vale o resumo do unittest com N>0
+    e nem todos pulados, ou o do pytest com ao menos 1 passed."""
     ran = re.search(r"\bRan (\d+) tests?\b", cauda)
     if ran:
         n = int(ran.group(1))
         pulados = re.search(r"\bOK \(skipped=(\d+)", cauda)
         return n == 0 or bool(pulados and int(pulados.group(1)) >= n)
-    if re.search(r"\bno tests ran\b", cauda):
-        return True
-    if re.search(r"\b\d+ (?:passed|skipped|deselected)\b", cauda):
-        return not re.search(r"\b[1-9]\d* passed\b", cauda)
-    return False
+    return not re.search(r"\b[1-9]\d* passed\b", cauda)
 
 
 def veredito(argv, codigo, cauda):
@@ -362,7 +362,8 @@ def veredito(argv, codigo, cauda):
         # Saiu 0 nao quer dizer que algo foi provado: teste todo pulado ou
         # nenhum coletado tambem sai 0 (Lei 2: nao vira "comprovado").
         if _nenhum_teste_rodou(cauda or ""):
-            return None, "nenhum teste rodou de verdade"
+            return None, ("nao deu para confirmar que algum teste rodou "
+                          "(nenhum resumo de teste na saida)")
         return True, ""
     pytest = "pytest" in (argv or [])
     if pytest:

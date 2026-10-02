@@ -2186,7 +2186,11 @@ def gravar_provas(usuario_id: int, projeto: str, itens: list, tarefa_id: str,
                 " VALUES (?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(usuario_id, projeto, criterio_id) DO UPDATE SET"
                 "   prova = excluded.prova,"
-                "   ok = excluded.ok,"
+                # Re-execucao sem resposta (prazo, parada) nao apaga o fato ja
+                # conhecido DA MESMA prova; prova trocada nao herda nada.
+                "   ok = CASE WHEN excluded.ok IS NULL"
+                "        AND prova = excluded.prova"
+                "        THEN ok ELSE excluded.ok END,"
                 "   motivo = excluded.motivo,"
                 "   sha = excluded.sha,"
                 "   tarefa_id = excluded.tarefa_id,"

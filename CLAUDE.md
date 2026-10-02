@@ -397,6 +397,11 @@ isola**. O clique "Pode fazer" é a aceitação desse risco; nada roda sem ele
 - **`None` nunca é falha (Lei 2).** Prova que não rodou (módulo ausente,
   nenhum teste coletado, prazo estourado) é critério sem resposta, não
   reprovado.
+- **Código 0 só vale com prova POSITIVA de teste rodado** (`Ran N` com N>0 e
+  nem tudo pulado, ou `N passed`). Script mudo que sai 0 (arquivo vazio, sem
+  classe, `__main__` fora do lugar) é `None`, não "comprovado". E uma
+  re-execução sem resposta (`ok` NULL) **não apaga** o veredito anterior da
+  MESMA prova (`banco.gravar_provas`); prova trocada não herda nada.
 - **O que roda é a interseção** do pedido aprovado com o que existe na cópia: o
   texto do pedido é dado e é revalidado linha a linha. `npm test` **fica fora**
   desta fase (`argv_da_prova` só roda `python`).
