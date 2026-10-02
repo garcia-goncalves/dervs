@@ -121,6 +121,37 @@ class Base(unittest.TestCase):
         return [p for p in d["provas"] if p["prova"] == prova][0]
 
 
+class HigieneDoFilho(unittest.TestCase):
+    def test_ambiente_sem_segredo_de_nome_neutro(self):
+        base = {"PATH": os.environ.get("PATH", ""), "SystemRoot":
+                os.environ.get("SystemRoot", ""), "DATABASE_URL": "x",
+                "MEU_DSN": "x", "HTTPS_PROXY": "x", "OUTRA": "ok"}
+        with mock.patch.dict(os.environ, base):
+            visto = {k.upper() for k in ex.ambiente_da_prova()}
+        for fora in ("DATABASE_URL", "MEU_DSN", "HTTPS_PROXY"):
+            self.assertNotIn(fora, visto)
+
+    @unittest.skipUnless(sys.platform.startswith("win"), "Job Object e do Windows")
+    def test_fechar_o_job_mata_o_filho_mesmo_sem_terminar(self):
+        import ctypes
+        import subprocess
+        proc = subprocess.Popen([sys.executable, "-c",
+                                 "import time; time.sleep(120)"])
+        try:
+            job = ex.ExecutorProva._job_da_arvore(proc)
+            self.assertIsNotNone(job)
+            k = ctypes.WinDLL("kernel32")
+            k.CloseHandle.argtypes = [ctypes.c_void_p]
+            k.CloseHandle(job)          # o agente "morreu": so fecha o handle
+            fim = time.time() + 10
+            while proc.poll() is None and time.time() < fim:
+                time.sleep(0.1)
+            self.assertIsNotNone(proc.poll(), "o filho sobreviveu ao Job")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+
 class Veredito(unittest.TestCase):
     def test_zero_sem_nenhum_resumo_nao_e_comprovado(self):
         # arquivo vazio / sem classe / `__main__` fora do lugar: sai 0 mudo

@@ -44,7 +44,7 @@ críticos do `workspace-medconsultoria`. O defeito custa a ordem do dia dele.
 - [ ] A coleta grava **pacotes distintos** e **defeitos distintos** (par pacote+aviso), além do total bruto.
 - [ ] A frase da pendência diz severidade e tamanho real. Verificável: um projeto com 19 alertas e 6 críticos produz frase contendo `6 crítico`.
 - [ ] Gravidade `alta` só quando há crítico ou alto; projeto só com moderado/baixo vira `media`. Verificável em `regras.avaliar()`.
-- [ ] Rodada que **não conseguiu** ler severidade não apaga nem inventa a anterior â€” a mesma proteção que hoje já existe para o total.
+- [ ] Rodada que **não conseguiu** ler severidade não apaga nem inventa a anterior — a mesma proteção que hoje já existe para o total.
 - [ ] Projeto sem alerta nenhum continua sem pendência.
 - [ ] As 5 suítes verdes; suíte nova nomeada no `ci.yml` **e** no `py_compile`.
 

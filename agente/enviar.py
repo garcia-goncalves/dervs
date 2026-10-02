@@ -420,6 +420,12 @@ def main(argv=None) -> int:
             print("NAO ENVIOU: %s" % e, file=sys.stderr)
             if not a.intervalo:
                 return 2
+        except Exception as e:                  # noqa: BLE001
+            # O laco NAO pode morrer por erro que ninguem previu: o agente
+            # ficou parado de 30/09 a 02/10 e o painel mentiu "sem notícia".
+            print("NAO ENVIOU (%s): %s" % (type(e).__name__, e), file=sys.stderr)
+            if not a.intervalo:
+                return 2
         if not a.intervalo:
             return 0
         time.sleep(a.intervalo)
