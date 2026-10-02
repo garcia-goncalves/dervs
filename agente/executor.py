@@ -313,7 +313,11 @@ TETO_DA_SAIDA = 8 * 1024 * 1024
 # porque a sessao de IA precisa; um teste de terceiro nao precisa de nada disso.
 _PREFIXOS_FORA = ("ANTHROPIC_", "CLAUDE_CODE_", "DERVS_")
 _NOMES_FORA = ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTEST_ADDOPTS",
-               "PYTEST_PLUGINS", "NODE_OPTIONS")
+               "PYTEST_PLUGINS", "NODE_OPTIONS", "DATABASE_URL", "REDIS_URL",
+               "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
+# Segredo costuma morar em variavel de nome neutro (`*_DSN`, `*_URL` de banco,
+# proxy com usuario:senha). O filtro e por nome, entao so cobre o que se nomeia.
+_SUFIXOS_FORA = ("_DSN", "_DATABASE_URL", "_CONNECTION_STRING")
 
 
 def argv_da_prova(argv):
@@ -334,7 +338,8 @@ def ambiente_da_prova(base=None) -> dict:
     limpo = execucao.ambiente_da_filha(base)
     for nome in list(limpo):
         alto = nome.upper()
-        if alto.startswith(_PREFIXOS_FORA) or alto in _NOMES_FORA:
+        if (alto.startswith(_PREFIXOS_FORA) or alto in _NOMES_FORA
+                or alto.endswith(_SUFIXOS_FORA)):
             del limpo[nome]
     limpo["PYTHONDONTWRITEBYTECODE"] = "1"
     return limpo
@@ -433,6 +438,41 @@ class ExecutorProva(Executor):
                                                    wintypes.HANDLE]
             job = k.CreateJobObjectW(None, None)
             if not job:
+                return None
+            # Se o agente morrer no meio da prova, o Windows fecha o handle do
+            # Job e mata a arvore junto (sem isso o teste sobrevive ao agente).
+            class _Basico(ctypes.Structure):
+                _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
+                            ("PerJobUserTimeLimit", ctypes.c_int64),
+                            ("LimitFlags", wintypes.DWORD),
+                            ("MinimumWorkingSetSize", ctypes.c_size_t),
+                            ("MaximumWorkingSetSize", ctypes.c_size_t),
+                            ("ActiveProcessLimit", wintypes.DWORD),
+                            ("Affinity", ctypes.c_size_t),
+                            ("PriorityClass", wintypes.DWORD),
+                            ("SchedulingClass", wintypes.DWORD)]
+
+            class _Io(ctypes.Structure):
+                _fields_ = [(n, ctypes.c_uint64) for n in (
+                    "ReadOperationCount", "WriteOperationCount",
+                    "OtherOperationCount", "ReadTransferCount",
+                    "WriteTransferCount", "OtherTransferCount")]
+
+            class _Extendido(ctypes.Structure):
+                _fields_ = [("Basic", _Basico), ("Io", _Io),
+                            ("ProcessMemoryLimit", ctypes.c_size_t),
+                            ("JobMemoryLimit", ctypes.c_size_t),
+                            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                            ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+            info = _Extendido()
+            info.Basic.LimitFlags = 0x2000          # KILL_ON_JOB_CLOSE
+            k.SetInformationJobObject.argtypes = [
+                wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+            if not k.SetInformationJobObject(job, 9, ctypes.byref(info),
+                                             ctypes.sizeof(info)):
+                k.CloseHandle.argtypes = [wintypes.HANDLE]
+                k.CloseHandle(job)
                 return None
             if not k.AssignProcessToJobObject(job, int(proc._handle)):
                 k.CloseHandle.argtypes = [wintypes.HANDLE]
