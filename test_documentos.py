@@ -330,7 +330,7 @@ class AContaDoProgresso(unittest.TestCase):
         self.assertEqual(set(r), {
             "estado", "percentual", "total", "comprovados", "falhos",
             "nao_verificados", "faltam", "declarados", "medido_em",
-            "documentos_n", "erros_n"})
+            "documentos_n", "erros_n", "provado_em"})
 
     def test_nao_verificado_nunca_entra_no_percentual(self):
         # Quatro marcados [x] a mao, sem prova rodada: a conta NAO pode ler isto
@@ -719,6 +719,103 @@ class OLeitorNaoSaiDoRepositorio(unittest.TestCase):
         r = documentos.ler_projeto(self.raiz)
         self.assertEqual(len(r["documentos"][0]["criterios"]), 3)
         self.assertEqual(r["documentos"][0]["erros"], [])
+
+
+class AsProvasDoPedidoEOResultadoValido(unittest.TestCase):
+    P = "proj"
+    MARCA = "PROVA: "
+
+    def d(self, prova="python test_a.py"):
+        return doc([("criterio um", False, prova),
+                    ("criterio dois", False, "npm test")])
+
+    def linha(self, d, i, prova, ok, em="2026-09-30T10:00:00+00:00"):
+        return {"id": id_de(self.P, d, i), "prova": prova, "ok": ok, "em": em}
+
+    def test_aceitas_so_as_permitidas_sem_repetir(self):
+        d = doc([("a", False, "python test_a.py"), ("b", False, "rm -rf x"),
+                 ("c", False, "python test_a.py")])
+        r = documentos.provas_aceitas(documentacao(d), self.P)
+        self.assertEqual(list(r), ["python test_a.py"])
+        self.assertEqual(len(r["python test_a.py"]), 2)
+
+    def test_pedido_ida_e_volta(self):
+        t = documentos.pedido_de_provas(["python test_a.py", "npm test"],
+                                        self.MARCA)
+        self.assertEqual(documentos.provas_do_pedido(t, self.MARCA),
+                         ["python test_a.py", "npm test"])
+
+    def test_linha_hostil_do_pedido_e_descartada(self):
+        t = "\n".join(self.MARCA + x for x in (
+            "python test_a.py; rm -rf /", "npm test & x", "python test_b.py",
+            "python test_b.py"))
+        self.assertEqual(documentos.provas_do_pedido(t, self.MARCA),
+                         ["python test_b.py"])
+
+    def test_corta_no_teto(self):
+        cmds = ["python test_%d.py" % i for i in range(30)]
+        t = documentos.pedido_de_provas(cmds, self.MARCA)
+        self.assertEqual(len(documentos.provas_do_pedido(t, self.MARCA)),
+                         documentos.MAX_PROVAS_POR_TAREFA)
+
+    def test_entrada_estranha_devolve_vazio(self):
+        for x in (None, 5, [], b"x"):
+            self.assertEqual(documentos.provas_do_pedido(x, self.MARCA), [])
+        self.assertEqual(documentos.provas_do_pedido("PROVA: npm test", ""), [])
+
+    def test_prova_trocada_invalida_o_resultado(self):
+        d = self.d()
+        linhas = [self.linha(d, 0, "python test_a.py", True)]
+        v, _ = documentos.provas_validas(documentacao(d), self.P, linhas)
+        self.assertEqual(v, {id_de(self.P, d, 0): True})
+        d2 = self.d(prova="python test_b.py")
+        self.assertEqual(id_de(self.P, d, 0), id_de(self.P, d2, 0))
+        v, em = documentos.provas_validas(documentacao(d2), self.P, linhas)
+        self.assertEqual((v, em), ({}, None))
+
+    def test_ok_so_vale_true_ou_false_pelo_tipo(self):
+        d = self.d()
+        for ok in (None, "true", 1, 0, "False", [], "verdadeiro"):
+            v, em = documentos.provas_validas(
+                documentacao(d), self.P,
+                [self.linha(d, 0, "python test_a.py", ok)])
+            self.assertEqual((v, em), ({}, None), repr(ok))
+        v, _ = documentos.provas_validas(
+            documentacao(d), self.P, [self.linha(d, 0, "python test_a.py", False)])
+        self.assertEqual(v, {id_de(self.P, d, 0): False})
+
+    def test_ok_none_nao_move_o_criterio(self):
+        d = self.d()
+        v, em = documentos.provas_validas(
+            documentacao(d), self.P, [self.linha(d, 0, "python test_a.py", None)])
+        r = documentos.progresso(documentacao(d), self.P, "x", v, em)
+        self.assertEqual(r["estado"], "nao_verificado")
+
+    def test_provado_em_e_o_mais_antigo_que_contou(self):
+        d = self.d()
+        linhas = [self.linha(d, 0, "python test_a.py", True, "2026-09-30T12:00:00+00:00"),
+                  self.linha(d, 1, "npm test", False, "2026-09-30T09:00:00+00:00"),
+                  self.linha(d, 1, "outra", True, "2026-01-01T00:00:00+00:00")]
+        _, em = documentos.provas_validas(documentacao(d), self.P, linhas)
+        self.assertEqual(em, "2026-09-30T09:00:00+00:00")
+        r = documentos.progresso(documentacao(d), self.P, "x", {}, em)
+        self.assertEqual(r["provado_em"], em)
+        self.assertIsNone(documentos.progresso(documentacao(d), self.P, "x")["provado_em"])
+        self.assertIsNone(documentos.progresso(None, self.P, "x")["provado_em"])
+
+    def test_chaves_inesperadas_nao_levantam(self):
+        d = self.d()
+        lixo = [None, 3, "x", {}, {"id": 5, "prova": 1, "ok": True},
+                {"id": [], "prova": {}, "ok": True, "em": 7},
+                {"id": id_de(self.P, d, 0), "prova": "python test_a.py",
+                 "ok": True, "em": 7}, {1: 2}]
+        v, em = documentos.provas_validas(documentacao(d), self.P, lixo)
+        self.assertEqual(v, {id_de(self.P, d, 0): True})
+        self.assertIsNone(em)
+        for x in (None, 5, "x", {}):
+            self.assertEqual(documentos.provas_validas(documentacao(d), self.P, x),
+                             ({}, None))
+        self.assertEqual(documentos.provas_aceitas(None, self.P), {})
 
 
 class OModuloNaoImportaOQueNaoPode(unittest.TestCase):

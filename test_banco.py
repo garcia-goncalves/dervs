@@ -150,7 +150,7 @@ class Esquema(unittest.TestCase):
             "historico", "instalacao", "instalacao_github",
             "maquina", "medida", "pareamento", "pendencia_arquivada",
             "pendencia_estado", "pendencia_vida", "projeto_conectado",
-            "servidor", "sessao", "tarefa_linha", "usuario",
+            "prova_rodada", "servidor", "sessao", "tarefa_linha", "usuario",
             "voz_aviso", "voz_estado", "voz_recado"])
 
     def test_as_seis_tabelas_antigas_nao_perderam_coluna(self):
@@ -3446,6 +3446,112 @@ class OAchadoNaoTrocaDeDono(unittest.TestCase):
         import inspect
         fonte = inspect.getsource(banco.gravar_auditoria)
         self.assertNotIn("usuario_id = excluded.usuario_id", fonte)
+
+
+class AsProvasRodadas(unittest.TestCase):
+    """`prova_rodada`: chave com o dono, tudo ou nada, `ok` NULL e NULL."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.a = banco.criar_usuario("a@teste.local", "teste1234", con=self.con)
+        self.b = banco.criar_usuario("b@teste.local", "teste1234", con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def _item(self, ok=True, cid="c1", prova="pytest"):
+        return {"criterio_id": cid, "prova": prova, "ok": ok, "motivo": "m"}
+
+    def test_duas_contas_mesmo_criterio_nao_se_sobrescrevem(self):
+        banco.gravar_provas(self.a, "dervs", [self._item(True)], "t1", "sha1",
+                            con=self.con)
+        banco.gravar_provas(self.b, "dervs", [self._item(False)], "t2", "sha2",
+                            con=self.con)
+        self.assertIs(banco.provas_da_conta(self.a, con=self.con)["dervs"][0]["ok"], True)
+        self.assertIs(banco.provas_da_conta(self.b, con=self.con)["dervs"][0]["ok"], False)
+        self.assertEqual(self.con.execute(
+            "SELECT COUNT(*) FROM prova_rodada").fetchone()[0], 2)
+
+    def test_regravar_atualiza_sem_duplicar(self):
+        banco.gravar_provas(self.a, "dervs", [self._item(True)], "t1", "s",
+                            con=self.con)
+        banco.gravar_provas(self.a, "dervs", [self._item(False)], "t2", "s",
+                            con=self.con)
+        linhas = banco.provas_da_conta(self.a, "dervs", con=self.con)["dervs"]
+        self.assertEqual(len(linhas), 1)
+        self.assertIs(linhas[0]["ok"], False)
+        self.assertEqual(linhas[0]["tarefa_id"], "t2")
+
+    def test_falha_no_meio_desfaz_tudo(self):
+        itens = [self._item(True, "c1"), self._item(True, "c2"),
+                 {"prova": "x", "ok": True}]          # sem criterio_id
+        with self.assertRaises(ValueError):
+            banco.gravar_provas(self.a, "dervs", itens, "t", "s", con=self.con)
+        self.assertEqual(self.con.execute(
+            "SELECT COUNT(*) FROM prova_rodada").fetchone()[0], 0)
+
+    def test_rerodada_sem_resposta_nao_apaga_o_veredito_da_mesma_prova(self):
+        for antigo in (True, False):
+            self.con.execute("DELETE FROM prova_rodada")
+            banco.gravar_provas(self.a, "dervs", [self._item(antigo)], "t1",
+                                "s", con=self.con)
+            banco.gravar_provas(self.a, "dervs", [self._item(None)], "t2",
+                                "s", con=self.con)
+            lin = banco.provas_da_conta(self.a, con=self.con)["dervs"][0]
+            self.assertIs(lin["ok"], antigo)
+            self.assertEqual(lin["tarefa_id"], "t2")
+
+    def test_prova_trocada_sem_resposta_nao_herda_o_veredito_antigo(self):
+        banco.gravar_provas(self.a, "dervs", [self._item(True, prova="a")],
+                            "t1", "s", con=self.con)
+        banco.gravar_provas(self.a, "dervs", [self._item(None, prova="b")],
+                            "t2", "s", con=self.con)
+        lin = banco.provas_da_conta(self.a, con=self.con)["dervs"][0]
+        self.assertIsNone(lin["ok"])
+        self.assertEqual(lin["prova"], "b")
+
+    def test_ok_nulo_fica_nulo(self):
+        banco.gravar_provas(self.a, "dervs", [self._item(None)], "t", "s",
+                            con=self.con)
+        self.assertIsNone(self.con.execute(
+            "SELECT ok FROM prova_rodada").fetchone()[0])
+        self.assertIsNone(
+            banco.provas_da_conta(self.a, con=self.con)["dervs"][0]["ok"])
+
+    def test_filtra_por_projeto(self):
+        banco.gravar_provas(self.a, "p1", [self._item()], "t", "s", con=self.con)
+        banco.gravar_provas(self.a, "p2", [self._item()], "t", "s", con=self.con)
+        self.assertEqual(list(banco.provas_da_conta(self.a, "p1", con=self.con)),
+                         ["p1"])
+        self.assertEqual(sorted(banco.provas_da_conta(self.a, con=self.con)),
+                         ["p1", "p2"])
+
+    def test_prova_aberta_olha_o_dono_e_o_estado(self):
+        def tarefa(uid, estado, proj="dervs"):
+            self.con.execute(
+                "INSERT INTO fila (id, usuario_id, projeto, regra, estado,"
+                " criado_em) VALUES (?,?,?,?,?,?)",
+                ("provar:%d:%s:%s" % (uid, proj, estado), uid, proj, "provar",
+                 estado, daqui()))
+            self.con.commit()
+        self.assertFalse(banco.prova_aberta(self.a, "dervs", con=self.con))
+        tarefa(self.b, "rodando")
+        self.assertFalse(banco.prova_aberta(self.a, "dervs", con=self.con),
+                         "tarefa da conta B apareceu como aberta para A")
+        tarefa(self.a, "ok")
+        self.assertFalse(banco.prova_aberta(self.a, "dervs", con=self.con))
+        tarefa(self.a, "aguardando_aprovacao")
+        self.assertTrue(banco.prova_aberta(self.a, "dervs", con=self.con))
+        self.assertFalse(banco.prova_aberta(self.a, "outro", con=self.con))
+
+    def test_o_set_do_upsert_nunca_toca_usuario_id(self):
+        """Guarda de codigo-fonte (o upsert so casa no mesmo dono, entao o
+        defeito seria codigo morto que teste de comportamento nao acusa)."""
+        import inspect
+        fonte = inspect.getsource(banco.gravar_provas)
+        set_ = fonte.split("DO UPDATE SET", 1)[1].split("excluded.medido_em", 1)[0]
+        self.assertIn("excluded.sha", set_)       # o recorte pegou o SET
+        self.assertNotIn("usuario_id", set_)
 
 
 class AMigracaoDoAchadoPreservaODono(unittest.TestCase):

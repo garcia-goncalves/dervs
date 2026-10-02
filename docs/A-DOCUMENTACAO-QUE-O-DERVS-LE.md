@@ -69,8 +69,21 @@ Só estes três formatos:
 
 Qualquer comando com estes caracteres é recusado na hora: `;` `&` `|` `$` crase
 `<` `>` `(` `)` aspas (simples ou duplas) ou quebra de linha. O texto da prova é
-**dado vindo de fora**: o DERVS nunca o entrega a um terminal. Nesta entrega
-**nenhuma prova roda ainda** (ver "O que a tela mostra").
+**dado vindo de fora**: o DERVS nunca o entrega a um terminal.
+
+### Como a prova roda (botão "Rodar as provas")
+
+O botão aparece na seção de progresso quando o projeto tem ao menos uma prova
+aceita e não é bloqueado. O clique só **enfileira** uma tarefa `provar`, que
+espera o "Pode fazer" em Consertar. Aprovada, o agente roda, numa cópia do
+repositório e sem shell, as provas aprovadas que ainda existem na cópia (só
+`python ...`; `npm test` não roda nesta fase) e devolve um veredito por prova:
+passou, falhou, ou **não sei**. "Não sei" (módulo ausente, nenhum teste
+coletado, prazo estourado) nunca conta como falha. O resultado só vale para o
+**mesmo texto de prova**: mudou o comando, o critério volta a "não verificado".
+
+**Atenção:** rodar o teste de um repositório é rodar código dele com os poderes
+de quem aprova. A barreira reduz o dano, não isola. Aprove só de projeto seu.
 
 ## Quando o documento está aprovado
 
@@ -125,9 +138,10 @@ número grande e a barra só existem na primeira:
 | **Sem dados** | o agente do computador não enviou a documentação (versão antiga, ou não mediu) | "Não consegui medir" |
 
 Um critério marcado com `[x]` **não conta** como cumprido: só conta quando a
-prova dele rodou e passou. Por isso, nesta entrega, onde nenhuma prova roda ainda,
+prova dele rodou e passou. Por isso, enquanto ninguém aprovou e rodou as provas,
 todo projeto com critérios aparece como "Não verificado". Toda frase com número
-diz **quando foi medida**. O progresso **não muda a cor do selo de saúde**: são
+diz **quando foi medida**, e na face Medido há também "provado há ..." (quando as
+provas rodaram). O progresso **não muda a cor do selo de saúde**: são
 perguntas diferentes.
 
 ## Um documento inteiro, como exemplo

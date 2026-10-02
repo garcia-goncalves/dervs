@@ -382,6 +382,37 @@ a próxima sessão erraria:
   mentira (como `test_voz_tela.py`); sem node ele pula só esses casos. Mais o
   `test_design`: `Number(`/`parseInt(` são proibidos (use `+x`).
 
+## Fase 2: as provas (01/10/2026)
+
+**O risco, com todas as letras:** rodar o teste de um repositório é **rodar
+código de terceiro com os poderes do dono**. Esse código alcança, entre outras
+coisas, o token da máquina em `~/.dervs/agente.json`. A barreira (comando da
+lista fechada, sem shell, ambiente limpo, numa cópia) **reduz o dano, não
+isola**. O clique "Pode fazer" é a aceitação desse risco; nada roda sem ele
+(`provar` está em `tarefas.SEMPRE_VERMELHA`).
+
+- **Resultado só vale com a MESMA prova.** O id do critério não inclui o texto
+  da prova: trocar o comando no documento não pode herdar o verde do comando
+  antigo. Quem lê o veredito confere a prova gravada contra a atual.
+- **`None` nunca é falha (Lei 2).** Prova que não rodou (módulo ausente,
+  nenhum teste coletado, prazo estourado) é critério sem resposta, não
+  reprovado.
+- **Código 0 só vale com prova POSITIVA de teste rodado** (`Ran N` com N>0 e
+  nem tudo pulado, ou `N passed`). Script mudo que sai 0 (arquivo vazio, sem
+  classe, `__main__` fora do lugar) é `None`, não "comprovado". E uma
+  re-execução sem resposta (`ok` NULL) **não apaga** o veredito anterior da
+  MESMA prova (`banco.gravar_provas`); prova trocada não herda nada.
+- **O que roda é a interseção** do pedido aprovado com o que existe na cópia: o
+  texto do pedido é dado e é revalidado linha a linha. `npm test` **fica fora**
+  desta fase (`argv_da_prova` só roda `python`).
+- **Nada com "exec" em nome de rota ou função** (`test_rotas.PROIBIDO`): a rota é
+  `POST /api/provar`, só `{projeto}`, e o servidor acha os comandos na
+  documentação DA CONTA, nunca no corpo.
+- **Balcão próprio `provar`** (`TETO_DE_PROVAS`), como o `consertar`.
+- **Na tela:** o botão "Rodar as provas" só existe com `provavel === true`
+  (`/api/progresso`); 403/404/409/429 viram frase nossa; "provado há …" só em
+  `estado === "medido"` e com o carimbo `haQuanto`.
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em

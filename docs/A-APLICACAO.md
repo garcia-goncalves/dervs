@@ -250,15 +250,19 @@ escrito em um só lugar: [`A-DOCUMENTACAO-QUE-O-DERVS-LE.md`](A-DOCUMENTACAO-QUE
   cumpridos (Lei 2: o painel não pode mentir).
 - **O selo de saúde não muda por causa do progresso.** São perguntas diferentes:
   "está funcionando?" e "quanto falta construir?".
-- **Nenhuma prova roda ainda** (fase 2). Só existe o validador da lista fechada
-  (`python test_<nome>.py`, `python -m pytest <arquivo>`, `npm test`); prova é dado
-  de fora e nunca vai a um terminal.
+- **"Rodar as provas"** (fase 2) enfileira uma tarefa `provar` que **espera o
+  "Pode fazer"**; aprovada, o agente roda as provas da lista fechada
+  (`python test_<nome>.py`, `python -m pytest <arquivo>`; `npm test` não) numa
+  cópia, sem shell. É rodar código do repositório com os poderes do dono: a
+  barreira reduz o dano, não isola. Prova que não rodou é "não sei", nunca falha, e
+  o resultado só vale para o mesmo texto de prova. A face Medido mostra "provado
+  há ...".
 - **"Desenvolver isto"** só aparece para critério de documento com a linha
   `Aprovado em: AAAA-MM-DD`. Cria uma tarefa `desenvolver` que **sempre espera o
   "Pode fazer"** e nunca anda sozinha; o resultado é um ramo para revisão. O
   servidor recusa documento não aprovado, projeto bloqueado, critério de segurança
   ou de dado de paciente e critério já marcado.
-- **Fora desta entrega:** rodar as provas, migrar briefings antigos (aparecem
+- **Fora desta entrega:** migrar briefings antigos (aparecem
   "sem documentação") e aprovar pela tela.
 
 ## 6. Como é feito por dentro

@@ -446,6 +446,16 @@ def laco(camada: str, intervalo: int):
         coletar(camada, "automática")
 
 
+def _linhas_de_prova(linhas) -> list:
+    """Linhas de `banco.provas_da_conta` (`criterio_id`, `medido_em`) no formato
+    de `documentos.provas_validas` (`id`, `em`). E o UNICO ponto de conversao:
+    sem ele `provas_validas` nao acha o id de ninguem e a conta nunca sai de
+    "nao verificado", com todos os testes de cada lado verdes."""
+    return [{"id": ln.get("criterio_id"), "prova": ln.get("prova"),
+             "ok": ln.get("ok"), "em": ln.get("medido_em")}
+            for ln in linhas or []]
+
+
 # --------------------------------------------------------------------- servidor
 class Hub(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
@@ -848,6 +858,7 @@ class Hub(SimpleHTTPRequestHandler):
                     and not tarefas.projeto_bloqueado(x.get("projeto")))
             tend = memoria.tendencia(con, agora_iso)
             guardadas = banco.arquivadas_detalhe(usuario_id=usuario_id, con=con)
+            provas_da_conta = banco.provas_da_conta(usuario_id, con=con)
         finally:
             con.close()
         # O SELO E CALCULADO AQUI, e nao no navegador.
@@ -888,9 +899,14 @@ class Hub(SimpleHTTPRequestHandler):
             # O servidor RECALCULA a conta dos criterios crus: um percentual que
             # o agente mandasse no meio e ignorado. `medido_em` e o da camada
             # local, a mesma que carimbou a chave `documentacao`.
+            nome_do_projeto = p.get("nome") or ""
+            veredito, provado_em = documentos.provas_validas(
+                p.get("documentacao"), nome_do_projeto,
+                _linhas_de_prova(provas_da_conta.get(nome_do_projeto)))
             p["progresso"] = documentos.progresso(
-                p.get("documentacao"), p.get("nome") or "",
-                (p.get("medido_em") or {}).get("local"))
+                p.get("documentacao"), nome_do_projeto,
+                (p.get("medido_em") or {}).get("local"),
+                provas=veredito, provado_em=provado_em)
         return {
             "agora": agora_iso,
             "pendencias": pend,
@@ -2431,7 +2447,11 @@ class Hub(SimpleHTTPRequestHandler):
                         tarefa_id=tarefa_id,
                         custo_usd=custo_usd or 0.0,
                         rodadas=rodadas or 0)
-            return self._json(200, {"ok": True, "pare": False})
+            extra = {}
+            if "provas" in corpo:
+                extra = self._gravar_provas_do_resultado(
+                    corpo, tarefa_id, maquina)
+            return self._json(200, dict({"ok": True, "pare": False}, **extra))
 
         if tipo != "progresso":
             return self._json(400, {"erro": "tipo desconhecido"})
@@ -2455,6 +2475,62 @@ class Hub(SimpleHTTPRequestHandler):
             linhas=linhas, rodadas=rodadas,
             custo_usd=custo_usd)
         return self._json(200, {"ok": True, "pare": bool(pare)})
+
+    _SHA_DE_PROVA = re.compile(r"[0-9a-f]{0,40}")
+
+    def _gravar_provas_do_resultado(self, corpo, tarefa_id, maquina) -> dict:
+        """O fio das provas: o agente conta o que cada comando respondeu.
+
+        So vale para tarefa de regra `provar`; o PROJETO vem da tarefa e o DONO
+        da maquina autenticada, nunca do corpo. Cada item e validado pelo TIPO
+        (`ok` so `True`/`False`/`None`: o texto `"true"` nao grava) e so grava
+        o criterio que existe na documentacao DESTA conta COM A MESMA prova.
+        O resto e descartado, e a contagem volta no resumo.
+        """
+        gravada = banco.tarefa(tarefa_id)
+        if not gravada or gravada.get("regra") != tarefas.PROVAR:
+            return {"provas_gravadas": 0, "provas_descartadas": 0}
+        projeto = gravada.get("projeto") or ""
+        itens = corpo.get("provas")
+        # Teto DERIVADO do que a documentacao pode ter, nunca digitado.
+        teto = documentos.MAX_DOCUMENTOS * documentos.MAX_CRITERIOS
+        sha = corpo.get("sha", "")
+        if (not isinstance(itens, list) or len(itens) > teto
+                or not isinstance(sha, str)
+                or not self._SHA_DE_PROVA.fullmatch(sha)):
+            return {"provas_gravadas": 0, "provas_descartadas": 0,
+                    "erro_das_provas": "provas invalidas"}
+        achados = self._criterios_da_conta(maquina["usuario_id"], projeto)
+        aceitas = (documentos.provas_aceitas(achados[0][1], projeto)
+                   if achados else {})
+        a_gravar, descartados = {}, 0
+        for it in itens:
+            if not isinstance(it, dict):
+                descartados += 1
+                continue
+            prova, ok = it.get("prova"), it.get("ok")
+            cids, motivo = it.get("criterios"), it.get("motivo", "")
+            # `ok` pelo TIPO: `1 == True` e `"true"` nao pode gravar nada.
+            if (not self._texto_gravavel(prova)
+                    or not (ok is True or ok is False or ok is None)
+                    or not isinstance(cids, list) or len(cids) > teto
+                    or not self._texto_gravavel(motivo) or len(motivo) > 300
+                    or not all(self._texto_gravavel(c) and len(c) <= 64
+                               for c in cids)):
+                descartados += 1
+                continue
+            validos = set(aceitas.get(prova.strip(), []))
+            for cid in cids:
+                if cid in validos:
+                    a_gravar[cid] = {"criterio_id": cid, "prova": prova.strip(),
+                                     "ok": ok, "motivo": motivo}
+                else:
+                    descartados += 1
+        if a_gravar:
+            banco.gravar_provas(maquina["usuario_id"], projeto,
+                                list(a_gravar.values()), tarefa_id, sha)
+        return {"provas_gravadas": len(a_gravar),
+                "provas_descartadas": descartados}
 
     # ------------------------------------------------- as quatro rotas do dono
 
@@ -2969,12 +3045,26 @@ class Hub(SimpleHTTPRequestHandler):
         if not achados:
             return self._json(404, {"erro": "projeto nao encontrado"})
         nome, doc, medido_em = achados[0]
-        pr = documentos.progresso(doc, nome, medido_em)
+        veredito, provado_em = self._veredito_das_provas(
+            sessao["usuario_id"], nome, doc)
+        pr = documentos.progresso(doc, nome, medido_em, provas=veredito,
+                                  provado_em=provado_em)
         return self._json(200, {
             "projeto": nome, "progresso": pr,
             "documentos": documentos.detalhar(
-                doc, nome, bloqueio=self._bloqueio_de_desenvolvimento(nome)),
+                doc, nome, provas=veredito,
+                bloqueio=self._bloqueio_de_desenvolvimento(nome)),
+            "provavel": bool(documentos.provas_aceitas(doc, nome))
+            and tarefas.projeto_pode_desenvolver(nome),
             "medido_em": pr["medido_em"]})
+
+    @staticmethod
+    def _veredito_das_provas(uid, nome, doc):
+        """`({criterio: bool}, provado_em)` das provas gravadas DESTA conta, ja
+        conferidas contra a prova ATUAL do criterio (`provas_validas`)."""
+        return documentos.provas_validas(
+            doc, nome,
+            _linhas_de_prova(banco.provas_da_conta(uid, nome).get(nome)))
 
     # Desenvolver gasta dinheiro e escreve em repositorio: balcao PROPRIO, como
     # o do conserto e o da auditoria — nunca emprestado de outra rota.
@@ -3006,8 +3096,11 @@ class Hub(SimpleHTTPRequestHandler):
         uid = sessao["usuario_id"]
         achado = projeto = None
         for nome, doc, _ in self._criterios_da_conta(uid):
+            # Com as provas: criterio COMPROVADO deixa de ser desenvolvivel.
             achado = documentos.achar_criterio(
-                doc, nome, cid, bloqueio=self._bloqueio_de_desenvolvimento(nome))
+                doc, nome, cid,
+                provas=self._veredito_das_provas(uid, nome, doc)[0],
+                bloqueio=self._bloqueio_de_desenvolvimento(nome))
             if achado:
                 projeto = nome
                 break
@@ -3037,6 +3130,59 @@ class Hub(SimpleHTTPRequestHandler):
                 banco.tarefa(id_fila, uid), "desenvolvimento")
         return self._json(200, {"ok": True, "pedido": bool(entrou),
                                 "tarefa": id_fila, "aviso": aviso})
+
+    # Provar roda comando da lista fechada na maquina do dono: balcao PROPRIO.
+    TETO_DE_PROVAS = 10
+
+    def _provar_pedir(self):
+        """O botao "Provar": enfileira UMA tarefa `provar` para um projeto.
+
+        O corpo traz so o NOME do projeto, e ele so vale se estiver no estado
+        DA CONTA de quem pediu: "nao existe" e "nao e seu" dao o MESMO 404. Os
+        comandos vem da documentacao da conta (`provas_aceitas`, lista
+        fechada), nunca do corpo. A tarefa nasce vermelha e espera o "Pode
+        fazer"; quem roda e o braco executor.
+        """
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="provar",
+                                           teto=self.TETO_DE_PROVAS):
+            return self._json(429, self.RECUSA)
+        nome = corpo.get("projeto")
+        if not nome or not isinstance(nome, str) or len(nome) > 200:
+            return self._json(400, {"erro": "faltou o nome do projeto"})
+        uid = sessao["usuario_id"]
+        achados = self._criterios_da_conta(uid, nome)
+        if not achados:
+            return self._json(404, {"erro": "projeto nao encontrado"})
+        nome, doc, _ = achados[0]
+        if not tarefas.projeto_pode_desenvolver(nome):
+            return self._json(403, {"erro": "projeto bloqueado"})
+        comandos = list(documentos.provas_aceitas(doc, nome))
+        if not comandos:
+            return self._json(409, {"erro": "nenhuma prova para rodar"})
+        if banco.prova_aberta(uid, nome):
+            return self._json(200, {
+                "ok": True, "pedido": False, "tarefa": None,
+                "aviso": "Já há uma prova deste projeto na fila ou rodando."})
+        # O dono entra NO ID (fila.id e TEXT PRIMARY KEY global). O carimbo
+        # deixa pedir de novo depois que a anterior terminou.
+        id_fila = "provar:%s:%s:%d" % (
+            uid, hashlib.sha256(nome.encode("utf-8")).hexdigest()[:16],
+            time.time_ns() // 1_000_000)
+        entrou = banco.enfileirar([{
+            "id": id_fila, "usuario_id": uid, "projeto": nome,
+            "regra": tarefas.PROVAR, "gravidade": "media", "risco": 0,
+            "trilho": "prova", "executor": tarefas.EXECUTOR_DA_PROVA,
+            "detalhe": "Rodar as provas de %s.\n%s" % (
+                nome, documentos.pedido_de_provas(comandos,
+                                                  banco.MARCA_DA_PROVA)),
+        }])
+        return self._json(200, {
+            "ok": True, "pedido": bool(entrou), "tarefa": id_fila,
+            "aviso": self._aviso_do_conserto(uid, "prova")})
 
     TIPOS_DE_PEDIDO_DO_VOZ = ("enfileirar_conserto",)
     _ID_DE_ALERTA = re.compile(r"[A-Za-z0-9._:-]{1,200}")
@@ -3572,6 +3718,7 @@ ROTAS = {
     # braco executor, depois do "Pode fazer". Nenhuma das duas roda prova.
     "/api/progresso":           Rota("GET",  Hub._progresso,        "dado"),
     "/api/desenvolver":         Rota("POST", Hub._desenvolver_pedir, "dado"),
+    "/api/provar":              Rota("POST", Hub._provar_pedir,      "dado"),
 
     # A ponte com o DERVS-VOZ. As tres `/agente/voz/*` sao `maquina` (token do
     # agente, so conexao de saida); as duas `/api/voz*` sao do dono. O servidor

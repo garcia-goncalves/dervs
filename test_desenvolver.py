@@ -517,7 +517,7 @@ class OPedidoDeDesenvolvimento(BaseServidorDeVerdade):
         self.assertEqual(r.status, 200, r.corpo)
         j = json.loads(r.corpo)
         self.assertEqual(set(j), {"projeto", "progresso", "documentos",
-                                  "medido_em"})
+                                  "provavel", "medido_em"})
         self.assertEqual(j["projeto"], "dv-rota")
         p = next(p for p in self.dados()["projetos"] if p["nome"] == "dv-rota")
         self.assertEqual(j["progresso"], p["progresso"])
@@ -587,7 +587,8 @@ class OsFatosDaTarefaDesenvolver(unittest.TestCase):
 
     def test_as_duas_familias_sao_conjuntos_separados(self):
         self.assertEqual(tarefas.NUNCA_VERDE, frozenset({"publicar"}))
-        self.assertEqual(tarefas.SEMPRE_VERMELHA, frozenset({"desenvolver"}))
+        self.assertEqual(tarefas.SEMPRE_VERMELHA,
+                         frozenset({"desenvolver", "provar"}))
         self.assertIsInstance(tarefas.SEMPRE_VERMELHA, frozenset)
         self.assertFalse(tarefas.NUNCA_VERDE & tarefas.SEMPRE_VERMELHA)
 

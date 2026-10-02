@@ -58,6 +58,7 @@ MAX_PASTAS = 1000           # entradas LISTADAS em docs/esteira (antes de abrir)
 # medidas junto. Esta chave nunca passa de 32 KiB (eram 24: com os 10 briefings
 # do proprio DERVS convertidos, o ultimo ficava sem criterio nenhum).
 MAX_JSON = 32 * 1024
+MAX_PROVAS_POR_TAREFA = 20  # provas por pedido de uma tarefa
 
 SECAO = "## criterio_de_aceitacao"
 
@@ -470,7 +471,76 @@ def _situacao(c, cid, provas) -> str:
     return "falta"
 
 
-def progresso(documentacao, projeto, medido_em, provas=None) -> dict:
+def _criterios_com_id(documentacao, projeto):
+    docs, _ = _limpar(documentacao)
+    for d in docs or []:
+        for c in d["criterios"]:
+            yield id_do_criterio(projeto, d["slug"], c["n"], c["texto"]), c
+
+
+def provas_aceitas(documentacao, projeto) -> dict:
+    """`{prova: [id do criterio, ...]}` so das provas que `prova_permitida`
+    aceita. Cada texto de prova aparece uma vez, com todos os criterios dele."""
+    aceitas = {}
+    for cid, c in _criterios_com_id(documentacao, projeto):
+        if prova_permitida(c["prova"])[0]:
+            aceitas.setdefault(c["prova"].strip(), []).append(cid)
+    return aceitas
+
+
+def pedido_de_provas(comandos, marca) -> str:
+    """Uma linha `marca + comando` por prova, para o texto do pedido."""
+    return "\n".join(marca + c for c in comandos)
+
+
+def provas_do_pedido(texto, marca) -> list:
+    """Le o pedido e REVALIDA cada linha: o texto do pedido e dado, nao ordem.
+    Sem repeticao, no maximo `MAX_PROVAS_POR_TAREFA`; entrada estranha -> []."""
+    if not isinstance(texto, str) or not isinstance(marca, str) or not marca:
+        return []
+    saida = []
+    for linha in texto.splitlines():
+        if not linha.startswith(marca):
+            continue
+        prova = linha[len(marca):].strip()
+        if prova in saida or not prova_permitida(prova)[0]:
+            continue
+        saida.append(prova)
+        if len(saida) >= MAX_PROVAS_POR_TAREFA:
+            break
+    return saida
+
+
+def provas_validas(documentacao, projeto, linhas):
+    """`({id: bool}, provado_em | None)`. Um resultado so vale se a `prova`
+    gravada for IGUAL a prova atual do criterio (o id nao inclui a prova: sem
+    isso, trocar a linha `Prova:` manteria o veredito antigo) e se `ok` for
+    `True`/`False` pelo TIPO. `provado_em` e o mais antigo que contou."""
+    if not isinstance(linhas, (list, tuple)):
+        return {}, None
+    atuais = {cid: c["prova"].strip()
+              for cid, c in _criterios_com_id(documentacao, projeto)}
+    resultado, datas = {}, []
+    for ln in linhas:
+        if not isinstance(ln, dict):
+            continue
+        cid, prova, ok = ln.get("id"), ln.get("prova"), ln.get("ok")
+        if (not isinstance(cid, str) or not isinstance(prova, str)
+                or not prova.strip() or atuais.get(cid) != prova.strip()):
+            continue
+        if ok is True:
+            resultado[cid] = True
+        elif ok is False:
+            resultado[cid] = False
+        else:
+            continue
+        if isinstance(ln.get("em"), str):
+            datas.append(ln["em"])
+    return resultado, (min(datas) if datas else None)
+
+
+def progresso(documentacao, projeto, medido_em, provas=None,
+              provado_em=None) -> dict:
     """A conta. RECALCULADA a partir dos criterios crus, sempre.
 
     Estados: `sem_dados` (a chave nao veio: agente antigo ou leitura que falhou),
@@ -483,7 +553,8 @@ def progresso(documentacao, projeto, medido_em, provas=None) -> dict:
         return {"estado": "sem_dados", "percentual": None, "total": 0,
                 "comprovados": 0, "falhos": 0, "nao_verificados": 0,
                 "faltam": 0, "declarados": 0, "medido_em": None,
-                "documentos_n": 0, "erros_n": 0}
+                "documentos_n": 0, "erros_n": 0,
+                "provado_em": None}
     conta = {"comprovado": 0, "prova_falhou": 0, "nao_verificado": 0,
              "falta": 0}
     declarados = 0
@@ -506,7 +577,8 @@ def progresso(documentacao, projeto, medido_em, provas=None) -> dict:
             "comprovados": comprovados, "falhos": falhos,
             "nao_verificados": conta["nao_verificado"],
             "faltam": conta["falta"], "declarados": declarados,
-            "medido_em": medido_em, "documentos_n": len(docs),
+            "medido_em": medido_em, "provado_em": provado_em,
+            "documentos_n": len(docs),
             "erros_n": sum(len(d["erros"]) for d in docs) + descartados}
 
 

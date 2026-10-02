@@ -165,6 +165,43 @@ class Semaforo(unittest.TestCase):
         self.assertNotIn("_", motivo)
 
 
+class ProvaPodeRodar(unittest.TestCase):
+    """A regra `provar`: mesma pergunta nos dois lados, sem abrir sessao de IA."""
+
+    def _prova(self, **kw):
+        base = {"regra": "provar", "executor": "prova",
+                "aprovado_em": AGORA_ISO}
+        base.update(kw)
+        return tarefa(**base)
+
+    def test_aprovada_roda(self):
+        pode, motivo = tarefas.pode_rodar(self._prova(), 0.0, AGORA_ISO, {})
+        self.assertTrue(pode, motivo)
+
+    def test_sem_aprovacao_nao_roda_nem_repintada_de_verde(self):
+        t = self._prova()
+        t.pop("aprovado_em")
+        for rep in ({}, {"provar": "verde"}):
+            pode, motivo = tarefas.pode_rodar(t, 0.0, AGORA_ISO, rep)
+            self.assertFalse(pode)
+            self.assertIn("clique", motivo)
+
+    def test_executor_errado_nao_roda(self):
+        for ex in ("claude", "mecanico", "", None):
+            pode, motivo = tarefas.pode_rodar(
+                self._prova(executor=ex), 0.0, AGORA_ISO, {})
+            self.assertFalse(pode, ex)
+            self.assertIn("executor", motivo)
+
+    def test_projeto_bloqueado_ou_nexa_nao_roda(self):
+        for proj in ("ajudei-saude", "Ajudei_Saude", "ccvp", "Nexa-x",
+                     "aninha-site", "", None):
+            pode, motivo = tarefas.pode_rodar(
+                self._prova(projeto=proj), 0.0, AGORA_ISO, {})
+            self.assertFalse(pode, proj)
+            self.assertIn("provas", motivo)
+
+
 class GuardaDaGuarda(unittest.TestCase):
     """Apagar a guarda tem de deixar o ARQUIVO vermelho, nao so a assercao."""
 

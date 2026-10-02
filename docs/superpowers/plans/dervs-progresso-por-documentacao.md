@@ -71,7 +71,16 @@ Testes: `test_progresso_tela.py`: 4 estados mapeados; nenhum `innerHTML` em `pin
 
 ## Fora desta entrega
 
-Rodar provas (fase 2: `ExecutorProva`); migrar briefings antigos (aparecem "sem documentação"); aprovar pela tela (aprovação é a linha no arquivo).
+Migrar briefings antigos (aparecem "sem documentação"); aprovar pela tela (aprovação é a linha no arquivo).
+
+## Fase 2 (provas): entregue no ramo `feat/progresso-provas`
+
+Banco (`prova_rodada`), agente (`ExecutorProva`, sem shell, numa cópia), servidor
+(`POST /api/provar`, `provavel` em `/api/progresso`, `provado_em` em `progresso`) e
+tela (botão "Rodar as provas" atrás de `provavel === true`, frases para 403, 404,
+409 e 429, "provado há ..." só em `medido`). Teste da tela:
+`test_progresso_tela.OBotaoRodarAsProvas`. Ainda sem clique real no navegador nem
+publicação.
 
 ## Riscos
 
