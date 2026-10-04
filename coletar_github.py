@@ -992,7 +992,12 @@ def main():
         por_alias[alias] = nome
 
     if not slugs:
-        print("nenhum repositorio com remoto no GitHub.")
+        # NAO MEDI nao e "zero repositorios": no servidor a conta lida aqui e a
+        # de teste, e dizer so "nenhum" parecia uma medicao feita (Lei 2).
+        print("NAO MEDI o GitHub: a conta lida (%s) nao tem nenhum repositorio "
+              "com remoto. Se esta rodada e do servidor, o bloco 'No GitHub' "
+              "esta SEM DADOS, nao vazio." % banco.conta_local(),
+              file=sys.stderr)
         return 0
 
     dados, erro = _gh_graphql(_consulta(slugs, com_vulns=True))

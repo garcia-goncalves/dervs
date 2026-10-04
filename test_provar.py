@@ -178,6 +178,35 @@ class AsProvasNoServidorDeVerdade(BaseServidorDeVerdade):
         self.assertIn(banco.MARCA_DA_PROVA + PROVA, l["detalhe"])
         self.assertIn(banco.MARCA_DA_PROVA + OUTRA_PROVA, l["detalhe"])
 
+    def test_cliques_simultaneos_enfileiram_uma_prova_so(self):
+        import threading
+        self.projeto_com_provas("pv-corrida")
+        sessao = self.sessao_e_token()
+        respostas, trava = [], threading.Lock()
+
+        def clicar():
+            r = self.provar("pv-corrida", sessao=sessao)
+            with trava:
+                respostas.append(r)
+        fios = [threading.Thread(target=clicar) for _ in range(8)]
+        for f in fios:
+            f.start()
+        for f in fios:
+            f.join(timeout=30)
+        self.assertEqual(len(respostas), 8)
+        status = [r.status for r in respostas]
+        self.assertTrue(all(s in (200, 429) for s in status), status)
+        self.assertEqual(len(self.linhas_da_fila()), 1)
+
+    def test_a_decisao_de_enfileirar_prova_mora_sob_a_trava(self):
+        # Guarda de codigo-fonte: o teste de corrida e probabilistico, este nao.
+        import inspect
+        fonte = inspect.getsource(servir.Hub._provar_pedir)
+        corpo = fonte.split("with self._TRAVA_DE_PROVAS:", 1)
+        self.assertEqual(len(corpo), 2, "a trava sumiu de _provar_pedir")
+        self.assertIn("prova_aberta", corpo[1])
+        self.assertIn("banco.enfileirar", corpo[1])
+
     def test_os_comandos_aparecem_na_coluna_prova_da_lista(self):
         self.projeto_com_provas("pv-lista")
         self.provar("pv-lista")
