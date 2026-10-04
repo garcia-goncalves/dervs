@@ -1281,6 +1281,18 @@ class ASugestaoNaTelaPropoeEPara(unittest.TestCase):
                       "a aparecer sozinha na mesma sessao")
 
 
+class OCustoDaAuditoriaEmDolar(unittest.TestCase):
+    """`custo_usd` e dolar. A tela escrevia `R$` na frente do mesmo numero e
+    mostrava R$ 1,00 para US$ 0,998 (visto no site em 02/10/2026): numero errado
+    com cara de certo, a Lei 2 deste repositorio."""
+
+    def test_custo_usd_nao_leva_cifrao_de_real(self):
+        js = PAINEL_JS.read_text(encoding="utf-8")
+        trecho = js[js.index("corrida.custo_usd") - 220: js.index("corrida.custo_usd") + 80]
+        self.assertIn("US$", trecho)
+        self.assertNotIn("custou R$", trecho)
+
+
 if __name__ == "__main__":
     # `exit=False` sozinho devolvia 0 mesmo com caso reprovado: em 28/08/2026
     # este arquivo imprimiu FAILED (failures=4) e a CI seguiu verde. O codigo

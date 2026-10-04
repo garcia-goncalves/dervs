@@ -3265,7 +3265,7 @@ async function pintarAuditoria(alvo) {
 
   $("#audit-carimbo").textContent = corrida.medido_em
     ? "Última auditoria: " + haQuanto(corrida.medido_em) + ", "
-      + (corrida.arquivos_n || 0) + " arquivo(s) lidos, custou R$ "
+      + (corrida.arquivos_n || 0) + " arquivo(s) lidos, custou US$ "
       + Number(corrida.custo_usd || 0).toFixed(2).replace(".", ",")
     : "";
 
