@@ -3278,10 +3278,11 @@ async function pedirAuditoria() {
   if (!nome) return;
   const btn = $("#audit-pedir");
   btn.disabled = true;
-  btn.textContent = "Auditando…";
+  btn.textContent = "Pedindo…";
   const faixa = $("#audit-faixa");
   faixa.hidden = false;
-  faixa.textContent = "Auditando " + nome + "… Isso pode levar alguns minutos.";
+  faixa.textContent = "Pedindo a auditoria de " + nome
+    + "… Ela só começa depois do seu “Pode fazer”.";
   try {
     const r = await escrever("/api/auditoria/pedir", { projeto: nome });
     if (!r.ok) throw new Error(r.status);

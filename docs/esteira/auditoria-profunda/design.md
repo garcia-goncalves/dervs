@@ -129,7 +129,7 @@ de leitura em 1100px, nenhum painel lateral fixo.
   **não é o mesmo** que "sem dados" — é "ainda não pedimos", e o texto diz
   isso com todas as letras (ver `## textos`).
 - **Carregando.** Só depois de clicar "Auditar agora": o botão vira
-  "Auditando…" e desabilita; a régua e a lista da corrida anterior (se
+  "Pedindo…" e desabilita; a régua e a lista da corrida anterior (se
   houver) continuam na tela, acinzentadas, com uma faixa no topo — o mesmo
   padrão do Painel quando o servidor não responde
   (`docs/esteira/dervs/design.md`, tela 2, estado Erro). Nunca uma tela em
@@ -196,8 +196,8 @@ a mesma ação de fundo (pedir uma medição), só que mais profunda.
 
 **Estado carregando:**
 
-> Faixa: "Auditando **ccvp-painel**… Isso pode levar alguns minutos."
-> Botão: "Auditando…" (desabilitado)
+> Faixa: "Pedindo a auditoria de **ccvp-painel**… Ela só começa depois do seu “Pode fazer”."
+> Botão: "Pedindo…" (desabilitado)
 
 **Estado erro/sem dados (a corrida mais recente falhou, mas há uma anterior
 boa):**

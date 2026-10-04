@@ -3150,6 +3150,8 @@ class Hub(SimpleHTTPRequestHandler):
     # Provar roda comando da lista fechada na maquina do dono: balcao PROPRIO.
     TETO_DE_PROVAS = 10
 
+    _TRAVA_DE_PROVAS = threading.Lock()
+
     def _provar_pedir(self):
         """O botao "Provar": enfileira UMA tarefa `provar` para um projeto.
 
@@ -3179,23 +3181,26 @@ class Hub(SimpleHTTPRequestHandler):
         comandos = list(documentos.provas_aceitas(doc, nome))
         if not comandos:
             return self._json(409, {"erro": "nenhuma prova para rodar"})
-        if banco.prova_aberta(uid, nome):
-            return self._json(200, {
-                "ok": True, "pedido": False, "tarefa": None,
-                "aviso": "Já há uma prova deste projeto na fila ou rodando."})
-        # O dono entra NO ID (fila.id e TEXT PRIMARY KEY global). O carimbo
-        # deixa pedir de novo depois que a anterior terminou.
-        id_fila = "provar:%s:%s:%d" % (
-            uid, hashlib.sha256(nome.encode("utf-8")).hexdigest()[:16],
-            time.time_ns() // 1_000_000)
-        entrou = banco.enfileirar([{
-            "id": id_fila, "usuario_id": uid, "projeto": nome,
-            "regra": tarefas.PROVAR, "gravidade": "media", "risco": 0,
-            "trilho": "prova", "executor": tarefas.EXECUTOR_DA_PROVA,
-            "detalhe": "Rodar as provas de %s.\n%s" % (
-                nome, documentos.pedido_de_provas(comandos,
-                                                  banco.MARCA_DA_PROVA)),
-        }])
+        # "Ja ha prova aberta?" e "enfileirar" sao UMA decisao so: sem a trava,
+        # dois cliques simultaneos liam "nao ha" juntos e enfileiravam duas.
+        with self._TRAVA_DE_PROVAS:
+            if banco.prova_aberta(uid, nome):
+                return self._json(200, {
+                    "ok": True, "pedido": False, "tarefa": None,
+                    "aviso": "Já há uma prova deste projeto na fila ou rodando."})
+            # O dono entra NO ID (fila.id e TEXT PRIMARY KEY global). O carimbo
+            # deixa pedir de novo depois que a anterior terminou.
+            id_fila = "provar:%s:%s:%d" % (
+                uid, hashlib.sha256(nome.encode("utf-8")).hexdigest()[:16],
+                time.time_ns() // 1_000_000)
+            entrou = banco.enfileirar([{
+                "id": id_fila, "usuario_id": uid, "projeto": nome,
+                "regra": tarefas.PROVAR, "gravidade": "media", "risco": 0,
+                "trilho": "prova", "executor": tarefas.EXECUTOR_DA_PROVA,
+                "detalhe": "Rodar as provas de %s.\n%s" % (
+                    nome, documentos.pedido_de_provas(comandos,
+                                                      banco.MARCA_DA_PROVA)),
+            }])
         return self._json(200, {
             "ok": True, "pedido": bool(entrou), "tarefa": id_fila,
             "aviso": self._aviso_do_conserto(uid, "prova")})
