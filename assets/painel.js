@@ -623,7 +623,8 @@ function pintarProjeto(nome) {
           rotuloCriterio,
           item.ok === false ? "quebrado" : item.ok === true ? "saudavel" : "sem_dados",
           item.ok === true ? "responde" : item.ok === false ? "fora do ar" : "não medido",
-          "medido " + haQuanto(item.medido_em),
+          item.ok === null || item.ok === undefined
+            ? "ainda não medido" : "medido " + haQuanto(item.medido_em),
           (item.url || "") + "\ncódigo: " + (item.codigo ?? "sem resposta")));
       }
     }
