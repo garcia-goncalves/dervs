@@ -477,6 +477,11 @@ def _consulta(slugs: dict, com_vulns: bool) -> str:
 # produto a uma pessoa estar sentada aqui. O roteiro dos tres valores esta em
 # docs/operacao/token-do-coletor.md.
 #
+# OS TRES CAMINHOS SAO DA MAQUINA LOCAL (e do servidor sem App). No SERVIDOR com
+# o App configurado, `main` desvia para `coletar_por_conta`, que nao usa
+# NENHUM deles: cada conta ganha um `Coletor` proprio, com a instalacao DELA,
+# e a credencial anda como parametro explicito. Ver `_modo_por_conta`.
+#
 # NEM O TOKEN NEM A CHAVE SAO IMPRESSOS OU GRAVADOS por este arquivo alem do
 # cabecalho da requisicao. Toda mensagem de erro que sai daqui e escrita por
 # nos, nunca repassada da excecao: `URLError` carrega a URL, e URL de API pode
@@ -524,10 +529,9 @@ def _app():
         # precedencia documentada no topo deste arquivo continua valendo inteira:
         # quem definiu a variavel esta depurando, e quer que ela valha.
         #
-        # DIVIDA NOMEADA, e ela esta escrita no plano: este coletor roda num
-        # processo so, e com varias contas nao ha resposta para "a instalacao de
-        # quem?". Hoje ele pega a da conta local, que e a mesma cujos projetos
-        # ele mede. Com duas pessoas isso nao doi; com dez, doi.
+        # A conta local, que e a mesma cujos projetos este caminho mede. Com
+        # varias contas a pergunta "a instalacao de quem?" e respondida pelo
+        # modo por conta (`coletar_por_conta`), que nao passa por aqui.
         if not instalacao:
             instalacao = _instalacao_do_banco()
         if not (ident and instalacao and chave.strip()):
@@ -1040,10 +1044,9 @@ def _gravar_medicao(con, dono, tudo, por_alias, dados, com_vulns, buscar):
     # OS ENDERECOS GRAVADOS PELA TELA (etapa B2). Uma leitura so, fora do
     # laco: sao poucas linhas e a conexao ja esta aberta.
     #
-    # DE QUEM SAO: da conta que este coletor atende, e nao "de todo mundo".
-    # Com varias contas isto e divida nomeada no plano — o coletor roda num
-    # processo so, e escolher a conta por rodada e outra etapa. Hoje ele
-    # atende a conta local, que e a mesma cujos projetos ele mede.
+    # DE QUEM SAO: de `dono`, a conta cujos projetos esta chamada mede — a
+    # conta local no caminho antigo, cada conta no modo por conta. Nunca "de
+    # todo mundo".
     #
     # FALHA FECHADA, em vazio: banco velho sem a tabela, ou qualquer outro
     # tropeco, nao pode derrubar a coleta inteira. Sem endereco gravado o
@@ -1141,11 +1144,11 @@ def _gravar_medicao(con, dono, tudo, por_alias, dados, com_vulns, buscar):
     return gravados, reusados
 
 
-def main():
-    tudo = banco.ler_tudo(usuario_id=banco.conta_local())
+def _slugs(tudo: dict):
+    """`{apelido: slug}` e `{apelido: projeto}` dos projetos com remoto."""
     slugs, por_alias = {}, {}
     for nome, camadas in sorted(tudo.items()):
-        if nome == banco.INFRA:
+        if nome in banco.RESERVADOS:
             continue
         slug = ((camadas.get("local") or {}).get("dados") or {}).get("git", {}).get("remoto_slug")
         if not slug or "/" not in slug:
@@ -1153,6 +1156,138 @@ def main():
         alias = "r%d" % len(slugs)
         slugs[alias] = slug
         por_alias[alias] = nome
+    return slugs, por_alias
+
+
+# ------------------------------------------------------------- o modo por conta
+#
+# O MOTIVO VAI PARA A TELA DO DONO DA CONTA (linha `banco.GITHUB_DA_CONTA`), e
+# por isso e sempre frase NOSSA. A saida do processo, ao contrario, aparece em
+# `falhas_de_coleta` no painel de TODAS as contas: ali so contagem e frase
+# generica, nunca nome de projeto, id ou e-mail.
+SEM_APP = "o servidor está sem o aplicativo do GitHub configurado"
+SEM_INSTALACAO = "esta conta não conectou o GitHub"
+SEM_CREDENCIAL = ("o GitHub não entregou a chave de leitura desta conta "
+                  "(aplicativo desinstalado?)")
+ERRO_INTERNO = "erro interno ao medir esta conta"
+MAX_NOMES_NO_MOTIVO = 5
+
+
+def _modo_por_conta() -> bool:
+    """Servidor (ambiente nao local) com o GitHub App ao menos em parte
+    configurado. Na maquina do dono, e no servidor sem App, nada muda."""
+    if (os.environ.get("DERVS_AMBIENTE") or "").strip().lower() == "local":
+        return False
+    return bool((os.environ.get(VAR_APP_ID) or "").strip()
+                or (os.environ.get(VAR_CHAVE_DO_APP) or "").strip())
+
+
+def _lista_cortada(nomes: list) -> list:
+    """Ate cinco nomes, e o corte se ANUNCIA ("e mais N")."""
+    nomes = sorted(nomes)
+    if len(nomes) <= MAX_NOMES_NO_MOTIVO:
+        return nomes
+    return nomes[:MAX_NOMES_NO_MOTIVO] + ["e mais %d" % (len(nomes) - MAX_NOMES_NO_MOTIVO)]
+
+
+def _medir_uma_conta(con, uid, tudo, slugs, por_alias, app_id, chave) -> dict:
+    """Mede UMA conta com a instalacao DELA e devolve o resumo que vai na
+    linha `_github`. A credencial e variavel LOCAL desta chamada: o `Coletor`
+    nasce aqui e morre aqui, nunca e guardado no modulo."""
+    resumo = {"motivo": None, "medidos": 0, "repositorios": len(slugs),
+              "sem_alcance": []}
+    if not (app_id and chave):
+        return dict(resumo, motivo=SEM_APP)
+    instalacao = banco.instalacao_do_github(uid, con=con)
+    if not instalacao:
+        return dict(resumo, motivo=SEM_INSTALACAO)
+    credencial = github_app.Coletor(app_id, instalacao, chave).token()
+    if not credencial:
+        return dict(resumo, motivo=SEM_CREDENCIAL)
+
+    dados, erro = _graphql_com(credencial, _consulta(slugs, com_vulns=True))
+    com_vulns = True
+    if dados is None:
+        # Mesma segunda tentativa, sem alertas, do caminho antigo: CI e PR
+        # valem por si, e a consulta sem alertas e a barata.
+        dados, erro = _graphql_com(credencial, _consulta(slugs, com_vulns=False))
+        com_vulns = False
+        if dados is None:
+            return dict(resumo, motivo=erro)   # frase nossa, de lista branca
+
+    gravados, _reusados = _gravar_medicao(
+        con, uid, tudo, por_alias, dados, com_vulns,
+        buscar=lambda caminho: _json_com(credencial, caminho))
+    faltaram = [por_alias[a] for a in por_alias if not dados.get(a)]
+    resumo.update(medidos=gravados, sem_alcance=_lista_cortada(faltaram))
+    if not gravados:
+        resumo["motivo"] = ("o GitHub não devolveu nenhum dos %d repositórios "
+                            "desta conta (o aplicativo alcança eles?)" % len(slugs))
+    return resumo
+
+
+def coletar_por_conta() -> int:
+    """Uma rodada do GitHub para CADA conta ativa com projeto.
+
+    Toda conta tentada termina com a linha `_github` gravada (motivo `None`
+    quando mediu), e com um commit SO DELA: uma conta que quebra no meio nao
+    desfaz a medicao das outras, nem deixa a dela pela metade.
+    """
+    app_id = (os.environ.get(VAR_APP_ID) or "").strip()
+    chave = (os.environ.get(VAR_CHAVE_DO_APP) or "").strip()
+    if (os.environ.get(VAR_TOKEN_NO_AMBIENTE) or os.environ.get(VAR_INSTALACAO)):
+        _diga("modo por conta: ignorei %s e %s; cada conta usa a propria "
+              "instalacao" % (VAR_TOKEN_NO_AMBIENTE, VAR_INSTALACAO))
+    tentadas = medidas = repositorios = 0
+    con = banco.conectar()
+    try:
+        for uid in banco.contas_com_projeto(con):
+            tudo = banco.ler_tudo(con, usuario_id=uid)
+            slugs, por_alias = _slugs(tudo)
+            if not slugs:
+                continue
+            tentadas += 1
+            try:
+                resumo = _medir_uma_conta(con, uid, tudo, slugs, por_alias,
+                                          app_id, chave)
+            except Exception:              # noqa: BLE001 — a rodada segue
+                # O TEXTO DA EXCECAO NAO ENTRA: ela pode carregar URL,
+                # cabecalho ou nome de projeto. A frase e fixa.
+                con.rollback()
+                resumo = {"motivo": ERRO_INTERNO, "medidos": 0,
+                          "repositorios": len(slugs), "sem_alcance": []}
+            try:
+                banco.gravar(banco.GITHUB_DA_CONTA, "github", resumo, con,
+                             usuario_id=uid)
+                con.commit()
+            except Exception:              # noqa: BLE001 — a rodada segue
+                con.rollback()
+                continue
+            if resumo["medidos"]:
+                medidas += 1
+                repositorios += resumo["medidos"]
+    finally:
+        con.close()
+
+    if not tentadas:
+        print("NAO MEDI o GitHub: nenhuma conta tem repositorio com remoto. "
+              "O bloco 'No GitHub' esta SEM DADOS, nao vazio.", file=sys.stderr)
+        return 0
+    if not medidas:
+        print("FALHA: tentei medir %d conta(s) no GitHub e nao medi nenhuma; "
+              "o motivo de cada uma esta no painel dela." % tentadas,
+              file=sys.stderr)
+        return 1
+    print("ok: medi %d de %d conta(s); %d repositorios do GitHub atualizados"
+          % (medidas, tentadas, repositorios))
+    return 0
+
+
+def main():
+    if _modo_por_conta():
+        return coletar_por_conta()
+    tudo = banco.ler_tudo(usuario_id=banco.conta_local())
+    slugs, por_alias = _slugs(tudo)
 
     if not slugs:
         # NAO MEDI nao e "zero repositorios": no servidor a conta lida aqui e a

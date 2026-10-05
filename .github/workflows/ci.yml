@@ -162,6 +162,11 @@ jobs:
       - name: Coletor
         run: python test_coletar.py
 
+      # GitHub por conta: cada conta medida com a instalacao DELA, nunca com
+      # o token do ambiente, o app guardado ou a credencial de outra conta.
+      - name: Coletor do GitHub por conta
+        run: python test_coletar_por_conta.py
+
       # Servidores multiplos (E5): o fio inteiro — banco de verdade, trecho
       # de coleta, `montar_estado` e `regras.avaliar` — provando que dois
       # servidores fora do ar viram duas pendencias, nunca uma so.
