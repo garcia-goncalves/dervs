@@ -172,9 +172,22 @@ Para o botão funcionar, o servidor precisa de mais uma variável:
 ID e não junto dos segredos. Sem ele o botão responde "não existe": melhor não
 ter porta do que ter porta que leva a um endereço que não abre.
 
-**Uma dívida nomeada:** com várias contas, o coletor roda num processo só e não
-tem como saber de quem é a instalação daquela rodada. Hoje ele usa a da conta
-local. Com duas pessoas isso não dói; com dez, dói.
+**A dívida das várias contas foi paga em 05/10/2026.** No **servidor**, com o App
+configurado (`DERVS_AMBIENTE` diferente de `local` e `DERVS_GITHUB_APP_ID` ou
+`DERVS_GITHUB_APP_KEY` presente), o coletor entra no **modo por conta**: para cada
+conta ativa com projeto, usa a instalação **daquela** conta (lida do banco) e
+grava o resultado nela. Nesse modo `DERVS_GITHUB_TOKEN` e
+`DERVS_GITHUB_INSTALLATION_ID` são **ignorados** (a ordem da tabela acima só vale
+fora dele, isto é, na sua máquina), e o `gh` nunca é chamado.
+
+A conta que não deu para medir (sem instalação, aplicativo desinstalado, passou
+do teto ou do prazo da rodada) aparece no bloco "No GitHub" com o **motivo em
+português**, e não como "nunca foi medido". O motivo mora numa linha de sistema
+`_github` da tabela `medida` e só aparece para a conta dona. O código de saída é
+1 só quando ele tentou medir alguma conta e não mediu nenhuma. Há teto de
+chamadas por conta e por rodada, e um prazo de 480 s (abaixo do limite de 600 s do
+servidor). **Dívida nova:** a ordem é fixa por conta, então, se o teto apertar, as
+últimas contas ficam sem medir; um rodízio fica para depois.
 
 ### A troca chave → token, que agora existe
 

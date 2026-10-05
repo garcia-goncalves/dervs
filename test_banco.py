@@ -3792,5 +3792,68 @@ class TarefaParaMaquinaTrazODetalheDoAchado(unittest.TestCase):
         self.assertIsNone(candidata["achado_arquivo"])
 
 
+class OGithubDaConta(unittest.TestCase):
+    """A linha de sistema `_github`: o motivo por que a coleta do GitHub nao
+    mediu UMA conta. Mora na `medida`, no molde de `_quota`, e por isso e
+    reservada — um agente que mandasse um projeto `_github` escreveria o
+    motivo que o painel do dono mostra."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.a = banco.criar_usuario("a@teste.local", "teste1234", con=self.con)
+        self.b = banco.criar_usuario("b@teste.local", "teste1234", con=self.con)
+        for uid in (self.a, self.b):
+            banco.gravar("app-%d" % uid, "local", {"nome": "app-%d" % uid},
+                         self.con, usuario_id=uid)
+        banco.gravar(banco.GITHUB_DA_CONTA, "github",
+                     {"motivo": "esta conta nao conectou o GitHub", "medidos": 0},
+                     self.con, usuario_id=self.a)
+        self.con.commit()
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_o_motivo_chega_so_a_conta_dona(self):
+        e_a = banco.montar_estado(self.con, usuario_id=self.a)
+        e_b = banco.montar_estado(self.con, usuario_id=self.b)
+        self.assertEqual(e_a["github_da_conta"]["motivo"],
+                         "esta conta nao conectou o GitHub")
+        self.assertTrue(e_a["github_da_conta"]["tentado_em"])
+        self.assertIsNone(e_b["github_da_conta"])
+
+    def test_a_linha_de_sistema_nao_vira_projeto(self):
+        e_a = banco.montar_estado(self.con, usuario_id=self.a)
+        nomes = [p["nome"] for p in e_a["projetos"]]
+        self.assertEqual(nomes, ["app-%d" % self.a])
+        self.assertNotIn(banco.GITHUB_DA_CONTA, nomes)
+
+    def test_e_nome_reservado(self):
+        self.assertIn(banco.GITHUB_DA_CONTA, banco.RESERVADOS)
+
+    def test_contas_com_projeto_deixa_de_fora_a_desativada_e_a_vazia(self):
+        vazia = banco.criar_usuario("vazia@teste.local", "teste1234", con=self.con)
+        so_sistema = banco.criar_usuario("s@teste.local", "teste1234", con=self.con)
+        banco.gravar(banco.QUOTA, "local", {"nome": banco.QUOTA}, self.con,
+                     usuario_id=so_sistema)
+        banco.gravar("x", "github", {}, self.con, usuario_id=vazia)
+        self.assertEqual(banco.contas_com_projeto(self.con), [self.a, self.b])
+        self.con.execute("UPDATE usuario SET desativado_em=? WHERE id=?",
+                         (iso(AGORA), self.b))
+        self.con.commit()
+        self.assertEqual(banco.contas_com_projeto(self.con), [self.a])
+
+    def test_relatorio_de_maquina_nao_escreve_a_linha(self):
+        banco.abrir_pareamento(self.b, "123456", expira_em=daqui(minutes=10),
+                               con=self.con)
+        token = banco.usar_pareamento("123456", "n", agora_iso=iso(AGORA),
+                                      con=self.con)
+        maq = banco.maquina_por_token(token, con=self.con)["id"]
+        r = banco.receber_relatorio(maq, [{"nome": banco.GITHUB_DA_CONTA,
+                                           "motivo": "sequestrado"}], con=self.con)
+        self.assertEqual(r["invalidos"], 1)
+        self.assertIsNone(banco.montar_estado(self.con, usuario_id=self.b)
+                          ["github_da_conta"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

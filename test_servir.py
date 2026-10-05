@@ -4307,5 +4307,141 @@ class OBotaoConsertarComIA(BaseServidorDeVerdade):
                          "https://github.com/x/y/pull/7")
 
 
+class OMotivoDoGithubDaConta(BaseServidorDeVerdade):
+    """Plano dervs-github-por-conta, etapa 5: o motivo por que a coleta do
+    GitHub nao mediu esta conta chega a tela DELA — e so a dela."""
+
+    MOTIVO = "esta conta não conectou o GitHub"
+
+    def setUp(self):
+        super().setUp()
+        con = banco.conectar()
+        try:
+            banco.gravar(banco.GITHUB_DA_CONTA, "github",
+                         {"motivo": self.MOTIVO, "medidos": 0}, con,
+                         usuario_id=self.uid)
+            con.commit()
+        finally:
+            con.close()
+
+        def apagar():
+            con = banco.conectar()
+            try:
+                con.execute("DELETE FROM medida WHERE projeto = ?",
+                            (banco.GITHUB_DA_CONTA,))
+                con.commit()
+            finally:
+                con.close()
+        self.addCleanup(apagar)
+
+    def sessao_de_outra_conta(self):
+        OMotivoDoGithubDaConta._n = getattr(OMotivoDoGithubDaConta, "_n", 0) + 1
+        con = banco.conectar()
+        try:
+            uid = banco.criar_usuario("motivo%d@teste.local" % self._n, con=con)
+            con.commit()
+            cookie = banco.novo_token()
+            banco.abrir_sessao(uid, cookie, banco.prazo(3600), con=con)
+            final = banco.confirmar_segundo_fator(cookie, banco.novo_token(),
+                                                  con=con)
+        finally:
+            con.close()
+        return {"sessao": final}
+
+    def test_a_dona_ve_o_motivo(self):
+        d = json.loads(self.pedir("/api/dados", cookies=self.com_sessao()).corpo)
+        self.assertEqual(d["github_da_conta"]["motivo"], self.MOTIVO)
+        self.assertTrue(d["github_da_conta"]["tentado_em"])
+
+    def test_outra_conta_nao_ve_o_motivo_alheio(self):
+        d = json.loads(self.pedir("/api/dados",
+                                  cookies=self.sessao_de_outra_conta()).corpo)
+        self.assertIn("github_da_conta", d)
+        self.assertIsNone(d["github_da_conta"])
+
+    def test_a_tela_le_o_motivo_no_bloco_no_github(self):
+        """Guarda de acoplamento: renomear a chave de um lado so reprova.
+        Palavra inteira, senao `github_da_contaX` passaria por substring."""
+        js = Path("assets/painel.js").read_text(encoding="utf-8")
+        inicio = js.index("/* --- No GitHub")
+        bloco = js[inicio:js.index("/* ---", inicio + 1)]
+        self.assertIn("motivoDoGithubDaConta(p.nome)", bloco)
+        m = re.search(r"function motivoDoGithubDaConta\(.*?\n}\n", js, re.S)
+        self.assertTrue(m, "motivoDoGithubDaConta sumiu do painel.js")
+        self.assertRegex(m.group(0), r"ESTADO\.github_da_conta\b")
+        for campo in ("motivo", "tentado_em", "sem_alcance"):
+            self.assertRegex(m.group(0), r"\.%s\b" % campo)
+
+
+class OMotivoDaContaSoQuandoValeParaOProjeto(unittest.TestCase):
+    """O motivo da conta (linha `_github`) so entra no card de um projeto
+    quando e FRESCO pela mesma validade da camada github, e quando nao e um
+    motivo parcial de OUTROS repositorios. Executado em node."""
+
+    JS = Path("assets/painel.js").read_text(encoding="utf-8")
+    AGORA = "2026-10-05T12:00:00+00:00"
+
+    def test_a_validade_e_a_mesma_do_selo(self):
+        import regras
+        m = re.search(r"const VALIDADE_GITHUB_S = ([0-9 *]+);", self.JS)
+        self.assertTrue(m, "constante VALIDADE_GITHUB_S sumiu do painel.js")
+        self.assertEqual(eval(m.group(1)), regras.VALIDADE["github"])  # noqa: S307
+
+    def _motivo(self, conta, nome="alfa"):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("sem node")
+        const = re.search(r"const VALIDADE_GITHUB_S = [^\n]*\n", self.JS).group(0)
+        func = re.search(r"function motivoDoGithubDaConta\(.*?\n}\n",
+                         self.JS, re.S).group(0)
+        prog = ("const ESTADO = %s;\n%s%s\nconsole.log(JSON.stringify("
+                "motivoDoGithubDaConta(%s)));\n"
+                % (json.dumps({"agora": self.AGORA, "github_da_conta": conta}),
+                   const, func, json.dumps(nome)))
+        r = subprocess.run([node, "-"], input=prog, capture_output=True,
+                           text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def conta(self, **k):
+        base = {"tentado_em": "2026-10-05T11:40:00+00:00",
+                "motivo": "esta conta não conectou o GitHub", "sem_alcance": []}
+        base.update(k)
+        return base
+
+    def test_motivo_fresco_aparece_com_maiuscula_e_ponto(self):
+        self.assertEqual(self._motivo(self.conta()),
+                         "Esta conta não conectou o GitHub.")
+
+    def test_motivo_velho_nao_aparece(self):
+        self.assertIsNone(self._motivo(self.conta(
+            tentado_em="2026-10-05T09:59:00+00:00")))
+        self.assertIsNone(self._motivo(self.conta(tentado_em="lixo")))
+
+    def test_no_limite_da_validade_ainda_aparece(self):
+        self.assertTrue(self._motivo(self.conta(
+            tentado_em="2026-10-05T10:00:00+00:00")))
+
+    def test_sem_conta_ou_sem_motivo_nao_aparece(self):
+        self.assertIsNone(self._motivo(None))
+        self.assertIsNone(self._motivo(self.conta(motivo=None)))
+
+    def test_motivo_parcial_de_outros_repositorios_nao_aparece(self):
+        self.assertIsNone(self._motivo(self.conta(
+            motivo="medi 50 de 60 repositórios", sem_alcance=["beta", "gama"])))
+
+    def test_projeto_na_lista_ve_o_motivo(self):
+        self.assertEqual(self._motivo(self.conta(
+            motivo="1 repositório(s) não puderam ser medidos",
+            sem_alcance=["beta", "alfa"])),
+            "1 repositório(s) não puderam ser medidos.")
+
+    def test_lista_cortada_pode_esconder_o_projeto(self):
+        self.assertTrue(self._motivo(self.conta(
+            sem_alcance=["a", "b", "c", "d", "e", "e mais 3"])))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)
