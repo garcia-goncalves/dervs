@@ -1935,6 +1935,28 @@ class OColetorTrocaAChavePorToken(unittest.TestCase):
         self.assertEqual(vistos, ["Bearer ghs-mentira"])
 
 
+class ACredencialEExplicita(unittest.TestCase):
+    """`_http_com` recebe a credencial como parametro: e o nucleo da coleta
+    por conta. Credencial vazia nao vira um pedido com `Bearer ` vazio — ela
+    levanta antes de qualquer conexao."""
+
+    def test_credencial_vazia_levanta_sem_abrir_conexao(self):
+        abertos = []
+        original = coletar_github.urllib.request.OpenerDirector.open
+
+        def espiar(self_, pedido, timeout=None):
+            abertos.append(pedido)
+            raise AssertionError("abriu conexao sem credencial")
+
+        coletar_github.urllib.request.OpenerDirector.open = espiar
+        self.addCleanup(setattr, coletar_github.urllib.request.OpenerDirector,
+                        "open", original)
+        for vazia in ("", None, "   "):
+            with self.assertRaises(ValueError):
+                coletar_github._http_com(vazia, "repos/a/b")
+        self.assertEqual(abertos, [])
+
+
 class OEnderecoDoBancoVenceOArquivo(unittest.TestCase):
     """Etapa B2. Duas fontes para o mesmo dado, e uma ordem so.
 
