@@ -50,7 +50,7 @@ abrir log do servidor. Com mais contas no futuro, cada uma só pode ver o que é
 6. **Teto de custo:** teste prova que o número de chamadas ao GitHub por rodada tem teto
    declarado (`TETO_...`), com mais de uma conta, e que estourar o teto vira "sem dados" com
    motivo, nunca silêncio.
-7. **Nada quebra:** as 38 suítes existentes continuam verdes, a CI do GitHub passa, e
+7. **Nada quebra:** as 37 suítes existentes continuam verdes, a CI do GitHub passa, e
    `test_imagem` aceita o Dockerfile (qualquer arquivo novo entra na cópia da imagem).
 8. **Revisão:** `security-reviewer` e `python-reviewer` rodam antes de mesclar e os achados
    críticos estão fechados ou justificados por escrito no `verificacao.md`.
