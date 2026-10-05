@@ -54,6 +54,9 @@ BANCO = _caminho_do_banco()
 
 INFRA = "_infra"          # projeto sintetico: containers e portas da maquina
 QUOTA = "_quota"          # projeto sintetico: cota de minutos do Actions, da CONTA
+# Linha de sistema da coleta do GitHub POR CONTA (camada "github"): o motivo
+# por que esta conta nao foi medida, e quanto foi. Ver `coletar_github`.
+GITHUB_DA_CONTA = "_github"
 CAMADAS = ("local", "github", "pesado")
 
 # Dono das linhas que nasceram antes de existir conta. Nao e um usuario de
@@ -77,9 +80,9 @@ MAX_PROJETOS_POR_RELATORIO = 300
 MAX_NOME_DE_PROJETO = 200
 MAX_CAMINHO = 500
 MAX_AVISOS = 30
-# As duas linhas de sistema que moram na mesma tabela `medida`. Relatorio de
+# As linhas de sistema que moram na mesma tabela `medida`. Relatorio de
 # maquina nao pode escrever nelas — ver `receber_relatorio`.
-RESERVADOS = (INFRA, QUOTA)
+RESERVADOS = (INFRA, QUOTA, GITHUB_DA_CONTA)
 # Quantos projetos DISTINTOS uma conta pode acumular na `medida`. O teto de
 # relatorio nao segura disco: 300 nomes NOVOS por envio, mil envios, e o volume
 # do servidor acaba. Ver `receber_relatorio`.
@@ -1710,6 +1713,7 @@ def montar_estado(con=None, *, usuario_id: int) -> dict:
     try:
         tudo = ler_tudo(con, usuario_id=usuario_id)
         infra = tudo.pop(INFRA, {}).get("local", {})
+        github = tudo.pop(GITHUB_DA_CONTA, {}).get("github")
         projetos = []
         for nome, camadas in sorted(tudo.items()):
             local = camadas.get("local")
@@ -1748,7 +1752,29 @@ def montar_estado(con=None, *, usuario_id: int) -> dict:
             "infra": infra.get("dados", {}),
             "infra_medido_em": infra.get("medido_em"),
             "quota": (tudo.get(QUOTA) or {}).get("pesado", {}).get("dados"),
+            # `None` = a coleta por conta nunca tentou esta conta (ou o
+            # servidor nao esta no modo por conta). Nunca `{}`.
+            "github_da_conta": ({"tentado_em": github["medido_em"],
+                                 **github["dados"]} if github else None),
         }
+    finally:
+        if fechar:
+            con.close()
+
+
+def contas_com_projeto(con=None) -> list:
+    """As contas ATIVAS que tem ao menos um projeto de verdade (camada `local`,
+    fora das linhas de sistema). E a lista que a coleta do GitHub por conta
+    percorre, em ordem fixa de id."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        marcas = ",".join("?" * len(RESERVADOS))
+        return [l[0] for l in con.execute(
+            "SELECT DISTINCT m.usuario_id FROM medida m"
+            " JOIN usuario u ON u.id = m.usuario_id"
+            " WHERE u.desativado_em IS NULL AND m.camada = 'local'"
+            " AND m.projeto NOT IN (%s) ORDER BY 1" % marcas, RESERVADOS)]
     finally:
         if fechar:
             con.close()
