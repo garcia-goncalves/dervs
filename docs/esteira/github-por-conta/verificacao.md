@@ -33,10 +33,9 @@ GraphQL (injeção, dentro da própria conta); mensagem de falha global reveland
 - **Sem rodízio:** ordem fixa por conta e por site; com teto apertado, os últimos envelhecem
   (`TETO_REPOS_POR_CONTA`, `TETO_SITES_POR_CONTA`, teto de 5 contas por rodada). O motivo aparece
   na tela, então não é silêncio.
-- `SLUG_VALIDO` aceita `.` como dono ou repo (`./x`); só rende um 404 do GitHub com o token da própria
-  conta. Fechar com `not any(p in (".", "..") ...)` quando alguém mexer ali.
-- Site `ok=None` sem item anterior (`adiado`/`prazo`) é gravado com `medido_em` de agora e o painel
-  mostra "não medido, há agora": carimbo enganoso, não alarme. Gravar `medido_em` vazio é o conserto.
+- **Fechadas em 05/10/2026 (PR #35):** `SLUG_VALIDO` recusa `.` e `..`; site sem medição e sem anterior
+  grava `medido_em` vazio e a tela diz "ainda não medido". **Criterio 1 conferido no site no ar** (14 de 20
+  repositorios medidos; os 6 fora de alcance mostram o motivo).
 - Um site que já começou pode passar do prazo da rodada em até 20 s; a thread que estourou fica viva
   até o processo acabar (o coletor é subprocesso, morre com ele).
 - A rota `/api/servidores/sugerir` chama `mede_site` sem o prazo por thread (pré-existente).
