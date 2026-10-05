@@ -309,6 +309,81 @@ class SegredoNaoVaza(Base):
             self.assertNotIn(nome, saida)
 
 
+class TetoDeChamadasEPrazo(Base):
+    """Criterio 6: mais contas multiplicam chamadas. O teto e por rodada, e
+    estourar vira motivo escrito — nunca silencio, nunca "zero repositorios".
+
+    Conta do duble, por rodada: A gasta 4 (token, GraphQL, workflows x2) e B
+    gasta 3 (token, GraphQL, workflows)."""
+
+    def teto(self, nome, valor):
+        self.addCleanup(setattr, coletar_github, nome, getattr(coletar_github, nome))
+        setattr(coletar_github, nome, valor)
+
+    def test_as_constantes_sao_derivadas_e_o_prazo_cabe_no_do_servidor(self):
+        c = coletar_github
+        self.assertEqual(c.TETO_CHAMADAS_POR_CONTA, 1 + 2 + 3 * c.TETO_REPOS_POR_CONTA)
+        self.assertEqual(c.TETO_CHAMADAS_POR_RODADA, 5 * c.TETO_CHAMADAS_POR_CONTA)
+        fonte = Path("servir.py").read_text(encoding="utf-8")
+        self.assertIn("timeout=600", fonte)
+        self.assertLess(c.PRAZO_DA_RODADA, 600)
+
+    def test_teto_da_rodada_acaba_antes_da_segunda_conta(self):
+        self.instalar_b()
+        self.teto("TETO_CHAMADAS_POR_RODADA", 4)
+        self.rodar()
+        self.assertLessEqual(len(self.chamadas), 4)
+        self.assertEqual(self.com_github(self.a), set(PROJETOS_A))
+        self.assertIn("teto", self.linha_github(self.b)["motivo"])
+        self.assertEqual(self.com_github(self.b), set())
+
+    def test_teto_no_meio_da_conta_diz_que_a_publicacao_nao_foi_relida(self):
+        self.instalar_b()
+        self.teto("TETO_CHAMADAS_POR_RODADA", 3)
+        self.rodar()
+        self.assertLessEqual(len(self.chamadas), 3)
+        linha_a = self.linha_github(self.a)
+        self.assertEqual(linha_a["medidos"], 2)
+        self.assertIn("publicação de 1 projeto", linha_a["motivo"])
+        self.assertIn("teto", self.linha_github(self.b)["motivo"])
+
+    def test_teto_por_conta_tambem_vale(self):
+        self.instalar_b()
+        self.teto("TETO_CHAMADAS_POR_CONTA", 2)
+        self.rodar()
+        por_conta = {"a": 0, "b": 0}
+        for url, _m, autorizacao, _c in self.chamadas:
+            if "ghs-conta-a" in autorizacao:
+                por_conta["a"] += 1
+            if "ghs-conta-b" in autorizacao:
+                por_conta["b"] += 1
+        # O token gasta 1 (vai com o JWT); sobra 1 de credencial por conta.
+        self.assertEqual(por_conta, {"a": 1, "b": 1})
+        self.assertIn("publicação", self.linha_github(self.a)["motivo"])
+
+    def test_repositorios_alem_do_teto_sao_anunciados(self):
+        self.instalar_b()
+        self.teto("TETO_REPOS_POR_CONTA", 1)
+        self.rodar()
+        linha = self.linha_github(self.a)
+        self.assertEqual(linha["medidos"], 1)
+        self.assertEqual(linha["repositorios"], 2)
+        self.assertIn("1 de 2", linha["motivo"])
+        for _url, _m, _a, corpo in self.chamadas:
+            if corpo:
+                self.assertLessEqual(len(PEDACO.findall(
+                    json.loads(corpo)["query"])), 1)
+
+    def test_prazo_vencido_vira_motivo_de_tempo_sem_chamar_nada(self):
+        self.instalar_b()
+        self.teto("PRAZO_DA_RODADA", 0)
+        codigo, _s, _e = self.rodar()
+        self.assertEqual(codigo, 1)
+        self.assertEqual(self.chamadas, [])
+        for uid in (self.a, self.b):
+            self.assertIn("tempo", self.linha_github(uid)["motivo"])
+
+
 class OCaminhoPorContaNaoTemCredencialImplicita(unittest.TestCase):
     """Guarda de codigo-fonte: o por conta nao alcanca nada que leia o ambiente,
     o app guardado ou o `gh`. Comportamento prova o caso que rodou; isto prova

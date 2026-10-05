@@ -705,9 +705,12 @@ def _gh_graphql(consulta: str):
         return None, "resposta do gh nao era JSON"
 
 
-def _graphql_com(credencial: str, consulta: str):
+def _graphql_com(credencial: str, consulta: str, orcamento=None):
     """`_gh_graphql` com a credencial EXPLICITA: nunca o ambiente, nunca o `gh`.
-    Devolve `(dados, erro)`; o erro e sempre frase nossa (lista branca)."""
+    Devolve `(dados, erro)`; o erro e sempre frase nossa (lista branca).
+    Com `orcamento`, sem saldo nao ha chamada."""
+    if orcamento is not None and not orcamento.gastar():
+        return None, orcamento.falta()
     try:
         resposta = _http_com(credencial, "graphql", {"query": consulta})
     except Exception as e:           # noqa: BLE001 — rede, HTTP, TLS, JSON
@@ -715,8 +718,11 @@ def _graphql_com(credencial: str, consulta: str):
     return _ler_graphql(resposta)
 
 
-def _json_com(credencial: str, caminho: str, teto=30):
-    """GET REST com a credencial EXPLICITA. `None` em qualquer falha."""
+def _json_com(credencial: str, caminho: str, teto=30, orcamento=None):
+    """GET REST com a credencial EXPLICITA. `None` em qualquer falha, e
+    tambem quando o `orcamento` acabou."""
+    if orcamento is not None and not orcamento.gastar():
+        return None
     try:
         return _http_com(credencial, caminho, teto=teto)
     except Exception:                # noqa: BLE001 — 404 aqui e resposta valida
@@ -1172,6 +1178,45 @@ SEM_CREDENCIAL = ("o GitHub não entregou a chave de leitura desta conta "
 ERRO_INTERNO = "erro interno ao medir esta conta"
 MAX_NOMES_NO_MOTIVO = 5
 
+# O TETO DE CUSTO, derivado e nunca digitado. Por conta: 1 troca da chave por
+# token + ate 2 consultas GraphQL (com e sem alertas) + ate 3 chamadas REST de
+# publicacao por repositorio. A rodada paga ate cinco contas cheias. O prazo
+# fica abaixo do `timeout=600` com que `servir.py` roda este coletor: estourar
+# la mata o processo sem gravar motivo nenhum.
+TETO_REPOS_POR_CONTA = 50
+TETO_CHAMADAS_POR_CONTA = 1 + 2 + 3 * TETO_REPOS_POR_CONTA
+TETO_CHAMADAS_POR_RODADA = 5 * TETO_CHAMADAS_POR_CONTA
+PRAZO_DA_RODADA = 480        # segundos
+
+
+class _Orcamento:
+    """Chamadas e tempo de UMA rodada. Vive numa variavel LOCAL de
+    `coletar_por_conta`: global do modulo carregaria saldo de uma rodada para
+    a outra. Os tetos sao lidos na criacao, nao na importacao."""
+
+    def __init__(self):
+        self.rodada = TETO_CHAMADAS_POR_RODADA
+        self.conta = 0
+        self.fim = time.monotonic() + PRAZO_DA_RODADA
+
+    def nova_conta(self) -> None:
+        self.conta = TETO_CHAMADAS_POR_CONTA
+
+    def falta(self):
+        """`None` se ainda pode chamar; senao, a frase do que acabou."""
+        if time.monotonic() >= self.fim:
+            return "passou do tempo desta rodada"
+        if self.rodada <= 0 or self.conta <= 0:
+            return "passou do teto de chamadas desta rodada"
+        return None
+
+    def gastar(self) -> bool:
+        if self.falta():
+            return False
+        self.rodada -= 1
+        self.conta -= 1
+        return True
+
 
 def _modo_por_conta() -> bool:
     """Servidor (ambiente nao local) com o GitHub App ao menos em parte
@@ -1190,10 +1235,12 @@ def _lista_cortada(nomes: list) -> list:
     return nomes[:MAX_NOMES_NO_MOTIVO] + ["e mais %d" % (len(nomes) - MAX_NOMES_NO_MOTIVO)]
 
 
-def _medir_uma_conta(con, uid, tudo, slugs, por_alias, app_id, chave) -> dict:
+def _medir_uma_conta(con, uid, tudo, slugs, por_alias, app_id, chave,
+                     orcamento) -> dict:
     """Mede UMA conta com a instalacao DELA e devolve o resumo que vai na
     linha `_github`. A credencial e variavel LOCAL desta chamada: o `Coletor`
-    nasce aqui e morre aqui, nunca e guardado no modulo."""
+    nasce aqui e morre aqui, nunca e guardado no modulo. Toda ida ao GitHub
+    passa pelo `orcamento` da rodada, inclusive a troca da chave por token."""
     resumo = {"motivo": None, "medidos": 0, "repositorios": len(slugs),
               "sem_alcance": []}
     if not (app_id and chave):
@@ -1201,28 +1248,57 @@ def _medir_uma_conta(con, uid, tudo, slugs, por_alias, app_id, chave) -> dict:
     instalacao = banco.instalacao_do_github(uid, con=con)
     if not instalacao:
         return dict(resumo, motivo=SEM_INSTALACAO)
-    credencial = github_app.Coletor(app_id, instalacao, chave).token()
-    if not credencial:
-        return dict(resumo, motivo=SEM_CREDENCIAL)
+    avisos = []
+    if len(slugs) > TETO_REPOS_POR_CONTA:
+        avisos.append("medi %d de %d repositórios; o resto passou do teto "
+                      "desta rodada" % (TETO_REPOS_POR_CONTA, len(slugs)))
+        apelidos = list(slugs)[:TETO_REPOS_POR_CONTA]
+        slugs = {a: slugs[a] for a in apelidos}
+        por_alias = {a: por_alias[a] for a in apelidos}
 
-    dados, erro = _graphql_com(credencial, _consulta(slugs, com_vulns=True))
+    def pedir_contado(url, jwt, teto, metodo="POST"):
+        if not orcamento.gastar():
+            raise RuntimeError("sem saldo nesta rodada")
+        return github_app._pedir_ao_github(url, jwt, teto, metodo)
+
+    credencial = github_app.Coletor(app_id, instalacao, chave,
+                                    _pedir=pedir_contado).token()
+    if not credencial:
+        acabou = orcamento.falta()
+        return dict(resumo, motivo=("sem dados: " + acabou) if acabou
+                    else SEM_CREDENCIAL)
+
+    dados, erro = _graphql_com(credencial, _consulta(slugs, com_vulns=True),
+                               orcamento)
     com_vulns = True
     if dados is None:
         # Mesma segunda tentativa, sem alertas, do caminho antigo: CI e PR
         # valem por si, e a consulta sem alertas e a barata.
-        dados, erro = _graphql_com(credencial, _consulta(slugs, com_vulns=False))
+        dados, erro = _graphql_com(credencial, _consulta(slugs, com_vulns=False),
+                                   orcamento)
         com_vulns = False
         if dados is None:
-            return dict(resumo, motivo=erro)   # frase nossa, de lista branca
+            return dict(resumo, motivo="; ".join([erro] + avisos))
 
-    gravados, _reusados = _gravar_medicao(
-        con, uid, tudo, por_alias, dados, com_vulns,
-        buscar=lambda caminho: _json_com(credencial, caminho))
+    nao_relidos = set()
+
+    def buscar(caminho):
+        r = _json_com(credencial, caminho, orcamento=orcamento)
+        if r is None and orcamento.falta():
+            nao_relidos.add("/".join(caminho.split("/")[1:3]))
+        return r
+
+    gravados, _reusados = _gravar_medicao(con, uid, tudo, por_alias, dados,
+                                          com_vulns, buscar=buscar)
+    if nao_relidos:
+        avisos.append("a publicação de %d projeto(s) não foi relida (%s)"
+                      % (len(nao_relidos), orcamento.falta()))
     faltaram = [por_alias[a] for a in por_alias if not dados.get(a)]
     resumo.update(medidos=gravados, sem_alcance=_lista_cortada(faltaram))
     if not gravados:
-        resumo["motivo"] = ("o GitHub não devolveu nenhum dos %d repositórios "
-                            "desta conta (o aplicativo alcança eles?)" % len(slugs))
+        avisos.insert(0, "o GitHub não devolveu nenhum dos %d repositórios "
+                         "desta conta (o aplicativo alcança eles?)" % len(slugs))
+    resumo["motivo"] = "; ".join(avisos) or None
     return resumo
 
 
@@ -1239,6 +1315,7 @@ def coletar_por_conta() -> int:
         _diga("modo por conta: ignorei %s e %s; cada conta usa a propria "
               "instalacao" % (VAR_TOKEN_NO_AMBIENTE, VAR_INSTALACAO))
     tentadas = medidas = repositorios = 0
+    orcamento = _Orcamento()
     con = banco.conectar()
     try:
         for uid in banco.contas_com_projeto(con):
@@ -1247,9 +1324,10 @@ def coletar_por_conta() -> int:
             if not slugs:
                 continue
             tentadas += 1
+            orcamento.nova_conta()
             try:
                 resumo = _medir_uma_conta(con, uid, tudo, slugs, por_alias,
-                                          app_id, chave)
+                                          app_id, chave, orcamento)
             except Exception:              # noqa: BLE001 — a rodada segue
                 # O TEXTO DA EXCECAO NAO ENTRA: ela pode carregar URL,
                 # cabecalho ou nome de projeto. A frase e fixa.
