@@ -545,8 +545,14 @@ function pintarProjeto(nome) {
   /* --- No GitHub -------------------------------------------------------- */
   const nogh = coluna("No GitHub", colunas);
   if (!vale.github || !gh) {
-    nogh.append(nada("A medição do GitHub não foi lida, ou está velha demais "
-                     + "para afirmar alguma coisa.", c.github));
+    /* O motivo da conta vem do servidor (frase nossa, nunca texto do GitHub)
+       e entra só por textContent, dentro de nada(). */
+    const daConta = ESTADO && ESTADO.github_da_conta;
+    const motivo = daConta && daConta.motivo
+      ? daConta.motivo.charAt(0).toUpperCase() + daConta.motivo.slice(1) + "."
+      : "A medição do GitHub não foi lida, ou está velha demais "
+        + "para afirmar alguma coisa.";
+    nogh.append(nada(motivo, c.github));
   } else {
     const marca = "medido " + haQuanto(c.github);
     const ci = gh.ci || {};

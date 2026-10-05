@@ -923,6 +923,10 @@ class Hub(SimpleHTTPRequestHandler):
             "infra_medido_em": e["infra_medido_em"],
             "quota": e["quota"],
             "falhas_de_coleta": dict(_ultima_falha),   # copia: o vivo muda em outra thread
+            # O motivo por que a coleta do GitHub nao mediu ESTA conta (linha
+            # `_github`, lida so com o `usuario_id` da sessao). `None` quando
+            # nunca tentou. `falhas_de_coleta` acima e da rodada inteira.
+            "github_da_conta": e["github_da_conta"],
         }
 
     # A chave de acesso vem PRIMEIRO, e e a unica sem `secundaria`: e a porta

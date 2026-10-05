@@ -4307,5 +4307,67 @@ class OBotaoConsertarComIA(BaseServidorDeVerdade):
                          "https://github.com/x/y/pull/7")
 
 
+class OMotivoDoGithubDaConta(BaseServidorDeVerdade):
+    """Plano dervs-github-por-conta, etapa 5: o motivo por que a coleta do
+    GitHub nao mediu esta conta chega a tela DELA — e so a dela."""
+
+    MOTIVO = "esta conta não conectou o GitHub"
+
+    def setUp(self):
+        super().setUp()
+        con = banco.conectar()
+        try:
+            banco.gravar(banco.GITHUB_DA_CONTA, "github",
+                         {"motivo": self.MOTIVO, "medidos": 0}, con,
+                         usuario_id=self.uid)
+            con.commit()
+        finally:
+            con.close()
+
+        def apagar():
+            con = banco.conectar()
+            try:
+                con.execute("DELETE FROM medida WHERE projeto = ?",
+                            (banco.GITHUB_DA_CONTA,))
+                con.commit()
+            finally:
+                con.close()
+        self.addCleanup(apagar)
+
+    def sessao_de_outra_conta(self):
+        OMotivoDoGithubDaConta._n = getattr(OMotivoDoGithubDaConta, "_n", 0) + 1
+        con = banco.conectar()
+        try:
+            uid = banco.criar_usuario("motivo%d@teste.local" % self._n, con=con)
+            con.commit()
+            cookie = banco.novo_token()
+            banco.abrir_sessao(uid, cookie, banco.prazo(3600), con=con)
+            final = banco.confirmar_segundo_fator(cookie, banco.novo_token(),
+                                                  con=con)
+        finally:
+            con.close()
+        return {"sessao": final}
+
+    def test_a_dona_ve_o_motivo(self):
+        d = json.loads(self.pedir("/api/dados", cookies=self.com_sessao()).corpo)
+        self.assertEqual(d["github_da_conta"]["motivo"], self.MOTIVO)
+        self.assertTrue(d["github_da_conta"]["tentado_em"])
+
+    def test_outra_conta_nao_ve_o_motivo_alheio(self):
+        d = json.loads(self.pedir("/api/dados",
+                                  cookies=self.sessao_de_outra_conta()).corpo)
+        self.assertIn("github_da_conta", d)
+        self.assertIsNone(d["github_da_conta"])
+
+    def test_a_tela_le_o_motivo_no_bloco_no_github(self):
+        """Guarda de acoplamento: renomear a chave de um lado so reprova.
+        Palavra inteira, senao `github_da_contaX` passaria por substring."""
+        js = Path("assets/painel.js").read_text(encoding="utf-8")
+        inicio = js.index("/* --- No GitHub")
+        bloco = js[inicio:js.index("/* ---", inicio + 1)]
+        self.assertRegex(bloco, r"ESTADO\.github_da_conta\b")
+        self.assertRegex(bloco, r"\.motivo\b")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)
