@@ -75,7 +75,7 @@ PRAZO_POR_SITE = (TENTATIVAS_SITE * TETO_SITE
 # Formato de `dono/repositorio`, o MESMO que `coletar.py` extrai do remoto. O
 # slug vem do relatorio do agente (dado de fora) e e interpolado na consulta
 # GraphQL: o que nao casar nao entra.
-SLUG_VALIDO = re.compile(r"[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}")
+SLUG_VALIDO = re.compile(r"(?!\.+/)[A-Za-z0-9._-]{1,100}/(?!\.+$)[A-Za-z0-9._-]{1,100}")
 # Sem endereco no User-Agent: ele e lido por todo servidor medido e por todo
 # intermediario no caminho. Anunciar "ha um painel local na 4777" e informacao
 # de graca para quem registrar um dominio que o dono deixou expirar.
@@ -414,7 +414,10 @@ def _monta_sites(nome: str, itens: list, url_casos_json: str,
             "ok": medida.get("ok"),
             "codigo": medida.get("codigo") or 0,
             "erro": medida.get("erro") or "",
-            "medido_em": AGORA.isoformat(timespec="seconds"),
+            # Nao medido nao ganha carimbo: "medido ha agora" para um site que
+            # nunca foi medido seria numero com cara de certo (Lei 2).
+            "medido_em": (AGORA.isoformat(timespec="seconds")
+                          if medida.get("ok") is not None else ""),
         })
     return sites
 
