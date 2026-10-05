@@ -413,6 +413,38 @@ isola**. O clique "Pode fazer" é a aceitação desse risco; nada roda sem ele
   (`/api/progresso`); 403/404/409/429 viram frase nossa; "provado há …" só em
   `estado === "medido"` e com o carimbo `haQuanto`.
 
+## O GitHub por conta (05/10/2026)
+
+O bloco "No GitHub" ficou vazio em produção porque o coletor lia só `banco.conta_local()`
+(a conta de teste). Agora, no servidor com o App configurado, `coletar_github` mede
+**conta por conta**. O que a próxima sessão erraria:
+
+- **O caminho por conta nunca chama `_token`, `_app`, `_gh_graphql`, `_gh_json` nem
+  `subprocess`.** Ele usa `_http_com`/`_graphql_com`/`_json_com`, que recebem a
+  `credencial` como parâmetro. É isso que impede a conta B de ler com a credencial da A;
+  limpar `_APP_GUARDADO` entre contas não substituiria. Um guarda de código-fonte em
+  `test_coletar_por_conta.py` cobra, e o `Coletor` é sempre variável **local**.
+- **O motivo por conta mora na linha de sistema `_github`** (`banco.GITHUB_DA_CONTA`, em
+  `RESERVADOS`) e chega à tela em `ESTADO.github_da_conta`. `falhas_de_coleta` continua
+  global e aparece no JSON de **toda** conta: no modo por conta, `stdout`/`stderr` levam só
+  contagens e frases genéricas, nunca nome de projeto, id ou e-mail.
+- **O modo liga** com `DERVS_AMBIENTE != "local"` e `DERVS_GITHUB_APP_ID` ou
+  `DERVS_GITHUB_APP_KEY` presente; nele `DERVS_GITHUB_TOKEN` e `DERVS_GITHUB_INSTALLATION_ID`
+  são ignorados. Conta não medida fica "sem dados" com motivo, nunca "zero repositórios".
+- **Tetos derivados** (`TETO_REPOS_POR_CONTA`, `TETO_CHAMADAS_POR_*`, `PRAZO_DA_RODADA=480`,
+  abaixo do `timeout=600` de `servir.coletar`). Dívida: ordem fixa por conta, sem rodízio.
+- **O prazo cobre a medição de sites.** `mede_site` é rede FORA do `_Orcamento` (~17 s
+  por site morto); o modo por conta passa `parar` a `_gravar_medicao`, e com o orçamento
+  esgotado a lista anterior de `sites` fica, com o carimbo dela, e o motivo diz que
+  ficou para a próxima. Com `parar`, `buscar=None` levanta `ValueError` (cairia em `_gh_json`).
+- **Um repositório por vez, commit por repositório.** O que quebra entra no motivo só
+  como contagem e no `sem_alcance` só pelo nome — nunca o texto da exceção.
+- **A tela só usa o motivo da conta quando ele vale para o card.** `motivoDoGithubDaConta`
+  (painel.js) exige `tentado_em` dentro de `VALIDADE_GITHUB_S` (cópia de
+  `regras.VALIDADE["github"]`, cobrada por `test_servir`) e, com `sem_alcance`
+  preenchido, só mostra o motivo a projeto que está na lista (ou se há "e mais N").
+- **Nome de rota/função com "instalacao" reprova `test_rotas.PROIBIDO`** ("inst**acao**").
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em

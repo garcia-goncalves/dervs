@@ -472,6 +472,29 @@ function criterio(rotulo, estado, valor, carimbo, prova) {
   return d;
 }
 
+/* A validade da camada github, em segundos: CÓPIA de regras.VALIDADE["github"],
+   a mesma régua que decide `p.camadas.github`. test_servir cobra que as duas
+   são iguais — mudar de um lado só reprova. */
+const VALIDADE_GITHUB_S = 2 * 3600;
+
+/* O motivo da conta (linha `_github`) para o card de UM projeto, ou `null`
+   para a frase genérica. Só vale se a tentativa é fresca pela mesma validade
+   do selo, e se não é um motivo parcial de OUTROS repositórios: com
+   `sem_alcance` preenchido e o projeto fora dele (sem "e mais N", que pode
+   escondê-lo), "medi 50 de 60" no card de um medido seria mentira. */
+function motivoDoGithubDaConta(nome) {
+  const daConta = ESTADO && ESTADO.github_da_conta;
+  if (!daConta || !daConta.motivo) return null;
+  const idade = (Date.parse(ESTADO.agora) - Date.parse(daConta.tentado_em)) / 1000;
+  if (!(idade <= VALIDADE_GITHUB_S)) return null;
+  const fora = Array.isArray(daConta.sem_alcance) ? daConta.sem_alcance : [];
+  if (fora.length && !fora.includes(nome)
+      && !fora.some(n => typeof n === "string" && n.startsWith("e mais "))) {
+    return null;
+  }
+  return daConta.motivo.charAt(0).toUpperCase() + daConta.motivo.slice(1) + ".";
+}
+
 function pintarProjeto(nome) {
   if (!ESTADO) return;
   const p = (ESTADO.projetos || []).find(x => x.nome === nome);
@@ -547,10 +570,8 @@ function pintarProjeto(nome) {
   if (!vale.github || !gh) {
     /* O motivo da conta vem do servidor (frase nossa, nunca texto do GitHub)
        e entra só por textContent, dentro de nada(). */
-    const daConta = ESTADO && ESTADO.github_da_conta;
-    const motivo = daConta && daConta.motivo
-      ? daConta.motivo.charAt(0).toUpperCase() + daConta.motivo.slice(1) + "."
-      : "A medição do GitHub não foi lida, ou está velha demais "
+    const motivo = motivoDoGithubDaConta(p.nome)
+      || "A medição do GitHub não foi lida, ou está velha demais "
         + "para afirmar alguma coisa.";
     nogh.append(nada(motivo, c.github));
   } else {

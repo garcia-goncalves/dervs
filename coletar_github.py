@@ -1038,13 +1038,22 @@ def issues_abertas(slug: str):
     return traduz(no, com_vulns=False)["issues"]
 
 
-def _gravar_medicao(con, dono, tudo, por_alias, dados, com_vulns, buscar):
+def _gravar_medicao(con, dono, tudo, por_alias, dados, com_vulns, buscar,
+                    parar=None):
     """Grava a camada `github` de cada repositorio que voltou da consulta,
     na conta `dono`. Devolve `(gravados, reusados)`.
 
     NAO COMMITA: quem abriu a conexao commita (ver coletar.py). `buscar` vai
     para `mede_deploy`: `None` e o caminho antigo; a coleta por conta passa
-    um que leva a credencial daquela conta."""
+    um que leva a credencial daquela conta.
+
+    `parar` e do modo por conta: verdadeiro quando o orcamento da rodada
+    acabou. Ai a medicao de sites (rede FORA do orcamento, ate ~17 s por site
+    morto) nao roda, e a lista anterior fica, com o carimbo dela. Quem passa
+    `parar` e obrigado a passar `buscar`: sem ele `mede_deploy` cairia em
+    `_gh_json`, a credencial do ambiente."""
+    if parar is not None and buscar is None:
+        raise ValueError("modo por conta sem `buscar`")
     gravados = 0
     reusados = []          # projetos cujo numero de alertas nao deu para reler
     # OS ENDERECOS GRAVADOS PELA TELA (etapa B2). Uma leitura so, fora do
@@ -1131,9 +1140,12 @@ def _gravar_medicao(con, dono, tudo, por_alias, dados, com_vulns, buscar):
         # `novo["site"]` (singular) DEIXA DE SER ESCRITO — so `sites`
         # (lista). `regras.py` tem a ponte para quem ainda tem o formato
         # antigo gravado; escrever os dois criaria duas verdades vivas.
-        novo["sites"] = _monta_sites(
-            nome, por_servidor.get(nome) or [], local.get("url_prod") or "",
-            antes_gh)
+        enderecos = por_servidor.get(nome) or []
+        if parar is not None and (enderecos or local.get("url_prod")) and parar():
+            novo["sites"] = antes_gh.get("sites") or []
+        else:
+            novo["sites"] = _monta_sites(
+                nome, enderecos, local.get("url_prod") or "", antes_gh)
 
         # A PUBLICACAO: para TODO repositorio, nao so os com endereco de site.
         # Amarrar as duas coisas foi erro meu, achado rodando: o `dents` tem
@@ -1288,14 +1300,40 @@ def _medir_uma_conta(con, uid, tudo, slugs, por_alias, app_id, chave,
             nao_relidos.add("/".join(caminho.split("/")[1:3]))
         return r
 
-    gravados, _reusados = _gravar_medicao(con, uid, tudo, por_alias, dados,
-                                          com_vulns, buscar=buscar)
+    sites_adiados = set()
+    gravados, falhos = 0, []
+    # UM REPOSITORIO POR VEZ, cada um com o proprio commit: um que quebra
+    # (resposta estranha do GitHub, endereco ruim) desfaz so a si mesmo, e
+    # nao a medicao dos outros desta conta.
+    for alias, nome in por_alias.items():
+        def parar(nome=nome):
+            if orcamento.falta():
+                sites_adiados.add(nome)
+                return True
+            return False
+        try:
+            g, _reusados = _gravar_medicao(con, uid, tudo, {alias: nome}, dados,
+                                           com_vulns, buscar=buscar, parar=parar)
+            con.commit()
+        except Exception:                  # noqa: BLE001 — os outros seguem
+            # O TEXTO DA EXCECAO NAO ENTRA no motivo: so a contagem e o nome.
+            con.rollback()
+            falhos.append(nome)
+            continue
+        gravados += g
     if nao_relidos:
         avisos.append("a publicação de %d projeto(s) não foi relida (%s)"
                       % (len(nao_relidos), orcamento.falta()))
+    if sites_adiados:
+        avisos.append("a medição de sites de %d projeto(s) ficou para a próxima "
+                      "rodada: passou do tempo/teto desta rodada"
+                      % len(sites_adiados))
+    if falhos:
+        avisos.append("%d repositório(s) não puderam ser medidos" % len(falhos))
     faltaram = [por_alias[a] for a in por_alias if not dados.get(a)]
-    resumo.update(medidos=gravados, sem_alcance=_lista_cortada(faltaram))
-    if not gravados:
+    resumo.update(medidos=gravados,
+                  sem_alcance=_lista_cortada(faltaram + falhos))
+    if not gravados and not falhos:
         avisos.insert(0, "o GitHub não devolveu nenhum dos %d repositórios "
                          "desta conta (o aplicativo alcança eles?)" % len(slugs))
     resumo["motivo"] = "; ".join(avisos) or None
@@ -1306,8 +1344,9 @@ def coletar_por_conta() -> int:
     """Uma rodada do GitHub para CADA conta ativa com projeto.
 
     Toda conta tentada termina com a linha `_github` gravada (motivo `None`
-    quando mediu), e com um commit SO DELA: uma conta que quebra no meio nao
-    desfaz a medicao das outras, nem deixa a dela pela metade.
+    quando mediu). Cada repositorio tem commit proprio, e a linha `_github`
+    outro: uma conta que quebra no meio nao desfaz a medicao das outras, e o
+    repositorio que quebrou entra no motivo dela.
     """
     app_id = (os.environ.get(VAR_APP_ID) or "").strip()
     chave = (os.environ.get(VAR_CHAVE_DO_APP) or "").strip()

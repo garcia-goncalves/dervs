@@ -244,15 +244,17 @@ class ContaSemInstalacaoNaoFicaVazia(Base):
         self.assertEqual(self.chamadas, [])
 
     def test_erro_inesperado_numa_conta_nao_derruba_a_outra(self):
+        # Explode FORA do laco por repositorio (que tem `try` proprio): e o
+        # `except` da conta que este caso vigia.
         self.instalar_b()
-        original = coletar_github._gravar_medicao
+        original = coletar_github._graphql_com
 
-        def explode_na_b(con, dono, *a, **k):
-            if dono == self.b:
+        def explode_na_b(credencial, *a, **k):
+            if credencial == CREDENCIAIS["222"]:
                 raise RuntimeError("segredo-na-excecao")
-            return original(con, dono, *a, **k)
-        self.addCleanup(setattr, coletar_github, "_gravar_medicao", original)
-        coletar_github._gravar_medicao = explode_na_b
+            return original(credencial, *a, **k)
+        self.addCleanup(setattr, coletar_github, "_graphql_com", original)
+        coletar_github._graphql_com = explode_na_b
         codigo, saida, erro = self.rodar()
         self.assertEqual(codigo, 0)
         motivo = self.linha_github(self.b)["motivo"]
@@ -384,6 +386,106 @@ class TetoDeChamadasEPrazo(Base):
             self.assertIn("tempo", self.linha_github(uid)["motivo"])
 
 
+class OPrazoCobreOsSites(Base):
+    """O prazo da rodada vale tambem para a medicao de sites: um site morto
+    custa ~17 s em `mede_site`, e essa rede nao passa pelo orcamento."""
+
+    ANTIGO = [{"servidor_id": 0, "servidor": "", "url": "https://antigo.example",
+               "ok": False, "codigo": 503, "erro": "", "ms": 9,
+               "medido_em": "2026-01-01T00:00:00+00:00"}]
+
+    def test_prazo_vencido_depois_da_consulta_preserva_os_sites_antigos(self):
+        for nome, slug in PROJETOS_A.items():
+            banco.gravar(nome, "local",
+                         {"nome": nome, "git": {"remoto_slug": slug},
+                          "url_prod": "https://%s.example" % nome},
+                         self.con, usuario_id=self.a)
+            banco.gravar(nome, "github", {"slug": slug, "sites": self.ANTIGO},
+                         self.con, usuario_id=self.a)
+        self.con.commit()
+        medidos = []
+
+        def mede_site(url):
+            medidos.append(url)
+            return {"url": url, "ok": True, "codigo": 200, "erro": "", "ms": 1}
+        self.addCleanup(setattr, coletar_github, "mede_site", coletar_github.mede_site)
+        coletar_github.mede_site = mede_site
+        original = coletar_github._graphql_com
+
+        def e_o_tempo_acaba(credencial, consulta, orcamento=None):
+            r = original(credencial, consulta, orcamento)
+            orcamento.fim = 0        # o relogio passou do prazo DEPOIS da consulta
+            return r
+        self.addCleanup(setattr, coletar_github, "_graphql_com", original)
+        coletar_github._graphql_com = e_o_tempo_acaba
+
+        self.rodar()
+        self.assertEqual(medidos, [])
+        tudo = banco.ler_tudo(self.con, usuario_id=self.a)
+        for nome in PROJETOS_A:
+            self.assertEqual(tudo[nome]["github"]["dados"]["sites"], self.ANTIGO)
+        linha = self.linha_github(self.a)
+        self.assertEqual(linha["medidos"], 2)
+        self.assertIn("a medição de sites de 2 projeto(s) ficou para a próxima "
+                      "rodada", linha["motivo"])
+
+
+class UmRepositorioRuimNaoDerrubaAConta(Base):
+    """Cada repositorio e gravado e commitado por si: um que quebra nao apaga
+    a medicao dos outros da mesma conta, nem a da conta seguinte."""
+
+    def test_o_bom_e_gravado_e_o_ruim_vira_motivo_sem_o_texto_da_excecao(self):
+        self.instalar_b()
+        original = coletar_github.traduz
+
+        def traduz(no, com_vulns):
+            if no.get("nameWithOwner") == PROJETOS_A["alfa-segundo"]:
+                raise RuntimeError("segredo-na-excecao")
+            return original(no, com_vulns)
+        self.addCleanup(setattr, coletar_github, "traduz", original)
+        coletar_github.traduz = traduz
+        codigo, saida, erro = self.rodar()
+        self.assertEqual(codigo, 0)
+        self.assertEqual(self.com_github(self.a), {"alfa-primeiro"})
+        linha = self.linha_github(self.a)
+        self.assertEqual(linha["medidos"], 1)
+        self.assertIn("1 repositório(s) não puderam ser medidos", linha["motivo"])
+        self.assertIn("alfa-segundo", linha["sem_alcance"])
+        self.assertNotIn("segredo-na-excecao", linha["motivo"] + saida + erro)
+        self.assertEqual(self.com_github(self.b), set(PROJETOS_B))
+
+
+class AFalhaAoGravarOMotivoNaoContamina(Base):
+    """O ramo `continue` de `coletar_por_conta`: a linha `_github` de uma
+    conta nao grava; a outra conta segue, e sem herdar transacao aberta."""
+
+    def test_a_outra_conta_segue_sem_transacao_aberta(self):
+        self.instalar_b()
+        gravar, ler_tudo = banco.gravar, banco.ler_tudo
+        abertas = []
+
+        def gravar_que_quebra(projeto, camada, dados, con, usuario_id=None, **k):
+            r = gravar(projeto, camada, dados, con, usuario_id=usuario_id, **k)
+            if projeto == banco.GITHUB_DA_CONTA and usuario_id == self.a:
+                raise RuntimeError("disco cheio")     # DEPOIS de escrever
+            return r
+
+        def ler_tudo_espiao(con=None, usuario_id=None, **k):
+            if usuario_id == self.b and con is not None:
+                abertas.append(con.in_transaction)
+            return ler_tudo(con, usuario_id=usuario_id, **k)
+        self.addCleanup(setattr, banco, "gravar", gravar)
+        self.addCleanup(setattr, banco, "ler_tudo", ler_tudo)
+        banco.gravar, banco.ler_tudo = gravar_que_quebra, ler_tudo_espiao
+        codigo, _s, _e = self.rodar()
+        banco.gravar, banco.ler_tudo = gravar, ler_tudo
+        self.assertEqual(codigo, 0)
+        self.assertEqual(abertas[:1], [False])
+        self.assertIsNone(self.linha_github(self.a))
+        self.assertIsNone(self.linha_github(self.b)["motivo"])
+        self.assertEqual(self.com_github(self.b), set(PROJETOS_B))
+
+
 class OCaminhoPorContaNaoTemCredencialImplicita(unittest.TestCase):
     """Guarda de codigo-fonte: o por conta nao alcanca nada que leia o ambiente,
     o app guardado ou o `gh`. Comportamento prova o caso que rodou; isto prova
@@ -393,10 +495,21 @@ class OCaminhoPorContaNaoTemCredencialImplicita(unittest.TestCase):
 
     def test_as_funcoes_do_por_conta_nao_tocam_o_caminho_antigo(self):
         for nome in ("coletar_por_conta", "_medir_uma_conta", "_graphql_com",
-                     "_json_com", "_http_com"):
+                     "_json_com", "_http_com", "_gravar_medicao", "mede_deploy"):
             fonte = inspect.getsource(getattr(coletar_github, nome))
             for proibido in self.PROIBIDOS:
                 self.assertNotIn(proibido, fonte, "%s contem %s" % (nome, proibido))
+
+    def test_modo_por_conta_sem_buscar_e_recusado(self):
+        """`buscar=None` cai em `_gh_json` dentro de `mede_deploy`. O modo por
+        conta sempre passa `parar`; com ele, `buscar` e obrigatorio."""
+        with self.assertRaises(ValueError):
+            coletar_github._gravar_medicao(None, 1, {}, {}, {}, True, None,
+                                           parar=lambda: False)
+
+    def test_medir_uma_conta_passa_buscar_e_parar(self):
+        fonte = inspect.getsource(coletar_github._medir_uma_conta)
+        self.assertRegex(fonte, r"_gravar_medicao\([^)]*buscar=buscar[^)]*parar=")
 
 
 class ATrocaDeModo(unittest.TestCase):
