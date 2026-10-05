@@ -237,8 +237,11 @@ class ContaSemInstalacaoNaoFicaVazia(Base):
 
     def test_servidor_sem_a_chave_do_app_diz_isso_em_cada_conta(self):
         os.environ.pop("DERVS_GITHUB_APP_KEY")
-        codigo, _s, _e = self.rodar()
+        codigo, _s, erro = self.rodar()
         self.assertEqual(codigo, 1)
+        # `stderr` vai para `falhas_de_coleta` de TODAS as contas: sem numero.
+        self.assertIn("FALHA: nenhuma conta foi medida nesta rodada", erro)
+        self.assertNotRegex(erro, r"\d")
         for uid in (self.a, self.b):
             self.assertIn("sem o aplicativo", self.linha_github(uid)["motivo"])
         self.assertEqual(self.chamadas, [])
@@ -484,6 +487,191 @@ class AFalhaAoGravarOMotivoNaoContamina(Base):
         self.assertIsNone(self.linha_github(self.a))
         self.assertIsNone(self.linha_github(self.b)["motivo"])
         self.assertEqual(self.com_github(self.b), set(PROJETOS_B))
+
+
+MALICIOSO = 'x"/y") { id } #'
+
+
+class ODadoDoAgenteNaoDerrubaARodada(Base):
+    """O relatorio do agente e dado de fora: `git` e `remoto_slug` podem vir
+    em qualquer forma. Nada disso pode derrubar a rodada das outras contas,
+    nem entrar cru na consulta GraphQL."""
+
+    RUINS = {"ruim-nulo": None, "ruim-texto": "x", "ruim-numero": 5,
+             "ruim-slug-numero": {"remoto_slug": 5},
+             "ruim-aspas": {"remoto_slug": MALICIOSO}}
+
+    def corpos(self):
+        return " ".join(c[3] for c in self.chamadas if c[0].endswith("/graphql"))
+
+    def test_relatorios_malformados_sao_descartados_e_as_contas_medidas(self):
+        self.instalar_b()
+        for nome, git in self.RUINS.items():
+            banco.gravar(nome, "local", {"nome": nome, "git": git},
+                         self.con, usuario_id=self.a)
+        self.con.commit()
+        codigo, _s, _e = self.rodar()
+        self.assertEqual(codigo, 0)
+        self.assertEqual(self.com_github(self.a), set(PROJETOS_A))
+        self.assertEqual(self.com_github(self.b), set(PROJETOS_B))
+        linha = self.linha_github(self.a)
+        self.assertEqual(linha["repositorios"], 2)
+        self.assertEqual(linha["sem_alcance"], [])
+        self.assertNotIn('x\\"/y', self.corpos())
+        self.assertNotIn("{ id }", self.corpos())
+
+    def test_excecao_ao_ler_a_conta_vira_erro_interno_e_a_outra_segue(self):
+        self.instalar_b()
+        ler_tudo = banco.ler_tudo
+
+        def quebra_na_a(con=None, usuario_id=None, **k):
+            if usuario_id == self.a:
+                raise TypeError("segredo-na-excecao")
+            return ler_tudo(con, usuario_id=usuario_id, **k)
+        self.addCleanup(setattr, banco, "ler_tudo", ler_tudo)
+        banco.ler_tudo = quebra_na_a
+        codigo, saida, erro = self.rodar()
+        banco.ler_tudo = ler_tudo
+        self.assertEqual(codigo, 0)
+        self.assertEqual(self.linha_github(self.a)["motivo"],
+                         coletar_github.ERRO_INTERNO)
+        self.assertNotIn("segredo-na-excecao", saida + erro)
+        self.assertEqual(self.com_github(self.b), set(PROJETOS_B))
+
+    def test_slug_malicioso_nunca_entra_na_consulta(self):
+        """Mesmo que `_slugs` deixe passar, `_consulta` recusa sozinha."""
+        original = coletar_github._slugs
+
+        def com_malicioso(tudo):
+            slugs, por_alias = original(tudo)
+            if "alfa-primeiro" in por_alias.values():
+                slugs["r9"], por_alias["r9"] = MALICIOSO, "malicioso"
+            return slugs, por_alias
+        self.addCleanup(setattr, coletar_github, "_slugs", original)
+        coletar_github._slugs = com_malicioso
+        self.rodar()
+        self.assertTrue(self.corpos())
+        self.assertNotIn('x\\"/y', self.corpos())
+        self.assertNotIn("r9:", self.corpos())
+        self.assertEqual(self.com_github(self.a), set(PROJETOS_A))
+        self.assertIn("malicioso", self.linha_github(self.a)["sem_alcance"])
+
+    def test_consulta_direta_ignora_slug_invalido(self):
+        q = coletar_github._consulta({"r0": MALICIOSO, "r1": "org-a/alfa-primeiro",
+                                      "r2": "a/b/c", "r3": 5}, com_vulns=False)
+        self.assertNotIn("r0:", q)
+        self.assertNotIn("r2:", q)
+        self.assertNotIn("r3:", q)
+        self.assertIn('r1: repository(owner: "org-a", name: "alfa-primeiro")', q)
+
+
+class OsSitesRespeitamPrazoETeto(Base):
+    """O prazo e checado ANTES DE CADA site, e cada conta tem um teto de
+    sites por rodada; o que sobrar fica para a proxima, anunciado."""
+
+    ANTES = {"servidor_id": 2, "servidor": "s2", "url": "https://s2.example",
+             "ok": False, "codigo": 503, "erro": "", "ms": 9,
+             "medido_em": "2026-01-01T00:00:00+00:00"}
+
+    def enderecos(self, mapa):
+        def por_servidor(uid, con=None):
+            return {nome: [{"servidor_id": i, "servidor": "s%d" % i,
+                            "url": "https://%s-s%d.example" % (nome, i)}
+                           for i in range(1, n + 1)]
+                    for nome, n in mapa.items()}
+        self.addCleanup(setattr, banco, "enderecos_por_servidor",
+                        banco.enderecos_por_servidor)
+        banco.enderecos_por_servidor = por_servidor
+
+    def espiar_sites(self, ao_medir=None):
+        medidos = []
+
+        def mede_site(url):
+            medidos.append(url)
+            if ao_medir:
+                ao_medir()
+            return {"url": url, "ok": True, "codigo": 200, "erro": "", "ms": 1}
+        self.addCleanup(setattr, coletar_github, "mede_site", coletar_github.mede_site)
+        coletar_github.mede_site = mede_site
+        return medidos
+
+    def test_prazo_vence_no_meio_dos_sites_de_um_projeto(self):
+        banco.gravar("alfa-primeiro", "github",
+                     {"slug": "org-a/alfa-primeiro", "sites": [self.ANTES]},
+                     self.con, usuario_id=self.a)
+        self.con.commit()
+        self.enderecos({"alfa-primeiro": 3})
+        orcamentos = []
+        original = coletar_github._graphql_com
+
+        def guarda(credencial, consulta, orcamento=None):
+            orcamentos.append(orcamento)
+            return original(credencial, consulta, orcamento)
+        self.addCleanup(setattr, coletar_github, "_graphql_com", original)
+        coletar_github._graphql_com = guarda
+
+        def vence():
+            orcamentos[-1].fim = 0
+        medidos = self.espiar_sites(vence)
+        self.rodar()
+        self.assertEqual(medidos, ["https://alfa-primeiro-s1.example"])
+        sites = banco.ler_tudo(self.con, usuario_id=self.a)[
+            "alfa-primeiro"]["github"]["dados"]["sites"]
+        self.assertEqual([s["servidor_id"] for s in sites], [1, 2, 3])
+        self.assertIs(sites[0]["ok"], True)
+        self.assertEqual(sites[1], self.ANTES)          # preservado, carimbo antigo
+        self.assertIsNone(sites[2]["ok"])               # nao medido nao e "fora"
+        self.assertIn("a medição de sites de 1 projeto(s) ficou para a próxima",
+                      self.linha_github(self.a)["motivo"])
+
+    def test_teto_de_sites_por_conta(self):
+        self.instalar_b()
+        self.addCleanup(setattr, coletar_github, "TETO_SITES_POR_CONTA",
+                        coletar_github.TETO_SITES_POR_CONTA)
+        coletar_github.TETO_SITES_POR_CONTA = 2
+        self.enderecos({"alfa-primeiro": 3, "alfa-segundo": 1, "beta-terceiro": 1})
+        medidos = self.espiar_sites()
+        self.rodar()
+        da_a = [u for u in medidos if "alfa" in u]
+        self.assertEqual(len(da_a), 2)
+        # O teto e POR CONTA: a B tem o dela.
+        self.assertIn("https://beta-terceiro-s1.example", medidos)
+        self.assertIn("ficou para a próxima rodada", self.linha_github(self.a)["motivo"])
+        self.assertIsNone(self.linha_github(self.b)["motivo"])
+
+    def test_as_constantes_dos_sites_sao_derivadas(self):
+        c = coletar_github
+        self.assertGreaterEqual(c.PRAZO_POR_SITE, c.TENTATIVAS_SITE * c.TETO_SITE
+                                + (c.TENTATIVAS_SITE - 1) * c.PAUSA_ENTRE_TENTATIVAS)
+        self.assertEqual(c.TETO_SITES_POR_CONTA,
+                         int(c.PRAZO_DA_RODADA * 3 / 4 // c.PRAZO_POR_SITE))
+        self.assertGreater(c.TETO_SITES_POR_CONTA, 0)
+
+
+class UmSiteQuePenduraTemPrazoTotal(unittest.TestCase):
+    """`getresponse()` so tem prazo por leitura: um servidor que pinga um
+    byte a cada 7 s pendura a medicao. O prazo total vem de fora."""
+
+    def setUp(self):
+        for nome in ("mede_site", "PRAZO_POR_SITE"):
+            self.addCleanup(setattr, coletar_github, nome, getattr(coletar_github, nome))
+
+    def test_site_que_pendura_vira_sem_resposta(self):
+        import time as _t
+        coletar_github.PRAZO_POR_SITE = 0.2
+        coletar_github.mede_site = lambda url: _t.sleep(3) or {"ok": True}
+        inicio = _t.monotonic()
+        sites = coletar_github._monta_sites("x", [], "https://x.example", {})
+        self.assertLess(_t.monotonic() - inicio, 2)
+        self.assertEqual(len(sites), 1)
+        self.assertIsNone(sites[0]["ok"])
+
+    def test_excecao_da_medicao_continua_subindo(self):
+        def quebra(url):
+            raise RuntimeError("quebrou")
+        coletar_github.mede_site = quebra
+        with self.assertRaises(RuntimeError):
+            coletar_github._monta_sites("x", [], "https://x.example", {})
 
 
 class OCaminhoPorContaNaoTemCredencialImplicita(unittest.TestCase):

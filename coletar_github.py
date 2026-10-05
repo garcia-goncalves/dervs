@@ -43,6 +43,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -65,6 +66,16 @@ MEDIR_SITE = True
 TETO_SITE = 8                # segundos ate desistir de um site
 TENTATIVAS_SITE = 2          # uma falha nao vira alarme: ver mede_site()
 PAUSA_ENTRE_TENTATIVAS = 1.5
+# O TETO TOTAL de uma medicao de site, derivado: as tentativas, a pausa, e
+# folga para a resolucao do nome (que nao tem prazo proprio). `TETO_SITE` e por
+# LEITURA: um servidor que manda um byte a cada 7 s nunca estoura ele.
+PRAZO_POR_SITE = (TENTATIVAS_SITE * TETO_SITE
+                  + (TENTATIVAS_SITE - 1) * PAUSA_ENTRE_TENTATIVAS + 2.5)
+
+# Formato de `dono/repositorio`, o MESMO que `coletar.py` extrai do remoto. O
+# slug vem do relatorio do agente (dado de fora) e e interpolado na consulta
+# GraphQL: o que nao casar nao entra.
+SLUG_VALIDO = re.compile(r"[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}")
 # Sem endereco no User-Agent: ele e lido por todo servidor medido e por todo
 # intermediario no caminho. Anunciar "ha um painel local na 4777" e informacao
 # de graca para quem registrar um dominio que o dono deixou expirar.
@@ -336,8 +347,28 @@ def mede_site(url: str) -> dict:
     return fora
 
 
+def _mede_site_com_prazo(url: str) -> dict:
+    """`mede_site` com teto TOTAL de `PRAZO_POR_SITE`. Roda numa thread
+    daemon: estourou, a thread fica para tras (morre com o processo) e o site
+    vira "sem resposta" (`ok=None`), nunca "fora do ar". Excecao da medicao
+    sobe para quem chamou, como antes."""
+    caixa = {}
+
+    def medir():
+        try:
+            caixa["r"] = mede_site(url)
+        except BaseException as e:     # noqa: BLE001 — devolvida abaixo
+            caixa["e"] = e
+    t = threading.Thread(target=medir, daemon=True)
+    t.start()
+    t.join(PRAZO_POR_SITE)
+    if "e" in caixa:
+        raise caixa["e"]
+    return caixa.get("r") or {"url": url, "ok": None, "erro": "prazo"}
+
+
 def _monta_sites(nome: str, itens: list, url_casos_json: str,
-                 antes_gh: dict) -> list:
+                 antes_gh: dict, parar=None) -> list:
     """`novo["sites"]` de UM projeto: uma medicao por servidor onde `nome`
     tem endereco gravado pela tela (`itens`, na ordem que
     `banco.enderecos_por_servidor` ja devolve — por nome de servidor), ou —
@@ -364,7 +395,13 @@ def _monta_sites(nome: str, itens: list, url_casos_json: str,
         return []
     sites = []
     for servidor_id, servidor, url in alvos:
-        medida = mede_site(url)
+        # `parar` e do modo por conta, perguntado ANTES DE CADA site: com o
+        # tempo ou o teto esgotado, o site nao e medido e cai na preservacao
+        # abaixo, como qualquer `ok=None`. Nao medido nao e "fora do ar".
+        if parar is not None and parar():
+            medida = {"ok": None, "erro": "adiado"}
+        else:
+            medida = _mede_site_com_prazo(url)
         if medida.get("ok") is None:
             anterior = antes.get(servidor_id)
             if anterior:
@@ -450,6 +487,11 @@ CAMPO_VULNS = """vulnerabilityAlerts(states: OPEN, first: 100) {
 def _consulta(slugs: dict, com_vulns: bool) -> str:
     partes = []
     for alias, slug in slugs.items():
+        # SLUG FORA DO FORMATO NAO ENTRA, mesmo que `_slugs` tenha deixado
+        # passar: com aspas ele fecha a string e escreve GraphQL. O apelido
+        # some da resposta, e o chamador conta o repositorio como nao medido.
+        if not isinstance(slug, str) or not SLUG_VALIDO.fullmatch(slug):
+            continue
         dono, repo = slug.split("/", 1)
         partes.append(PEDACO % {"alias": alias, "dono": dono, "repo": repo,
                                 "vulns": CAMPO_VULNS if com_vulns else ""})
@@ -1047,9 +1089,9 @@ def _gravar_medicao(con, dono, tudo, por_alias, dados, com_vulns, buscar,
     para `mede_deploy`: `None` e o caminho antigo; a coleta por conta passa
     um que leva a credencial daquela conta.
 
-    `parar` e do modo por conta: verdadeiro quando o orcamento da rodada
-    acabou. Ai a medicao de sites (rede FORA do orcamento, ate ~17 s por site
-    morto) nao roda, e a lista anterior fica, com o carimbo dela. Quem passa
+    `parar` e do modo por conta, e vai ate `_monta_sites`, que o pergunta
+    antes de cada site: verdadeiro quando o tempo ou o teto de sites acabou.
+    Ai aquele site nao e medido e o item anterior dele fica. Quem passa
     `parar` e obrigado a passar `buscar`: sem ele `mede_deploy` cairia em
     `_gh_json`, a credencial do ambiente."""
     if parar is not None and buscar is None:
@@ -1140,12 +1182,9 @@ def _gravar_medicao(con, dono, tudo, por_alias, dados, com_vulns, buscar,
         # `novo["site"]` (singular) DEIXA DE SER ESCRITO — so `sites`
         # (lista). `regras.py` tem a ponte para quem ainda tem o formato
         # antigo gravado; escrever os dois criaria duas verdades vivas.
-        enderecos = por_servidor.get(nome) or []
-        if parar is not None and (enderecos or local.get("url_prod")) and parar():
-            novo["sites"] = antes_gh.get("sites") or []
-        else:
-            novo["sites"] = _monta_sites(
-                nome, enderecos, local.get("url_prod") or "", antes_gh)
+        novo["sites"] = _monta_sites(
+            nome, por_servidor.get(nome) or [], local.get("url_prod") or "",
+            antes_gh, parar=parar)
 
         # A PUBLICACAO: para TODO repositorio, nao so os com endereco de site.
         # Amarrar as duas coisas foi erro meu, achado rodando: o `dents` tem
@@ -1168,8 +1207,13 @@ def _slugs(tudo: dict):
     for nome, camadas in sorted(tudo.items()):
         if nome in banco.RESERVADOS:
             continue
-        slug = ((camadas.get("local") or {}).get("dados") or {}).get("git", {}).get("remoto_slug")
-        if not slug or "/" not in slug:
+        # O RELATORIO E DADO DE FORA: `git` pode vir nulo, texto ou numero, e
+        # o slug em qualquer forma. Formato errado e descartado aqui — levantar
+        # derrubaria a rodada de todas as contas seguintes.
+        dados = (camadas.get("local") or {}).get("dados")
+        git = dados.get("git") if isinstance(dados, dict) else None
+        slug = git.get("remoto_slug") if isinstance(git, dict) else None
+        if not isinstance(slug, str) or not SLUG_VALIDO.fullmatch(slug):
             continue                       # sem remoto: regra 13 ja cobre
         alias = "r%d" % len(slugs)
         slugs[alias] = slug
@@ -1199,6 +1243,10 @@ TETO_REPOS_POR_CONTA = 50
 TETO_CHAMADAS_POR_CONTA = 1 + 2 + 3 * TETO_REPOS_POR_CONTA
 TETO_CHAMADAS_POR_RODADA = 5 * TETO_CHAMADAS_POR_CONTA
 PRAZO_DA_RODADA = 480        # segundos
+# Sites: rede FORA do orcamento de chamadas. Uma conta cheia de sites mortos
+# (cada um no pior caso, `PRAZO_POR_SITE`) cabe em 3/4 do prazo da rodada; o
+# resto fica para a proxima rodada, anunciado no motivo.
+TETO_SITES_POR_CONTA = int(PRAZO_DA_RODADA * 3 / 4 // PRAZO_POR_SITE)
 
 
 class _Orcamento:
@@ -1301,15 +1349,18 @@ def _medir_uma_conta(con, uid, tudo, slugs, por_alias, app_id, chave,
         return r
 
     sites_adiados = set()
+    sites_medidos = [0]
     gravados, falhos = 0, []
     # UM REPOSITORIO POR VEZ, cada um com o proprio commit: um que quebra
     # (resposta estranha do GitHub, endereco ruim) desfaz so a si mesmo, e
     # nao a medicao dos outros desta conta.
     for alias, nome in por_alias.items():
         def parar(nome=nome):
-            if orcamento.falta():
+            """Perguntado antes de CADA site; `False` = vai medir, e conta."""
+            if orcamento.falta() or sites_medidos[0] >= TETO_SITES_POR_CONTA:
                 sites_adiados.add(nome)
                 return True
+            sites_medidos[0] += 1
             return False
         try:
             g, _reusados = _gravar_medicao(con, uid, tudo, {alias: nome}, dados,
@@ -1358,13 +1409,16 @@ def coletar_por_conta() -> int:
     con = banco.conectar()
     try:
         for uid in banco.contas_com_projeto(con):
-            tudo = banco.ler_tudo(con, usuario_id=uid)
-            slugs, por_alias = _slugs(tudo)
-            if not slugs:
-                continue
-            tentadas += 1
-            orcamento.nova_conta()
+            slugs = {}
+            # A LEITURA DA CONTA TAMBEM ESTA NO `try`: ela le o relatorio do
+            # agente, dado de fora, e uma conta com dado estranho nao pode
+            # derrubar a rodada das contas seguintes.
             try:
+                tudo = banco.ler_tudo(con, usuario_id=uid)
+                slugs, por_alias = _slugs(tudo)
+                if not slugs:
+                    continue
+                orcamento.nova_conta()
                 resumo = _medir_uma_conta(con, uid, tudo, slugs, por_alias,
                                           app_id, chave, orcamento)
             except Exception:              # noqa: BLE001 — a rodada segue
@@ -1373,6 +1427,7 @@ def coletar_por_conta() -> int:
                 con.rollback()
                 resumo = {"motivo": ERRO_INTERNO, "medidos": 0,
                           "repositorios": len(slugs), "sem_alcance": []}
+            tentadas += 1
             try:
                 banco.gravar(banco.GITHUB_DA_CONTA, "github", resumo, con,
                              usuario_id=uid)
@@ -1391,9 +1446,10 @@ def coletar_por_conta() -> int:
               "O bloco 'No GitHub' esta SEM DADOS, nao vazio.", file=sys.stderr)
         return 0
     if not medidas:
-        print("FALHA: tentei medir %d conta(s) no GitHub e nao medi nenhuma; "
-              "o motivo de cada uma esta no painel dela." % tentadas,
-              file=sys.stderr)
+        # SEM NUMERO: esta linha vai para `falhas_de_coleta` de TODAS as
+        # contas, e a contagem diria a cada uma quantas outras existem.
+        print("FALHA: nenhuma conta foi medida nesta rodada; o motivo de cada "
+              "uma esta no painel dela.", file=sys.stderr)
         return 1
     print("ok: medi %d de %d conta(s); %d repositorios do GitHub atualizados"
           % (medidas, tentadas, repositorios))
