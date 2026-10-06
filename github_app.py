@@ -360,8 +360,9 @@ def confirmar_instalacao(app_id, chave_pem, instalacao_id, teto: int = 15,
     return resposta
 
 
-API_INSTALACOES = "https://api.github.com/app/installations?per_page=100"
-MAX_INSTALACOES_LISTADAS = 100
+API_INSTALACOES = "https://api.github.com/app/installations?per_page=100&page=%d"
+MAX_PAGINAS_DE_INSTALACOES = 5
+MAX_INSTALACOES_LISTADAS = 100 * MAX_PAGINAS_DE_INSTALACOES
 
 
 def listar_instalacoes(app_id, chave_pem, teto: int = 15, _pedir=None):
@@ -373,8 +374,9 @@ def listar_instalacoes(app_id, chave_pem, teto: int = 15, _pedir=None):
     normal — o `installation_id` e publico e sequencial.
 
     Mesma LEI 3 de `confirmar_instalacao`: `None` em toda falha, nunca levanta.
-    Sem criptografia nova (so `montar_jwt`). So a primeira pagina (ate 100):
-    passar disso e erro visivel de quem chama, nao silencio.
+    Sem criptografia nova (so `montar_jwt`). Pagina ate
+    `MAX_PAGINAS_DE_INSTALACOES` de 100; se a ultima ainda vier cheia a lista
+    pode estar INCOMPLETA e devolve `None` (nao olhei), nunca um corte mudo.
     """
     chave = chave_de_pem(chave_pem)
     if chave is None:
@@ -385,14 +387,22 @@ def listar_instalacoes(app_id, chave_pem, teto: int = 15, _pedir=None):
         _diga("nao consegui montar o pedido; confira o App ID")
         return None
     pedir = _pedir or _pedir_ao_github
-    try:
-        resposta = pedir(API_INSTALACOES, jwt, teto, "GET")
-    except Exception:                      # noqa: BLE001 — rede, HTTP, JSON
-        _diga("o GitHub nao listou as instalacoes")
+    todas = []
+    for pagina in range(1, MAX_PAGINAS_DE_INSTALACOES + 1):
+        try:
+            resposta = pedir(API_INSTALACOES % pagina, jwt, teto, "GET")
+        except Exception:                  # noqa: BLE001 — rede, HTTP, JSON
+            _diga("o GitHub nao listou as instalacoes")
+            return None
+        if not isinstance(resposta, list):
+            return None
+        todas.extend(resposta)
+        if len(resposta) < 100:
+            break
+    else:
+        _diga("ha instalacoes demais para listar de uma vez")
         return None
-    if not isinstance(resposta, list):
-        return None
-    return [i for i in resposta[:MAX_INSTALACOES_LISTADAS]
+    return [i for i in todas
             if isinstance(i, dict) and isinstance(i.get("id"), int)
             and not isinstance(i.get("id"), bool)]
 

@@ -1989,6 +1989,11 @@ class Hub(SimpleHTTPRequestHandler):
         if lista is None:
             return self._json(200, {"ok": False, "ligadas": 0})
         ligadas = orgs = 0
+        # A lista veio inteira e sem erro: o que esta ligado a esta conta e NAO
+        # aparece nela morreu (App desinstalado e reinstalado gera numero novo).
+        # Podar antes de ligar tambem libera vaga no teto de instalacoes.
+        podadas = banco.podar_instalacoes_do_github(
+            uid, [i["id"] for i in lista])
         for inst in sorted(lista, key=lambda i: i["id"], reverse=True):
             numero = str(inst["id"])
             conta = inst.get("account") or {}
@@ -2020,7 +2025,8 @@ class Hub(SimpleHTTPRequestHandler):
                 ligadas += 1
             except ValueError:
                 break                    # teto de instalacoes da conta
-        return self._json(200, {"ok": True, "ligadas": ligadas})
+        return self._json(200, {"ok": True, "ligadas": ligadas,
+                                "podadas": podadas})
 
     def _github_instalar(self):
         """Devolve o endereco da instalacao, com o selo dentro."""

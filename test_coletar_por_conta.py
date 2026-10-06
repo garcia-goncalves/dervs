@@ -266,6 +266,27 @@ class UmaContaComVariasInstalacoes(Base):
         self.rodar()
         self.assertEqual(set(PROJETOS_A), self.com_github(self.a))
         self.assertEqual(2, self.linha_github(self.a)["medidos"])
+        # A MORTA aparece no motivo, e "nao tentei" NUNCA vira "mediu 0" (Lei 2).
+        self.assertIn("aplicativo desinstalado", self.linha_github(self.a)["motivo"])
+        por = {i["installation_id"]: i["medidos"]
+               for i in banco.instalacoes_da_conta(self.a, con=self.con)}
+        self.assertIsNone(por["111"])
+        self.assertEqual(2, por["333"])
+
+    def test_nada_devolvido_por_uma_nao_apaga_o_aviso_das_outras(self):
+        """A frase "o GitHub nao devolveu nenhum" de uma instalacao so vale se
+        NINGUEM mediu; e o filtro nao pode levar junto os outros avisos."""
+        self.duas()
+        self.alcance = {"ghs-conta-a": set(),
+                        "ghs-conta-a-org": set()}
+        self.rodar()
+        self.assertIn("o GitHub não devolveu nenhum",
+                      self.linha_github(self.a)["motivo"])
+        self.alcance = {"ghs-conta-a": set(),
+                        "ghs-conta-a-org": {"org-a/alfa-primeiro",
+                                            "org-a/alfa-segundo"}}
+        self.rodar()
+        self.assertIsNone(self.linha_github(self.a)["motivo"])
 
     def test_o_que_nenhuma_alcanca_continua_sem_alcance(self):
         self.duas()

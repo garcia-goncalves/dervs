@@ -463,14 +463,24 @@ O bloco "No GitHub" ficou vazio em produção porque o coletor lia só `banco.co
 (installation_id)`) e `guardar_instalacao_do_github` nunca troca o dono. Quatro coisas
 que quebram em silêncio:
 
-- **`instalacao_do_github` devolve só a MAIS ANTIGA.** Quem mede ou lista usa
+- **`instalacao_do_github` devolve só a MAIS NOVA.** Quem mede ou lista usa
   `instalacoes_da_conta`; usar a singular numa rota nova esconde as outras contas.
+  Reinstalar o App gera número novo: a morta só sai quando `Procurar minhas contas`
+  recebe a lista COMPLETA do GitHub (`podar_instalacoes_do_github`); lista parcial ou
+  `None` nunca poda. `marcar_medicao_da_instalacao` só roda se a instalação CHEGOU a
+  consultar (`_achados` no retorno): "não tentei" nunca vira "mediu 0".
 - **`/api/github/procurar` prova posse pela MESMA `_instalacao_e_dele` da volta normal.**
   O App é público, então a lista do GitHub traz instalação de estranhos: as já ligadas são
   puladas e só `MAX_ORGS_CONFERIDAS` organizações geram pergunta por pedido. Nunca ligue
   por estar na lista, e o nome da conta vem do GitHub, nunca do corpo do pedido.
 - **O coletor mede por instalação em `_medir_com_instalacao`**, e `_medir_uma_conta` só
   junta. A credencial de cada instalação é local; o que uma alcança não vai para a próxima.
+- **Dívida nomeada (revisão de segurança, 06/10/2026):** a posse de ORGANIZAÇÃO é provada
+  uma vez, na hora de ligar, e nunca revalidada; quem deixou a organização depois mantém a
+  linha, e o `remoto_slug` do relatório do próprio agente é consultado com TODAS as
+  instalações da conta. Corrigir = re-conferir admin periodicamente no coletor. Também em
+  aberto: `Procurar` confere só as 10 organizações mais novas sem dono (estranhos podem
+  entupir), e o botão Conectar é o caminho garantido.
 - **A migração reconstrói a tabela** (`_migrar_instalacao_github_varias`, condição de
   "já rodou" = coluna `conta_login`). O banco de produção tem a linha antiga: o teste
   `InstalacaoDoGithubComUniqueAntigo` cobra que ela sobrevive.

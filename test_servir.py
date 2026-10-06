@@ -2711,7 +2711,7 @@ class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
         self.assertEqual(["111", "222"],
                          [i["installation_id"] for i in est["instalacoes"]])
         self.assertEqual("dono", est["instalacoes"][0]["conta_login"])
-        self.assertEqual("111", est["instalacao"])
+        self.assertEqual("222", est["instalacao"])
 
     def test_o_estado_traz_o_link_de_gerenciar_so_com_nome_valido(self):
         banco.guardar_instalacao_do_github(self.uid, "111", conta_login="thi-garcia",
@@ -2749,7 +2749,8 @@ class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
             lambda app, chave, inst, org, quem: org == "org-minha"
         r = self.procurar()
         self.assertEqual(200, r.status, r.corpo)
-        self.assertEqual({"ok": True, "ligadas": 2}, json.loads(r.corpo))
+        self.assertEqual({"ok": True, "ligadas": 2, "podadas": 0},
+                         json.loads(r.corpo))
         ligadas = {i["installation_id"]: i["conta_login"]
                    for i in self.estado()["instalacoes"]}
         self.assertEqual({"11": "dono", "13": "org-minha"}, ligadas)
@@ -2764,6 +2765,29 @@ class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
         self.assertEqual(0, json.loads(self.procurar().corpo)["ligadas"])
         self.assertIsNone(banco.instalacao_do_github(self.uid))
         self.assertEqual("11", banco.instalacao_do_github(outra))
+
+    def test_procurar_poda_a_instalacao_morta_da_propria_conta(self):
+        """App desinstalado e reinstalado gera numero novo: a antiga some."""
+        banco.guardar_instalacao_do_github(self.uid, "7")
+        outra = banco.criar_usuario("outra2@teste.local", "teste1234")
+        banco.guardar_instalacao_do_github(outra, "8")
+        original = servir.github_app.listar_instalacoes
+        self.addCleanup(setattr, servir.github_app, "listar_instalacoes", original)
+        servir.github_app.listar_instalacoes = lambda *a, **k: [
+            {"id": 11, "account": {"id": 4242, "login": "dono", "type": "User"}}]
+        r = json.loads(self.procurar().corpo)
+        self.assertEqual({"ok": True, "ligadas": 1, "podadas": 1}, r)
+        self.assertEqual(["11"], [i["installation_id"]
+                                  for i in self.estado()["instalacoes"]])
+        self.assertEqual("8", banco.instalacao_do_github(outra))
+
+    def test_procurar_sem_resposta_nao_poda_nada(self):
+        banco.guardar_instalacao_do_github(self.uid, "7")
+        original = servir.github_app.listar_instalacoes
+        self.addCleanup(setattr, servir.github_app, "listar_instalacoes", original)
+        servir.github_app.listar_instalacoes = lambda *a, **k: None
+        self.procurar()
+        self.assertEqual("7", banco.instalacao_do_github(self.uid))
 
     def test_procurar_completa_o_nome_de_linha_migrada(self):
         banco.guardar_instalacao_do_github(self.uid, "11")

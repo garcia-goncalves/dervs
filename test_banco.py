@@ -2963,6 +2963,21 @@ class InstalacaoDoGithubTemDono(unittest.TestCase):
                                    banco.instalacoes_da_conta(self.a, con=self.con)])
         self.assertEqual("333", banco.instalacao_do_github(self.b, con=self.con))
 
+    def test_podar_apaga_so_as_mortas_da_propria_conta(self):
+        """Reinstalar o App gera numero novo; a antiga nao pode ficar para
+        sempre, contando no teto e fazendo o coletor errar a cada rodada."""
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        banco.guardar_instalacao_do_github(self.a, "222", con=self.con)
+        banco.guardar_instalacao_do_github(self.b, "333", con=self.con)
+        n = banco.podar_instalacoes_do_github(self.a, [222, 333], con=self.con)
+        self.assertEqual(1, n)
+        self.assertEqual(["222"], [i["installation_id"] for i in
+                                   banco.instalacoes_da_conta(self.a, con=self.con)])
+        # a de OUTRA conta nao e tocada, mesmo ausente da lista
+        self.assertEqual("333", banco.instalacao_do_github(self.b, con=self.con))
+        n = banco.podar_instalacoes_do_github(self.b, [], con=self.con)
+        self.assertEqual(1, n)
+
     def test_marcar_medicao_so_toca_a_linha_do_dono(self):
         banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
         banco.marcar_medicao_da_instalacao(self.b, "111", 7, con=self.con)
@@ -3089,7 +3104,7 @@ class UmaInstalacaoPertenceAUmaContaSo(unittest.TestCase):
     def test_a_conta_pode_acumular_e_o_numero_continua_de_quem_o_tem(self):
         banco.guardar_instalacao_do_github(self.a, "111")
         banco.guardar_instalacao_do_github(self.a, "222")
-        self.assertEqual("111", banco.instalacao_do_github(self.a))   # a mais antiga
+        self.assertEqual("222", banco.instalacao_do_github(self.a))   # a mais NOVA
         with self.assertRaises(ValueError):
             banco.guardar_instalacao_do_github(self.b, "111")
         # So depois de a dona desconectar o numero fica livre.

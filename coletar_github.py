@@ -1315,36 +1315,57 @@ def _medir_uma_conta(con, uid, tudo, slugs, por_alias, app_id, chave,
     if not instalacoes:
         return dict(resumo, motivo=SEM_INSTALACAO)
     restantes = list(por_alias)           # aliases ainda sem resposta
-    medidos, falhos, motivos = 0, [], []
+    medidos, falhos, motivos, nadas = 0, [], [], []
+    sites_medidos = [0]                   # UM contador por CONTA, nao por instalacao
     for inst in instalacoes:
         if not restantes:
             break
-        parte = _medir_com_instalacao(
-            con, uid, tudo, {a: slugs[a] for a in restantes},
-            {a: por_alias[a] for a in restantes}, app_id, chave, orcamento,
-            inst["installation_id"])
+        try:
+            parte = _medir_com_instalacao(
+                con, uid, tudo, {a: slugs[a] for a in restantes},
+                {a: por_alias[a] for a in restantes}, app_id, chave, orcamento,
+                inst["installation_id"], sites_medidos)
+        except Exception:                  # noqa: BLE001 — as outras seguem
+            # Uma instalacao que estoura nao apaga o que as anteriores ja
+            # mediram (cada repositorio ja commitou o seu). Frase fixa.
+            con.rollback()
+            if ERRO_INTERNO not in motivos:
+                motivos.append(ERRO_INTERNO)
+            continue
         medidos += parte["medidos"]
         falhos += parte.pop("_falhos", [])
+        # `_achados` so existe quando a instalacao CHEGOU a consultar o GitHub.
+        # Sem ele (token recusado, orcamento acabou) a contagem fica como
+        # estava: "nao tentei" nunca vira "mediu 0" (Lei 2).
+        consultou = "_achados" in parte
         achados = set(parte.pop("_achados", []))
         restantes = [a for a in restantes if a not in achados]
-        if parte["motivo"] and parte["motivo"] not in motivos:
-            motivos.append(parte["motivo"])
-        banco.marcar_medicao_da_instalacao(uid, inst["installation_id"],
-                                           parte["medidos"], con=con)
+        avisos = parte.pop("_avisos", None)
+        if avisos is None:
+            avisos = [parte["motivo"]] if parte["motivo"] else []
+        nada = parte.pop("_nada", "")
+        for aviso in avisos:
+            if aviso == nada:
+                nadas.append(aviso)
+            elif aviso not in motivos:
+                motivos.append(aviso)
+        if consultou:
+            banco.marcar_medicao_da_instalacao(
+                uid, inst["installation_id"], parte["medidos"], con=con)
         con.commit()
     resumo.update(medidos=medidos,
                   sem_alcance=_lista_cortada([por_alias[a] for a in restantes]
                                              + falhos))
-    # Com varias instalacoes, a frase "o GitHub nao devolveu nenhum" de uma
-    # delas engana quando outra mediu: so vale se NINGUEM mediu.
-    if medidos or falhos:
-        motivos = [m for m in motivos if not m.startswith("o GitHub não devolveu")]
+    # "o GitHub nao devolveu nenhum" de UMA instalacao engana quando outra
+    # mediu: so vale se NINGUEM mediu.
+    if not (medidos or falhos):
+        motivos = nadas[:1] + motivos
     resumo["motivo"] = "; ".join(motivos) or None
     return resumo
 
 
 def _medir_com_instalacao(con, uid, tudo, slugs, por_alias, app_id, chave,
-                          orcamento, instalacao) -> dict:
+                          orcamento, instalacao, sites_medidos=None) -> dict:
     """Mede os `slugs` com UMA instalacao. A credencial e variavel LOCAL desta
     chamada: o `Coletor` nasce aqui e morre aqui, nunca e guardado no modulo.
     Toda ida ao GitHub passa pelo `orcamento` da rodada, inclusive a troca da
@@ -1393,7 +1414,8 @@ def _medir_com_instalacao(con, uid, tudo, slugs, por_alias, app_id, chave,
         return r
 
     sites_adiados = set()
-    sites_medidos = [0]
+    if sites_medidos is None:
+        sites_medidos = [0]
     gravados, falhos = 0, []
     # UM REPOSITORIO POR VEZ, cada um com o proprio commit: um que quebra
     # (resposta estranha do GitHub, endereco ruim) desfaz so a si mesmo, e
@@ -1430,10 +1452,13 @@ def _medir_com_instalacao(con, uid, tudo, slugs, por_alias, app_id, chave,
                   sem_alcance=_lista_cortada(faltaram + falhos),
                   _achados=[a for a in por_alias if dados.get(a)],
                   _falhos=list(falhos))
+    nada = ""
     if not gravados and not falhos:
-        avisos.insert(0, "o GitHub não devolveu nenhum dos %d repositórios "
-                         "desta conta (o aplicativo alcança eles?)" % len(slugs))
+        nada = ("o GitHub não devolveu nenhum dos %d repositórios "
+                "desta conta (o aplicativo alcança eles?)" % len(slugs))
+        avisos.insert(0, nada)
     resumo["motivo"] = "; ".join(avisos) or None
+    resumo.update(_avisos=list(avisos), _nada=nada)
     return resumo
 
 

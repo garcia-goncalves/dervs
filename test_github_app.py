@@ -370,11 +370,24 @@ class ListarInstalacoesDoApp(unittest.TestCase):
         self.assertIsNone(github_app.listar_instalacoes(
             "123", "isto nao e uma chave", _pedir=lambda *a, **k: []))
 
-    def test_corta_em_cem(self):
-        r = github_app.listar_instalacoes(
+    def test_pagina_ate_a_pagina_incompleta(self):
+        vistas = []
+
+        def falso(url, jwt, teto, metodo="POST"):
+            vistas.append(url)
+            return ([{"id": n} for n in range(100)] if url.endswith("page=1")
+                    else [{"id": 1000 + n} for n in range(3)])
+
+        r = github_app.listar_instalacoes("123", PEM_PKCS1, _pedir=falso)
+        self.assertEqual(103, len(r))
+        self.assertEqual(2, len(vistas))
+
+    def test_lista_que_nunca_acaba_diz_que_nao_olhou(self):
+        """Todas as paginas cheias: a lista pode estar INCOMPLETA, e entregar
+        o pedaco seria um corte mudo. `None` = nao olhei."""
+        self.assertIsNone(github_app.listar_instalacoes(
             "123", PEM_PKCS1,
-            _pedir=lambda *a, **k: [{"id": n} for n in range(500)])
-        self.assertEqual(github_app.MAX_INSTALACOES_LISTADAS, len(r))
+            _pedir=lambda *a, **k: [{"id": n} for n in range(100)]))
 
 
 class ConfirmarInstalacaoContraAApi(unittest.TestCase):

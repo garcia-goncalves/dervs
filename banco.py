@@ -3927,7 +3927,7 @@ def instalacao_do_github(usuario_id: int, con=None):
     con = con or conectar()
     try:
         l = con.execute("SELECT installation_id FROM instalacao_github"
-                        " WHERE usuario_id = ? ORDER BY id LIMIT 1",
+                        " WHERE usuario_id = ? ORDER BY id DESC LIMIT 1",
                         (usuario_id,)).fetchone()
         return l["installation_id"] if l else None
     finally:
@@ -3955,7 +3955,7 @@ def instalacoes_da_conta(usuario_id: int, con=None) -> list:
 
 
 def instalacoes_do_github(con=None) -> dict:
-    """{usuario_id: installation_id} de TODAS as contas — a MAIS ANTIGA de cada.
+    """{usuario_id: installation_id} de TODAS as contas — a MAIS NOVA de cada.
 
     Quem mede por conta usa `instalacoes_da_conta`; esta so diz "quem tem
     alguma". Esta e a unica leitura sem dono deste conjunto, de proposito.
@@ -3965,7 +3965,7 @@ def instalacoes_do_github(con=None) -> dict:
     try:
         return {l["usuario_id"]: l["installation_id"] for l in con.execute(
             "SELECT usuario_id, installation_id FROM instalacao_github"
-            " ORDER BY usuario_id, id DESC")}
+            " ORDER BY usuario_id, id")}
     finally:
         if fechar:
             con.close()
@@ -4022,6 +4022,13 @@ def guardar_instalacao_do_github(usuario_id: int, installation_id, con=None,
             (usuario_id, limpa, quando, quando,
              (str(conta_login).strip() or None) if conta_login else None,
              (str(conta_tipo).strip() or None) if conta_tipo else None))
+        # O DO UPDATE nunca troca o dono: numa corrida em que outra conta
+        # gravou o mesmo numero entre a conferencia e o INSERT, esta chamada
+        # NAO ganhou linha, e dizer "gravei" seria mentir.
+        dono = con.execute("SELECT usuario_id FROM instalacao_github"
+                           " WHERE installation_id = ?", (limpa,)).fetchone()
+        if dono is None or dono["usuario_id"] != usuario_id:
+            raise ValueError("essa instalacao ja pertence a outra conta")
         if fechar:                    # ver `gravar`: nao quebre a transacao alheia
             con.commit()
     finally:
@@ -4044,6 +4051,32 @@ def marcar_medicao_da_instalacao(usuario_id: int, installation_id, medidos: int,
                     (int(medidos), agora(), usuario_id, str(installation_id)))
         if fechar:
             con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def podar_instalacoes_do_github(usuario_id: int, vivas, con=None) -> int:
+    """Apaga as instalacoes DAQUELA conta que nao estao em `vivas` (os numeros
+    que o GitHub ainda lista). Reinstalar o App gera um numero novo e deixaria a
+    antiga para sempre, contando no teto e fazendo o coletor errar a cada
+    rodada. Quem chama so passa a lista de um pedido que DEU CERTO e completo:
+    lista parcial apagaria instalacao boa. Devolve quantas apagou."""
+    vivas = {str(v) for v in vivas}
+    fechar = con is None
+    con = con or conectar()
+    try:
+        apagar = [l["installation_id"] for l in con.execute(
+            "SELECT installation_id FROM instalacao_github"
+            " WHERE usuario_id = ?", (usuario_id,))
+            if l["installation_id"] not in vivas]
+        for numero in apagar:
+            con.execute("DELETE FROM instalacao_github"
+                        " WHERE usuario_id = ? AND installation_id = ?",
+                        (usuario_id, numero))
+        if fechar:
+            con.commit()
+        return len(apagar)
     finally:
         if fechar:
             con.close()
