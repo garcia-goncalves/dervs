@@ -575,6 +575,8 @@ main { padding-bottom: var(--e12); }
 }
 
 .porta__cabeca > h2 { margin: 0; }
+.porta__lista { margin: var(--e2) 0 0; padding-left: var(--e4); }
+.porta__lista li { margin-bottom: var(--e1); overflow-wrap: anywhere; }
 
 /* Em 360px de largura os dois botões da porta 1 ocupam a linha inteira, um
    embaixo do outro, em vez de espremer. O `.acoes` já quebra linha; o que

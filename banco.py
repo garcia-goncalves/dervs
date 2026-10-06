@@ -459,13 +459,22 @@ CREATE INDEX IF NOT EXISTS ix_endereco_servidor ON endereco_producao (servidor_i
 -- outra pessoa. Sem esta linha, duas contas gravavam o mesmo numero e a segunda
 -- ficava amarrada a instalacao da primeira. Achado pelas duas revisoes de
 -- 01/09/2026; a primeira tranca e a conferencia do dono em `servir.py`.
+-- UMA CONTA DO DERVS PODE TER VARIAS INSTALACOES (06/10/2026): a pessoal e as
+-- das organizacoes. So a posse por NUMERO continua unica (`UNIQUE
+-- (installation_id)`); o `UNIQUE (usuario_id)` antigo foi tirado. `conta_login`
+-- e `conta_tipo` ('User'/'Organization') sao o nome que a tela mostra no lugar
+-- do numero; `medidos`/`medido_em` sao quantos repositorios a ultima rodada
+-- mediu COM esta instalacao. Todos nulos = "ainda nao sei", nunca zero.
 CREATE TABLE IF NOT EXISTS instalacao_github (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     usuario_id      INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
     installation_id TEXT NOT NULL CHECK (length(trim(installation_id)) > 0),
     criado_em       TEXT NOT NULL,
     atualizado_em   TEXT NOT NULL,
-    UNIQUE (usuario_id),
+    conta_login     TEXT,
+    conta_tipo      TEXT,
+    medidos         INTEGER,
+    medido_em       TEXT,
     UNIQUE (installation_id)
 );
 CREATE INDEX IF NOT EXISTS ix_instalacao_github_dono
@@ -702,6 +711,7 @@ def migrar(con: sqlite3.Connection) -> None:
     _migrar_endereco_producao(con)
     _migrar_servidor_por_endereco(con)
     _migrar_instalacao_github(con)
+    _migrar_instalacao_github_varias(con)
     _migrar_auditoria(con)
     _migrar_achado_dono(con)
 
@@ -1248,7 +1258,10 @@ _CREATE_INSTALACAO_GITHUB = """CREATE TABLE IF NOT EXISTS instalacao_github (
     installation_id TEXT NOT NULL CHECK (length(trim(installation_id)) > 0),
     criado_em       TEXT NOT NULL,
     atualizado_em   TEXT NOT NULL,
-    UNIQUE (usuario_id),
+    conta_login     TEXT,
+    conta_tipo      TEXT,
+    medidos         INTEGER,
+    medido_em       TEXT,
     UNIQUE (installation_id))"""
 
 
@@ -1288,6 +1301,47 @@ def _migrar_instalacao_github(con: sqlite3.Connection) -> None:
             con.rollback()
             return
         con.execute(_CREATE_INSTALACAO_GITHUB)
+        con.execute("CREATE INDEX IF NOT EXISTS ix_instalacao_github_dono"
+                    " ON instalacao_github (usuario_id)")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        _religar_fk(con)
+
+
+def _migrar_instalacao_github_varias(con: sqlite3.Connection) -> None:
+    """Varias instalacoes por conta (06/10/2026): tira o `UNIQUE (usuario_id)` e
+    acrescenta nome da conta e contagem medida, SEM perder nenhuma linha.
+
+    A condicao de "ja rodou" e a coluna `conta_login`. SQLite nao remove um
+    UNIQUE por ALTER, entao a tabela e reconstruida: copia, derruba, renomeia.
+    Tudo dentro de um `BEGIN IMMEDIATE` (nunca `executescript`, que da COMMIT
+    implicito): ou migra por inteiro, ou fica como estava.
+    """
+    cols = {l[1] for l in con.execute("PRAGMA table_info(instalacao_github)")}
+    if not cols or "conta_login" in cols:
+        return           # banco novo (o ESQUEMA faz certo) ou ja migrado
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        # Relido dentro do lock, como em `_migrar_instalacao_github`.
+        cols = {l[1] for l in con.execute("PRAGMA table_info(instalacao_github)")}
+        if "conta_login" in cols:
+            con.rollback()
+            return
+        con.execute("DROP TABLE IF EXISTS instalacao_github_nova")
+        con.execute(_CREATE_INSTALACAO_GITHUB.replace(
+            "CREATE TABLE IF NOT EXISTS instalacao_github (",
+            "CREATE TABLE instalacao_github_nova ("))
+        con.execute(
+            "INSERT INTO instalacao_github_nova"
+            " (id, usuario_id, installation_id, criado_em, atualizado_em)"
+            " SELECT id, usuario_id, installation_id, criado_em, atualizado_em"
+            " FROM instalacao_github")
+        con.execute("DROP TABLE instalacao_github")
+        con.execute("ALTER TABLE instalacao_github_nova"
+                    " RENAME TO instalacao_github")
         con.execute("CREATE INDEX IF NOT EXISTS ix_instalacao_github_dono"
                     " ON instalacao_github (usuario_id)")
         con.commit()
@@ -3873,39 +3927,66 @@ def instalacao_do_github(usuario_id: int, con=None):
     con = con or conectar()
     try:
         l = con.execute("SELECT installation_id FROM instalacao_github"
-                        " WHERE usuario_id = ?", (usuario_id,)).fetchone()
+                        " WHERE usuario_id = ? ORDER BY id LIMIT 1",
+                        (usuario_id,)).fetchone()
         return l["installation_id"] if l else None
     finally:
         if fechar:
             con.close()
 
 
-def instalacoes_do_github(con=None) -> dict:
-    """{usuario_id: installation_id} de TODAS as contas — o que o coletor le.
+def instalacoes_da_conta(usuario_id: int, con=None) -> list:
+    """TODAS as instalacoes DAQUELA conta, da mais antiga para a mais nova.
 
-    Esta e a unica leitura sem dono deste conjunto, e e de proposito: quem
-    coleta roda por conta propria, sem sessao, e precisa saber em nome de quem
-    falar com o GitHub. Toda outra leitura passa por `instalacao_do_github`.
+    Cada item: installation_id, conta_login, conta_tipo, medidos, medido_em
+    (os quatro ultimos podem ser `None` = "ainda nao sei"). `usuario_id` e
+    obrigatorio pelo mesmo motivo de `instalacao_do_github`.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return [dict(l) for l in con.execute(
+            "SELECT installation_id, conta_login, conta_tipo, medidos,"
+            " medido_em FROM instalacao_github"
+            " WHERE usuario_id = ? ORDER BY id", (usuario_id,))]
+    finally:
+        if fechar:
+            con.close()
+
+
+def instalacoes_do_github(con=None) -> dict:
+    """{usuario_id: installation_id} de TODAS as contas — a MAIS ANTIGA de cada.
+
+    Quem mede por conta usa `instalacoes_da_conta`; esta so diz "quem tem
+    alguma". Esta e a unica leitura sem dono deste conjunto, de proposito.
     """
     fechar = con is None
     con = con or conectar()
     try:
         return {l["usuario_id"]: l["installation_id"] for l in con.execute(
             "SELECT usuario_id, installation_id FROM instalacao_github"
-            " ORDER BY usuario_id")}
+            " ORDER BY usuario_id, id DESC")}
     finally:
         if fechar:
             con.close()
 
 
-def guardar_instalacao_do_github(usuario_id: int, installation_id, con=None) -> None:
-    """Grava ou troca a instalacao daquela conta. Vazio aqui e ERRO, nao apagar.
+# Teto de instalacoes por conta do DERVS: cada uma custa uma troca de chave por
+# token a cada rodada, e a conta ja paga o orcamento de chamadas por inteiro.
+MAX_INSTALACOES_POR_CONTA = 10
 
-    A diferenca para `guardar_endereco_de_producao`, que apaga com string
-    vazia: la o vazio vem de um campo de formulario que o dono limpou; aqui o
-    valor vem do GitHub, e um vazio significa que o fluxo de instalar quebrou.
-    Gravar silencio nesse caso seria uma conta "conectada" a lugar nenhum.
-    Desconectar tem funcao propria, e um `DELETE` explicito.
+
+def guardar_instalacao_do_github(usuario_id: int, installation_id, con=None,
+                                 conta_login=None, conta_tipo=None) -> None:
+    """Grava (ou atualiza) UMA instalacao daquela conta. Vazio aqui e ERRO.
+
+    Uma conta pode ter varias (pessoal + organizacoes); o que nao pode e o MESMO
+    numero em duas contas. A diferenca para `guardar_endereco_de_producao`, que
+    apaga com string vazia: aqui o valor vem do GitHub, e vazio significa que o
+    fluxo de instalar quebrou. Gravar silencio seria uma conta "conectada" a
+    lugar nenhum. Desconectar tem funcao propria, e um `DELETE` explicito.
+    `conta_login`/`conta_tipo` so entram quando vierem (nao apagam o que ja
+    esta gravado).
     """
     limpa = str(installation_id or "").strip()
     if not limpa:
@@ -3915,32 +3996,32 @@ def guardar_instalacao_do_github(usuario_id: int, installation_id, con=None) -> 
     con = con or conectar()
     try:
         quando = agora()
-        # O `criado_em` NAO entra no `DO UPDATE`: reinstalar o App nao reescreve
-        # a data em que aquela conta conectou pela primeira vez.
-        # O NUMERO JA E DE OUTRA CONTA? Recusa, e diz. `ON CONFLICT(usuario_id)`
-        # so cobre a colisao pelo dono; a colisao pelo NUMERO cai no `UNIQUE`
-        # novo e viraria um `IntegrityError` cru no meio de um caminho de
-        # autenticacao. Conferir antes deixa a recusa legivel para quem chamou.
+        # O NUMERO JA E DE OUTRA CONTA? Recusa, e diz. A colisao pelo NUMERO
+        # cairia no `UNIQUE` como `IntegrityError` cru no meio de um caminho de
+        # autenticacao; conferir antes deixa a recusa legivel.
         dono = con.execute("SELECT usuario_id FROM instalacao_github"
                            " WHERE installation_id = ?", (limpa,)).fetchone()
         if dono is not None and dono["usuario_id"] != usuario_id:
             raise ValueError("essa instalacao ja pertence a outra conta")
-        # O NUMERO JA E DE OUTRA CONTA? Recusa, e diz. `ON CONFLICT(usuario_id)`
-        # so cobre a colisao pelo dono; a colisao pelo NUMERO cai no `UNIQUE`
-        # novo e viraria um `IntegrityError` cru no meio de um caminho de
-        # autenticacao. Conferir antes deixa a recusa legivel para quem chamou.
-        dono = con.execute("SELECT usuario_id FROM instalacao_github"
-                           " WHERE installation_id = ?", (limpa,)).fetchone()
-        if dono is not None and dono["usuario_id"] != usuario_id:
-            raise ValueError("essa instalacao ja pertence a outra conta")
+        if dono is None:
+            n = con.execute("SELECT COUNT(*) FROM instalacao_github"
+                            " WHERE usuario_id = ?", (usuario_id,)).fetchone()[0]
+            if n >= MAX_INSTALACOES_POR_CONTA:
+                raise ValueError("esta conta ja tem %d instalacoes do GitHub"
+                                 % MAX_INSTALACOES_POR_CONTA)
+        # O `criado_em` e o `usuario_id` NAO entram no `DO UPDATE`: reinstalar
+        # nao reescreve a data da primeira conexao nem transfere a linha.
         con.execute(
             "INSERT INTO instalacao_github"
-            " (usuario_id, installation_id, criado_em, atualizado_em)"
-            " VALUES (?,?,?,?)"
-            " ON CONFLICT(usuario_id) DO UPDATE SET"
-            " installation_id=excluded.installation_id,"
-            " atualizado_em=excluded.atualizado_em",
-            (usuario_id, limpa, quando, quando))
+            " (usuario_id, installation_id, criado_em, atualizado_em,"
+            "  conta_login, conta_tipo) VALUES (?,?,?,?,?,?)"
+            " ON CONFLICT(installation_id) DO UPDATE SET"
+            " atualizado_em=excluded.atualizado_em,"
+            " conta_login=COALESCE(excluded.conta_login, conta_login),"
+            " conta_tipo=COALESCE(excluded.conta_tipo, conta_tipo)",
+            (usuario_id, limpa, quando, quando,
+             (str(conta_login).strip() or None) if conta_login else None,
+             (str(conta_tipo).strip() or None) if conta_tipo else None))
         if fechar:                    # ver `gravar`: nao quebre a transacao alheia
             con.commit()
     finally:
@@ -3948,8 +4029,29 @@ def guardar_instalacao_do_github(usuario_id: int, installation_id, con=None) -> 
             con.close()
 
 
-def desconectar_do_github(usuario_id: int, con=None) -> None:
-    """Apaga a instalacao DAQUELA conta — e so a dela.
+def marcar_medicao_da_instalacao(usuario_id: int, installation_id, medidos: int,
+                                 con=None) -> None:
+    """Quantos repositorios a ultima rodada mediu COM esta instalacao.
+
+    O `usuario_id` no `WHERE` e obrigatorio: sem ele, uma rodada de uma conta
+    escreveria na linha de outra. Chamada com o `con` do coletor nao comita.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("UPDATE instalacao_github SET medidos = ?, medido_em = ?"
+                    " WHERE usuario_id = ? AND installation_id = ?",
+                    (int(medidos), agora(), usuario_id, str(installation_id)))
+        if fechar:
+            con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
+def desconectar_do_github(usuario_id: int, installation_id=None, con=None) -> None:
+    """Apaga a instalacao DAQUELA conta — e so a dela. Sem `installation_id`,
+    apaga todas as DAQUELA conta (o comportamento de antes).
 
     O `usuario_id` no `WHERE` e a peca inteira desta funcao: sem ele um clique
     em "desconectar" derrubaria o GitHub de todo mundo. Inofensiva quando nao ha
@@ -3958,8 +4060,13 @@ def desconectar_do_github(usuario_id: int, con=None) -> None:
     fechar = con is None
     con = con or conectar()
     try:
-        con.execute("DELETE FROM instalacao_github WHERE usuario_id = ?",
-                    (usuario_id,))
+        if installation_id is None:
+            con.execute("DELETE FROM instalacao_github WHERE usuario_id = ?",
+                        (usuario_id,))
+        else:
+            con.execute("DELETE FROM instalacao_github"
+                        " WHERE usuario_id = ? AND installation_id = ?",
+                        (usuario_id, str(installation_id)))
         if fechar:                    # ver `gravar`: nao quebre a transacao alheia
             con.commit()
     finally:

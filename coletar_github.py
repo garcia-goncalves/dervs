@@ -1300,17 +1300,58 @@ def _lista_cortada(nomes: list) -> list:
 
 def _medir_uma_conta(con, uid, tudo, slugs, por_alias, app_id, chave,
                      orcamento) -> dict:
-    """Mede UMA conta com a instalacao DELA e devolve o resumo que vai na
-    linha `_github`. A credencial e variavel LOCAL desta chamada: o `Coletor`
-    nasce aqui e morre aqui, nunca e guardado no modulo. Toda ida ao GitHub
-    passa pelo `orcamento` da rodada, inclusive a troca da chave por token."""
+    """Mede UMA conta com TODAS as instalacoes dela (pessoal + organizacoes) e
+    devolve o resumo que vai na linha `_github`.
+
+    Cada instalacao enxerga so os repositorios que o dono liberou nela: a
+    primeira mede o que alcanca, e a seguinte tenta so o que ficou sem resposta.
+    Uma instalacao quebrada nao impede as outras. O que NENHUMA alcanca entra
+    em `sem_alcance`, como antes."""
     resumo = {"motivo": None, "medidos": 0, "repositorios": len(slugs),
               "sem_alcance": []}
     if not (app_id and chave):
         return dict(resumo, motivo=SEM_APP)
-    instalacao = banco.instalacao_do_github(uid, con=con)
-    if not instalacao:
+    instalacoes = banco.instalacoes_da_conta(uid, con=con)
+    if not instalacoes:
         return dict(resumo, motivo=SEM_INSTALACAO)
+    restantes = list(por_alias)           # aliases ainda sem resposta
+    medidos, falhos, motivos = 0, [], []
+    for inst in instalacoes:
+        if not restantes:
+            break
+        parte = _medir_com_instalacao(
+            con, uid, tudo, {a: slugs[a] for a in restantes},
+            {a: por_alias[a] for a in restantes}, app_id, chave, orcamento,
+            inst["installation_id"])
+        medidos += parte["medidos"]
+        falhos += parte.pop("_falhos", [])
+        achados = set(parte.pop("_achados", []))
+        restantes = [a for a in restantes if a not in achados]
+        if parte["motivo"] and parte["motivo"] not in motivos:
+            motivos.append(parte["motivo"])
+        banco.marcar_medicao_da_instalacao(uid, inst["installation_id"],
+                                           parte["medidos"], con=con)
+        con.commit()
+    resumo.update(medidos=medidos,
+                  sem_alcance=_lista_cortada([por_alias[a] for a in restantes]
+                                             + falhos))
+    # Com varias instalacoes, a frase "o GitHub nao devolveu nenhum" de uma
+    # delas engana quando outra mediu: so vale se NINGUEM mediu.
+    if medidos or falhos:
+        motivos = [m for m in motivos if not m.startswith("o GitHub não devolveu")]
+    resumo["motivo"] = "; ".join(motivos) or None
+    return resumo
+
+
+def _medir_com_instalacao(con, uid, tudo, slugs, por_alias, app_id, chave,
+                          orcamento, instalacao) -> dict:
+    """Mede os `slugs` com UMA instalacao. A credencial e variavel LOCAL desta
+    chamada: o `Coletor` nasce aqui e morre aqui, nunca e guardado no modulo.
+    Toda ida ao GitHub passa pelo `orcamento` da rodada, inclusive a troca da
+    chave por token. Alem do resumo, devolve `_achados` (aliases que esta
+    instalacao alcancou) e `_falhos` (nomes que alcancou mas nao gravou)."""
+    resumo = {"motivo": None, "medidos": 0, "repositorios": len(slugs),
+              "sem_alcance": []}
     avisos = []
     if len(slugs) > TETO_REPOS_POR_CONTA:
         avisos.append("medi %d de %d repositórios; o resto passou do teto "
@@ -1386,7 +1427,9 @@ def _medir_uma_conta(con, uid, tudo, slugs, por_alias, app_id, chave,
         avisos.append("%d repositório(s) não puderam ser medidos" % len(falhos))
     faltaram = [por_alias[a] for a in por_alias if not dados.get(a)]
     resumo.update(medidos=gravados,
-                  sem_alcance=_lista_cortada(faltaram + falhos))
+                  sem_alcance=_lista_cortada(faltaram + falhos),
+                  _achados=[a for a in por_alias if dados.get(a)],
+                  _falhos=list(falhos))
     if not gravados and not falhos:
         avisos.insert(0, "o GitHub não devolveu nenhum dos %d repositórios "
                          "desta conta (o aplicativo alcança eles?)" % len(slugs))

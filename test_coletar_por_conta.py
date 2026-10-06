@@ -39,7 +39,8 @@ from test_github_app import PEM_PKCS1   # noqa: E402
 PROJETOS_A = {"alfa-primeiro": "org-a/alfa-primeiro",
               "alfa-segundo": "org-a/alfa-segundo"}
 PROJETOS_B = {"beta-terceiro": "org-b/beta-terceiro"}
-CREDENCIAIS = {"111": "ghs-conta-a", "222": "ghs-conta-b"}
+CREDENCIAIS = {"111": "ghs-conta-a", "222": "ghs-conta-b",
+               "333": "ghs-conta-a-org"}
 PROIBIDAS = ("env-proibido", "app-global")
 PEDACO = re.compile(r'(\w+): repository\(owner: "([^"]+)", name: "([^"]+)"\)')
 
@@ -106,6 +107,7 @@ class Base(unittest.TestCase):
         self.chamadas = []          # (url, metodo, authorization, corpo)
         self.recusar = set()        # instalacoes cujo access_tokens da 404
         self.sem_alcance = set()    # slugs que o GraphQL devolve como null
+        self.alcance = {}           # token -> slugs que ELE enxerga (se houver)
         original = urllib.request.OpenerDirector.open
         self.addCleanup(setattr, urllib.request.OpenerDirector, "open", original)
         # Funcao solta, e nao `self._rede`: metodo ja ligado nao se liga de
@@ -147,7 +149,11 @@ class Base(unittest.TestCase):
             dados = {}
             for alias, dono, repo in PEDACO.findall(consulta):
                 slug = "%s/%s" % (dono, repo)
-                dados[alias] = None if slug in self.sem_alcance else {
+                token = (pedido.get_header("Authorization") or "")[7:]
+                nao_vejo = (token in self.alcance
+                            and slug not in self.alcance[token])
+                dados[alias] = None if (slug in self.sem_alcance
+                                        or nao_vejo) else {
                     "nameWithOwner": slug, "url": "https://github.com/" + slug,
                     "defaultBranchRef": {"name": "main", "target": {}}}
             return _Resposta({"data": dados})
@@ -213,6 +219,62 @@ class UmaContaUmaInstalacao(Base):
         self.assertEqual(linha["medidos"], 1)
         self.assertEqual(linha["repositorios"], 2)
         self.assertEqual(linha["sem_alcance"], ["alfa-segundo"])
+
+
+class UmaContaComVariasInstalacoes(Base):
+    """06/10/2026: pessoal + organizacao. Cada repositorio e medido pela
+    instalacao que o alcanca, com a credencial DELA."""
+
+    def duas(self):
+        banco.guardar_instalacao_do_github(self.a, "333", con=self.con)
+        self.con.commit()
+        self.alcance = {"ghs-conta-a": {"org-a/alfa-primeiro"},
+                        "ghs-conta-a-org": {"org-a/alfa-segundo"}}
+
+    def test_cada_instalacao_mede_o_que_alcanca(self):
+        self.duas()
+        codigo, _s, _e = self.rodar()
+        self.assertEqual(0, codigo)
+        self.assertEqual(set(PROJETOS_A), self.com_github(self.a))
+        linha = self.linha_github(self.a)
+        self.assertEqual(2, linha["medidos"])
+        self.assertEqual([], linha["sem_alcance"])
+        self.assertIsNone(linha["motivo"])
+        # a REST de cada repositorio vai com a credencial de quem o alcanca
+        for url, _m, aut, _c in self.chamadas:
+            if "/repos/org-a/alfa-segundo/" in url:
+                self.assertEqual("Bearer ghs-conta-a-org", aut)
+            if "/repos/org-a/alfa-primeiro/" in url:
+                self.assertEqual("Bearer ghs-conta-a", aut)
+        # a segunda instalacao so foi perguntar o que a primeira nao alcancou
+        org = [json.loads(c[3])["query"] for c in self.chamadas
+               if c[0].endswith("/graphql") and c[2] == "Bearer ghs-conta-a-org"]
+        self.assertTrue(org)
+        self.assertNotIn("alfa-primeiro", org[0])
+
+    def test_a_contagem_por_instalacao_fica_gravada(self):
+        self.duas()
+        self.rodar()
+        por = {i["installation_id"]: i["medidos"]
+               for i in banco.instalacoes_da_conta(self.a, con=self.con)}
+        self.assertEqual({"111": 1, "333": 1}, por)
+
+    def test_instalacao_quebrada_nao_impede_a_outra(self):
+        self.duas()
+        self.recusar = {"111"}
+        self.alcance = {}                 # a 333 enxerga tudo
+        self.rodar()
+        self.assertEqual(set(PROJETOS_A), self.com_github(self.a))
+        self.assertEqual(2, self.linha_github(self.a)["medidos"])
+
+    def test_o_que_nenhuma_alcanca_continua_sem_alcance(self):
+        self.duas()
+        self.alcance = {"ghs-conta-a": {"org-a/alfa-primeiro"},
+                        "ghs-conta-a-org": set()}
+        self.rodar()
+        linha = self.linha_github(self.a)
+        self.assertEqual(1, linha["medidos"])
+        self.assertEqual(["alfa-segundo"], linha["sem_alcance"])
 
 
 class ContaSemInstalacaoNaoFicaVazia(Base):
@@ -682,7 +744,8 @@ class OCaminhoPorContaNaoTemCredencialImplicita(unittest.TestCase):
     PROIBIDOS = ("_token(", "_app(", "_gh_graphql(", "_gh_json(", "subprocess")
 
     def test_as_funcoes_do_por_conta_nao_tocam_o_caminho_antigo(self):
-        for nome in ("coletar_por_conta", "_medir_uma_conta", "_graphql_com",
+        for nome in ("coletar_por_conta", "_medir_uma_conta",
+                     "_medir_com_instalacao", "_graphql_com",
                      "_json_com", "_http_com", "_gravar_medicao", "mede_deploy"):
             fonte = inspect.getsource(getattr(coletar_github, nome))
             for proibido in self.PROIBIDOS:
@@ -696,7 +759,7 @@ class OCaminhoPorContaNaoTemCredencialImplicita(unittest.TestCase):
                                            parar=lambda: False)
 
     def test_medir_uma_conta_passa_buscar_e_parar(self):
-        fonte = inspect.getsource(coletar_github._medir_uma_conta)
+        fonte = inspect.getsource(coletar_github._medir_com_instalacao)
         self.assertRegex(fonte, r"_gravar_medicao\([^)]*buscar=buscar[^)]*parar=")
 
 

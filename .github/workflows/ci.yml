@@ -282,6 +282,11 @@ jobs:
       - name: A tela do progresso
         run: python test_progresso_tela.py
 
+      # A tela "A sua conta do GitHub" com varias contas: nome no lugar do
+      # numero, link so para github.com, nada por innerHTML.
+      - name: A tela das contas do GitHub
+        run: python test_github_tela.py
+
       # O fio inteiro: briefing no disco -> leitor -> /agente/relatorio ->
       # /api/dados e /api/progresso -> os campos que o painel.js le.
       - name: O fio do progresso

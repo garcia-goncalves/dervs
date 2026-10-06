@@ -342,6 +342,41 @@ class OQueARevisaoDeSegurancaPediu(unittest.TestCase):
         self.assertEqual(len(chamadas), 2)
 
 
+class ListarInstalacoesDoApp(unittest.TestCase):
+    """Descoberta das contas que instalaram o App. Nenhum caso bate na rede."""
+
+    def test_lista_so_o_que_tem_id_inteiro(self):
+        vistos = {}
+
+        def falso(url, jwt, teto, metodo="POST"):
+            vistos.update(url=url, metodo=metodo, jwt=jwt)
+            return [{"id": 1, "account": {"id": 9, "login": "a"}},
+                    {"id": "2"}, {"id": True}, "lixo", {"sem": "id"}]
+
+        r = github_app.listar_instalacoes("123", PEM_PKCS1, _pedir=falso)
+        self.assertEqual([1], [i["id"] for i in r])
+        self.assertEqual("GET", vistos["metodo"])
+        self.assertIn("/app/installations", vistos["url"])
+        self.assertNotIn("access_tokens", vistos["url"])
+        self.assertTrue(vistos["jwt"])
+
+    def test_falha_devolve_None_e_nao_levanta(self):
+        def quebra(*a, **k):
+            raise OSError("rede")
+        self.assertIsNone(github_app.listar_instalacoes(
+            "123", PEM_PKCS1, _pedir=quebra))
+        self.assertIsNone(github_app.listar_instalacoes(
+            "123", PEM_PKCS1, _pedir=lambda *a, **k: {"nao": "lista"}))
+        self.assertIsNone(github_app.listar_instalacoes(
+            "123", "isto nao e uma chave", _pedir=lambda *a, **k: []))
+
+    def test_corta_em_cem(self):
+        r = github_app.listar_instalacoes(
+            "123", PEM_PKCS1,
+            _pedir=lambda *a, **k: [{"id": n} for n in range(500)])
+        self.assertEqual(github_app.MAX_INSTALACOES_LISTADAS, len(r))
+
+
 class ConfirmarInstalacaoContraAApi(unittest.TestCase):
     """A peca da etapa C2, e o motivo dela em uma frase:
 

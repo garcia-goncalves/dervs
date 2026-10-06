@@ -70,6 +70,16 @@ Ele **ja existe**, criado em 27/08/2026:
 | Chave privada (`DERVS_GITHUB_APP_KEY`) | no cofre do repositorio |
 | Onde administrar | <https://github.com/organizations/garcia-goncalves/settings/apps/dervs-coletor> |
 
+**O app e PUBLICO desde 06/10/2026** (Advanced -> Make public). Um app privado
+so se instala na conta dona dele (a organizacao): a conta pessoal e as
+organizacoes de outras pessoas davam 404 em `github.com/apps/dervs-coletor/
+installations/new`. Hoje uma mesma conta do DERVS conecta **varias** contas do
+GitHub (pessoal + organizacoes, ate 10), cada uma com um clique em **Conectar
+outra conta do GitHub**; quem instalou direto no GitHub usa **Procurar minhas
+contas**. A posse de cada instalacao e provada como antes (`account.id` da conta
+pessoal; ADMIN da organizacao). Para escolher quais repositorios cada conta
+libera: o link "escolher repositorios no GitHub" na propria tela.
+
 **Permissao de organizacao "Members: Read-only" — acrescentada em 04/09/2026.**
 Sem ela, instalar o app numa ORGANIZACAO (o unico jeito quando os repositorios
 de verdade moram numa organizacao, nao numa conta pessoal) sempre terminava em

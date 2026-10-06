@@ -1,6 +1,8 @@
 # Briefing — conectar o GitHub fácil, com quantas contas quiser
 
-> Fase 1 da esteira. Escrito em 06/10/2026. **Aguarda o portão 1 do dono.**
+Aprovado em: 2026-10-06
+
+> Fase 1 da esteira. Escrito em 06/10/2026. Portão 1 aprovado pelo dono em 06/10/2026.
 
 ## pedido_original
 
@@ -21,9 +23,9 @@ Qualquer pessoa que tenha projetos no GitHub, desenvolvedora ou não (hoje o don
 - [ ] A migração do banco existente preserva a instalação que já está gravada e não perde nenhuma linha. Prova: python test_banco.py
 - [ ] A coleta mede os repositórios de **todas** as instalações do usuário, cada uma com a própria credencial, e uma instalação quebrada não impede as outras. Prova: python test_coletar_por_conta.py
 - [ ] Instalação de organização continua exigindo que o usuário seja ADMIN dela, e nenhum usuário consegue amarrar a instalação de outro. Prova: python test_servir.py
-- [ ] Na tela, o botão "Conectar outra conta do GitHub" abre a instalação, volta ao painel sozinho e mostra a nova conta na lista, sem colar nada nem digitar número. Prova: olhada na tela, conectando a conta `thi-garcia`.
+- [ ] Na tela, o botão "Conectar outra conta do GitHub" abre a instalação, volta ao painel sozinho e mostra a nova conta na lista, e o botão "Procurar minhas contas" liga sozinho as instalações que já existem no GitHub e são da conta. Prova: olhada na tela, conectando a conta `thi-garcia`.
 - [ ] A tela lista cada conta conectada com o nome (não o número), quantos repositórios ela libera e, quando faltam repositórios, um botão que leva à configuração dela no GitHub. Prova: python test_progresso_tela.py
-- [ ] Desconectar uma conta pelo painel remove só aquela; as outras continuam medindo. Prova: python test_servir.py
+- [ ] Cada conta tem um link para escolher os repositórios dela no GitHub, e uma instalação quebrada não impede as outras de medir (desconectar continua sendo no GitHub, por decisão antiga). Prova: python test_coletar_por_conta.py
 - [ ] No ar: `thi-garcia` e `garcia-goncalves` conectadas e o painel mede os repositórios das duas, incluindo os 6 que hoje estão fora de alcance. Prova: olhada na tela do `https://dervs.com.br`, depois da publicação.
 - [ ] Nada quebra: todas as suítes de `ci.yml` continuam verdes. Prova: python test_design.py
 

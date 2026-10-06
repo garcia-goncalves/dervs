@@ -1935,10 +1935,92 @@ class Hub(SimpleHTTPRequestHandler):
         sessao = self._sessao()
         if sessao is None:
             return self._json(403, {"erro": "entre de novo"})
+        contas = banco.instalacoes_da_conta(sessao["usuario_id"])
+        for c in contas:
+            c["gerenciar_url"] = self._url_de_gerenciar(c)
         return self._json(200, {
             "instalacao": banco.instalacao_do_github(sessao["usuario_id"]) or "",
+            "instalacoes": contas,
             "da_para_instalar": bool(APP_DO_GITHUB),
             "lido_em": banco.agora()})
+
+    @staticmethod
+    def _url_de_gerenciar(conta: dict) -> str:
+        """Onde, no GitHub, esta instalacao se configura (quais repositorios
+        liberar). So monta com login valido; sem nome, vazio — a tela esconde o
+        link em vez de apontar para um endereco chutado."""
+        login = conta.get("conta_login") or ""
+        numero = str(conta.get("installation_id") or "")
+        if not (github_app.SO_LOGIN_DO_GITHUB.fullmatch(login)
+                and github_app.SO_DIGITOS.fullmatch(numero)):
+            return ""
+        if conta.get("conta_tipo") == "Organization":
+            return ("https://github.com/organizations/%s/settings/"
+                    "installations/%s" % (login, numero))
+        return "https://github.com/settings/installations/%s" % numero
+
+    TETO_DE_PROCURAS = 10
+    MAX_ORGS_CONFERIDAS = 10
+
+    def _github_procurar(self):
+        """"Procurar minhas contas": liga sozinho as instalacoes do App que ja
+        existem no GitHub e sao DESTA conta, sem refazer o caminho de instalar.
+
+        A prova de posse e a MESMA da volta normal (`_instalacao_e_dele`):
+        conta pessoal so se o `account.id` for o do GitHub amarrado a esta
+        sessao; organizacao so se esta conta for ADMIN dela. Como o App e
+        publico, ha instalacao de estranhos na lista: as ja ligadas a alguem
+        sao puladas, e so `MAX_ORGS_CONFERIDAS` organizacoes (as mais novas)
+        geram pergunta ao GitHub por pedido. O caminho principal continua
+        sendo o botao de conectar, que e deterministico."""
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        if not APP_DO_GITHUB:
+            return self._json(404, {"erro": "nao existe"})
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="github_procurar",
+                                           teto=self.TETO_DE_PROCURAS):
+            return self._json(429, self.RECUSA)
+        uid = sessao["usuario_id"]
+        lista = github_app.listar_instalacoes(
+            (os.environ.get("DERVS_GITHUB_APP_ID") or "").strip(),
+            os.environ.get("DERVS_GITHUB_APP_KEY") or "")
+        if lista is None:
+            return self._json(200, {"ok": False, "ligadas": 0})
+        ligadas = orgs = 0
+        for inst in sorted(lista, key=lambda i: i["id"], reverse=True):
+            numero = str(inst["id"])
+            conta = inst.get("account") or {}
+            if inst.get("suspended_at"):
+                continue
+            if conta.get("type") == "Organization":
+                if orgs >= self.MAX_ORGS_CONFERIDAS:
+                    continue
+            with contextlib.closing(banco.conectar()) as con:
+                dono = con.execute("SELECT usuario_id FROM instalacao_github"
+                                   " WHERE installation_id = ?",
+                                   (numero,)).fetchone()
+            if dono is not None:
+                if dono["usuario_id"] == uid:
+                    # Ja e minha: so completa o nome (linha migrada, sem nome).
+                    # O nome vem do GitHub, nunca do corpo do pedido.
+                    banco.guardar_instalacao_do_github(
+                        uid, numero, conta_login=conta.get("login"),
+                        conta_tipo=conta.get("type"))
+                continue                 # ja e de alguem: nao e candidata
+            if conta.get("type") == "Organization":
+                orgs += 1
+            if not self._instalacao_e_dele(uid, inst):
+                continue
+            try:
+                banco.guardar_instalacao_do_github(
+                    uid, numero, conta_login=conta.get("login"),
+                    conta_tipo=conta.get("type"))
+                ligadas += 1
+            except ValueError:
+                break                    # teto de instalacoes da conta
+        return self._json(200, {"ok": True, "ligadas": ligadas})
 
     def _github_instalar(self):
         """Devolve o endereco da instalacao, com o selo dentro."""
@@ -1988,7 +2070,10 @@ class Hub(SimpleHTTPRequestHandler):
         if usuario_id is not None and confirmada is not None \
                 and self._instalacao_e_dele(usuario_id, confirmada):
             try:
-                banco.guardar_instalacao_do_github(usuario_id, instalacao)
+                conta = confirmada.get("account") or {}
+                banco.guardar_instalacao_do_github(
+                    usuario_id, instalacao, conta_login=conta.get("login"),
+                    conta_tipo=conta.get("type"))
             except ValueError:
                 # O numero ja e de outra conta. Mesmo desfecho de todo o resto
                 # que nao deu: nao gravou, e nao e um erro vermelho.
@@ -3709,6 +3794,7 @@ ROTAS = {
     # que o nosso JavaScript nao fez. A autorizacao dela nao sai da sessao, sai
     # do selo assinado com o cofre.
     "/api/github/instalar":     Rota("POST", Hub._github_instalar,  "dado"),
+    "/api/github/procurar":     Rota("POST", Hub._github_procurar,  "dado"),
     "/api/github":              Rota("GET",  Hub._github_estado,    "dado"),
     "/github/instalado":        Rota("GET",  Hub._github_instalado, "cortina"),
 

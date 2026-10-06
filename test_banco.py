@@ -2847,6 +2847,50 @@ class InstalacaoDoGithubNoBancoVelho(unittest.TestCase):
         self.assertEqual(do_esquema, da_migracao)
 
 
+class InstalacaoDoGithubComUniqueAntigo(unittest.TestCase):
+    """O hub.db de producao tem `UNIQUE (usuario_id)`: a migracao de 06/10/2026
+    tem de reconstruir a tabela sem perder a linha que ja esta la."""
+
+    def test_a_linha_antiga_sobrevive_e_a_conta_passa_a_aceitar_varias(self):
+        pasta = tempfile.TemporaryDirectory()
+        self.addCleanup(pasta.cleanup)
+        caminho = Path(pasta.name) / "antigo.db"
+        con = banco.conectar(caminho)
+        uid = banco.criar_usuario("a@teste.local", "teste1234", con=con)
+        con.execute("DROP TABLE instalacao_github")
+        con.execute("""CREATE TABLE instalacao_github (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario_id INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+            installation_id TEXT NOT NULL CHECK (length(trim(installation_id)) > 0),
+            criado_em TEXT NOT NULL, atualizado_em TEXT NOT NULL,
+            UNIQUE (usuario_id), UNIQUE (installation_id))""")
+        con.execute("INSERT INTO instalacao_github"
+                    " (usuario_id, installation_id, criado_em, atualizado_em)"
+                    " VALUES (?,?,?,?)", (uid, "159077999", "2026-09-01T10:00:00+00:00",
+                                          "2026-09-02T10:00:00+00:00"))
+        con.commit()
+        con.close()
+        con = banco.conectar(caminho)         # a migracao roda aqui
+        try:
+            lista = banco.instalacoes_da_conta(uid, con=con)
+            self.assertEqual(["159077999"], [i["installation_id"] for i in lista])
+            self.assertEqual("2026-09-01T10:00:00+00:00", con.execute(
+                "SELECT criado_em FROM instalacao_github").fetchone()[0])
+            banco.guardar_instalacao_do_github(uid, "168374560", con=con,
+                                               conta_login="thi-garcia",
+                                               conta_tipo="User")
+            con.commit()
+            self.assertEqual(2, len(banco.instalacoes_da_conta(uid, con=con)))
+        finally:
+            con.close()
+        banco.conectar(caminho).close()       # segunda subida: inofensiva
+        con = banco.conectar(caminho)
+        try:
+            self.assertEqual(2, len(banco.instalacoes_da_conta(uid, con=con)))
+        finally:
+            con.close()
+
+
 class InstalacaoDoGithubTemDono(unittest.TestCase):
     """A porta 1 e dado de conta, e nao configuracao do processo inteiro."""
 
@@ -2877,33 +2921,67 @@ class InstalacaoDoGithubTemDono(unittest.TestCase):
         banco.guardar_instalacao_do_github(self.b, "222", con=self.con)
         self.assertIsNone(banco.instalacao_do_github(self.a, con=self.con))
 
-    def test_uma_conta_nao_pode_ter_duas_instalacoes(self):
-        """A unicidade vive no BANCO, e nao so no `ON CONFLICT` do Python: duas
-        linhas para o mesmo dono deixariam o coletor escolhendo em silencio qual
-        instalacao usar — e a escolha mudaria com a ordem das linhas."""
+    def test_uma_conta_pode_ter_varias_instalacoes_mas_o_numero_e_de_um_so(self):
+        """06/10/2026: pessoal + organizacoes. A posse do NUMERO continua unica
+        no BANCO (`UNIQUE (installation_id)`), e nao so no Python."""
         banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        banco.guardar_instalacao_do_github(self.a, "999", con=self.con,
+                                           conta_login="minha-org",
+                                           conta_tipo="Organization")
+        lista = banco.instalacoes_da_conta(self.a, con=self.con)
+        self.assertEqual(["111", "999"], [i["installation_id"] for i in lista])
+        self.assertEqual("minha-org", lista[1]["conta_login"])
+        self.assertIsNone(lista[0]["conta_login"])     # "nao sei", nunca ""
         with self.assertRaises(sqlite3.IntegrityError):
             self.con.execute(
                 "INSERT INTO instalacao_github"
                 " (usuario_id, installation_id, criado_em, atualizado_em)"
-                " VALUES (?,?,?,?)", (self.a, "999", daqui(), daqui()))
+                " VALUES (?,?,?,?)", (self.b, "999", daqui(), daqui()))
         self.con.rollback()
-        # E regravar pela funcao TROCA, nao acumula.
-        banco.guardar_instalacao_do_github(self.a, "999", con=self.con)
-        self.assertEqual(self.con.execute(
-            "SELECT COUNT(*) FROM instalacao_github"
-            " WHERE usuario_id = ?", (self.a,)).fetchone()[0], 1)
-        self.assertEqual(banco.instalacao_do_github(self.a, con=self.con), "999")
+
+    def test_o_teto_de_instalacoes_por_conta(self):
+        for n in range(banco.MAX_INSTALACOES_POR_CONTA):
+            banco.guardar_instalacao_do_github(self.a, str(5000 + n), con=self.con)
+        with self.assertRaises(ValueError):
+            banco.guardar_instalacao_do_github(self.a, "9999", con=self.con)
+        # regravar uma que ja existe continua valendo no teto
+        banco.guardar_instalacao_do_github(self.a, "5000", con=self.con)
+
+    def test_regravar_sem_nome_nao_apaga_o_nome(self):
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con,
+                                           conta_login="thi", conta_tipo="User")
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        self.assertEqual("thi", banco.instalacoes_da_conta(
+            self.a, con=self.con)[0]["conta_login"])
+
+    def test_desconectar_uma_instalacao_deixa_as_outras(self):
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        banco.guardar_instalacao_do_github(self.a, "222", con=self.con)
+        banco.guardar_instalacao_do_github(self.b, "333", con=self.con)
+        banco.desconectar_do_github(self.a, "111", con=self.con)
+        self.assertEqual(["222"], [i["installation_id"] for i in
+                                   banco.instalacoes_da_conta(self.a, con=self.con)])
+        self.assertEqual("333", banco.instalacao_do_github(self.b, con=self.con))
+
+    def test_marcar_medicao_so_toca_a_linha_do_dono(self):
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
+        banco.marcar_medicao_da_instalacao(self.b, "111", 7, con=self.con)
+        self.assertIsNone(banco.instalacoes_da_conta(
+            self.a, con=self.con)[0]["medidos"])
+        banco.marcar_medicao_da_instalacao(self.a, "111", 7, con=self.con)
+        i = banco.instalacoes_da_conta(self.a, con=self.con)[0]
+        self.assertEqual(7, i["medidos"])
+        self.assertTrue(i["medido_em"])
 
     def test_regravar_nao_reescreve_o_criado_em(self):
         banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
         antes = self.con.execute("SELECT criado_em FROM instalacao_github"
                                  " WHERE usuario_id = ?", (self.a,)).fetchone()[0]
-        banco.guardar_instalacao_do_github(self.a, "222", con=self.con)
+        banco.guardar_instalacao_do_github(self.a, "111", con=self.con)
         linha = self.con.execute("SELECT * FROM instalacao_github"
                                  " WHERE usuario_id = ?", (self.a,)).fetchone()
         self.assertEqual(linha["criado_em"], antes)
-        self.assertEqual(linha["installation_id"], "222")
+        self.assertEqual(linha["installation_id"], "111")
 
     def test_desconectar_apaga_a_daquele_usuario_e_so_a_dele(self):
         """Sem o `usuario_id` no `WHERE`, um clique em "desconectar" derrubaria
@@ -3008,11 +3086,14 @@ class UmaInstalacaoPertenceAUmaContaSo(unittest.TestCase):
         banco.guardar_instalacao_do_github(self.a, "424242")
         self.assertEqual("424242", banco.instalacao_do_github(self.a))
 
-    def test_a_conta_pode_trocar_de_instalacao(self):
+    def test_a_conta_pode_acumular_e_o_numero_continua_de_quem_o_tem(self):
         banco.guardar_instalacao_do_github(self.a, "111")
         banco.guardar_instalacao_do_github(self.a, "222")
-        self.assertEqual("222", banco.instalacao_do_github(self.a))
-        # E o numero antigo fica livre para quem o tiver de verdade.
+        self.assertEqual("111", banco.instalacao_do_github(self.a))   # a mais antiga
+        with self.assertRaises(ValueError):
+            banco.guardar_instalacao_do_github(self.b, "111")
+        # So depois de a dona desconectar o numero fica livre.
+        banco.desconectar_do_github(self.a, "111")
         banco.guardar_instalacao_do_github(self.b, "111")
         self.assertEqual("111", banco.instalacao_do_github(self.b))
 
