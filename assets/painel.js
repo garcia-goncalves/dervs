@@ -1361,7 +1361,7 @@ function marcaDaPorta(estado, rotulo) {
 /* Um cartão de porta, montado por uma função só. Duas montagens divergem, e a
    que divergir é sempre a que esquece o rótulo escrito. */
 function porta({ titulo, estado, resumo, carimbo, caminhos = [], nota = "",
-                depois = "" }) {
+                depois = "", lista = [] }) {
   const cartao = document.createElement("div");
   cartao.className = "cartao porta";
 
@@ -1380,6 +1380,36 @@ function porta({ titulo, estado, resumo, carimbo, caminhos = [], nota = "",
     c.className = "carimbo";
     c.textContent = carimbo;
     cartao.append(c);
+  }
+
+  /* Itens opcionais (por exemplo, as contas do GitHub conectadas): cada um é
+     { texto, detalhe, link: { rotulo, url } }. Tudo entra por textContent, e o
+     link só é montado quando o endereço é https do github.com. */
+  if (lista.length) {
+    const ul = document.createElement("ul");
+    ul.className = "porta__lista";
+    for (const item of lista) {
+      const li = document.createElement("li");
+      const nome = document.createElement("strong");
+      nome.textContent = item.texto;
+      li.append(nome);
+      if (item.detalhe) {
+        const d = document.createElement("span");
+        d.className = "carimbo";
+        d.textContent = " — " + item.detalhe;
+        li.append(d);
+      }
+      if (item.link && /^https:\/\/github\.com\//.test(item.link.url)) {
+        const a = document.createElement("a");
+        a.href = item.link.url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = item.link.rotulo;
+        li.append(" ", a);
+      }
+      ul.append(li);
+    }
+    cartao.append(ul);
   }
 
   /* Os botões vão dentro de `.acoes` — é lá que mora o `min-height: 44px`.
@@ -1696,6 +1726,27 @@ async function ligarOGithub() {
   location.href = d.url;
 }
 
+/* "Procurar minhas contas": o servidor pergunta ao GitHub quais instalações do
+   aplicativo existem e liga as que são desta conta. Serve para quem instalou
+   direto no GitHub e a volta nunca chegou aqui. */
+async function procurarContasDoGithub() {
+  const r = await escrever("/api/github/procurar");
+  if (!r.ok) {
+    recado("não consegui procurar agora. Tente de novo.", true);
+    return;
+  }
+  const d = await r.json();
+  if (!d.ok) {
+    recado("o GitHub não respondeu agora. Isso não quer dizer que não há "
+           + "contas: tente de novo daqui a pouco.", true);
+    return;
+  }
+  await olharOGithub();
+  recado(d.ligadas
+    ? "liguei " + d.ligadas + (d.ligadas === 1 ? " conta nova." : " contas novas.")
+    : "não achei conta nova. Se acabou de instalar, use Conectar outra conta.");
+}
+
 async function olharOsEnderecos() {
   try {
     const r = await fetch("/api/enderecos");
@@ -1923,7 +1974,8 @@ function pintarConectar() {
      de novo — nunca um erro vermelho, e nunca "conectado". Cancelar não é
      defeito: é o quarto estado, e ele é de primeira classe aqui. */
   const leuGh = !!GITHUB_LIDO_EM;
-  const ligado = leuGh && !!GITHUB.instalacao;
+  const contasGh = leuGh ? (GITHUB.instalacoes || []) : [];
+  const ligado = leuGh && (contasGh.length > 0 || !!GITHUB.instalacao);
   const voltou = new URLSearchParams(location.search).get("github");
   const caminhos2 = [];
   if (leuGh && !GITHUB.da_para_instalar) {
@@ -1931,9 +1983,11 @@ function pintarConectar() {
                      porque: "o aplicativo do GitHub ainda não foi registrado "
                            + "neste servidor" });
   } else {
-    caminhos2.push({ rotulo: ligado ? "Instalar em mais repositórios"
+    caminhos2.push({ rotulo: ligado ? "Conectar outra conta do GitHub"
                                     : "Conectar a conta",
                      aoClicar: ligarOGithub });
+    caminhos2.push({ rotulo: "Procurar minhas contas", secundario: true,
+                     aoClicar: procurarContasDoGithub });
   }
   onde.append(porta({
     titulo: "A sua conta do GitHub",
@@ -1944,9 +1998,12 @@ function pintarConectar() {
       ? "Não consegui ler o estado desta conta. Isso não quer dizer que ela "
         + "não está conectada — quer dizer que não olhei."
       : (ligado
-         ? "Conectada. O DERVS traz sozinho os pedidos de alteração, a "
+         ? (contasGh.length > 1
+             ? "Conectadas: " + contasGh.length + " contas do GitHub. "
+             : "Conectada. ")
+           + "O DERVS traz sozinho os pedidos de alteração, a "
            + "verificação automática e os alertas de segurança dos "
-           + "repositórios que você liberou."
+           + "repositórios que você liberou em cada conta."
          : (voltou === "nao-deu"
             ? "Não deu para confirmar a instalação. Se você fechou a página do "
               + "GitHub no meio, é isso mesmo e não é erro: é só tentar de "
@@ -1955,6 +2012,19 @@ function pintarConectar() {
               + "verificação automática e os alertas de segurança dos seus "
               + "repositórios — sem você colar chave nenhuma.")),
     carimbo: leuGh ? "estado lido " + haQuanto(GITHUB_LIDO_EM) : "",
+    lista: contasGh.map((c) => ({
+      texto: c.conta_login
+        ? c.conta_login + (c.conta_tipo === "Organization" ? " (organização)"
+                                                          : " (pessoal)")
+        : "Conta ainda sem nome — toque em Procurar minhas contas",
+      detalhe: (c.medidos === null || c.medidos === undefined)
+        ? "ainda não mediu repositórios"
+        : "mediu " + c.medidos + (c.medidos === 1 ? " repositório " : " repositórios ")
+          + haQuanto(c.medido_em),
+      link: c.gerenciar_url
+        ? { rotulo: "escolher repositórios no GitHub", url: c.gerenciar_url }
+        : null
+    })),
     caminhos: caminhos2,
     /* DESCONECTAR ACONTECE EM github.com, e a tela DIZ isso. Foi cortado do
        escopo de propósito, e esconder o corte é mentir por omissão. */

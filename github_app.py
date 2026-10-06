@@ -360,6 +360,53 @@ def confirmar_instalacao(app_id, chave_pem, instalacao_id, teto: int = 15,
     return resposta
 
 
+API_INSTALACOES = "https://api.github.com/app/installations?per_page=100&page=%d"
+MAX_PAGINAS_DE_INSTALACOES = 5
+MAX_INSTALACOES_LISTADAS = 100 * MAX_PAGINAS_DE_INSTALACOES
+
+
+def listar_instalacoes(app_id, chave_pem, teto: int = 15, _pedir=None):
+    """TODAS as instalacoes deste App, ou `None` se nao deu para perguntar.
+
+    E o que deixa o painel achar sozinho as contas que alguem instalou direto
+    no GitHub (o salto de volta nunca chegou ao DERVS). NAO prova posse: quem
+    chama confere cada uma contra a conta amarrada a sessao, como na volta
+    normal — o `installation_id` e publico e sequencial.
+
+    Mesma LEI 3 de `confirmar_instalacao`: `None` em toda falha, nunca levanta.
+    Sem criptografia nova (so `montar_jwt`). Pagina ate
+    `MAX_PAGINAS_DE_INSTALACOES` de 100; se a ultima ainda vier cheia a lista
+    pode estar INCOMPLETA e devolve `None` (nao olhei), nunca um corte mudo.
+    """
+    chave = chave_de_pem(chave_pem)
+    if chave is None:
+        _diga("a chave privada do app nao foi lida; nao da para listar")
+        return None
+    jwt = montar_jwt(app_id, chave)
+    if jwt is None:
+        _diga("nao consegui montar o pedido; confira o App ID")
+        return None
+    pedir = _pedir or _pedir_ao_github
+    todas = []
+    for pagina in range(1, MAX_PAGINAS_DE_INSTALACOES + 1):
+        try:
+            resposta = pedir(API_INSTALACOES % pagina, jwt, teto, "GET")
+        except Exception:                  # noqa: BLE001 — rede, HTTP, JSON
+            _diga("o GitHub nao listou as instalacoes")
+            return None
+        if not isinstance(resposta, list):
+            return None
+        todas.extend(resposta)
+        if len(resposta) < 100:
+            break
+    else:
+        _diga("ha instalacoes demais para listar de uma vez")
+        return None
+    return [i for i in todas
+            if isinstance(i, dict) and isinstance(i.get("id"), int)
+            and not isinstance(i.get("id"), bool)]
+
+
 # O nome de organizacao/usuario do GitHub: letras, digitos e hifen, 1 a 39
 # caracteres, nunca comecando ou terminando em hifen. Mesma regra que o
 # proprio GitHub usa para o login — e o valor aqui SEMPRE vem de um campo que

@@ -2695,6 +2695,116 @@ class AContaDoGithubNoServidorDeVerdade(BaseServidorDeVerdade):
         selo = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["state"][0]
         self.assertEqual(self.uid, servir.Hub._dono_do_selo(selo))
 
+    # ----------------------------------------- varias contas (06/10/2026)
+    def estado(self):
+        return json.loads(self.pedir(self.ESTADO, cookies=self.com_sessao()).corpo)
+
+    def procurar(self):
+        cookies, token = self.sessao_e_token()
+        return self.pedir(self.IDA.replace("instalar", "procurar"), "POST", {},
+                          cookies=cookies, cabecalhos={"X-Token": token})
+
+    def test_a_volta_aceita_uma_segunda_instalacao_e_guarda_o_nome(self):
+        self.assertEqual(302, self.voltar(self.selo(), "111").status)
+        self.assertEqual(302, self.voltar(self.selo(), "222").status)
+        est = self.estado()
+        self.assertEqual(["111", "222"],
+                         [i["installation_id"] for i in est["instalacoes"]])
+        self.assertEqual("dono", est["instalacoes"][0]["conta_login"])
+        self.assertEqual("222", est["instalacao"])
+
+    def test_o_estado_traz_o_link_de_gerenciar_so_com_nome_valido(self):
+        banco.guardar_instalacao_do_github(self.uid, "111", conta_login="thi-garcia",
+                                           conta_tipo="User")
+        banco.guardar_instalacao_do_github(self.uid, "222", conta_login="minha-org",
+                                           conta_tipo="Organization")
+        banco.guardar_instalacao_do_github(self.uid, "333")
+        urls = [i["gerenciar_url"] for i in self.estado()["instalacoes"]]
+        self.assertEqual("https://github.com/settings/installations/111", urls[0])
+        self.assertEqual("https://github.com/organizations/minha-org/settings/"
+                         "installations/222", urls[1])
+        self.assertEqual("", urls[2], "sem nome nao se chuta endereco")
+
+    def test_procurar_sem_sessao_e_sem_anti_csrf_e_recusado(self):
+        rota = self.IDA.replace("instalar", "procurar")
+        self.assertEqual(401, self.pedir(rota, "POST", {}).status)
+        self.assertEqual(403, self.pedir(rota, "POST", {},
+                                         cookies=self.com_sessao()).status)
+
+    def test_procurar_liga_so_o_que_e_desta_conta(self):
+        """A prova de posse e a da volta normal: pessoal pelo `account.id`,
+        organizacao so se esta conta for ADMIN dela."""
+        original = servir.github_app.listar_instalacoes
+        self.addCleanup(setattr, servir.github_app, "listar_instalacoes", original)
+        servir.github_app.listar_instalacoes = lambda *a, **k: [
+            {"id": 11, "account": {"id": 4242, "login": "dono", "type": "User"}},
+            {"id": 12, "account": {"id": 999, "login": "estranho", "type": "User"}},
+            {"id": 13, "account": {"id": 555, "login": "org-minha",
+                                   "type": "Organization"}},
+            {"id": 14, "account": {"id": 556, "login": "org-alheia",
+                                   "type": "Organization"}},
+            {"id": 15, "account": {"id": 4242, "login": "dono", "type": "User"},
+             "suspended_at": "2026-10-01T00:00:00Z"}]
+        servir.github_app.usuario_administra_a_organizacao = \
+            lambda app, chave, inst, org, quem: org == "org-minha"
+        r = self.procurar()
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual({"ok": True, "ligadas": 2, "podadas": 0},
+                         json.loads(r.corpo))
+        ligadas = {i["installation_id"]: i["conta_login"]
+                   for i in self.estado()["instalacoes"]}
+        self.assertEqual({"11": "dono", "13": "org-minha"}, ligadas)
+
+    def test_procurar_nao_rouba_instalacao_de_outra_conta(self):
+        outra = banco.criar_usuario("outra@teste.local", "teste1234")
+        banco.guardar_instalacao_do_github(outra, "11")
+        original = servir.github_app.listar_instalacoes
+        self.addCleanup(setattr, servir.github_app, "listar_instalacoes", original)
+        servir.github_app.listar_instalacoes = lambda *a, **k: [
+            {"id": 11, "account": {"id": 4242, "login": "dono", "type": "User"}}]
+        self.assertEqual(0, json.loads(self.procurar().corpo)["ligadas"])
+        self.assertIsNone(banco.instalacao_do_github(self.uid))
+        self.assertEqual("11", banco.instalacao_do_github(outra))
+
+    def test_procurar_poda_a_instalacao_morta_da_propria_conta(self):
+        """App desinstalado e reinstalado gera numero novo: a antiga some."""
+        banco.guardar_instalacao_do_github(self.uid, "7")
+        outra = banco.criar_usuario("outra2@teste.local", "teste1234")
+        banco.guardar_instalacao_do_github(outra, "8")
+        original = servir.github_app.listar_instalacoes
+        self.addCleanup(setattr, servir.github_app, "listar_instalacoes", original)
+        servir.github_app.listar_instalacoes = lambda *a, **k: [
+            {"id": 11, "account": {"id": 4242, "login": "dono", "type": "User"}}]
+        r = json.loads(self.procurar().corpo)
+        self.assertEqual({"ok": True, "ligadas": 1, "podadas": 1}, r)
+        self.assertEqual(["11"], [i["installation_id"]
+                                  for i in self.estado()["instalacoes"]])
+        self.assertEqual("8", banco.instalacao_do_github(outra))
+
+    def test_procurar_sem_resposta_nao_poda_nada(self):
+        banco.guardar_instalacao_do_github(self.uid, "7")
+        original = servir.github_app.listar_instalacoes
+        self.addCleanup(setattr, servir.github_app, "listar_instalacoes", original)
+        servir.github_app.listar_instalacoes = lambda *a, **k: None
+        self.procurar()
+        self.assertEqual("7", banco.instalacao_do_github(self.uid))
+
+    def test_procurar_completa_o_nome_de_linha_migrada(self):
+        banco.guardar_instalacao_do_github(self.uid, "11")
+        original = servir.github_app.listar_instalacoes
+        self.addCleanup(setattr, servir.github_app, "listar_instalacoes", original)
+        servir.github_app.listar_instalacoes = lambda *a, **k: [
+            {"id": 11, "account": {"id": 4242, "login": "dono", "type": "User"}}]
+        self.procurar()
+        self.assertEqual("dono", self.estado()["instalacoes"][0]["conta_login"])
+
+    def test_procurar_quando_o_github_nao_responde_diz_que_nao_olhou(self):
+        original = servir.github_app.listar_instalacoes
+        self.addCleanup(setattr, servir.github_app, "listar_instalacoes", original)
+        servir.github_app.listar_instalacoes = lambda *a, **k: None
+        self.assertEqual({"ok": False, "ligadas": 0},
+                         json.loads(self.procurar().corpo))
+
     def test_sem_app_registrado_a_porta_diz_que_nao_existe(self):
         """Falha FECHADA: melhor nao ter porta do que ter porta que leva a um
         endereco que nao abre."""

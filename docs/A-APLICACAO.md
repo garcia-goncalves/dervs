@@ -617,6 +617,16 @@ Decisões travadas. Mudar qualquer uma exige um motivo novo, escrito.
   Ele diz "pedido de parada enviado", e só troca a frase quando a confirmação
   chega.
 
+### 5.7 O GitHub com várias contas (06/10/2026)
+
+Uma conta do DERVS conecta **quantas contas do GitHub quiser** (pessoal e organizações,
+até 10): botão **Conectar outra conta do GitHub**, ou **Procurar minhas contas** para quem
+instalou direto no GitHub. O coletor mede cada repositório pela instalação que o alcança;
+uma instalação quebrada não impede as outras. A tela lista cada conta pelo **nome**, quantos
+repositórios ela mediu e um link para escolher repositórios no GitHub. Desconectar continua
+sendo no GitHub (revogar acesso mora do lado de quem dá o acesso). Briefing:
+`docs/esteira/github-varias-contas/briefing.md`.
+
 ## 13. Dívidas conhecidas, ainda abertas
 
 - ~~**A porta 2 nunca falou com o GitHub de verdade.**~~ **Fechado em 04/09/2026 (PR #25),
