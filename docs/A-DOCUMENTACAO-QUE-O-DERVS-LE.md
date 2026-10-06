@@ -208,6 +208,10 @@ aparece sempre como texto, nunca como HTML. Por dentro, o pedido que desce ao ag
 vai dentro de um bloco de dados, e qualquer tentativa de abrir ou fechar esse bloco
 (maiúsculas, espaços dentro da etiqueta) é trocada por "[etiqueta removida]".
 
+Antes de escrever código, a IA investiga o **estado atual** do projeto (histórico do git,
+README, planos, código). Se o critério já está cumprido, ela não mexe em nada e termina
+com "JÁ CUMPRIDO" e a evidência; se está pela metade, faz só o que falta.
+
 O resultado de um desenvolvimento é um ramo para você revisar; o DERVS não publica
 nada sozinho.
 

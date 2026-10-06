@@ -1,5 +1,7 @@
 # Briefing — o Claude dentro do painel
 
+Aprovado em: 2026-10-06
+
 > Fase 1 da esteira. Escrito em 24/08/2026, na janela do `painel-projetos`.
 
 ## pedido_original

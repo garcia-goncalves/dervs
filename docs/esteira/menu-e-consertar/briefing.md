@@ -1,5 +1,7 @@
 # Briefing — menu enxuto e botão "Consertar com IA"
 
+Aprovado em: 2026-10-06
+
 ## pedido_original
 
 "Quero tudo funcionando 100% no local, no GitHub e no servidor, sincronizado e integrado. O fluxo e o menu estão confusos, toda a estrutura está confusa. Você pode refatorar para refinar/melhorar toda a aplicação. Quero que meus desenvolvedores tenham facilidade no dia a dia e com poucos cliques façam todas as aplicações monitoradas ficarem saudáveis e sem erros. O DERVS nasceu pra monitorar e deixar tudo saudável, e também para desenvolver de forma facilitada usando IA. Quero uma aplicação revolucionária." Depois: "ok, pode seguir sem me perguntar" à proposta de começar por menu de 4 lugares e botão Consertar para alertas mecânicos.

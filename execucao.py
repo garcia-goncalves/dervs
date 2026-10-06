@@ -206,6 +206,13 @@ Regras desta sessão, sem exceção:
 1. Trabalhe só nesta cópia. Não mude nada fora dela.
 2. Leia o CLAUDE.md do repositório e o documento de onde o critério veio antes
    de escrever a primeira linha. Siga as convenções que estão lá.
+   Depois entenda o ESTADO ATUAL do projeto: leia o `git log` recente, o
+   README, os planos e as verificações em `docs/` e procure no código o que já
+   existe sobre este critério. Muitos critérios foram escritos antes e já estão
+   cumpridos, e a documentação pode estar atrasada em relação ao código.
+   SE O CRITÉRIO JÁ ESTÁ CUMPRIDO, não escreva código: diga na última mensagem
+   "JÁ CUMPRIDO" e cite a evidência (arquivo e teste ou comando que o prova).
+   Se está cumprido pela metade, implemente só o que falta.
 3. Escreva primeiro o teste que falha e depois o código que o faz passar. Rode a
    suíte de testes do projeto antes e depois.
 4. Não implemente outros critérios, não "melhore" o que está ao lado e não

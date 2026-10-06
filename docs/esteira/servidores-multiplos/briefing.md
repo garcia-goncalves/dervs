@@ -1,3 +1,5 @@
+Aprovado em: 2026-10-06
+
 ## pedido_original
 "Quero poder conectar mais de um servidor... e fazer eles refletirem em cada projeto
 (cada projeto mostra qual está no local, qual tem ou não github, qual projeto está em

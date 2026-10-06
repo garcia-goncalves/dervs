@@ -1,5 +1,7 @@
 # Briefing — DERVS
 
+Aprovado em: 2026-10-06
+
 Fase 1 da esteira. Escrito em 26/08/2026 pelo Interrogador, a partir de duas rodadas de
 perguntas ao dono.
 

@@ -1,5 +1,7 @@
 # Briefing — o HUB fecha o dia
 
+Aprovado em: 2026-10-06
+
 > Fase 1 da esteira `hub-fecha-o-dia`. Escrito em 25/08/2026 sobre medição do
 > painel rodando, não sobre suposição: 27 pendências reais, 17 projetos,
 > `/api/dados` inspecionado item a item.

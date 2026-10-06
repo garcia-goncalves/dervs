@@ -1,5 +1,7 @@
 # Briefing — DERVS e DERVS-VOZ como um sistema só
 
+Aprovado em: 2026-10-06
+
 ## pedido_original
 
 "Continue de onde você parou e faça tudo. Preciso da aplicação 100% funcionando e sem erros. Preciso que o DERVS-VOZ esteja conectado e integrado a aplicação web DERVS (você). O Dervs-Voz já está aberto em outro terminal/VSCODE. Vocês podem interagir... e quero que vcs mesmo façam tudo o que for necessário para funcionar. Preciso que a aplicação DERVS analise todos os projetos e monitore eles 24h por dia. Faça manutenção e ajustes em tudo. Desenvolva e programe/crie. Preciso que o DERVS-VOZ possa utilizar tanto o Claude Code como modelo de IA, mas tbm quero que tenha opção de usar o HERMES AGENT e o JEV. Quero que tenhamos nosso proprio terminal SSH para comandos e desenvolvimento. Precisa ser tudo bem inteligente e integrado. Quero suas melhores ideias..."

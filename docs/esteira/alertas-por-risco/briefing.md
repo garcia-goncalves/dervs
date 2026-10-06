@@ -1,5 +1,7 @@
 # Briefing â€” alertas por risco, não por contagem
 
+Aprovado em: 2026-10-06
+
 > Fase 1 da esteira `alertas-por-risco`. Escrito em 25/08/2026 sobre os 203
 > alertas baixados um a um com `gh api dependabot/alerts`, não sobre suposição.
 

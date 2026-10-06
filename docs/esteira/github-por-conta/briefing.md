@@ -1,5 +1,7 @@
 # Briefing — O bloco "No GitHub" medindo no servidor
 
+Aprovado em: 2026-10-06
+
 > Fase 1 da esteira. Escrito em 05/10/2026. Aguarda o portão 1 (aprovação do dono).
 
 ## pedido_original
@@ -31,28 +33,28 @@ abrir log do servidor. Com mais contas no futuro, cada uma só pode ver o que é
 
 ## criterio_de_aceitacao
 
-1. **Ponta a ponta no servidor:** depois da publicação e de uma rodada de coleta, abrir
+- [ ] **Ponta a ponta no servidor:** depois da publicação e de uma rodada de coleta, abrir
    https://dervs.com.br/#/painel, entrar em um projeto com remoto no GitHub e ver o bloco "No
    GitHub" com CI, PR e alertas medidos (com carimbo "há X minutos"), no lugar de "nunca foi
    medido". Prova: olhada na tela, com o projeto de nome citado na verificação.
-2. **Uma conta, uma instalação:** teste novo que cria duas contas, cada uma com instalação e
+- [ ] **Uma conta, uma instalação:** teste novo que cria duas contas, cada uma com instalação e
    projetos próprios, roda a coleta e prova que cada conta recebeu **só** os repositórios dela e
    que o token usado em cada uma foi o da instalação dela (dublê de rede registra o token
    por chamada). Comando: `python test_coletar_por_conta.py` sai com 0.
-3. **Conta sem instalação ou com instalação quebrada não fica "vazia":** teste prova que o
+- [ ] **Conta sem instalação ou com instalação quebrada não fica "vazia":** teste prova que o
    estado dela marca "sem dados" com motivo (`falhas_de_coleta` por conta), nunca zero
    repositórios; e que a rodada continua para as outras contas (uma falha não derruba as demais).
-4. **Falha fechada de token:** teste prova que, se o token de instalação não puder ser obtido,
+- [ ] **Falha fechada de token:** teste prova que, se o token de instalação não puder ser obtido,
    a conta fica "sem dados" e **nenhuma** chamada cai no token de outra conta nem no token do
    ambiente.
-5. **Segredo não vaza:** teste prova que nenhum token aparece em saída, log, mensagem de erro
+- [ ] **Segredo não vaza:** teste prova que nenhum token aparece em saída, log, mensagem de erro
    nem no estado gravado; o varredor `secret-scan.sh` passa sem exceção.
-6. **Teto de custo:** teste prova que o número de chamadas ao GitHub por rodada tem teto
+- [ ] **Teto de custo:** teste prova que o número de chamadas ao GitHub por rodada tem teto
    declarado (`TETO_...`), com mais de uma conta, e que estourar o teto vira "sem dados" com
    motivo, nunca silêncio.
-7. **Nada quebra:** as 37 suítes existentes continuam verdes, a CI do GitHub passa, e
+- [ ] **Nada quebra:** as 37 suítes existentes continuam verdes, a CI do GitHub passa, e
    `test_imagem` aceita o Dockerfile (qualquer arquivo novo entra na cópia da imagem).
-8. **Revisão:** `security-reviewer` e `python-reviewer` rodam antes de mesclar e os achados
+- [ ] **Revisão:** `security-reviewer` e `python-reviewer` rodam antes de mesclar e os achados
    críticos estão fechados ou justificados por escrito no `verificacao.md`.
 
 ## fora_de_escopo

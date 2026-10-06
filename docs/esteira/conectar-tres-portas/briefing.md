@@ -1,5 +1,7 @@
 # Briefing — Conectar em três portas
 
+Aprovado em: 2026-10-06
+
 > Fase 1 da esteira. Escrito em 29/08/2026.
 
 ## pedido_original

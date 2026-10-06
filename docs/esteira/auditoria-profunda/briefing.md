@@ -1,5 +1,7 @@
 # Briefing — A Auditoria Profunda
 
+Aprovado em: 2026-10-06
+
 > Fase 1 da esteira. Escrito em 02/09/2026. **Aguardando o portão 1 do dono.**
 
 ## pedido_original
