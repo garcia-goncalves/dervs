@@ -40,6 +40,16 @@ Estas decisões **vencem** o resto deste briefing onde houver conflito.
 4. **Aviso do Windows (SmartScreen) é medido antes de construir**, no PC do dono, com arquivo
    marcado como baixado (ZoneId=3). Se aparecer a tela azul, a tela do DERVS avisa antes com
    imagem, e o certificado de assinatura (R$ 1-2 mil/ano) vira decisão de custo do dono.
+   **MEDIDO em 09/10/2026 no PC do dono** (Windows 11 Pro, Smart App Control desligado,
+   arquivos com ZoneId=3): NENHUM deu a tela azul. `.cmd` → "Abrir Arquivo - Aviso de
+   Segurança", escudo VERMELHO, "O fornecedor não pôde ser verificado... [Executar]".
+   `.vbs` → mesmo diálogo, escudo AMARELO, "Deseja abrir este arquivo? [Abrir]" (mais
+   suave). **Escolha: `.cmd`** — o VBScript está sendo removido do Windows pela Microsoft
+   (recurso sob demanda, desligado por padrão nas próximas versões); o arquivo pararia de
+   abrir sozinho. A tela do DERVS mostra a imagem do aviso do `.cmd` antes do download
+   ("o Windows vai perguntar; clique em Executar"). **Não medido ainda:** o aviso do
+   PRÓPRIO Chrome no download de `.cmd` (só com arquivo servido pelo dervs.com.br de
+   verdade) — conferir na entrega A antes de dizer pronto.
 5. **GitHub:** quantas contas quiser (pessoal e organização) e, em cada uma, "Escolher
    repositórios" abre a página certa do GitHub; chave "acompanhar" por repositório no DERVS.
 
