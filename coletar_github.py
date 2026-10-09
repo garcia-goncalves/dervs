@@ -48,7 +48,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import github_app
 import regras
@@ -918,7 +918,10 @@ def mede_no_ar(slug: str, branch: str, head_sha: str, shas, buscar=None) -> list
         if sha in vistos or (head_sha and head_sha.startswith(sha)):
             continue
         vistos.add(sha)
-        atras = atras_de(buscar("repos/%s/compare/%s...%s" % (slug, sha, branch)))
+        # O branch vai escapado inteiro: `?`, `#` ou `/` nele nao viram outra
+        # URL. O que sai com `%` a peneira `_url_da_api` recusa: "nao sei".
+        atras = atras_de(buscar("repos/%s/compare/%s...%s"
+                                % (slug, sha, quote(branch, safe=""))))
         if atras is not None:
             saida.append({"sha": sha, "atras": atras})
     return saida
