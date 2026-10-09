@@ -3527,6 +3527,49 @@ def projetos_ocultos(usuario_id: int, con=None) -> set:
             con.close()
 
 
+def projeto_da_conta(usuario_id: int, projeto: str, con=None) -> bool:
+    """O projeto existe NESTA conta: tem medida `local` dela ou foi visto por
+    uma maquina dela. "Nao existe" e "e de outra conta" sao a mesma resposta
+    para quem pergunta (IDOR), e e por isso que a pergunta e so booleana."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return con.execute(
+            "SELECT 1 FROM medida WHERE usuario_id = ? AND projeto = ?"
+            " AND camada = 'local'"
+            " UNION ALL"
+            " SELECT 1 FROM projeto_conectado p JOIN maquina m"
+            "   ON m.id = p.maquina_id WHERE m.usuario_id = ? AND p.projeto = ?"
+            " LIMIT 1", (usuario_id, projeto, usuario_id, projeto)
+        ).fetchone() is not None
+    finally:
+        if fechar:
+            con.close()
+
+
+def mostrar_projeto(usuario_id: int, projeto: str, mostrar: bool,
+                    con=None) -> None:
+    """Esconde (ou volta a mostrar) um projeto no painel DESTA conta.
+
+    Por NOME e por conta, em tabela propria: `arquivado_em` nao serve, porque
+    `ver_projeto` o zera a cada relatorio. Esconder duas vezes e inofensivo."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        if mostrar:
+            con.execute("DELETE FROM projeto_oculto"
+                        " WHERE usuario_id = ? AND projeto = ?",
+                        (usuario_id, projeto))
+        else:
+            con.execute("INSERT OR IGNORE INTO projeto_oculto"
+                        " (usuario_id, projeto, escondido_em) VALUES (?,?,?)",
+                        (usuario_id, projeto, agora()))
+        con.commit()
+    finally:
+        if fechar:
+            con.close()
+
+
 # ---------------------------------------------------------- a ponte com o VOZ
 #
 # O servidor so guarda e entrega. Nada aqui executa, e nada aqui carimba

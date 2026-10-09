@@ -805,7 +805,23 @@ class Hub(SimpleHTTPRequestHandler):
     # ------------------------------------------------------------- as rotas
     def _dados(self):
         # O dono da sessao, e nao o dono da MAQUINA. Ver `_estado`.
-        estado = self._estado(self._sessao()["usuario_id"])
+        usuario_id = self._sessao()["usuario_id"]
+        estado = self._estado(usuario_id)
+        # O QUE O DONO ESCONDEU SAI AQUI, e nao em `_estado` nem em
+        # `montar_estado`: o motor de regras e a vigilia do VOZ leem o estado
+        # inteiro (esconder do painel nao e deixar de olhar). `grupos` e
+        # `briefing` sao refeitos sobre a lista podada, senao a tela contaria
+        # um alerta que nao mostra.
+        ocultos = banco.projetos_ocultos(usuario_id)
+        if ocultos:
+            estado["projetos"] = [p for p in estado["projetos"]
+                                  if p.get("nome") not in ocultos]
+            estado["pendencias"] = [x for x in estado["pendencias"]
+                                    if x.get("projeto") not in ocultos]
+            estado["grupos"] = regras.agrupar(estado["pendencias"])
+            estado["briefing"] = memoria.briefing(estado["pendencias"],
+                                                  estado["tendencia"])
+        estado["ocultos"] = sorted(ocultos)
         # A chave crua `documentacao` (todos os criterios, ate 32 KiB por
         # projeto) NAO vai no poll de 60 s de toda aba: a tela recebe a CONTA
         # (`progresso`) e busca os criterios em `/api/progresso` quando abre o
@@ -3390,6 +3406,30 @@ class Hub(SimpleHTTPRequestHandler):
         return self._json(200, {"ok": True, "pedido": bool(entrou),
                                 "tarefa": id_fila, "aviso": aviso})
 
+    # Esconder um projeto do painel (conectar simples, A): balcao PROPRIO.
+    TETO_DE_MOSTRAR = 60
+
+    def _projeto_mostrar(self):
+        """A chave "Mostrar no painel": esconde ou volta a mostrar um projeto,
+        so no painel DESTA conta. Nao apaga medida nem alerta."""
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        projeto = self._texto_do_corpo(corpo, "projeto", teto=200)
+        mostrar = corpo.get("mostrar")
+        if not projeto.strip() or not isinstance(mostrar, bool):
+            return self._json(400, {"erro": "diga o projeto e se ele aparece"})
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="mostrar",
+                                           teto=self.TETO_DE_MOSTRAR):
+            return self._json(429, self.RECUSA)
+        usuario = sessao["usuario_id"]
+        if not banco.projeto_da_conta(usuario, projeto):
+            return self._json(404, {"erro": "nao existe"})
+        banco.mostrar_projeto(usuario, projeto, mostrar)
+        return self._json(200, {"projeto": projeto, "mostrar": mostrar,
+                                "ocultos_n": len(banco.projetos_ocultos(usuario))})
+
     # Provar roda comando da lista fechada na maquina do dono: balcao PROPRIO.
     TETO_DE_PROVAS = 10
 
@@ -3940,6 +3980,7 @@ ROTAS = {
     "/api/pedido":              Rota("GET",  Hub._pedido_ver,       "dado"),
     "/api/pedido/autorizar":    Rota("POST", Hub._pedido_autorizar, "dado"),
     "/api/conectar.cmd":        Rota("GET",  Hub._arquivo_de_conectar, "dado"),
+    "/api/projetos/mostrar":    Rota("POST", Hub._projeto_mostrar,  "dado"),
 
     # A porta 3 (fatia B). As cinco sao `dado`: servidor e endereco de producao
     # sao dado da conta que gravou, e cada rota le SO o da sessao — o IDOR ja

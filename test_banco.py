@@ -4093,5 +4093,37 @@ class ConectarSimplesNoBanco(unittest.TestCase):
             con.close()
 
 
+class ProjetoOcultoNoBanco(unittest.TestCase):
+    """Esconder do painel e por NOME e por conta, e nao some com relatorio."""
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.a = banco.criar_usuario("a@teste.local", "teste1234", con=self.con)
+        self.b = banco.criar_usuario("b@teste.local", "teste1234", con=self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def test_projeto_da_conta_so_vale_para_o_dono(self):
+        banco.gravar("x", "local", {"nome": "x"}, self.con, usuario_id=self.a)
+        self.assertTrue(banco.projeto_da_conta(self.a, "x", con=self.con))
+        self.assertFalse(banco.projeto_da_conta(self.b, "x", con=self.con))
+        self.assertFalse(banco.projeto_da_conta(self.a, "y", con=self.con))
+
+    def test_esconder_e_mostrar_sao_por_conta_e_repetiveis(self):
+        banco.mostrar_projeto(self.a, "x", False, con=self.con)
+        banco.mostrar_projeto(self.a, "x", False, con=self.con)
+        self.assertEqual({"x"}, banco.projetos_ocultos(self.a, con=self.con))
+        self.assertEqual(set(), banco.projetos_ocultos(self.b, con=self.con))
+        banco.mostrar_projeto(self.a, "x", True, con=self.con)
+        self.assertEqual(set(), banco.projetos_ocultos(self.a, con=self.con))
+
+    def test_apagar_a_conta_leva_o_esconderijo(self):
+        banco.mostrar_projeto(self.b, "x", False, con=self.con)
+        self.con.execute("DELETE FROM usuario WHERE id = ?", (self.b,))
+        self.con.commit()
+        self.assertEqual(set(), banco.projetos_ocultos(self.b, con=self.con))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -452,5 +452,140 @@ class OArquivoDeConectar(_Base):
         self.assertFalse(hasattr(servir.Hub, "_conectador"))
 
 
+def _projeto(nome, caminho=None):
+    """Um projeto com UMA pendencia (exemplo de variaveis divergente)."""
+    return {"nome": nome, "caminho": caminho or "C:/p/" + nome,
+            "git": {"versionado": True},
+            "env_drift": {"faltando": ["A"], "sobrando": []}}
+
+
+class OProjetoOculto(_Base):
+    """C8, C9 e a parte `projetos_vistos` de C10."""
+
+    def setUp(self):
+        super().setUp()
+        con = banco.conectar()
+        try:
+            for t in ("projeto_oculto", "projeto_conectado", "medida"):
+                con.execute("DELETE FROM %s" % t)
+            con.execute("DELETE FROM maquina")
+            con.commit()
+        finally:
+            con.close()
+        self.token, self.mid = self.maquina_com_token("pc-oculto",
+                                                      autorizada=False)
+
+    def relatar(self, *nomes):
+        banco.receber_relatorio(self.mid, [_projeto(n) for n in nomes])
+
+    def dados(self):
+        r = self.dono("/api/dados", metodo="GET")
+        self.assertEqual(200, r.status)
+        return self.json(r)
+
+    def mostrar(self, projeto, mostrar, sessao=None):
+        return self.dono("/api/projetos/mostrar",
+                         {"projeto": projeto, "mostrar": mostrar}, sessao=sessao)
+
+    def test_esconder_tira_de_projetos_pendencias_e_grupos(self):
+        self.relatar("x", "y")
+        antes = self.dados()
+        self.assertEqual([], antes["ocultos"])
+        self.assertEqual({"x", "y"}, {p["nome"] for p in antes["projetos"]})
+        r = self.mostrar("x", False)
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual({"projeto": "x", "mostrar": False, "ocultos_n": 1},
+                         self.json(r))
+        d = self.dados()
+        self.assertEqual(["x"], d["ocultos"])
+        self.assertEqual(["y"], [p["nome"] for p in d["projetos"]])
+        self.assertEqual({"y"}, {p["projeto"] for p in d["pendencias"]})
+        self.assertNotIn('"x"', json.dumps(d["grupos"]))
+        self.assertNotIn("projeto x", d["briefing"])
+
+    def test_relatorio_novo_nao_traz_de_volta_e_mostrar_traz(self):
+        self.relatar("x", "y")
+        self.mostrar("x", False)
+        self.relatar("x", "y")
+        self.assertEqual(["y"], [p["nome"] for p in self.dados()["projetos"]])
+        r = self.mostrar("x", True)
+        self.assertEqual(0, self.json(r)["ocultos_n"])
+        d = self.dados()
+        self.assertEqual({"x", "y"}, {p["nome"] for p in d["projetos"]})
+        self.assertEqual([], d["ocultos"])
+
+    def test_o_estado_do_banco_continua_com_o_escondido(self):
+        """A poda e em `_dados`, DEPOIS do motor: o motor (e a vigilia do VOZ)
+        leem `montar_estado` inteiro."""
+        self.relatar("x", "y")
+        self.mostrar("x", False)
+        con = banco.conectar()
+        try:
+            e = banco.montar_estado(con, usuario_id=self.uid)
+        finally:
+            con.close()
+        self.assertIn("x", {p["nome"] for p in e["projetos"]})
+        self.assertIn("x", {p["projeto"] for p in self.estado_da_conta()["pendencias"]})
+
+    def estado_da_conta(self):
+        h = servir.Hub.__new__(servir.Hub)
+        return h._estado(self.uid)
+
+    def test_projeto_desconhecido_ou_de_outra_conta_e_404(self):
+        self.relatar("x")
+        r = self.mostrar("nao-existe", False)
+        self.assertEqual((404, {"erro": "nao existe"}), (r.status, self.json(r)))
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("outro-oculto@teste.local", con=con)
+            banco.gravar("so-do-outro", "local", {"nome": "so-do-outro"},
+                         con=con, usuario_id=outro)
+        finally:
+            con.close()
+        self.assertEqual(404, self.mostrar("so-do-outro", False).status)
+
+    def test_corpo_torto_e_400(self):
+        self.relatar("x")
+        for corpo in ({"projeto": "x", "mostrar": "nao"},
+                      {"projeto": "x", "mostrar": 0},
+                      {"projeto": "x"},
+                      {"projeto": "", "mostrar": False},
+                      {"projeto": "a" * 201, "mostrar": False},
+                      {"mostrar": False}):
+            r = self.dono("/api/projetos/mostrar", corpo)
+            self.assertEqual(400, r.status, corpo)
+            self.assertEqual({"erro": "diga o projeto e se ele aparece"},
+                             self.json(r))
+
+    def test_anti_csrf_vencido_e_429(self):
+        self.relatar("x")
+        cookies, _csrf = self.sessao_e_token()
+        r = self.pedir("/api/projetos/mostrar", "POST",
+                       {"projeto": "x", "mostrar": False}, cookies=cookies,
+                       cabecalhos={"X-Token": "errado"})
+        self.assertEqual("pagina_velha", self.json(r)["motivo"])
+        sessao = self.sessao_e_token()
+        for _ in range(servir.Hub.TETO_DE_MOSTRAR):
+            self.mostrar("x", True, sessao=sessao)
+        self.assertEqual(429, self.mostrar("x", True, sessao=sessao).status)
+
+    def test_maquinas_traz_os_projetos_vistos(self):
+        antes = self.json(self.dono("/api/maquinas", metodo="GET"))
+        antes = antes["maquinas"] if isinstance(antes, dict) else antes
+        m = next(x for x in antes if x["id"] == self.mid)
+        self.assertEqual(([], False), (m["projetos_vistos"], m["so_mede"]))
+        self.relatar("b", "a")
+        self.mostrar("b", False)
+        depois = self.json(self.dono("/api/maquinas", metodo="GET"))
+        depois = depois["maquinas"] if isinstance(depois, dict) else depois
+        m = next(x for x in depois if x["id"] == self.mid)
+        self.assertIsNotNone(m["relatado_em"])
+        self.assertEqual(
+            [("a", "C:/p/a", False), ("b", "C:/p/b", True)],
+            [(v["projeto"], v["caminho"], v["oculto"])
+             for v in m["projetos_vistos"]])
+        self.assertTrue(all(v["visto_em"] for v in m["projetos_vistos"]))
+
+
 if __name__ == "__main__":
     unittest.main()
