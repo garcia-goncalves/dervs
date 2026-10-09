@@ -241,7 +241,7 @@ class APortaDoComputadorNaoMenteQuandoEleCalou(unittest.TestCase):
         if not node:
             return None
         ini = JS.index("const COMPUTADOR_CALADO_APOS_MS")
-        fim = JS.index("function pintarConectar()")
+        fim = JS.index("\n}\n", JS.index("function estadoDosComputadores(")) + 3
         prog = (JS[ini:fim] + "\nconsole.log(JSON.stringify("
                 "estadoDosComputadores(%s, Date.parse(%s))));"
                 % (json.dumps(lista), json.dumps(agora_iso)))
@@ -284,10 +284,16 @@ class APortaDoComputadorNaoMenteQuandoEleCalou(unittest.TestCase):
         self.assertFalse(r["calado"])
 
     def test_a_tela_usa_a_funcao_e_nao_a_contagem(self):
-        corpo = corpo_da_funcao("pintarConectar")
-        self.assertIn("estadoDosComputadores(COMPUTADORES", corpo)
-        self.assertIn("vida.estado", corpo)
-        self.assertNotIn('ligados ? "conectado"', corpo)
+        """Desde o "Conectar simples" quem pinta o cartao e
+        `pintarEsteComputador`, e quem decide o estado e `situacaoDoComputador`
+        -- que chama `estadoDosComputadores` e herda o `calado`."""
+        decide = corpo_da_funcao("situacaoDoComputador")
+        self.assertIn("estadoDosComputadores(lista", decide)
+        self.assertIn("vida.calado", decide)
+        pinta = corpo_da_funcao("pintarEsteComputador")
+        self.assertIn("situacaoDoComputador(lista", pinta)
+        self.assertNotIn('ligados ? "conectado"', pinta)
+        self.assertIn("pintarEsteComputador()", corpo_da_funcao("pintarConectar"))
 
 
 if __name__ == "__main__":
