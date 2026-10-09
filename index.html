@@ -136,6 +136,12 @@ __FAIXA__
 
 <main id="conteudo" class="limite">
 
+  <!-- A faixa "Esta página ficou desatualizada" (tela D do design). Nasce
+       vazia: o painel.js põe nela o aviso, com `role="alert"`, só quando um
+       pedido de escrita volta 403 com `motivo: "pagina_velha"`. O contêiner é
+       quem fica fixo no topo (ver painel.css). -->
+  <div id="faixa-pagina-velha"></div>
+
   <!-- ================================================== 2. Painel ======= -->
   <section id="tela-painel">
     <!-- A faixa do servidor mudo. A lista anterior CONTINUA na tela,
@@ -143,6 +149,7 @@ __FAIXA__
     <p class="faixa" id="aviso-painel" hidden></p>
 
     <h1 class="resumo" id="resumo" aria-live="polite">Carregando as medições…</h1>
+    <p class="mole" id="painel-ocultos" hidden></p>
 
     <!-- A ação recomendada: UMA, a mais grave. Painel com cinco chamadas de
          igual peso não tem nenhuma. -->
@@ -214,127 +221,340 @@ __FAIXA__
     </div>
   </section>
 
-  <!-- ============================================ 4. Conectar projeto === -->
+  <!-- ============================================ 4. Conectar =========== -->
   <section id="tela-conectar" hidden>
+    <!-- O bloco "Autorizar este computador" (tela B). Só aparece quando a
+         página abre com `?autorizar=<código>`, que é para onde o arquivo
+         baixado leva o navegador. Nasce vazio: o painel.js o monta. -->
+    <div class="cartao" id="conectar-autorizar" aria-labelledby="autorizar-titulo" aria-live="polite" hidden></div>
+
     <h1>Conectar</h1>
     <p>
-      O navegador não enxerga o disco do seu computador, e o DERVS roda num
-      servidor. Quem lista as pastas com Git é o <strong>agente</strong> — o
-      programinha que roda no seu computador e só faz saídas, nunca abre porta.
-    </p>
-    <div class="pilha" id="conectar-corpo"></div>
-  </section>
-
-  <!-- ============================================== 5. Computadores ===== -->
-  <section id="tela-computadores" hidden>
-    <h2>Computadores</h2>
-    <p class="mole">
-      Quais estão conectados, e quando cada um deu notícia pela última vez.
+      Ligue o DERVS ao que você usa. Cada cartão abaixo tem um botão — comece
+      pelo primeiro.
     </p>
 
-    <div class="cartao" style="margin-bottom: var(--e6)">
-      <h2>Conectar um computador</h2>
-      <p class="mole">
-        Gere um número, e cole o comando abaixo dele no computador que vai
-        reportar. O número vale por poucos minutos e serve para um só.
-      </p>
-      <!-- A instrução anterior mandava abrir o terminal DENTRO da pasta do
-           DERVS, porque a linha usava o nome do módulo e só funcionava de lá.
-           Desde a etapa A4 ela carrega o caminho do arquivo e roda de qualquer
-           pasta — e manter o aviso antigo aqui seria a tela descrevendo o
-           software de ontem, que é a pior espécie de documentação: mente com
-           autoridade, e é lida justamente por quem já está travado. -->
-      <p class="mole">
-        <strong>Pode rodar de qualquer pasta.</strong> A única coisa a trocar na
-        linha é <code>&lt;CAMINHO DO DERVS&gt;</code>, pela pasta onde o DERVS
-        está naquele computador. Quem não quer trocar nada usa o conectador, em
-        <strong>Conectar</strong>, no alto desta tela.
-      </p>
-      <button class="botao" type="button" id="btn-gerar-numero">Gerar o número</button>
-      <div id="pareamento" hidden>
-        <p class="numerao" id="numero-pareamento"></p>
-        <p class="carimbo" id="numero-prazo"></p>
-        <div class="receita" id="comando-pareamento"></div>
-        <button class="botao botao--secundario" type="button" id="btn-copiar-comando">
-          Copiar comando
-        </button>
-        <!-- A confirmação de que o computador apareceu (etapa A6). Nasce
-             vazia: caixa vazia visível parece que já está esperando algo. O
-             `aria-live` é posto pelo script, junto com o primeiro texto. -->
-        <div class="espera" id="espera-pareamento"></div>
+    <div class="pilha">
+      <!-- CARTÃO "ESTE COMPUTADOR" (tela A). O esqueleto é fixo e o painel.js
+           preenche os vãos: assim a espera, o campo e as janelas abertas não
+           se perdem quando a tela se repinta sozinha, a cada minuto. -->
+      <div class="cartao porta" id="cartao-computador" aria-labelledby="pc-titulo" aria-busy="true">
+        <div class="porta__cabeca">
+          <h2 id="pc-titulo" tabindex="-1">Este computador</h2>
+          <span id="pc-marca"></span>
+        </div>
+        <p id="pc-resumo">Olhando os computadores desta conta…</p>
+        <p class="carimbo" id="pc-carimbo"></p>
+        <div class="acoes" id="pc-acoes"></div>
+        <p class="mole">
+          Baixa um arquivo pequeno para o Windows. Você abre, escolhe a pasta
+          dos seus projetos e volta aqui. Nada é instalado e não precisa de
+          administrador. Em outro sistema que não o Windows, use “Prefiro
+          colar um comando”.
+        </p>
+        <p class="mole">
+          O Windows vai perguntar se você confia no arquivo. É normal — veja
+          abaixo o que clicar. Não baixou? Clique de novo. Se continuar, use
+          “Prefiro colar um comando”, mais abaixo.
+        </p>
+        <!-- A confirmação de que o computador apareceu. Nasce vazia: caixa
+             vazia visível parece que já está esperando algo. O `aria-live` é
+             posto pelo script, junto com o primeiro texto. -->
+        <div class="espera" id="espera-maquina"></div>
+
+        <!-- Aberto só na primeira visita (o painel.js lembra no navegador). -->
+        <details class="ajuda" id="o-que-vai-aparecer">
+          <summary>O que vai aparecer?</summary>
+          <h3>O que vai aparecer quando você clicar</h3>
+          <p>
+            Você vai ver alguns avisos do computador. São normais e todos têm
+            um botão certo. Veja o que clicar em cada um.
+          </p>
+          <ol class="passos" role="list">
+            <li>
+              <div class="passos__texto">
+                <p><strong>O Chrome pode perguntar se você quer manter o arquivo.</strong>
+                  Se o Chrome mostrar que “conectar-dervs.cmd” pode ser perigoso,
+                  clique em <strong>Manter</strong>. Ele diz isso de qualquer
+                  arquivo desse tipo. O nosso é pequeno e legível: dá para abrir
+                  no Bloco de Notas e conferir antes (botão direito → Abrir com →
+                  Bloco de Notas).</p>
+              </div>
+              <figure class="passos__desenho">
+                <svg class="desenho" viewBox="0 0 240 90" aria-hidden="true" focusable="false">
+                  <rect class="desenho__fundo" x="4" y="24" width="232" height="44" rx="3"/>
+                  <rect class="desenho__linha" x="12" y="34" width="14" height="14"/>
+                  <text class="desenho__texto" x="32" y="45">conectar-dervs.cmd</text>
+                  <rect class="desenho__destaque" x="120" y="48" width="52" height="16" rx="3"/>
+                  <text class="desenho__texto-claro" x="146" y="60" text-anchor="middle">Manter</text>
+                  <rect class="desenho__fundo" x="178" y="48" width="52" height="16" rx="3"/>
+                  <text class="desenho__texto" x="204" y="60" text-anchor="middle">Descartar</text>
+                </svg>
+                <figcaption class="mole">Desenho ilustrativo. O seu computador pode mostrar algo um pouco diferente.</figcaption>
+              </figure>
+            </li>
+            <li>
+              <div class="passos__texto">
+                <p><strong>Abra o arquivo.</strong> Clique no arquivo na barra de
+                  downloads do Chrome, ou abra a pasta Downloads e dê dois
+                  cliques nele.</p>
+              </div>
+            </li>
+            <li>
+              <div class="passos__texto">
+                <p><strong>O Windows vai perguntar se você confia.</strong> Vai
+                  aparecer “Abrir Arquivo - Aviso de Segurança” com um escudo
+                  vermelho e a frase “O fornecedor não pôde ser verificado”. É
+                  normal: o Windows avisa assim de todo arquivo que não tem
+                  assinatura paga. Clique em <strong>Executar</strong>.</p>
+              </div>
+              <figure class="passos__desenho">
+                <svg class="desenho" viewBox="0 0 240 90" aria-hidden="true" focusable="false">
+                  <rect class="desenho__fundo" x="4" y="6" width="232" height="78" rx="3"/>
+                  <rect class="desenho__linha" x="12" y="14" width="216" height="3"/>
+                  <text class="desenho__glifo" x="16" y="46">[!]</text>
+                  <text class="desenho__texto" x="52" y="40">O fornecedor não pôde</text>
+                  <text class="desenho__texto" x="52" y="54">ser verificado.</text>
+                  <rect class="desenho__destaque" x="104" y="62" width="60" height="16" rx="3"/>
+                  <text class="desenho__texto-claro" x="134" y="74" text-anchor="middle">Executar</text>
+                  <rect class="desenho__fundo" x="170" y="62" width="58" height="16" rx="3"/>
+                  <text class="desenho__texto" x="199" y="74" text-anchor="middle">Cancelar</text>
+                </svg>
+                <figcaption class="mole">Desenho ilustrativo. O seu computador pode mostrar algo um pouco diferente.</figcaption>
+              </figure>
+            </li>
+            <li>
+              <div class="passos__texto">
+                <p><strong>Uma janela preta vai mostrar o que está sendo feito.</strong>
+                  Ela escreve em português cada coisa que faz. Não digite nada
+                  nela e não feche. Ela baixa um programa de apoio do site
+                  oficial do Python (12 MB) e confere que ele chegou inteiro.</p>
+              </div>
+            </li>
+            <li>
+              <div class="passos__texto">
+                <p><strong>Escolha a pasta dos seus projetos.</strong> Uma janela
+                  do Windows vai pedir a pasta onde ficam seus projetos.
+                  Escolha a pasta e clique em <strong>OK</strong>.</p>
+              </div>
+              <figure class="passos__desenho">
+                <svg class="desenho" viewBox="0 0 240 90" aria-hidden="true" focusable="false">
+                  <rect class="desenho__fundo" x="4" y="6" width="232" height="78" rx="3"/>
+                  <rect class="desenho__linha" x="12" y="14" width="150" height="10"/>
+                  <rect class="desenho__destaque" x="12" y="28" width="150" height="12"/>
+                  <text class="desenho__texto-claro" x="18" y="38">projetos</text>
+                  <rect class="desenho__linha" x="12" y="44" width="150" height="10"/>
+                  <rect class="desenho__linha" x="12" y="58" width="150" height="10"/>
+                  <rect class="desenho__destaque" x="176" y="60" width="52" height="16" rx="3"/>
+                  <text class="desenho__texto-claro" x="202" y="72" text-anchor="middle">OK</text>
+                </svg>
+                <figcaption class="mole">Desenho ilustrativo. O seu computador pode mostrar algo um pouco diferente.</figcaption>
+              </figure>
+            </li>
+            <li>
+              <div class="passos__texto">
+                <p><strong>O navegador abre e você autoriza.</strong> Esta página
+                  vai mostrar o nome do computador e um código. Confira se são os
+                  mesmos da janela preta e clique em <strong>Autorizar este
+                  computador</strong>.</p>
+              </div>
+            </li>
+            <li>
+              <div class="passos__texto">
+                <p><strong>Pronto.</strong> A janela preta se fecha sozinha. Em
+                  até um minuto aparece aqui “Conectado — achei N projetos”.</p>
+              </div>
+            </li>
+          </ol>
+          <p class="mole">Funciona no Windows 10 (versão 1803 ou mais nova) e no Windows 11.</p>
+          <p class="mole">Precisa de internet, mas não precisa de administrador.</p>
+        </details>
+
+        <div id="pc-lista" hidden>
+          <h3>Computadores</h3>
+          <ul class="lista computadores" id="lista-computadores"></ul>
+          <p class="carimbo" id="computadores-carimbo"></p>
+        </div>
+
+        <details class="ajuda" id="o-que-faz">
+          <summary>O que esse arquivo faz no meu computador?</summary>
+          <ul class="lista--simples">
+            <li>Baixa o programa de apoio do site oficial do Python e confere a
+              impressão digital dele antes de usar. Se não bater, apaga e para.</li>
+            <li>Guarda tudo em uma pasta sua, dentro do seu usuário. Não mexe em
+              nenhuma outra pasta e não instala nada no Windows.</li>
+            <li>Pede ao DERVS um código e espera você autorizar aqui. Sem o seu
+              clique, nada é ligado.</li>
+            <li>Baixa do DERVS o programa que mede os seus projetos e o agenda
+              para rodar sozinho quando você entra no Windows, sem janela.</li>
+            <li>O programa só <strong>lê</strong> a pasta que você escolheu e
+              <strong>envia</strong> o resultado. Ele não abre porta no seu
+              computador e não faz alterações.</li>
+            <li>Para desfazer: clique em <strong>Remover</strong> na lista de
+              computadores. O painel deixa de aceitar o programa.</li>
+          </ul>
+        </details>
+
+        <!-- O caminho do terminal. Fica fechado: é o único lugar da tela onde
+             as palavras "comando" e "pasta do DERVS" aparecem. -->
+        <details class="ajuda" id="prefiro-comando">
+          <summary>Prefiro colar um comando</summary>
+          <p class="mole">
+            Para um computador sem tela, ou se você prefere o terminal. Gere um
+            número, e cole a linha abaixo dele no computador que vai
+            acompanhar. O número vale por poucos minutos e serve para um só.
+          </p>
+          <!-- A instrução anterior mandava abrir o terminal DENTRO da pasta do
+               DERVS, porque a linha usava o nome do módulo e só funcionava de
+               lá. Desde a etapa A4 ela carrega o caminho do arquivo e roda de
+               qualquer pasta — e manter o aviso antigo aqui seria a tela
+               descrevendo o software de ontem. -->
+          <p class="mole">
+            <strong>Pode rodar de qualquer pasta.</strong> A única coisa a
+            trocar na linha é <code>&lt;CAMINHO DO DERVS&gt;</code>, pela pasta
+            onde o DERVS está naquele computador. O painel não sabe onde ela
+            fica, e inventar seria mentir.
+          </p>
+          <button class="botao" type="button" id="btn-gerar-numero">Gerar o número</button>
+          <div id="pareamento" hidden>
+            <p class="numerao" id="numero-pareamento"></p>
+            <p class="carimbo" id="numero-prazo"></p>
+            <div class="receita" id="comando-pareamento"></div>
+            <button class="botao botao--secundario" type="button" id="btn-copiar-comando">
+              Copiar comando
+            </button>
+            <div class="espera" id="espera-pareamento"></div>
+          </div>
+        </details>
+      </div>
+
+      <!-- O cartão GitHub. O painel.js o monta de novo a cada repintura. -->
+      <div class="pilha" id="conectar-corpo"></div>
+
+      <!-- CARTÃO "SEUS SITES" (tela E). O campo é FIXO aqui no HTML, e não
+           montado pelo script: a tela se repinta sozinha a cada minuto, e um
+           campo recriado apagaria o que a pessoa está digitando e roubaria o
+           foco. O painel.js preenche só o que está em volta dele. -->
+      <div class="cartao porta" id="cartao-sites" aria-labelledby="sites-titulo">
+        <div class="porta__cabeca">
+          <h2 id="sites-titulo">Seus sites</h2>
+          <span id="sites-marca"></span>
+        </div>
+        <p>
+          Cole o endereço de um site. O DERVS confere na hora se ele responde,
+          antes de guardar.
+        </p>
+        <p id="sites-resumo"></p>
+        <div id="sites-sugestoes"></div>
+
+        <form id="sites-form" class="sites__form" novalidate>
+          <div class="campo">
+            <label for="site-endereco">Endereço do site</label>
+            <input id="site-endereco" type="text" inputmode="url" autocomplete="off"
+                   spellcheck="false" placeholder="https://clinica-agenda.com.br"
+                   aria-describedby="site-erro">
+            <span class="ajuda" id="site-erro" hidden></span>
+          </div>
+          <div class="acoes">
+            <button class="botao" type="submit" id="site-conferir">Conferir o site</button>
+          </div>
+        </form>
+
+        <!-- O resultado da conferência. `aria-live` desde o nascimento: o foco
+             NÃO é roubado pelo resultado, ele fica no botão que foi apertado. -->
+        <div id="site-resultado" aria-live="polite" aria-busy="false"></div>
+        <p class="carimbo" id="sites-guardado" aria-live="polite"></p>
+
+        <ul class="lista" id="sites-lista"></ul>
+
+        <details class="ajuda" id="sites-avancado">
+          <summary>Opções avançadas</summary>
+          <p class="mole">
+            Servidor: onde o site roda. Se você não tem nenhum cadastrado, o
+            DERVS cria um chamado “Meus sites”.
+          </p>
+          <div id="sites-servidores"></div>
+        </details>
+
+        <p class="mole">
+          O DERVS nunca pede chave de acesso ao servidor. O endereço público
+          basta para conferir se ele responde. Endereço de rede interna é
+          recusado de propósito.
+        </p>
       </div>
     </div>
+  </section>
 
-    <h2>Conectados</h2>
-    <ul class="lista computadores" id="lista-computadores"></ul>
-    <p class="carimbo" id="computadores-carimbo"></p>
-
-    <!-- VIGÍLIA E CÉREBROS (ponte com o DERVS-VOZ). Mora DENTRO da tela
-         Conectar, e não num item novo de menu: o menu tem quatro lugares e
-         test_menu cobra isso. Tudo que vem do servidor entra por `textContent`
-         no painel.js — a página só tem a casca. -->
-    <div id="voz" class="voz">
-      <h2 id="voz-titulo">Vigília e cérebros</h2>
-      <p class="mole">
-        O <strong>DERVS-VOZ</strong> é o programa do seu computador que vigia
-        os projetos e executa o que você aprova. Aqui você vê se ele está
-        medindo, quais cérebros ele tem à mão, e manda recados a ele.
-      </p>
-      <div class="pilha" id="voz-computadores" aria-live="polite"></div>
-      <p class="carimbo" id="voz-carimbo"></p>
-
-      <form class="cartao voz__form" id="voz-form" aria-labelledby="voz-form-titulo" novalidate>
-        <h3 id="voz-form-titulo">Mandar um recado ao DERVS-VOZ</h3>
-        <div class="campo">
-          <label for="voz-maquina">Computador</label>
-          <select id="voz-maquina" name="maquina_id" required></select>
-        </div>
-        <div class="campo">
-          <label for="voz-tipo">O que você quer</label>
-          <select id="voz-tipo" name="tipo">
-            <option value="analisar">Analisar um projeto</option>
-            <option value="status">Pedir o estado de um projeto</option>
-            <option value="propor">Propor uma mudança</option>
-          </select>
-        </div>
-        <div class="campo">
-          <label for="voz-alvo">Projeto</label>
-          <input id="voz-alvo" name="alvo" type="text" maxlength="200" autocomplete="off">
-          <span class="ajuda">O nome do projeto, como aparece no painel.</span>
-        </div>
-        <div class="campo">
-          <label for="voz-texto">Recado</label>
-          <textarea id="voz-texto" name="texto" rows="3" maxlength="500"></textarea>
-          <span class="ajuda">Até 500 caracteres.</span>
-        </div>
-        <div class="campo">
-          <label for="voz-nivel">O que o recado pode fazer</label>
-          <select id="voz-nivel" name="nivel">
-            <option value="leitura">Só ler e responder</option>
-            <option value="muda_estado">Mudar alguma coisa</option>
-          </select>
-        </div>
-        <div class="campo">
-          <label for="voz-cerebro">Cérebro</label>
-          <select id="voz-cerebro" name="cerebro_pedido">
-            <option value="auto">Automático (o VOZ escolhe)</option>
-            <option value="claude_code">Claude Code</option>
-            <option value="hermes">Hermes Agent</option>
-          </select>
-        </div>
-        <p class="voz__aviso" id="voz-aviso" data-forte="nao" role="note">
-          O que muda alguma coisa só acontece depois do seu clique no
-          DERVS-VOZ. Aprovar aqui não basta.
+  <!-- ============================================== 5. Recados do VOZ === -->
+  <!-- Mora DENTRO da tela Conectar (a seção abre junto com ela, ver `mostrar`
+       em painel.js), e não num item novo de menu: o menu tem quatro lugares e
+       test_menu cobra isso. -->
+  <section id="tela-computadores" hidden>
+    <details class="ajuda" id="recados-do-voz">
+      <summary>Recados do DERVS-VOZ</summary>
+      <div id="voz" class="voz">
+        <h2 id="voz-titulo">Vigília e cérebros</h2>
+        <p class="mole">
+          O <strong>DERVS-VOZ</strong> é o programa do seu computador que vigia
+          os projetos e executa o que você aprova. Aqui você vê se ele está
+          medindo, quais cérebros ele tem à mão, e manda recados a ele.
         </p>
-        <p class="voz__erro" id="voz-erro" role="alert" hidden></p>
-        <div class="acoes">
-          <button class="botao" type="submit" id="voz-enviar">Mandar o recado</button>
-        </div>
-      </form>
+        <div class="pilha" id="voz-computadores" aria-live="polite"></div>
+        <p class="carimbo" id="voz-carimbo"></p>
 
-      <h3 id="voz-recados-titulo">Últimos recados</h3>
-      <ul class="lista voz__recados" id="voz-recados" aria-labelledby="voz-recados-titulo"></ul>
-    </div>
+        <form class="cartao voz__form" id="voz-form" aria-labelledby="voz-form-titulo" novalidate>
+          <h3 id="voz-form-titulo">Mandar um recado ao DERVS-VOZ</h3>
+          <div class="campo">
+            <label for="voz-maquina">Computador</label>
+            <select id="voz-maquina" name="maquina_id" required></select>
+          </div>
+          <div class="campo">
+            <label for="voz-tipo">O que você quer</label>
+            <select id="voz-tipo" name="tipo">
+              <option value="analisar">Analisar um projeto</option>
+              <option value="status">Pedir o estado de um projeto</option>
+              <option value="propor">Propor uma mudança</option>
+            </select>
+          </div>
+          <div class="campo">
+            <label for="voz-alvo">Projeto</label>
+            <input id="voz-alvo" name="alvo" type="text" maxlength="200" autocomplete="off">
+            <span class="ajuda">O nome do projeto, como aparece no painel.</span>
+          </div>
+          <div class="campo">
+            <label for="voz-texto">Recado</label>
+            <textarea id="voz-texto" name="texto" rows="3" maxlength="500"></textarea>
+            <span class="ajuda">Até 500 caracteres.</span>
+          </div>
+          <div class="campo">
+            <label for="voz-nivel">O que o recado pode fazer</label>
+            <select id="voz-nivel" name="nivel">
+              <option value="leitura">Só ler e responder</option>
+              <option value="muda_estado">Mudar alguma coisa</option>
+            </select>
+          </div>
+          <div class="campo">
+            <label for="voz-cerebro">Cérebro</label>
+            <select id="voz-cerebro" name="cerebro_pedido">
+              <option value="auto">Automático (o VOZ escolhe)</option>
+              <option value="claude_code">Claude Code</option>
+              <option value="hermes">Hermes Agent</option>
+            </select>
+          </div>
+          <p class="voz__aviso" id="voz-aviso" data-forte="nao" role="note">
+            O que muda alguma coisa só acontece depois do seu clique no
+            DERVS-VOZ. Aprovar aqui não basta.
+          </p>
+          <p class="voz__erro" id="voz-erro" role="alert" hidden></p>
+          <div class="acoes">
+            <button class="botao" type="submit" id="voz-enviar">Mandar o recado</button>
+          </div>
+        </form>
+
+        <h3 id="voz-recados-titulo">Últimos recados</h3>
+        <ul class="lista voz__recados" id="voz-recados" aria-labelledby="voz-recados-titulo"></ul>
+      </div>
+    </details>
   </section>
 
   <!-- ================================================== 6. Trabalho ===== -->

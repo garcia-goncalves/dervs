@@ -11,10 +11,11 @@ computador é parear o VOZ dele.
 ## Passo a passo
 
 1. Conecte o computador seguindo
-   [`conectar-uma-maquina.md`](conectar-uma-maquina.md) — o conectador ou a linha
-   de comando, os dois valem. **Onde:** painel, tela **Conectar** → **Gerar o
-   número**. O número tem seis dígitos, vale poucos minutos e serve para um
-   computador só.
+   [`conectar-uma-maquina.md`](conectar-uma-maquina.md). **Onde:** painel, tela
+   **Conectar** → **Conectar este computador** (baixa um arquivo; abra, escolha
+   a pasta e clique em **Autorizar** no navegador que abrir). Não há número para
+   digitar; o pedido vale poucos minutos e serve para um computador só. A linha
+   de comando continua existindo em **opções avançadas**.
 2. Com o computador aparecendo em **Conectados**, desça até **Vigília e
    cérebros**, na mesma tela.
 3. Abra o DERVS-VOZ nesse computador. Ele usa o token que o pareamento já

@@ -502,6 +502,35 @@ main { padding-bottom: var(--e12); }
   .freio__ponto { animation: none; }
 }
 
+/* ------------------------------------------ a faixa de página desatualizada
+   Fixa no topo, ACIMA do freio (z-index 50): sem recarregar nada funciona, então
+   ela vence. O contêiner é quem gruda, porque `sticky` só vale dentro do pai —
+   a faixa sozinha, filha de um `div` do tamanho dela, nunca grudaria. Não usa
+   `--estado-*`: é aviso sobre a própria página, não o selo de um projeto. O
+   filete de baixo é `--acao`: a cor de ação é a que manda "faça isto agora". */
+#faixa-pagina-velha {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+}
+
+.faixa--pagina-velha {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--e3);
+  max-height: 7rem;
+  overflow-y: auto;
+  border-bottom: var(--traco-forte) solid var(--acao);
+}
+
+.faixa--pagina-velha .botao { min-height: 44px; }
+.faixa__titulo, .faixa__texto { display: block; }
+
+@media (max-width: 30rem) {
+  .faixa--pagina-velha { flex-direction: column; align-items: stretch; }
+  .faixa--pagina-velha .botao { justify-content: center; width: 100%; }
+}
+
 .freio__texto {
   margin: 0;
   flex: 1 1 14rem;
@@ -583,7 +612,69 @@ main { padding-bottom: var(--e12); }
    falta é o botão não encolher abaixo do alvo de toque. */
 @media (max-width: 30rem) {
   .porta .acoes { flex-direction: column; align-items: stretch; }
+  .porta .acoes .botao { justify-content: center; }
 }
+
+/* ------------------------------------------------- ajuda que abre e fecha
+   `<details>` nativo: abre com Enter e Espaço, sem script. Dentro dos cartões
+   da tela Conectar ela guarda o que só interessa a quem quer conferir. */
+details.ajuda { margin-top: var(--e4); padding-top: var(--e3); border-top: var(--traco) solid var(--borda); }
+details.ajuda > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  font-weight: var(--peso-medio);
+}
+details.ajuda > summary:focus-visible {
+  outline: var(--foco-largura) solid var(--acao);
+  outline-offset: var(--foco-afastamento);
+}
+details.ajuda h3 { margin: var(--e3) 0; font-size: var(--fs-corpo); }
+
+/* O passo a passo do que vai aparecer. O número vem do contador, em mono; o
+   desenho fica ACIMA do texto em tela estreita e ao lado a partir de 40rem. */
+.passos {
+  list-style: none;
+  counter-reset: passo;
+  margin: var(--e3) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e4);
+}
+.passos > li {
+  counter-increment: passo;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e2);
+}
+.passos__texto p { margin: 0; }
+.passos__texto > p:first-child::before {
+  content: counter(passo) ". ";
+  font-family: var(--fonte-mono);
+  font-weight: var(--peso-forte);
+}
+.passos__desenho { order: -1; margin: 0; }
+.passos__desenho figcaption { font-size: var(--fs-metadado); }
+@media (min-width: 40rem) {
+  .passos > li { flex-direction: row; align-items: flex-start; gap: var(--e6); }
+  .passos__texto { flex: 1; min-width: 0; }
+  .passos__desenho { order: 1; flex: none; width: 15rem; }
+}
+
+/* Os esquemas ilustrativos (SVG inline no index.html). Só tokens: valem nos
+   dois temas, e a CSP não aceita `style=` nem `fill="var(...)"`. */
+.desenho { display: block; width: 100%; max-width: 15rem; height: auto; max-height: 9rem; }
+.desenho__fundo { fill: var(--fundo-elevado); stroke: var(--borda-forte); stroke-width: 1; }
+.desenho__linha { fill: var(--borda); }
+.desenho__destaque { fill: var(--acao); }
+.desenho__texto { fill: var(--texto); font-family: var(--fonte-sans); font-size: 10px; }
+.desenho__texto-claro { fill: var(--acao-texto); font-family: var(--fonte-sans); font-size: 10px; }
+.desenho__glifo { fill: var(--texto); font-family: var(--fonte-mono); font-size: 16px; font-weight: var(--peso-forte); }
+
+/* A lista de computadores e o que vem dentro dela */
+#pc-lista h3 { margin: var(--e4) 0 var(--e2); font-size: var(--fs-corpo); }
 
 /* -------------------------------------------------- a espera da máquina nova
    Ela vive dentro do cartão da porta e dentro do bloco de pareamento, e não
@@ -934,3 +1025,105 @@ main { padding-bottom: var(--e12); }
   outline: var(--foco-largura) solid var(--acao);
   outline-offset: var(--foco-afastamento);
 }
+
+/* -------------------------------------------- projetos achados e a chave
+   `.visto` é a linha de um projeto com a chave "Mostrar no painel". A chave é
+   um `<input type="checkbox" role="switch">` de verdade: o trilho e o botão são
+   desenho, e o significado está na POSIÇÃO e no texto ao lado, nunca na cor.
+   Ligada o trilho vira `--acao`; nunca verde (verde é estado saudável). O
+   rótulo inteiro é o alvo de toque (44px). */
+.projetos-vistos { flex-basis: 100%; min-width: 0; }
+.projetos-vistos h4 { margin: var(--e3) 0 var(--e1); font-size: var(--fs-corpo); }
+.visto { flex-wrap: wrap; align-items: center; justify-content: space-between; }
+.visto .dizeres { flex: 1; min-width: min(100%, 14rem); }
+.visto .nome { font-size: var(--fs-destaque); font-weight: var(--peso-medio); overflow-wrap: anywhere; }
+.visto .caminho {
+  font-family: var(--fonte-mono);
+  font-size: var(--fs-metadado);
+  color: var(--texto-suave);
+  overflow-wrap: anywhere;
+}
+.visto--oculto .nome, .visto--oculto .caminho { color: var(--texto-suave); }
+
+.chave {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e2);
+  min-height: 44px;
+  min-width: 44px;
+  cursor: pointer;
+}
+.chave input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.chave__trilho {
+  position: relative;
+  flex: none;
+  width: 2.5rem;
+  height: 1.4rem;
+  border: var(--traco) solid var(--borda-forte);
+  border-radius: 999px;
+  background: var(--fundo);
+  transition: background var(--transicao);
+}
+.chave__trilho::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(1.4rem - 8px);
+  height: calc(1.4rem - 8px);
+  border-radius: 50%;
+  background: var(--borda-forte);
+  transition: transform var(--transicao), background var(--transicao);
+}
+.chave input:checked + .chave__trilho { background: var(--acao); border-color: var(--acao); }
+.chave input:checked + .chave__trilho::after {
+  transform: translateX(1.1rem);
+  background: var(--acao-texto);
+}
+.chave input:focus-visible + .chave__trilho {
+  outline: var(--foco-largura) solid var(--acao);
+  outline-offset: var(--foco-afastamento);
+}
+.chave input:disabled + .chave__trilho { opacity: 0.45; }
+.chave__texto { font-size: var(--fs-metadado); color: var(--texto-suave); }
+
+.lista--rolavel { max-height: 24rem; overflow-y: auto; }
+.lista--rolavel:focus-visible {
+  outline: var(--foco-largura) solid var(--acao);
+  outline-offset: var(--foco-afastamento);
+}
+
+/* ----------------------------------------------------- as contas do GitHub
+   Cada conta é uma coluna: nome e tipo em cima, medição e link embaixo, e a
+   lista dos repositórios dentro de um `<details>`. */
+.conta-gh { flex-direction: column; align-items: stretch; gap: var(--e2); }
+.conta-gh__topo { display: flex; align-items: baseline; gap: var(--e2); flex-wrap: wrap; }
+.conta-gh .nome { font-size: var(--fs-destaque); overflow-wrap: anywhere; }
+.conta-gh p { margin: 0; }
+.conta-gh .lista { margin-top: var(--e2); }
+
+/* ------------------------------------------------------------ seus sites
+   O campo e o botão ficam em coluna (em 360px, lado a lado dariam menos de 140px
+   ao campo). O resultado da conferência é uma linha com a marca e a frase,
+   seguida de "De qual projeto?" e dos botões. O endereço quebra em qualquer
+   ponto: ele vem de fora e pode ser longo. */
+.sites__form { display: flex; flex-direction: column; gap: var(--e2); margin-top: var(--e3); }
+.sites__form .campo > input { min-height: 44px; width: 100%; box-sizing: border-box; }
+.sites__form .acoes { margin-top: 0; }
+#site-resultado:empty { display: none; }
+#site-resultado { margin-top: var(--e3); }
+.site-guardar { display: flex; flex-direction: column; gap: var(--e3); margin-top: var(--e3); }
+.site-guardar select { min-height: 44px; width: 100%; }
+.site { flex-wrap: wrap; align-items: flex-start; }
+.site .endereco__dizeres { flex: 1; min-width: min(100%, 14rem); }
+.site .endereco__url { overflow-wrap: anywhere; word-break: normal; }
+.site .carimbo, .site-guardar p { margin: 0; }

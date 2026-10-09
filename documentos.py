@@ -55,9 +55,9 @@ MAX_VARRIDOS = 120          # briefings ABERTOS por leitura, com ou sem criterio
 MAX_PASTAS = 1000           # entradas LISTADAS em docs/esteira (antes de abrir)
 # O projeto INTEIRO e descartado pelo servidor acima de 64 KiB
 # (`banco.MAX_BYTES_POR_PROJETO`), e uma chave gorda derruba todas as outras
-# medidas junto. Esta chave nunca passa de 32 KiB (eram 24: com os 10 briefings
-# do proprio DERVS convertidos, o ultimo ficava sem criterio nenhum).
-MAX_JSON = 32 * 1024
+# medidas junto. Esta chave nunca passa de 40 KiB (eram 24, depois 32: com os 14 briefings
+# do proprio DERVS, 141 criterios, medem 33.556 bytes e o ultimo ficava cortado).
+MAX_JSON = 40 * 1024
 MAX_PROVAS_POR_TAREFA = 20  # provas por pedido de uma tarefa
 
 SECAO = "## criterio_de_aceitacao"
@@ -226,7 +226,7 @@ def _caber(docs: list) -> None:
     ultimo = docs[-1]
     ultimo["cortado"] = True
     ultimo["erros"].append("critérios cortados para caber no relatório "
-                           "(32 KiB por projeto)")
+                           "(40 KiB por projeto)")
     if tirados:
         ultimo["erros"].append("%d documento(s) não couberam no relatório"
                                % tirados)

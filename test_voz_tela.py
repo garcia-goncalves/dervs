@@ -63,6 +63,18 @@ class ASecaoExisteDentroDeConectar(unittest.TestCase):
         self.assertNotIn("</section>", HTML[ini:HTML.index('id="voz"')])
         self.assertGreater(fim, ini)
 
+    def test_os_recados_ficam_num_details_fechado_no_fim_de_conectar(self):
+        """Tela F do design: o VOZ saiu do meio da tela. Um `<details>` nativo
+        (abre com Enter/Espaco), FECHADO, com o resumo escrito."""
+        ini = HTML.index('<section id="tela-computadores"')
+        tela = HTML[ini:HTML.index("</section>", ini)]
+        m = re.search(r"<details\b([^>]*)>\s*<summary>([^<]*)</summary>", tela)
+        self.assertIsNotNone(m, "o VOZ nao esta dentro de um <details> com <summary>")
+        self.assertEqual(m.group(2).strip(), "Recados do DERVS-VOZ")
+        self.assertNotRegex(m.group(1), r"\bopen\b", "o details tem de nascer fechado")
+        self.assertLess(tela.index("<details"), tela.index('id="voz"'))
+        self.assertLess(tela.index('id="voz"'), tela.index("</details>"))
+
     def test_conectar_carrega_a_vigilia(self):
         corpo = re.search(r'case "conectar":(.*?)break;', JS, re.S)
         self.assertIsNotNone(corpo)

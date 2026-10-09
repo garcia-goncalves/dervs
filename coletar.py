@@ -182,7 +182,27 @@ RAIZES = raizes_configuradas()
 # novo, o hub continua se vigiando em vez de voltar a ser sapateiro descalco.
 # AQUI, e nao o caminho escrito na mao, para continuar certo se a pasta mudar
 # de nome.
-AVULSOS = [AQUI]
+def _casas_do_programa():
+    """As pastas onde o `conectador` instala o programa (as mesmas regras de
+    `conectador.casa_do_programa`, copiadas porque este arquivo nao importa o
+    conectador). Rodando de uma delas, AQUI e o pacote, nao um projeto."""
+    local = os.environ.get("LOCALAPPDATA")
+    casas = []
+    for bruto in (os.environ.get("DERVS_CASA"),
+                  local and str(Path(local) / "DERVS" / "programa"),
+                  str(Path.home() / ".dervs" / "programa")):
+        if bruto:
+            try:
+                casas.append(str(Path(bruto).expanduser().resolve()).lower())
+            except OSError:
+                pass
+    return casas
+
+
+# Rodando do PACOTE (computador conectado pelo arquivo), a pasta do programa
+# nunca e projeto: apareceria no painel como "casa"/"programa". Do repositorio
+# clonado, AQUI e o proprio DERVS e continua medido.
+AVULSOS = [] if str(AQUI).lower() in _casas_do_programa() else [AQUI]
 
 
 def pastas_de_projeto():
@@ -878,7 +898,7 @@ def coleta_documentacao(repo: Path):
     mostra "sem dados", que e outra coisa que "sem documentacao" (que e a
     resposta `{"documentos": []}`). Zerar uma leitura que falhou apagaria o
     problema real — a Lei 2 do painel. O formato, os tetos (o JSON da chave
-    nunca passa de 32 KiB, porque o servidor descarta o projeto INTEIRO acima
+    nunca passa de 40 KiB, porque o servidor descarta o projeto INTEIRO acima
     de 64 KiB) e a lista de provas moram em `documentos.py`.
     """
     try:

@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import conectador
@@ -85,6 +86,11 @@ class UmArquivoSoBibliotecaPadraoSo(unittest.TestCase):
         sujas = [s for s in sujas if s not in docs]
         self.assertEqual([], sujas, "texto com acento vai para o console: %s" % sujas)
 
+    def test_o_arquivo_inteiro_e_ascii_porque_o_corpo_do_cmd_e_ascii_puro(self):
+        """Contrato C7: o servidor monta o `.cmd` em ASCII. Comentario com
+        travessao quebraria a rota (e a extracao) so em producao."""
+        self.assertTrue(self.fonte.isascii())
+
     def test_o_dunder_main_fica_no_fim(self):
         """Ja houve teste neste repositorio que nunca rodou por causa disso."""
         linhas = [i for i, l in enumerate(self.fonte.splitlines())
@@ -95,10 +101,19 @@ class UmArquivoSoBibliotecaPadraoSo(unittest.TestCase):
                             for l in depois),
                         "ha codigo de modulo depois do bloco __main__")
 
-    def test_as_duas_marcas_que_o_servidor_troca_existem(self):
-        """A rota da etapa A3 injeta por essas marcas. Apagar uma a quebra."""
-        self.assertIn("# DERVS:CODIGO", self.fonte)
-        self.assertIn("# DERVS:ALVO", self.fonte)
+    def test_a_marca_que_o_servidor_troca_existe_e_a_do_codigo_nao(self):
+        """O servidor injeta SO o alvo. O codigo de seis digitos saiu do arquivo:
+        agora nasce no PC (pedido), e o navegador o confere."""
+        com_alvo = [l for l in self.fonte.splitlines()
+                    if l.rstrip().endswith("# DERVS:ALVO")]
+        self.assertEqual(1, len(com_alvo))
+        self.assertNotIn("DERVS:CODIGO", self.fonte)
+
+    def test_nenhuma_linha_imita_o_marcador_do_python_embutido(self):
+        """O `.cmd` corta o arquivo montado na linha `#:DERVS-PYTHON`."""
+        ruins = [l for l in self.fonte.splitlines()
+                 if l.startswith("#:DERVS-PYTHON")]
+        self.assertEqual([], ruins)
 
 
 class OsDoisCaminhosDaPasta(unittest.TestCase):
@@ -108,6 +123,11 @@ class OsDoisCaminhosDaPasta(unittest.TestCase):
         self.tk_antes = sys.modules.get("tkinter")
         self.fd_antes = sys.modules.get("tkinter.filedialog")
         self.addCleanup(self._devolver)
+        # No Windows de verdade `escolher_pasta` tentaria o PowerShell primeiro.
+        # Estes casos sao do que vem DEPOIS dele.
+        antes = conectador.pelo_powershell
+        conectador.pelo_powershell = lambda sugestao: None
+        self.addCleanup(setattr, conectador, "pelo_powershell", antes)
 
     def _devolver(self):
         for nome, antes in (("tkinter", self.tk_antes),
@@ -196,19 +216,20 @@ class FecharSemEscolherNaoDeixaLixo(unittest.TestCase):
 
     def test_sem_pasta_nada_de_rede_nada_de_escrita_nada_de_agendador(self):
         os.environ["DERVS_ALVO"] = "https://dervs.com.br"
-        os.environ["DERVS_CODIGO"] = "123456"
         self.addCleanup(os.environ.pop, "DERVS_ALVO", None)
-        self.addCleanup(os.environ.pop, "DERVS_CODIGO", None)
-        original = (conectador.escolher_pasta, conectador.parear,
+        original = (conectador.escolher_pasta, conectador.pedir,
                     conectador.gravar, conectador.agendar, subprocess.run)
+        navegador = conectador.webbrowser.open
+        conectador.webbrowser.open = self._explodir
+        self.addCleanup(setattr, conectador.webbrowser, "open", navegador)
         conectador.escolher_pasta = lambda *a, **k: ""
-        conectador.parear = self._explodir
+        conectador.pedir = self._explodir
         conectador.gravar = self._explodir
         conectador.agendar = self._explodir
         subprocess.run = self._explodir
 
         def devolver():
-            (conectador.escolher_pasta, conectador.parear, conectador.gravar,
+            (conectador.escolher_pasta, conectador.pedir, conectador.gravar,
              conectador.agendar, subprocess.run) = original
         self.addCleanup(devolver)
 
@@ -228,22 +249,20 @@ class FecharSemEscolherNaoDeixaLixo(unittest.TestCase):
         self.assertIn("Nada foi alterado", saida.getvalue())
 
     def test_pareamento_recusado_nao_grava_nem_agenda(self):
-        original = (conectador.escolher_pasta, conectador.parear,
+        original = (conectador.escolher_pasta, conectador.conectar_pelo_navegador,
                     conectador.gravar, conectador.agendar)
         conectador.escolher_pasta = lambda *a, **k: self.casa.name
-        conectador.parear = lambda *a, **k: ""      # o painel recusou
+        conectador.conectar_pelo_navegador = lambda *a, **k: ""   # o painel recusou
         conectador.gravar = self._explodir
         conectador.agendar = self._explodir
 
         def devolver():
-            (conectador.escolher_pasta, conectador.parear, conectador.gravar,
-             conectador.agendar) = original
+            (conectador.escolher_pasta, conectador.conectar_pelo_navegador,
+             conectador.gravar, conectador.agendar) = original
         self.addCleanup(devolver)
 
-        os.environ["DERVS_ALVO"] = "https://dervs.com.br"
-        os.environ["DERVS_CODIGO"] = "123456"
+        os.environ["DERVS_ALVO"] = "https://outro.exemplo"
         self.addCleanup(os.environ.pop, "DERVS_ALVO", None)
-        self.addCleanup(os.environ.pop, "DERVS_CODIGO", None)
 
         saida, antes_out = io.StringIO(), sys.stdout
         antes_in, sys.stdin = sys.stdin, io.StringIO("")
@@ -415,105 +434,634 @@ class APausaNaoPenduraOAgendador(unittest.TestCase):
             sys.stdin = antes
 
 
-class AcharOAgente(unittest.TestCase):
-    """Ele so ACHA o que ja esta na maquina. Nao distribui codigo-fonte."""
+class ODuble:
+    """Servidor de mentira que fala os contratos C2, C3 e C6 do plano.
+
+    Sobe `http.server` numa thread, em 127.0.0.1, porta livre. `respostas` mapeia
+    caminho -> lista de (codigo, dict); cada pedido consome a primeira, e a
+    ultima se repete. `registro` guarda (metodo, caminho, corpo, cabecalhos).
+    """
+
+    def __init__(self, respostas):
+        import http.server
+        import threading
+        duble = self
+        self.respostas = {k: list(v) for k, v in respostas.items()}
+        self.registro = []
+
+        class Maneja(http.server.BaseHTTPRequestHandler):
+            def log_message(self_, *a):
+                pass
+
+            def _responde(self_, metodo):
+                n = int(self_.headers.get("Content-Length") or 0)
+                corpo = self_.rfile.read(n) if n else b""
+                duble.registro.append((metodo, self_.path, corpo,
+                                       dict(self_.headers)))
+                fila = duble.respostas.get(self_.path.split("?")[0])
+                if not fila:
+                    codigo, dados = 404, {"erro": "nao existe"}
+                else:
+                    codigo, dados = fila[0] if len(fila) == 1 else fila.pop(0)
+                bruto = json.dumps(dados).encode("utf-8")
+                self_.send_response(codigo)
+                self_.send_header("Content-Type", "application/json")
+                self_.send_header("Content-Length", str(len(bruto)))
+                self_.end_headers()
+                self_.wfile.write(bruto)
+
+            def do_POST(self_):
+                self_._responde("POST")
+
+            def do_GET(self_):
+                self_._responde("GET")
+
+        self.servidor = http.server.HTTPServer(("127.0.0.1", 0), Maneja)
+        self.alvo = "http://127.0.0.1:%d" % self.servidor.server_address[1]
+        self.fio = threading.Thread(target=self.servidor.serve_forever, daemon=True)
+        self.fio.start()
+
+    def fechar(self):
+        self.servidor.shutdown()
+        self.servidor.server_close()
+        self.fio.join(5)
+
+    def chamadas(self, caminho):
+        return [r for r in self.registro if r[1].split("?")[0] == caminho]
+
+
+PEDIDO_OK = (200, {"pedido": "p" * 43, "codigo": "K7M4-2QXP",
+                   "minutos": 10, "intervalo": 5})
+
+
+class EscolherAPastaNoWindows(unittest.TestCase):
+    """Python embutivel nao traz tkinter: a pasta vem do PowerShell 5.1.
+
+    `os.name` e `subprocess.run` sao dubles. A prova real (a janela abrir, o
+    antivirus deixar) e manual e esta no plano, F-2.
+    """
 
     def setUp(self):
-        self.casa = tempfile.TemporaryDirectory()
-        self.addCleanup(self.casa.cleanup)
-        os.environ.pop("DERVS_REPO", None)
+        self.nt = unittest.mock.patch.object(os, "name", "nt")
+        self.nt.start()
+        self.addCleanup(self.nt.stop)
 
-    def test_acha_o_agente_numa_filha_da_raiz_escolhida(self):
-        repo = Path(self.casa.name) / "dervs" / "agente"
-        repo.mkdir(parents=True)
-        (repo / "enviar.py").write_text("# de mentira", encoding="utf-8")
-        achado = conectador.achar_o_agente(self.casa.name)
-        self.assertTrue(achado.endswith(os.path.join("agente", "enviar.py")))
-
-    def test_a_variavel_de_ambiente_vence(self):
-        outro = Path(self.casa.name) / "escolhido" / "agente"
-        outro.mkdir(parents=True)
-        (outro / "enviar.py").write_text("# de mentira", encoding="utf-8")
-        os.environ["DERVS_REPO"] = str(outro.parent)
-        self.addCleanup(os.environ.pop, "DERVS_REPO", None)
-        self.assertEqual(str(outro / "enviar.py"),
-                         conectador.achar_o_agente(self.casa.name))
-
-    def test_sem_o_repositorio_ele_devolve_vazio_em_vez_de_levantar(self):
-        vazia = Path(self.casa.name) / "so-projetos"
-        vazia.mkdir()
-        antes = conectador.__file__
-        # Aponta o proprio arquivo para uma pasta sem `agente/`, senao ele
-        # acharia o repositorio de VERDADE em que este teste roda.
-        conectador.__file__ = str(vazia / "conectador.py")
-        self.addCleanup(setattr, conectador, "__file__", antes)
-        self.assertEqual("", conectador.achar_o_agente(str(vazia)))
-
-
-class OPareamentoPelaRede(unittest.TestCase):
-    """Duble de `urlopen`. A CI nao tem painel para bater."""
-
-    def test_devolve_o_token_do_json(self):
-        import urllib.request
-
-        class Resposta:
-            def __enter__(self_):
-                return self_
-
-            def __exit__(self_, *a):
-                return False
-
-            def read(self_, n=None):
-                return b'{"token": "abc123"}'
-
+    def _run(self, retorno=None, erro=None):
         vistos = {}
 
-        def falso(pedido, timeout=None):
-            vistos["url"] = pedido.full_url
-            vistos["metodo"] = pedido.get_method()
-            vistos["corpo"] = pedido.data
-            return Resposta()
+        class Fim:
+            returncode = 0
+            stdout = b""
+            stderr = b""
 
-        antes = urllib.request.urlopen
-        urllib.request.urlopen = falso
-        self.addCleanup(setattr, urllib.request, "urlopen", antes)
+        fim = Fim()
+        for k, v in (retorno or {}).items():
+            setattr(fim, k, v)
 
-        self.assertEqual("abc123",
-                         conectador.parear("https://dervs.com.br/", "123456", "pc"))
-        self.assertEqual("https://dervs.com.br/agente/parear", vistos["url"])
-        self.assertEqual("POST", vistos["metodo"])
-        self.assertEqual({"codigo": "123456", "maquina": "pc"},
-                         json.loads(vistos["corpo"].decode("utf-8")))
+        def falso(argv, **kw):
+            vistos["argv"], vistos["kw"] = argv, kw
+            if erro:
+                raise erro
+            return fim
 
-    def test_rede_caida_devolve_vazio_e_nao_levanta(self):
-        import urllib.error
-        import urllib.request
+        mock = unittest.mock.patch.object(subprocess, "run", falso)
+        mock.start()
+        self.addCleanup(mock.stop)
+        return vistos
 
-        def explodir(pedido, timeout=None):
-            raise urllib.error.URLError("sem rede")
+    def test_argv_e_lista_com_powershell_noprofile_e_sta(self):
+        vistos = self._run({"stdout": b"C:\\projetos\r\n"})
+        self.assertEqual("C:\\projetos", conectador.escolher_pasta("C:\\sug"))
+        argv = vistos["argv"]
+        self.assertIsInstance(argv, list)
+        self.assertEqual("powershell.exe", argv[0])
+        self.assertIn("-NoProfile", argv)
+        self.assertIn("-STA", argv)
+        self.assertFalse(vistos["kw"].get("shell", False))
 
-        antes = urllib.request.urlopen
-        urllib.request.urlopen = explodir
-        self.addCleanup(setattr, urllib.request, "urlopen", antes)
-        self.assertEqual("", conectador.parear("https://x", "1", "pc"))
+    def test_a_sugestao_vai_no_ambiente_e_nunca_no_argv(self):
+        vistos = self._run({"stdout": b"C:\\p"})
+        conectador.escolher_pasta("C:\\Users\\a b'c\\repos")
+        self.assertFalse(any("a b'c" in a for a in vistos["argv"]),
+                         "caminho no argv atravessaria o interpretador")
+        self.assertEqual("C:\\Users\\a b'c\\repos",
+                         vistos["kw"]["env"]["DERVS_SUGESTAO"])
 
-    def test_resposta_torta_devolve_vazio(self):
-        import urllib.request
+    def test_script_do_powershell_e_ascii(self):
+        vistos = self._run({"stdout": b"C:\\p"})
+        conectador.escolher_pasta("C:\\x")
+        for a in vistos["argv"]:
+            self.assertTrue(a.isascii(), a)
 
-        class Resposta:
-            def __enter__(self_):
-                return self_
+    def test_acento_no_caminho_volta_em_utf8_sem_bom(self):
+        self._run({"stdout": "\ufeffC:\\Proje\u00e7\u00f5es\r\n".encode("utf-8")})
+        self.assertEqual("C:\\Proje\u00e7\u00f5es",
+                         conectador.escolher_pasta("C:\\x"))
 
-            def __exit__(self_, *a):
-                return False
+    def test_fechar_a_janela_e_vazio_e_nao_cai_para_o_teclado(self):
+        """Cancelar e resposta, nao defeito: nao pergunta de novo."""
+        self._run({"stdout": b"", "returncode": 0})
 
-            def read(self_, n=None):
-                return b"nao sou json"
+        def explodir(*a, **k):
+            raise AssertionError("nao podia perguntar pelo teclado")
+        antes = conectador.pasta_pelo_teclado
+        conectador.pasta_pelo_teclado = explodir
+        self.addCleanup(setattr, conectador, "pasta_pelo_teclado", antes)
+        self.assertEqual("", conectador.escolher_pasta("C:\\x"))
 
-        antes = urllib.request.urlopen
-        urllib.request.urlopen = lambda p, timeout=None: Resposta()
-        self.addCleanup(setattr, urllib.request, "urlopen", antes)
-        self.assertEqual("", conectador.parear("https://x", "1", "pc"))
+    def test_oserror_cai_para_tkinter_e_depois_para_o_teclado(self):
+        self._run(erro=OSError("sem powershell"))
+        chamadas = []
+        antes = conectador.pasta_pelo_teclado
+        conectador.pasta_pelo_teclado = lambda s: chamadas.append(s) or "D:/k"
+        self.addCleanup(setattr, conectador, "pasta_pelo_teclado", antes)
+        tk_antes = (sys.modules.get("tkinter"),
+                    sys.modules.get("tkinter.filedialog"))
+        sys.modules["tkinter"] = None           # sem Tcl/Tk: ImportError
+        sys.modules["tkinter.filedialog"] = None
+
+        def devolver():
+            for nome, antes_ in zip(("tkinter", "tkinter.filedialog"), tk_antes):
+                if antes_ is None:
+                    sys.modules.pop(nome, None)
+                else:
+                    sys.modules[nome] = antes_
+        self.addCleanup(devolver)
+        self.assertEqual("D:/k", conectador.escolher_pasta("C:\\x"))
+        self.assertEqual(["C:\\x"], chamadas)
+
+    def test_constrained_language_mode_codigo_de_saida_cai_para_o_proximo(self):
+        """`Add-Type` falha em CLM: o processo sai com erro e stdout vazio."""
+        self._run({"returncode": 1, "stdout": b""})
+        self.assertIsNone(conectador.pelo_powershell("C:\\x"))
+
+
+class OPedidoEAEsperaPeloNavegador(unittest.TestCase):
+    """Contratos C2 e C3, contra um servidor de mentira de verdade."""
+
+    def setUp(self):
+        self.dormidos = []
+        antes = conectador.dormir
+        conectador.dormir = self.dormidos.append
+        self.addCleanup(setattr, conectador, "dormir", antes)
+        self.abertos = []
+        navegador = conectador.webbrowser.open
+        conectador.webbrowser.open = lambda url, *a, **k: self.abertos.append(url)
+        self.addCleanup(setattr, conectador.webbrowser, "open", navegador)
+        self.saida, antes_out = io.StringIO(), sys.stdout
+        sys.stdout = self.saida
+        self.addCleanup(setattr, sys, "stdout", antes_out)
+
+    def _duble(self, respostas):
+        d = ODuble(respostas)
+        self.addCleanup(d.fechar)
+        return d
+
+    def test_abre_o_navegador_na_tela_com_o_codigo_e_devolve_o_token(self):
+        d = self._duble({"/agente/pedir": [PEDIDO_OK],
+                         "/agente/esperar": [(202, {"estado": "esperando",
+                                                    "intervalo": 5}),
+                                             (200, {"token": "tk-secreto"})]})
+        token = conectador.conectar_pelo_navegador(d.alvo, "PC-DO-ZE")
+        self.assertEqual("tk-secreto", token)
+        self.assertEqual([d.alvo + "/#/conectar?autorizar=K7M4-2QXP"],
+                         self.abertos)
+        corpo = json.loads(d.chamadas("/agente/pedir")[0][2])
+        self.assertEqual({"maquina": "PC-DO-ZE"}, corpo)
+        esperas = d.chamadas("/agente/esperar")
+        self.assertEqual(2, len(esperas))
+        self.assertEqual({"pedido": "p" * 43}, json.loads(esperas[0][2]))
+
+    def test_mostra_o_codigo_e_o_nome_e_nunca_o_token(self):
+        d = self._duble({"/agente/pedir": [PEDIDO_OK],
+                         "/agente/esperar": [(200, {"token": "tk-secreto"})]})
+        conectador.conectar_pelo_navegador(d.alvo, "PC-DO-ZE")
+        texto = self.saida.getvalue()
+        self.assertIn("K7M4-2QXP", texto)
+        self.assertIn("PC-DO-ZE", texto)
+        self.assertNotIn("tk-secreto", texto)
+        self.assertNotIn("p" * 43, texto)       # o pedido e segredo do PC
+
+    def test_404_na_espera_e_sem_token_e_nao_insiste(self):
+        d = self._duble({"/agente/pedir": [PEDIDO_OK],
+                         "/agente/esperar": [(404, {"erro": "nao existe"})]})
+        self.assertEqual("", conectador.conectar_pelo_navegador(d.alvo, "pc"))
+        self.assertEqual(1, len(d.chamadas("/agente/esperar")))
+
+    def test_429_dobra_o_intervalo(self):
+        d = self._duble({"/agente/pedir": [PEDIDO_OK],
+                         "/agente/esperar": [(429, {"erro": "nao deu"}),
+                                             (202, {"estado": "esperando"}),
+                                             (200, {"token": "t"})]})
+        self.assertEqual("t", conectador.conectar_pelo_navegador(d.alvo, "pc"))
+        self.assertEqual([10, 10], self.dormidos)
+
+    def test_o_prazo_acaba_e_devolve_vazio(self):
+        pedido = (200, {"pedido": "p" * 43, "codigo": "K7M4-2QXP",
+                        "minutos": 1, "intervalo": 5})
+        d = self._duble({"/agente/pedir": [pedido],
+                         "/agente/esperar": [(202, {"estado": "esperando"})]})
+        self.assertEqual("", conectador.conectar_pelo_navegador(d.alvo, "pc"))
+        self.assertLessEqual(sum(self.dormidos), 60 + 5)
+        self.assertGreaterEqual(sum(self.dormidos), 55)
+
+    def test_pedir_recusado_nao_abre_navegador(self):
+        for codigo in (400, 429, 503):
+            d = self._duble({"/agente/pedir": [(codigo, {"erro": "x"})]})
+            self.assertEqual("", conectador.conectar_pelo_navegador(d.alvo, "pc"))
+        self.assertEqual([], self.abertos)
+
+    def test_pedido_sem_codigo_ou_torto_nao_vira_url(self):
+        """O codigo entra numa URL: so o alfabeto do servidor passa."""
+        for ruim in ("K7M4-2QXP&x=1", "k7m4-2qxp", "", "../x", "K7M4 2QXP"):
+            d = self._duble({"/agente/pedir": [(200, {
+                "pedido": "p" * 43, "codigo": ruim, "minutos": 10,
+                "intervalo": 5})]})
+            self.assertEqual("", conectador.conectar_pelo_navegador(d.alvo, "pc"))
+        self.assertEqual([], self.abertos)
+
+    def test_servidor_fora_do_ar_devolve_vazio(self):
+        self.assertEqual("", conectador.conectar_pelo_navegador(
+            "http://127.0.0.1:1", "pc"))
+
+
+class OMoldeDoArquivoCmd(unittest.TestCase):
+    """`conectador.cmd`: o que o servidor entrega junto com o Python.
+
+    Nenhum teste de CI RODA o lote (a CI e Linux): aqui so se confere a forma.
+    A prova de que ele funciona e abrir no Windows, e esta no plano (F-2).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.caminho = Path(conectador.__file__).parent / "conectador.cmd"
+        cls.bruto = cls.caminho.read_bytes()
+        cls.texto = cls.bruto.decode("ascii")      # nao decodifica = nao e ASCII
+
+    def test_e_ascii(self):
+        self.assertTrue(self.bruto.isascii())
+
+    def test_tem_o_que_o_plano_manda(self):
+        for peca in ("curl.exe", "certutil -hashfile", "tar.exe",
+                     r"%LOCALAPPDATA%\DERVS",
+                     "https://www.python.org/ftp/python/3.14.8/"
+                     "python-3.14.8-embed-amd64.zip"):
+            self.assertIn(peca, self.texto)
+
+    def test_o_hash_e_um_sha256_de_64_hexadecimais(self):
+        import re
+        achados = re.findall(r'(?i)set "SHA=([0-9a-f]+)"', self.texto)
+        self.assertEqual(1, len(achados))
+        self.assertRegex(achados[0], r"^[0-9a-fA-F]{64}$")
+
+    def test_o_zip_e_apagado_no_ramo_do_hash_diferente(self):
+        linhas = self.texto.splitlines()
+        i = next(n for n, l in enumerate(linhas) if "certutil -hashfile" in l)
+        ate_a_saida = []
+        for l in linhas[i + 1:]:
+            ate_a_saida.append(l)
+            if "exit /b" in l:
+                break
+        self.assertTrue(any(" del " in " " + l.lower() for l in ate_a_saida),
+                        "hash diferente tem de apagar o zip antes de sair")
+
+    def test_termina_em_exit_b_errorlevel(self):
+        uteis = [l.strip() for l in self.texto.splitlines()
+                 if l.strip() and not l.strip().lower().startswith(("rem ", "::"))]
+        self.assertEqual("exit /b %ERRORLEVEL%", uteis[-1])
+
+    def test_nao_tem_a_linha_do_marcador_nem_truques_proibidos(self):
+        self.assertFalse(any(l.startswith("#:DERVS-PYTHON")
+                             for l in self.texto.splitlines()))
+        baixo = self.texto.lower()
+        for ruim in ("-encodedcommand", "-enc ", "bitsadmin",
+                     "invoke-expression", "iex"):
+            self.assertNotIn(ruim, baixo)
+
+    def test_o_codigo_do_dash_c_nao_tem_percentual(self):
+        import re
+        c = re.search(r'-c "([^"]*)"', self.texto)
+        self.assertIsNotNone(c)
+        self.assertNotIn("%", c.group(1))
+
+    def test_a_extracao_devolve_um_python_que_compila(self):
+        """Roda o `-c` do molde de verdade, com o arquivo montado como o
+        servidor monta (molde, marcador, conectador.py, tudo em CRLF)."""
+        import re
+        fonte = Path(conectador.__file__).read_text(encoding="utf-8")
+        montado = "\r\n".join(self.texto.splitlines()
+                              + ["#:DERVS-PYTHON"] + fonte.splitlines()) + "\r\n"
+        c = re.search(r'-c "([^"]*)"', self.texto).group(1)
+        with tempfile.TemporaryDirectory() as pasta:
+            entrada = Path(pasta) / "conectar-dervs.cmd"
+            saida = Path(pasta) / "conectador.py"
+            entrada.write_bytes(montado.encode("ascii"))
+            fim = subprocess.run([sys.executable, "-I", "-c", c, str(entrada),
+                                  str(saida)], capture_output=True, timeout=60)
+            self.assertEqual(0, fim.returncode, fim.stderr)
+            extraido = saida.read_text(encoding="utf-8")
+        ast.parse(extraido)
+        self.assertEqual(fonte.splitlines(), extraido.splitlines())
+
+
+PACOTE_6 = ("agente/__init__.py", "agente/enviar.py", "coletar.py", "banco.py",
+            "documentos.py", "tarefas.py")
+
+
+def um_pacote(so_mede=True, caminhos=PACOTE_6):
+    return (200, {"versao": "0" * 64, "so_mede": so_mede,
+                  "arquivos": [{"caminho": c, "conteudo": "# %s\n" % c}
+                               for c in caminhos]})
+
+
+class ComCasaEArquivoTemporarios(unittest.TestCase):
+    """Isola `DERVS_CASA` e `DERVS_AGENTE_ARQUIVO`: nada toca o PC de quem testa."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.casa = Path(self.tmp.name) / "programa"
+        self.arquivo = Path(self.tmp.name) / "agente.json"
+        for k, v in (("DERVS_CASA", str(self.casa)),
+                     ("DERVS_AGENTE_ARQUIVO", str(self.arquivo))):
+            os.environ[k] = v
+            self.addCleanup(os.environ.pop, k, None)
+
+
+class OPacoteDoPainel(ComCasaEArquivoTemporarios):
+    """Contrato C6: o PC passa a medir sem o repositorio clonado."""
+
+    def test_a_casa_padrao_e_a_pasta_do_programa_no_localappdata(self):
+        os.environ.pop("DERVS_CASA")
+        with unittest.mock.patch.dict(os.environ, {"LOCALAPPDATA": "C:\\L"}):
+            self.assertEqual(Path("C:\\L") / "DERVS" / "programa",
+                             conectador.casa_do_programa())
+
+    def test_dervs_casa_vence(self):
+        self.assertEqual(self.casa, conectador.casa_do_programa())
+
+    def test_grava_os_arquivos_na_casa(self):
+        pacote = um_pacote()[1]
+        self.assertTrue(conectador.gravar_pacote(pacote, self.casa))
+        for c in PACOTE_6:
+            self.assertEqual("# %s\n" % c,
+                             (self.casa / c).read_text(encoding="utf-8"))
+
+    def test_caminho_fora_do_formato_recusa_o_pacote_inteiro(self):
+        ruins = ("../x.py", "agente/../../x.py", "/etc/x.py", "C:\\x.py",
+                 "agente\\enviar.py", "a/b/c.py", "agente/enviar.PY",
+                 "enviar.txt", "agente/.py", "x" * 41 + ".py", "agente/en viar.py",
+                 "agente/enviar.py\n", "")
+        for ruim in ruins:
+            with self.subTest(ruim=ruim):
+                pacote = um_pacote(caminhos=PACOTE_6 + (ruim,))[1]
+                self.assertFalse(conectador.gravar_pacote(pacote, self.casa))
+                self.assertFalse(self.casa.exists(),
+                                 "recusa o pacote INTEIRO: nada gravado")
+                self.assertFalse((Path(self.tmp.name) / "x.py").exists())
+
+    def test_pacote_torto_e_recusado(self):
+        for torto in ({}, {"arquivos": []}, {"arquivos": "x"},
+                      {"arquivos": ["agente/enviar.py"]},
+                      {"arquivos": [{"caminho": "agente/enviar.py"}]},
+                      {"arquivos": [{"caminho": "agente/enviar.py",
+                                     "conteudo": 5}]},
+                      {"arquivos": [{"caminho": "coletar.py", "conteudo": "x"}]}):
+            with self.subTest(torto=torto):
+                self.assertFalse(conectador.gravar_pacote(torto, self.casa))
+                self.assertFalse(self.casa.exists())
+
+    def test_o_pacote_pede_com_o_token_no_cabecalho(self):
+        d = ODuble({"/agente/pacote": [um_pacote()]})
+        self.addCleanup(d.fechar)
+        codigo, dados = conectador.buscar_pacote(d.alvo, "tk-do-pc")
+        self.assertEqual(200, codigo)
+        self.assertEqual(6, len(dados["arquivos"]))
+        pedido = d.chamadas("/agente/pacote")[0]
+        self.assertEqual("GET", pedido[0])
+        self.assertEqual("Token tk-do-pc", pedido[3].get("Authorization"))
+
+
+class OInterpretadorDaTarefa(unittest.TestCase):
+    def test_pythonw_ao_lado_quando_existe(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            (Path(pasta) / "python.exe").write_bytes(b"")
+            (Path(pasta) / "pythonw.exe").write_bytes(b"")
+            with unittest.mock.patch.object(
+                    sys, "executable", str(Path(pasta) / "python.exe")):
+                self.assertEqual(str(Path(pasta) / "pythonw.exe"),
+                                 conectador.interprete_da_tarefa())
+                tr = conectador.argumentos_do_schtasks(
+                    "C:/c/agente/enviar.py", "https://d",
+                    interprete=conectador.interprete_da_tarefa())
+                self.assertIn(str(Path(pasta) / "pythonw.exe"),
+                              tr[tr.index("/TR") + 1])
+
+    def test_sem_pythonw_fica_o_python_do_console(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            (Path(pasta) / "python.exe").write_bytes(b"")
+            with unittest.mock.patch.object(
+                    sys, "executable", str(Path(pasta) / "python.exe")):
+                self.assertEqual(str(Path(pasta) / "python.exe"),
+                                 conectador.interprete_da_tarefa())
+
+    def test_aspas_e_plano_b_continuam_valendo_com_o_interprete(self):
+        argv = conectador.argumentos_do_schtasks(
+            "C:/c/agente/enviar.py", "https://d", plano_b=True,
+            interprete=r"C:\Arquivos de Programa\py\pythonw.exe")
+        tr = argv[argv.index("/TR") + 1]
+        self.assertTrue(tr.startswith(r'"C:\Arquivos de Programa\py\pythonw.exe" '))
+        self.assertEqual("MINUTE", argv[argv.index("/SC") + 1])
+        self.assertNotIn("--intervalo", tr)
+
+
+class OFluxoInteiroComServidorDeMentira(ComCasaEArquivoTemporarios):
+    """`main()` do começo ao fim, contra o dublê do painel (C2, C3 e C6)."""
+
+    def setUp(self):
+        super().setUp()
+        self.pasta = Path(self.tmp.name) / "projetos"
+        self.pasta.mkdir()
+        self.dormidos, self.abertos = [], []
+        self.agendados, self.relatos = [], []
+        for nome, valor in (
+                ("escolher_pasta", lambda *a, **k: str(self.pasta)),
+                ("dormir", self.dormidos.append),
+                ("agendar", self._agendar)):
+            antes = getattr(conectador, nome)
+            setattr(conectador, nome, valor)
+            self.addCleanup(setattr, conectador, nome, antes)
+        navegador = conectador.webbrowser.open
+        conectador.webbrowser.open = lambda url, *a, **k: self.abertos.append(url)
+        self.addCleanup(setattr, conectador.webbrowser, "open", navegador)
+
+        def falso_run(argv, **kw):
+            self.relatos.append((argv, kw))
+
+            class Fim:
+                returncode = 0
+            return Fim()
+        run = unittest.mock.patch.object(subprocess, "run", falso_run)
+        run.start()
+        self.addCleanup(run.stop)
+        self.antes_out = sys.stdout
+        sys.stdout = self.saida = io.StringIO()
+        self.addCleanup(setattr, sys, "stdout", self.antes_out)
+        antes_in = sys.stdin
+        sys.stdin = io.StringIO("")
+        self.addCleanup(setattr, sys, "stdin", antes_in)
+
+    def _agendar(self, agente, alvo, plano_b=False, interprete=""):
+        self.agendados.append((agente, alvo, plano_b, interprete))
+        return True
+
+    def _duble(self, respostas):
+        d = ODuble(respostas)
+        self.addCleanup(d.fechar)
+        os.environ["DERVS_ALVO"] = d.alvo
+        self.addCleanup(os.environ.pop, "DERVS_ALVO", None)
+        return d
+
+    def _json(self):
+        return json.loads(self.arquivo.read_text(encoding="utf-8"))
+
+    def test_do_pedido_ao_primeiro_relato(self):
+        d = self._duble({"/agente/pedir": [PEDIDO_OK],
+                         "/agente/esperar": [(202, {"estado": "esperando"}),
+                                             (200, {"token": "tk-novo"})],
+                         "/agente/pacote": [um_pacote()]})
+        self.assertEqual(conectador.SAIU_BEM, conectador.main())
+        dados = self._json()
+        self.assertEqual("tk-novo", dados[d.alvo.lower()]["token"])
+        self.assertEqual([str(self.pasta)], dados["raizes"])
+        for c in PACOTE_6:
+            self.assertTrue((self.casa / c).is_file(), c)
+        enviar = str(self.casa / "agente" / "enviar.py")
+        self.assertEqual(1, len(self.agendados))
+        self.assertEqual((enviar, d.alvo), self.agendados[0][:2])
+        argv, kw = self.relatos[-1]
+        self.assertEqual([sys.executable, enviar, "--alvo", d.alvo], argv)
+        self.assertIn("timeout", kw)
+        self.assertFalse(kw.get("shell", False))
+        self.assertIn("Pronto. Esta janela fecha em 10 segundos.",
+                      self.saida.getvalue())
+        self.assertEqual(10, self.dormidos[-1])
+        self.assertNotIn("tk-novo", self.saida.getvalue())
+
+    def test_pacote_com_caminho_perigoso_sai_com_sem_pacote_e_nao_agenda(self):
+        d = self._duble({"/agente/pedir": [PEDIDO_OK],
+                         "/agente/esperar": [(200, {"token": "tk-novo"})],
+                         "/agente/pacote": [um_pacote(
+                             caminhos=PACOTE_6 + ("agente/../../x.py",))]})
+        self.assertEqual(conectador.SEM_PACOTE, conectador.main())
+        self.assertEqual([], self.agendados)
+        self.assertEqual([], self.relatos)
+        self.assertFalse(self.casa.exists())
+        # O resgate e UMA vez so: o token ja existe e e gravado antes do pacote.
+        self.assertEqual("tk-novo", self._json()[d.alvo.lower()]["token"])
+        self.assertNotIn("Nada foi gravado", self.saida.getvalue())
+        self.assertEqual(5, conectador.SEM_PACOTE)
+        self.assertTrue(d.chamadas("/agente/pacote"))
+
+    def test_pacote_503_depois_do_resgate_grava_o_token_e_a_proxima_entra(self):
+        d = self._duble({"/agente/pedir": [PEDIDO_OK],
+                         "/agente/esperar": [(200, {"token": "tk-novo"})],
+                         "/agente/pacote": [(503, {"erro": "x"}), um_pacote()]})
+        self.assertEqual(conectador.SEM_PACOTE, conectador.main())
+        self.assertEqual("tk-novo", self._json()[d.alvo.lower()]["token"])
+        self.assertNotIn("Nada foi gravado", self.saida.getvalue())
+        self.assertEqual(conectador.SAIU_BEM, conectador.main())
+        self.assertEqual(1, len(d.chamadas("/agente/pedir")),
+                         "a segunda rodada entra pelo token gravado")
+
+    def test_s3_o_nome_mandado_e_saneado(self):
+        antes = conectador.socket.gethostname
+        conectador.socket.gethostname = lambda: "CAFÉ <PC>/1" + "x" * 60
+        self.addCleanup(setattr, conectador.socket, "gethostname", antes)
+        nome = conectador.nome_desta_maquina()
+        self.assertLessEqual(len(nome), 40)
+        self.assertEqual("CAF- -PC--1", nome[:11])
+        self.assertTrue(set(nome) <= set(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._-"))
+
+    def test_com_token_gravado_nao_pede_de_novo_e_usa_o_pacote(self):
+        d = self._duble({"/agente/pacote": [um_pacote()]})
+        conectador.gravar(d.alvo, "tk-velho", "D:/outra", "pc")
+        self.assertEqual(conectador.SAIU_BEM, conectador.main())
+        self.assertEqual([], d.chamadas("/agente/pedir"))
+        self.assertEqual("Token tk-velho",
+                         d.chamadas("/agente/pacote")[0][3].get("Authorization"))
+        dados = self._json()
+        self.assertEqual("tk-velho", dados[d.alvo.lower()]["token"])
+        self.assertEqual(["D:/outra", str(self.pasta)], dados["raizes"])
+        self.assertEqual(1, len(self.agendados))
+
+    def test_token_recusado_com_401_pareia_de_novo(self):
+        d = self._duble({"/agente/pacote": [(401, {"erro": "x"}), um_pacote()],
+                         "/agente/pedir": [PEDIDO_OK],
+                         "/agente/esperar": [(200, {"token": "tk-novo"})]})
+        conectador.gravar(d.alvo, "tk-velho", "D:/outra", "pc")
+        self.assertEqual(conectador.SAIU_BEM, conectador.main())
+        self.assertEqual(1, len(d.chamadas("/agente/pedir")))
+        self.assertEqual("tk-novo", self._json()[d.alvo.lower()]["token"])
+
+    def test_so_mede_falso_nao_instala_nem_agenda_so_acrescenta_a_pasta(self):
+        """Risco 15: trocar a tarefa mataria o braco executor deste PC."""
+        d = self._duble({"/agente/pacote": [um_pacote(so_mede=False)]})
+        conectador.gravar(d.alvo, "tk-velho", "D:/outra", "pc")
+        self.assertEqual(conectador.SAIU_BEM, conectador.main())
+        self.assertEqual([], self.agendados)
+        self.assertEqual([], self.relatos)
+        self.assertFalse(self.casa.exists(), "nao instala por cima do repositorio")
+        dados = self._json()
+        self.assertEqual("tk-velho", dados[d.alvo.lower()]["token"])
+        self.assertEqual(["D:/outra", str(self.pasta)], dados["raizes"])
+
+    def test_pacote_indisponivel_com_token_gravado_sai_com_sem_pacote(self):
+        d = self._duble({"/agente/pacote": [(503, {"erro": "x"})]})
+        conectador.gravar(d.alvo, "tk-velho", "D:/outra", "pc")
+        self.assertEqual(conectador.SEM_PACOTE, conectador.main())
+        self.assertEqual([], self.agendados)
+
+
+class OPacoteSemOBraco(ComCasaEArquivoTemporarios):
+    """O pacote nao leva `agente/executor.py`: o PC so mede."""
+
+    def _copiar_o_pacote(self, destino):
+        aqui = Path(conectador.__file__).parent
+        for c in PACOTE_6:
+            (destino / c).parent.mkdir(parents=True, exist_ok=True)
+            (destino / c).write_bytes((aqui / c).read_bytes())
+
+    def test_enviar_help_roda_sem_o_repositorio(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            raiz = Path(pasta)
+            self._copiar_o_pacote(raiz)
+            self.assertFalse((raiz / "agente" / "executor.py").exists())
+            ambiente = {k: v for k, v in os.environ.items()
+                        if k != "PYTHONPATH"}
+            fim = subprocess.run(
+                [sys.executable, str(raiz / "agente" / "enviar.py"), "--help"],
+                cwd=pasta, env=ambiente, capture_output=True, timeout=60)
+            self.assertEqual(0, fim.returncode, fim.stderr)
+
+    def test_tarefa_sem_o_braco_sobe_falha_em_vez_de_levantar(self):
+        sys.path.insert(0, str(Path(conectador.__file__).parent))
+        self.addCleanup(sys.path.remove, str(Path(conectador.__file__).parent))
+        from agente import enviar
+        subidos = []
+        with unittest.mock.patch.dict(sys.modules, {"agente.executor": None}), \
+                unittest.mock.patch.object(
+                    enviar, "_falar",
+                    lambda alvo, caminho, corpo, token="": subidos.append(
+                        (caminho, corpo)) or {}):
+            desfecho = enviar.fazer_a_tarefa(
+                "https://d", "tk", {"id": "t1", "projeto": "p",
+                                    "executor": "claude"})
+        self.assertEqual("falha", desfecho["estado"])
+        self.assertIn("so mede", desfecho["erro"])
+        self.assertEqual("/agente/resultado", subidos[0][0])
+        self.assertEqual("falha", subidos[0][1]["estado"])
 
 
 if __name__ == "__main__":

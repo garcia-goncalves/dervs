@@ -368,8 +368,9 @@ a próxima sessão erraria:
 - **O corte do leitor nunca é mudo.** Passar de `MAX_VARRIDOS` abertos ou de
   `MAX_PASTAS` listadas vira erro visível ("há mais briefings que o limite"),
   senão o painel diria "sem documentação". O teto do JSON da chave subiu para
-  32 KiB: com os 11 briefings do próprio DERVS convertidos (115 critérios,
-  ~28 KiB) o último ficava sem critério nenhum. Os briefings antigos estão em
+  40 KiB (09/10/2026; era 32): os 14 briefings do próprio DERVS (141 critérios)
+  medem 33.556 bytes, e com 32 KiB o último ficava cortado. Tem de ficar abaixo
+  dos 64 KiB do projeto inteiro (`test_documentos` cobra). Os briefings antigos estão em
   `- [ ]` (nada marcado `[x]`: marcar é julgamento por critério).
 - **Em Consertar, o comando da prova sai à parte** (`prova` em
   `banco.tarefas_do_painel`): ele fica no fim do pedido e o corte em 300 o
@@ -377,7 +378,7 @@ a próxima sessão erraria:
 - **Não nomeie rota nem função `documentacao`:** `test_rotas.PROIBIDO` casa
   `acao|exec|comando|shell`, e "documentACAO" casa.
 - **Projeto acima de 64 KiB é descartado INTEIRO** em `banco.receber_relatorio`: o
-  agente limita o tamanho da chave (32 KiB) e marca `cortado`.
+  agente limita o tamanho da chave (40 KiB) e marca `cortado`.
 - **`test_progresso_tela.py` executa as funções de montagem em node** com um DOM de
   mentira (como `test_voz_tela.py`); sem node ele pula só esses casos. Mais o
   `test_design`: `Number(`/`parseInt(` são proibidos (use `+x`).
@@ -484,6 +485,55 @@ que quebram em silêncio:
 - **A migração reconstrói a tabela** (`_migrar_instalacao_github_varias`, condição de
   "já rodou" = coluna `conta_login`). O banco de produção tem a linha antiga: o teste
   `InstalacaoDoGithubComUniqueAntigo` cobra que ela sobrevive.
+
+## Conectar simples (09/10/2026)
+
+O botão **Conectar este computador** baixa `GET /api/conectar.cmd` (molde
+`conectador.cmd` + `#:DERVS-PYTHON` + `conectador.py` com o endereço injetado);
+o computador pede (`/agente/pedir`), o navegador abre em `#/conectar?autorizar=`,
+o dono clica em Autorizar e o computador resgata o token (`/agente/esperar`) e
+baixa o programa (`/agente/pacote`). O que a próxima sessão erraria:
+
+- **`GET /api/pedido` é UMA leitura por página** (`olharOPedido`); sondar gasta o
+  balcão do próprio dono. Quem sonda é `/api/maquinas`. O segredo do computador
+  se chama `pedido`, nunca `token`, e o código curto (`XXXX-XXXX`) tem balcão
+  `codigo_curto`.
+- **Cada rota nova paga o próprio balcão** (`pedir`, `esperar`, `codigo_curto`,
+  `pacote`, `medir`, `mostrar`); nenhuma empresta o teto de outra.
+  `PAGINA_VELHA` é central e `escrever()` só abre a faixa com o `motivo` exato
+  (`test_conectar_fio` compara as duas palavras).
+- **`so_mede` tem duas trancas:** o pacote não leva `agente/executor.py`
+  (`Hub.PACOTE` == `test_imagem.PACOTE_DO_COMPUTADOR`) e o servidor recusa ligar
+  execução em máquina `so_mede`. Quem tira uma tira só metade.
+- **`projeto_oculto` é por NOME e por CONTA, e a poda é em `_dados`**, nunca em
+  `banco.montar_estado`: o motor de regras e a vigilia do VOZ leem o estado
+  inteiro (esconder do painel não é deixar de olhar).
+- **O `.cmd` sai com CRLF montado pelo servidor** (`"
+".join`, `ascii`); no
+  repositório `conectador.cmd` é LF. `conectador.py` tem de ser **ASCII puro**:
+  um acento e o servidor responde 503. A marca `# DERVS:ALVO` é única.
+- **`conectador.cmd` e `agente/enviar.py` têm de estar no `Dockerfile`**
+  (`test_imagem`): a rota responde 200 aqui e 500 na imagem se faltar.
+- **`/api/conectador` foi removida** (criava estado num POST); `test_rotas` e
+  `test_conectar_servidor` cobram a ausência. Nome de rota/função com
+  `autorizacao` ou `comando` reprova `test_rotas.PROIBIDO`.
+- **Repositórios do GitHub vêm do relatório** (`remoto_slug` do `git`), não de
+  uma lista do GitHub. `coletar.AVULSOS` fica VAZIO quando `AQUI` é a pasta do
+  programa instalado (`DERVS_CASA`): senão ela vira um projeto falso no painel.
+- **Máquina `so_mede` leva 403 em `/agente/voz/*` e nunca é destino de aviso**
+  (revisão de segurança): um link de phishing autorizado ligaria uma máquina
+  estranha que leria os avisos da vigília e roubaria os recados do VOZ. VOZ
+  num PC pareado pelo `.cmd` exige uma chave explícita nova, nunca afrouxar.
+- **`GET /api/pedido` devolve `mesma_rede` (booleano, nunca o IP).** Falso:
+  a tela esconde o código e exige que o dono o DIGITE. Nome da máquina só
+  `[A-Za-z0-9 ._-]{1,40}`; `/agente/pedir` e `/agente/esperar` dão 415 sem
+  JSON, antes do balcão; `pedir` agrupa IPv6 por /64; `/api/enderecos/medir`
+  só na porta padrão. O token é gravado no PC LOGO depois do resgate.
+- **Dívida nomeada:** máquina `so_mede` ainda sobrescreve a camada `local` de
+  projeto de mesmo nome e o `_infra` da conta, e enche `MAX_PROJETOS_POR_CONTA`.
+  `fechadas_24h`/`resolvidas_7d` não descontam projeto escondido.
+- **`test_conectar_fio` roda o primeiro relato como processo novo** (~8 s por
+  classe, uma vez). `test_github_tela` importa helpers de `test_conectar_tela`.
 
 ## Testes
 

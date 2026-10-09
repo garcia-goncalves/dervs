@@ -1,0 +1,1838 @@
+# -*- coding: utf-8 -*-
+"""A tela Conectar (entrega A do "Conectar simples") -- so a casca da tela.
+
+MOTIVO: o servidor e o computador estao provados por outros arquivos. O que
+nenhum deles prova e o que o DONO ve. Mentiras possiveis desta tela, e nenhuma
+e vista por um teste "o botao existe":
+
+  - o 403 de pagina velha cair num "tente de novo" que falharia de novo;
+  - "0 projetos" escrito para um computador que ainda nem mediu;
+  - a chave "Mostrar no painel" mudar de posicao sem o servidor ter aceito;
+  - um site "fora do ar" onde a medicao simplesmente nao aconteceu;
+  - texto vindo de OUTRO computador, de OUTRO repositorio ou do GitHub entrar
+    como HTML.
+
+As funcoes de montagem sao EXECUTADAS (node, com um DOM de mentira), como em
+`test_voz_tela.py`; sem node os casos de comportamento sao pulados e os de
+texto continuam. Cada guarda foi sabotada de proposito.
+
+    python test_conectar_tela.py
+"""
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+import unittest
+from pathlib import Path
+
+AQUI = Path(__file__).parent
+HTML = (AQUI / "index.html").read_text(encoding="utf-8")
+JS = (AQUI / "assets" / "painel.js").read_text(encoding="utf-8")
+CSS = (AQUI / "assets" / "painel.css").read_text(encoding="utf-8")
+CORTINA = (AQUI / "assets" / "cortina.js").read_text(encoding="utf-8")
+
+
+def sem_comentarios(js: str) -> str:
+    js = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+    return re.sub(r"(?m)^\s*//[^\n]*$", "", js)
+
+
+def funcao(nome: str) -> str:
+    """O texto de uma funcao de primeiro nivel do painel.js (ate o `}` na coluna 0)."""
+    m = re.search(r"^(?:async )?function %s\(.*?\n}\n" % re.escape(nome), JS,
+                  re.S | re.M)
+    assert m, "funcao %s nao encontrada em painel.js" % nome
+    return m.group(0)
+
+
+def constante(nome: str) -> str:
+    """Uma `const NOME = ...;` de primeiro nivel (ate o `;` que fecha a linha)."""
+    m = re.search(r"^const %s = .*?;\n" % re.escape(nome), JS, re.S | re.M)
+    assert m, "constante %s nao encontrada em painel.js" % nome
+    return m.group(0)
+
+
+# --------------------------------------------------------------- o DOM de mentira
+PRELUDIO = r"""
+const FOCO = { atual: null };
+const REG = {};
+class No {
+  constructor(tag) {
+    this.tag = tag; this.className = ""; this._texto = ""; this.filhos = [];
+    this.attrs = {}; this.dataset = {}; this.hidden = false; this.ouvintes = {};
+    this.disabled = false; this.checked = false; this.value = ""; this.open = false;
+    this.isConnected = true; this.href = ""; this.download = ""; this.rel = "";
+    this.target = ""; this.type = ""; this.id = ""; this.name = "";
+    const eu = this;
+    this.classList = {
+      add(c) { if (!eu.className.split(" ").includes(c)) eu.className = (eu.className + " " + c).trim(); },
+      remove(c) { eu.className = eu.className.split(" ").filter(x => x && x !== c).join(" "); },
+      contains(c) { return eu.className.split(" ").includes(c); }
+    };
+  }
+  set textContent(v) { this._texto = String(v); this.filhos = []; }
+  get textContent() {
+    return this._texto + this.filhos.map(f => typeof f === "string" ? f : f.textContent).join("");
+  }
+  append(...x) { this.filhos.push(...x); }
+  replaceChildren(...x) { this._texto = ""; this.filhos = x; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  addEventListener(t, f) { (this.ouvintes[t] = this.ouvintes[t] || []).push(f); }
+  async disparar(t, ev) { for (const f of (this.ouvintes[t] || [])) await f(ev || { preventDefault() {} }); }
+  async clicar() { await this.disparar("click"); }
+  focus() { FOCO.atual = this; }
+  remove() {}
+}
+const document = { createElement: (t) => new No(t), activeElement: null };
+const $ = (s) => {
+  if (!REG[s]) { REG[s] = new No("reg"); if (s[0] === "#") REG[s].id = s.slice(1); }
+  return REG[s];
+};
+function todos(n) {
+  if (typeof n === "string") return [];
+  return [n].concat((n.filhos || []).flatMap(todos));
+}
+function acha(n, f) { return todos(n).find(f) || null; }
+function achaTodos(n, f) { return todos(n).filter(f); }
+"""
+
+
+def node_ou_pula(caso: unittest.TestCase) -> str:
+    node = shutil.which("node")
+    if not node:
+        caso.skipTest("sem node")
+    return node
+
+
+def roda(caso: unittest.TestCase, fontes: list[str], script: str):
+    """Roda `fontes` (trechos do painel.js) mais `script` com o DOM de mentira.
+
+    O script imprime UM json no fim (`console.log(JSON.stringify(...))`)."""
+    node = node_ou_pula(caso)
+    prog = PRELUDIO + "\n".join(fontes) + "\n(async () => {\n" + script + "\n})();\n"
+    r = subprocess.run([node, "-"], input=prog, capture_output=True, text=True,
+                       timeout=30, encoding="utf-8")
+    caso.assertEqual(r.returncode, 0, r.stderr)
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+# ============================================================ E3-1: a faixa
+def fontes_da_faixa() -> list[str]:
+    return ["let PAGINA_VELHA = false;\n", "const TOKEN = 't';\n",
+            funcao("recado"), funcao("abrirFaixaPaginaVelha"), funcao("escrever")]
+
+
+PRELUDIO_DA_REDE = r"""
+let RESPOSTAS = [];
+globalThis.fetch = async () => RESPOSTAS.shift();
+globalThis.location = { reloaded: 0, reload() { this.reloaded++; } };
+globalThis.setTimeout = (f) => 0;
+globalThis.clearTimeout = () => {};
+function resposta(status, corpo) {
+  return {
+    status, ok: status >= 200 && status < 300,
+    json: async () => { if (corpo === undefined) throw new Error("sem json"); return corpo; },
+    clone() { return resposta(status, corpo); }
+  };
+}
+"""
+
+
+class AFaixaDePaginaVelha(unittest.TestCase):
+    def rode(self, respostas, script):
+        return roda(self, fontes_da_faixa(),
+                    PRELUDIO_DA_REDE + "RESPOSTAS = " + respostas + ";\n" + script)
+
+    def test_403_com_o_motivo_abre_a_faixa_com_alerta_e_foco(self):
+        r = self.rode('[resposta(403, {erro: "x", motivo: "pagina_velha"})]', r"""
+const resp = await escrever("/api/silenciar", { id: "a" });
+const faixa = $("#faixa-pagina-velha");
+const alerta = acha(faixa, n => n.attrs.role === "alert");
+const botao = acha(faixa, n => n.tag === "button");
+console.log(JSON.stringify({
+  status: resp.status, tem_alerta: !!alerta, texto: faixa.textContent,
+  botao: botao && botao.textContent, foco_no_botao: FOCO.atual === botao,
+  corpo_ainda_legivel: (await resp.json()).motivo }));
+""")
+        self.assertEqual(r["status"], 403)
+        self.assertTrue(r["tem_alerta"])
+        self.assertIn("Esta página ficou desatualizada.", r["texto"])
+        self.assertIn("O que você acabou de clicar não foi feito.", r["texto"])
+        self.assertEqual(r["botao"], "Recarregar")
+        self.assertTrue(r["foco_no_botao"])
+        self.assertEqual(r["corpo_ainda_legivel"], "pagina_velha")
+
+    def test_o_botao_recarrega_a_pagina(self):
+        r = self.rode('[resposta(403, {motivo: "pagina_velha"})]', r"""
+await escrever("/x");
+await acha($("#faixa-pagina-velha"), n => n.tag === "button").clicar();
+console.log(JSON.stringify({ recarregou: location.reloaded }));
+""")
+        self.assertEqual(r["recarregou"], 1)
+
+    def test_a_segunda_recusa_nao_empilha_outra_faixa(self):
+        r = self.rode('[resposta(403, {motivo: "pagina_velha"}), '
+                      'resposta(403, {motivo: "pagina_velha"})]', r"""
+await escrever("/a"); await escrever("/b");
+const faixa = $("#faixa-pagina-velha");
+console.log(JSON.stringify({
+  alertas: achaTodos(faixa, n => n.attrs.role === "alert").length,
+  botoes: achaTodos(faixa, n => n.tag === "button").length }));
+""")
+        self.assertEqual(r, {"alertas": 1, "botoes": 1})
+
+    def test_403_de_outro_motivo_nao_abre_faixa(self):
+        for corpo in ('{erro: "entre de novo"}', '{erro: "origem nao permitida"}',
+                      "undefined"):
+            with self.subTest(corpo=corpo):
+                r = self.rode("[resposta(403, %s)]" % corpo, r"""
+const resp = await escrever("/a");
+console.log(JSON.stringify({ filhos: $("#faixa-pagina-velha").filhos.length,
+                             status: resp.status }));
+""")
+                self.assertEqual(r, {"filhos": 0, "status": 403})
+
+    def test_resposta_que_nao_e_403_passa_intacta(self):
+        r = self.rode('[resposta(200, {ok: true})]', r"""
+const resp = await escrever("/a");
+console.log(JSON.stringify({ ok: resp.ok, d: await resp.json(),
+                             filhos: $("#faixa-pagina-velha").filhos.length }));
+""")
+        self.assertEqual(r, {"ok": True, "d": {"ok": True}, "filhos": 0})
+
+    def test_com_a_faixa_aberta_o_recado_de_erro_nao_promete_tentar_de_novo(self):
+        r = self.rode('[resposta(403, {motivo: "pagina_velha"})]', r"""
+await escrever("/a");
+recado("não conseguimos adiar. Tente de novo.", true);
+const ruim = $("#recado").textContent;
+recado("adiado por 24 horas.");
+console.log(JSON.stringify({ ruim, bom: $("#recado").textContent }));
+""")
+        self.assertEqual(r["ruim"], "Não foi feito. Veja o aviso no alto da página.")
+        # recado de SUCESSO nao e trocado: so o de erro mente com a faixa aberta.
+        self.assertEqual(r["bom"], "adiado por 24 horas.")
+
+    def test_sem_a_faixa_o_recado_de_erro_e_o_de_quem_chamou(self):
+        r = self.rode("[]", r"""
+recado("não conseguimos adiar. Tente de novo.", true);
+console.log(JSON.stringify({ t: $("#recado").textContent }));
+""")
+        self.assertEqual(r["t"], "não conseguimos adiar. Tente de novo.")
+
+    def test_o_literal_do_motivo_mora_dentro_de_escrever(self):
+        """Vale tambem sem node: o servidor e a tela combinam este valor."""
+        self.assertIn('motivo === "pagina_velha"', funcao("escrever"))
+        self.assertIn("abrirFaixaPaginaVelha()", funcao("escrever"))
+
+    def test_so_o_motivo_exato_abre_a_faixa_e_o_status_tambem_conta(self):
+        corpo = funcao("escrever")
+        self.assertIn("r.status === 403", corpo)
+
+    def test_a_faixa_tem_lugar_no_html_sem_estilo_embutido(self):
+        i = HTML.index('id="faixa-pagina-velha"')
+        marca = HTML[HTML.rindex("<", 0, i):HTML.index(">", i) + 1]
+        self.assertNotIn("style=", marca)
+        self.assertLess(HTML.index("<main"), i, "a faixa tem de ficar dentro do <main>")
+
+    def test_a_classe_da_faixa_existe_nos_dois_lados_e_nao_usa_cor_de_estado(self):
+        self.assertIn("faixa--pagina-velha", JS)
+        css = sem_comentarios(CSS)
+        self.assertIn(".faixa--pagina-velha", css)
+        ini = css.index("#faixa-pagina-velha")
+        bloco = css[ini:css.index(".freio__texto", ini)]
+        self.assertGreater(len(bloco), 200)
+        self.assertNotIn("--estado-", bloco)
+        self.assertIn("position: sticky", bloco)
+        self.assertIn("z-index: 60", bloco)   # acima do .freio (50)
+
+    def test_a_faixa_nao_tem_botao_de_fechar(self):
+        self.assertNotRegex(sem_comentarios(funcao("abrirFaixaPaginaVelha")),
+                            r'"(Fechar|Dispensar|OK)"')
+
+
+# ===================================== E3-2: este computador e autorizar
+def fontes(*nomes: str, consts: tuple[str, ...] = ()) -> list[str]:
+    return [constante(c) for c in consts] + [funcao(n) for n in nomes]
+
+
+PRELUDIO_DE_TEMPO = r"""
+const agora = () => Date.now();
+const ha = (s) => new Date(Date.now() - s * 1000).toISOString();
+globalThis.setInterval = (f) => 77;
+globalThis.clearInterval = () => {};
+"""
+
+
+class ARotaLeOsParametros(unittest.TestCase):
+    def rota(self, hash_):
+        return roda(self, fontes("rota"), "globalThis.location = { hash: %s };\n"
+                    "console.log(JSON.stringify(rota()));" % json.dumps(hash_))
+
+    def test_conectar_com_autorizar(self):
+        r = self.rota("#/conectar?autorizar=K7M4-2QXP")
+        self.assertEqual(r["tela"], "conectar")
+        self.assertEqual(r["autorizar"], "K7M4-2QXP")
+
+    def test_o_resto_da_rota_segue_igual(self):
+        self.assertEqual(self.rota("#/projeto/clinica-agenda"),
+                         {"tela": "projeto", "alvo": "clinica-agenda", "autorizar": ""})
+        self.assertEqual(self.rota("")["tela"], "painel")
+        self.assertEqual(self.rota("#/conta/entrada")["alvo"], "entrada")
+
+    def test_o_parametro_nao_vaza_para_o_nome_da_tela_nem_para_o_alvo(self):
+        r = self.rota("#/projeto/x?autorizar=K7M4-2QXP")
+        self.assertEqual((r["tela"], r["alvo"]), ("projeto", "x"))
+
+    def test_conectar_sem_parametro(self):
+        self.assertEqual(self.rota("#/conectar")["autorizar"], "")
+
+
+class OCodigoDeAutorizarSoAceitaOFormatoExato(unittest.TestCase):
+    def codigos(self, entradas):
+        return roda(self, fontes("codigoDeAutorizar"),
+                    "console.log(JSON.stringify(%s.map(codigoDeAutorizar)));"
+                    % json.dumps(entradas))
+
+    def test_normaliza_caixa_espaco_e_hifen(self):
+        self.assertEqual(self.codigos(["K7M4-2QXP", "k7m4 2qxp", "k7m42qxp"]),
+                         ["K7M4-2QXP"] * 3)
+
+    def test_recusa_o_que_o_servidor_recusaria(self):
+        ruins = ["K7M0-2QXP", "K7MI-2QXP", "K7ML-2QXP", "K7M1-2QXP", "K7M4-2QX",
+                 "K7M4-2QXPP", "", "<img src=x>", "javascript:alert(1)", "K7M4-2QX_"]
+        self.assertEqual(self.codigos(ruins), [""] * len(ruins))
+
+    def test_vazio_e_nulo_nao_estouram(self):
+        r = roda(self, fontes("codigoDeAutorizar"),
+                 "console.log(JSON.stringify([codigoDeAutorizar(null), "
+                 "codigoDeAutorizar(undefined)]));")
+        self.assertEqual(r, ["", ""])
+
+    def test_a_cortina_usa_o_mesmo_alfabeto_do_painel(self):
+        padrao = r"[2-9A-HJKMNP-Z]{8}"
+        self.assertIn(padrao, funcao("codigoDeAutorizar"))
+        self.assertIn(padrao, CORTINA)
+
+
+def fontes_do_autorizar() -> list[str]:
+    return ["const AUTORIZAR = { codigo: '', dados: null, fase: '', prazo: null, "
+            "fim: 0, botao: null, focou: false, digitado: '' };\n", "let PAGINA_VELHA = false;\n"] + [
+        funcao(n) for n in ("criar", "botaoEmAcoes", "prazoEmPalavras",
+                            "codigoDeAutorizar", "pintarAutorizar", "olharOPedido",
+                            "autorizarPedido", "fecharAutorizar",
+                            "abrirOuFecharAutorizar", "recolherAutorizar",
+                            "andarOPrazoDoPedido")]
+
+
+PRELUDIO_DO_AUTORIZAR = PRELUDIO_DA_REDE + r"""
+globalThis.esperas = [];
+function esperarMaquinaNova(onde, min, modo) { esperas.push([onde && onde.id, min, modo]); }
+globalThis.history = { trocas: [], replaceState(a, b, c) { this.trocas.push(c); } };
+const escrever = async (url, corpo) => { escritas.push([url, corpo]); return RESPOSTAS.shift(); };
+globalThis.escritas = [];
+const _fetch = globalThis.fetch;
+globalThis.fetch = async (url) => { buscas.push(url); return RESPOSTAS.shift(); };
+globalThis.buscas = [];
+const bloco = () => $("#conectar-autorizar");
+const textoDoBloco = () => bloco().textContent;
+"""
+
+
+class OBlocoDeAutorizar(unittest.TestCase):
+    def rode(self, respostas, script):
+        # `escrever` e `fetch` de mentira: o que importa e o que o bloco faz.
+        return roda(self, [PRELUDIO_DO_AUTORIZAR] + fontes_do_autorizar(),
+                    "RESPOSTAS = " + respostas + ";\n" + script)
+
+    def test_pedido_valido_mostra_nome_codigo_prazo_e_o_botao(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ codigo: "K7M4-2QXP", maquina: "PC-ESCRITORIO", minutos: 8, estado: "esperando" });
+const b = bloco();
+const botao = acha(b, n => n.tag === "button");
+const cod = acha(b, n => n.className === "numerao");
+const visivel = acha(cod, n => n.attrs["aria-hidden"] === "true");
+const falado = acha(cod, n => n.className === "so-leitor");
+const titulo = acha(b, n => n.id === "autorizar-titulo");
+console.log(JSON.stringify({
+  oculto: b.hidden, texto: textoDoBloco(), botao: botao.textContent,
+  codigo: visivel.textContent, leitura: falado.textContent,
+  sem_aria_label: !("aria-label" in cod.attrs),
+  foco_no_titulo: FOCO.atual === titulo, tabindex: titulo.attrs.tabindex,
+  busy: b.attrs["aria-busy"] }));
+""")
+        self.assertFalse(r["oculto"])
+        self.assertIn("O computador PC-ESCRITORIO pediu para se ligar ao seu painel", r["texto"])
+        self.assertIn("Vale por mais 8 minutos.", r["texto"])
+        self.assertIn("Não reconhece este computador? Não clique em nada", r["texto"])
+        self.assertEqual(r["botao"], "Autorizar este computador")
+        self.assertEqual(r["codigo"], "K7M4-2QXP")
+        self.assertEqual(r["leitura"], "Código: K, 7, M, 4, 2, Q, X, P")
+        self.assertTrue(r["sem_aria_label"])
+        self.assertTrue(r["foco_no_titulo"])
+        self.assertEqual(r["tabindex"], "-1")
+        self.assertEqual(r["busy"], "false")
+
+    def test_t2_o_foco_so_vai_ao_titulo_no_primeiro_desenho_com_dados(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ estado: "carregando" });
+const depois_do_carregando = FOCO.atual;
+pintarAutorizar({ codigo: "K7M4-2QXP", maquina: "PC", minutos: 8, estado: "esperando" });
+console.log(JSON.stringify({ no_carregando: depois_do_carregando === null,
+  no_titulo: FOCO.atual === acha(bloco(), n => n.id === "autorizar-titulo") }));
+""")
+        self.assertTrue(r["no_carregando"])
+        self.assertTrue(r["no_titulo"])
+
+    def test_t2_enviando_atualiza_o_botao_no_lugar(self):
+        r = self.rode("[]", r"""
+const d = { codigo: "K7M4-2QXP", maquina: "PC", minutos: 8, estado: "esperando" };
+pintarAutorizar(d);
+const botao = acha(bloco(), n => n.tag === "button");
+pintarAutorizar(Object.assign({}, d, { estado: "enviando" }));
+const depois = acha(bloco(), n => n.tag === "button");
+console.log(JSON.stringify({ mesmo: botao === depois, desligado: depois.disabled,
+  busy: depois.attrs["aria-busy"] }));
+""")
+        self.assertEqual((r["mesmo"], r["desligado"], r["busy"]), (True, True, "true"))
+
+    def test_t2_o_bloco_e_regiao_viva_no_html(self):
+        i = HTML.index('id="conectar-autorizar"')
+        marca = HTML[HTML.rindex("<", 0, i):HTML.index(">", i) + 1]
+        self.assertIn('aria-live="polite"', marca)
+
+    def test_s2_pedido_de_outra_rede_exige_digitar_o_codigo(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ codigo: "K7M4-2QXP", maquina: "PC", minutos: 8, estado: "esperando", mesma_rede: false });
+const entrada = acha(bloco(), n => n.tag === "input");
+const botao = acha(bloco(), n => n.tag === "button");
+const antes = { desligado: botao.disabled, vazio: entrada.value };
+entrada.value = "k7m4-2qxq"; await entrada.disparar("input");
+const errado = botao.disabled;
+entrada.value = " k7m4 2qxp "; await entrada.disparar("input");
+console.log(JSON.stringify({ antes, errado, certo: botao.disabled,
+  texto: textoDoBloco(), cod_na_tela: textoDoBloco().includes("K7M4-2QXP") }));
+""")
+        self.assertEqual(r["antes"], {"desligado": True, "vazio": ""})
+        self.assertTrue(r["errado"])
+        self.assertFalse(r["certo"])
+        self.assertIn("Este pedido veio de outra rede. Só autorize se você acabou "
+                      "de abrir o arquivo neste computador.", r["texto"])
+        self.assertNotIn("Confira se o nome e o código abaixo", r["texto"])
+
+    def test_s2_pedido_da_mesma_rede_segue_como_antes(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ codigo: "K7M4-2QXP", maquina: "PC", minutos: 8, estado: "esperando", mesma_rede: true });
+console.log(JSON.stringify({ entradas: achaTodos(bloco(), n => n.tag === "input").length,
+  desligado: acha(bloco(), n => n.tag === "button").disabled }));
+""")
+        self.assertEqual((r["entradas"], r["desligado"]), (0, False))
+
+    def test_o_nome_do_computador_entra_como_texto(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ codigo: "K7M4-2QXP", maquina: "<img src=x onerror=alert(1)>", minutos: 3, estado: "esperando" });
+console.log(JSON.stringify({ texto: textoDoBloco(),
+  imgs: achaTodos(bloco(), n => n.tag === "img").length }));
+""")
+        self.assertIn("<img src=x onerror=alert(1)>", r["texto"])
+        self.assertEqual(r["imgs"], 0)
+
+    def test_carregando_nao_tem_botao_de_autorizar(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ estado: "carregando" });
+console.log(JSON.stringify({ texto: textoDoBloco(), busy: bloco().attrs["aria-busy"],
+  botoes: achaTodos(bloco(), n => n.tag === "button").length }));
+""")
+        self.assertIn("Conferindo o pedido…", r["texto"])
+        self.assertEqual((r["busy"], r["botoes"]), ("true", 0))
+
+    def test_nao_existe_diz_que_venceu_e_volta_para_conectar(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ estado: "nao_existe" });
+const botao = acha(bloco(), n => n.tag === "button");
+AUTORIZAR.codigo = "K7M4-2QXP";
+await botao.clicar();
+console.log(JSON.stringify({ texto: textoDoBloco(), botao: botao.textContent,
+  oculto: bloco().hidden, trocas: history.trocas, foco: FOCO.atual === $("#pc-titulo") }));
+""")
+        self.assertIn("Este pedido venceu ou não existe. Baixe o arquivo de novo e abra.", r["texto"])
+        self.assertEqual(r["botao"], "Voltar para Conectar")
+        self.assertTrue(r["oculto"])
+        self.assertEqual(r["trocas"], ["#/conectar"])
+        self.assertTrue(r["foco"])
+
+    def test_ja_autorizado_ou_conectado_nao_tem_botao(self):
+        for estado in ("autorizado", "conectado"):
+            with self.subTest(estado=estado):
+                r = self.rode("[]", """
+pintarAutorizar({ codigo: "K7M4-2QXP", maquina: "PC", minutos: 3, estado: "%s" });
+console.log(JSON.stringify({ texto: textoDoBloco(),
+  botoes: achaTodos(bloco(), n => n.tag === "button").length }));
+""" % estado)
+                self.assertIn("Este computador já foi autorizado. Veja abaixo se ele apareceu.", r["texto"])
+                self.assertEqual(r["botoes"], 0)
+
+    def test_erro_de_rede_nao_diz_que_venceu(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ estado: "erro_rede" });
+console.log(JSON.stringify({ texto: textoDoBloco(),
+  botao: acha(bloco(), n => n.tag === "button").textContent }));
+""")
+        self.assertIn("Isso não quer dizer que o pedido venceu — quer dizer que não olhei.", r["texto"])
+        self.assertNotIn("Este pedido venceu", r["texto"])
+        self.assertEqual(r["botao"], "Tentar de novo")
+
+    def test_olhar_o_pedido_busca_pelo_codigo_e_pinta_os_dados(self):
+        r = self.rode('[resposta(200, {codigo: "K7M4-2QXP", maquina: "PC", minutos: 9, '
+                      'expira_em: "x", estado: "esperando"})]', r"""
+AUTORIZAR.codigo = "K7M4-2QXP";
+await olharOPedido("K7M4-2QXP", false);
+console.log(JSON.stringify({ buscas, botoes: achaTodos(bloco(), n => n.tag === "button").length,
+  texto: textoDoBloco() }));
+""")
+        self.assertEqual(r["buscas"], ["/api/pedido?codigo=K7M4-2QXP"])
+        self.assertEqual(r["botoes"], 1)
+        self.assertIn("Vale por mais 9 minutos.", r["texto"])
+
+    def test_404_e_400_viram_nao_existe_e_falha_de_rede_vira_erro_de_rede(self):
+        for resp, esperado in (("resposta(404, {})", "venceu ou não existe"),
+                               ("resposta(400, {})", "venceu ou não existe"),
+                               ("resposta(500, {})", "quer dizer que não olhei")):
+            with self.subTest(resp=resp):
+                r = self.rode("[%s]" % resp, r"""
+AUTORIZAR.codigo = "K7M4-2QXP";
+await olharOPedido("K7M4-2QXP", false);
+console.log(JSON.stringify({ texto: textoDoBloco() }));
+""")
+                self.assertIn(esperado, r["texto"])
+
+    def test_clicar_em_autorizar_manda_so_o_codigo_e_comeca_a_espera(self):
+        r = self.rode("[resposta(200, {ok: true, maquina: 'PC', ja_estava: false})]", r"""
+AUTORIZAR.codigo = "K7M4-2QXP";
+AUTORIZAR.dados = { codigo: "K7M4-2QXP", maquina: "PC", minutos: 5, estado: "esperando" };
+pintarAutorizar(AUTORIZAR.dados);
+await acha(bloco(), n => n.tag === "button").clicar();
+console.log(JSON.stringify({ escritas, esperas, texto: textoDoBloco(),
+  botoes: achaTodos(bloco(), n => n.tag === "button").length }));
+""")
+        self.assertEqual(r["escritas"], [["/api/pedido/autorizar", {"codigo": "K7M4-2QXP"}]])
+        self.assertEqual(r["esperas"], [["espera-maquina", 10, None]])
+        self.assertIn("Autorizado. Volte à janela preta do computador: ela termina sozinha.",
+                      r["texto"])
+        self.assertEqual(r["botoes"], 0)
+
+    def test_autorizar_com_falha_devolve_o_botao_e_foca_nele(self):
+        r = self.rode("[resposta(500, {})]", r"""
+AUTORIZAR.codigo = "K7M4-2QXP";
+AUTORIZAR.dados = { codigo: "K7M4-2QXP", maquina: "PC", minutos: 5, estado: "esperando" };
+pintarAutorizar(AUTORIZAR.dados);
+await acha(bloco(), n => n.tag === "button").clicar();
+const b = acha(bloco(), n => n.tag === "button");
+console.log(JSON.stringify({ texto: textoDoBloco(), ativo: !b.disabled,
+  foco: FOCO.atual === b, esperas }));
+""")
+        self.assertIn("quer dizer que não olhei", r["texto"])
+        self.assertTrue(r["ativo"])
+        self.assertTrue(r["foco"])
+        self.assertEqual(r["esperas"], [])
+
+    def test_autorizar_404_vira_nao_existe(self):
+        r = self.rode("[resposta(404, {})]", r"""
+AUTORIZAR.codigo = "K7M4-2QXP";
+AUTORIZAR.dados = { codigo: "K7M4-2QXP", maquina: "PC", minutos: 5, estado: "esperando" };
+pintarAutorizar(AUTORIZAR.dados);
+await acha(bloco(), n => n.tag === "button").clicar();
+console.log(JSON.stringify({ texto: textoDoBloco() }));
+""")
+        self.assertIn("Este pedido venceu ou não existe", r["texto"])
+
+    def test_pagina_velha_no_autorizar_nao_repete_o_erro(self):
+        r = self.rode("[{status: 403, ok: false}]", r"""
+PAGINA_VELHA = true;
+AUTORIZAR.codigo = "K7M4-2QXP";
+AUTORIZAR.dados = { codigo: "K7M4-2QXP", maquina: "PC", minutos: 5, estado: "esperando" };
+pintarAutorizar(AUTORIZAR.dados);
+await acha(bloco(), n => n.tag === "button").clicar();
+console.log(JSON.stringify({ texto: textoDoBloco(),
+  botoes: achaTodos(bloco(), n => n.tag === "button").length }));
+""")
+        self.assertNotIn("quer dizer que não olhei", r["texto"])
+        self.assertEqual(r["botoes"], 1)
+
+    def test_a_pagina_aberta_sem_parametro_esconde_o_bloco(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ estado: "carregando" });
+abrirOuFecharAutorizar("");
+console.log(JSON.stringify({ oculto: bloco().hidden }));
+""")
+        self.assertTrue(r["oculto"])
+
+    def test_codigo_torto_no_endereco_vira_nao_existe_sem_ir_ao_servidor(self):
+        r = self.rode("[]", r"""
+abrirOuFecharAutorizar("<script>");
+console.log(JSON.stringify({ texto: textoDoBloco(), buscas }));
+""")
+        self.assertIn("venceu ou não existe", r["texto"])
+        self.assertEqual(r["buscas"], [])
+
+    def test_recolher_so_depois_de_autorizado(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ codigo: "K7M4-2QXP", maquina: "PC", minutos: 5, estado: "esperando" });
+recolherAutorizar();
+const antes = bloco().hidden;
+pintarAutorizar({ estado: "sucesso" });
+recolherAutorizar();
+console.log(JSON.stringify({ antes, depois: bloco().hidden, foco: FOCO.atual === $("#pc-titulo") }));
+""")
+        self.assertFalse(r["antes"])
+        self.assertTrue(r["depois"])
+        self.assertTrue(r["foco"])
+
+    def test_o_repintar_do_minuto_nao_vai_a_rede_e_so_anda_o_prazo(self):
+        """GET /api/pedido tem balcao de 20 por origem em 15 minutos: uma
+        leitura por pagina, nunca sondagem."""
+        r = self.rode('[resposta(200, {codigo: "K7M4-2QXP", maquina: "PC", minutos: 5, estado: "esperando"})]', r"""
+abrirOuFecharAutorizar("K7M4-2QXP");
+await new Promise(f => setImmediate(f));
+const botao = acha(bloco(), n => n.tag === "button");
+for (let i = 0; i < 5; i++) abrirOuFecharAutorizar("k7m4-2qxp");
+const _agora = Date.now; Date.now = () => _agora() + 2 * 60000 + 500;
+abrirOuFecharAutorizar("K7M4-2QXP");
+console.log(JSON.stringify({ buscas: buscas.length, mesmo_botao: acha(bloco(), n => n.tag === "button") === botao,
+  texto: textoDoBloco() }));
+""")
+        self.assertEqual(r["buscas"], 1)
+        self.assertTrue(r["mesmo_botao"])
+        self.assertIn("Vale por mais 2 minutos.", r["texto"])
+
+    def test_um_minuto_e_menos_de_um_minuto(self):
+        r = roda(self, fontes("prazoEmPalavras"),
+                 "console.log(JSON.stringify([0,1,2,undefined].map(prazoEmPalavras)));")
+        self.assertEqual(r, ["menos de um minuto", "mais 1 minuto", "mais 2 minutos",
+                             "menos de um minuto"])
+
+
+class OLinkDeBaixarEOCartaoDoComputador(unittest.TestCase):
+    """O botao e um LINK (GET), nao um botao que chama `escrever`."""
+
+    def fontes(self):
+        return ["let COMPUTADORES = null, COMPUTADORES_LIDO_EM = null, "
+                "COMPUTADORES_FALHOU = false;\n"] + fontes(
+            "haQuanto", "criar", "marcaDaPorta", "linkDeBaixar", "estadoDosComputadores",
+            "situacaoDoComputador", "pintarEsteComputador", "linhaDeComputador",
+            "blocoDeProjetosVistos", "linhaDeProjetoVisto", "linhaComChave",
+            consts=("ESTADO_DA_PORTA", "COMPUTADOR_CALADO_APOS_MS"))
+
+    PRELUDIO = PRELUDIO_DE_TEMPO + r"""
+const esperas = [], carregou = [], confirmou = [];
+function esperarMaquinaNova(onde, min, modo) { esperas.push([onde && onde.id, min]); }
+function confirmar(o, f) { confirmou.push(o); }
+function carregarComputadores() { carregou.push(1); }
+function autorizarComputador() {} function removerComputador() {}
+const card = () => $("#cartao-computador");
+function acoes() { return $("#pc-acoes").filhos; }
+"""
+
+    def rode(self, script):
+        return roda(self, [self.PRELUDIO] + self.fontes(), script)
+
+    def test_o_link_aponta_para_o_arquivo_e_se_chama_conectar_dervs_cmd(self):
+        r = self.rode(r"""
+const a = linkDeBaixar("Conectar este computador", false);
+console.log(JSON.stringify({ tag: a.tag, href: a.href, download: a.download,
+  classe: a.className, texto: a.textContent }));
+""")
+        self.assertEqual(r["tag"], "a")
+        self.assertEqual(r["href"], "/api/conectar.cmd")
+        self.assertEqual(r["download"], "conectar-dervs.cmd")
+        self.assertEqual(r["classe"], "botao")
+        self.assertEqual(r["texto"], "Conectar este computador")
+
+    def test_o_clique_no_link_comeca_a_espera_sem_cancelar_o_download(self):
+        r = self.rode(r"""
+const a = linkDeBaixar("x", false);
+let cancelou = false;
+await a.disparar("click", { preventDefault() { cancelou = true; } });
+console.log(JSON.stringify({ esperas, cancelou }));
+""")
+        self.assertEqual(r["esperas"], [["espera-maquina", 10]])
+        self.assertFalse(r["cancelou"])
+
+    def test_antes_da_leitura_diz_olhando_e_o_botao_ja_funciona(self):
+        r = self.rode(r"""
+pintarEsteComputador();
+console.log(JSON.stringify({ resumo: $("#pc-resumo").textContent, busy: card().attrs["aria-busy"],
+  marca: $("#pc-marca").textContent, botoes: acoes().map(b => b.textContent) }));
+""")
+        self.assertEqual(r["resumo"], "Olhando os computadores desta conta…")
+        self.assertEqual(r["busy"], "true")
+        self.assertIn("não deu para conferir", r["marca"])
+        self.assertEqual(r["botoes"], ["Conectar este computador"])
+
+    def test_leitura_que_falhou_nao_diz_nenhum_computador(self):
+        r = self.rode(r"""
+COMPUTADORES_FALHOU = true;
+pintarEsteComputador();
+const antes = { resumo: $("#pc-resumo").textContent,
+                botoes: acoes().map(b => b.textContent) };
+await acoes()[1].clicar();
+console.log(JSON.stringify({ antes, carregou, falhou: COMPUTADORES_FALHOU }));
+""")
+        self.assertIn("Isso não quer dizer que nenhum esteja ligado — quer dizer que não olhei.",
+                      r["antes"]["resumo"])
+        self.assertNotIn("Nenhum computador está ligado", r["antes"]["resumo"])
+        self.assertEqual(r["antes"]["botoes"], ["Conectar este computador", "Tentar de novo"])
+        self.assertEqual(r["carregou"], [1])
+        self.assertFalse(r["falhou"])
+
+    def test_lista_vazia_e_nao_conectado(self):
+        r = self.rode(r"""
+COMPUTADORES = []; COMPUTADORES_LIDO_EM = ha(1);
+pintarEsteComputador();
+console.log(JSON.stringify({ resumo: $("#pc-resumo").textContent, marca: $("#pc-marca").textContent,
+  lista_oculta: $("#pc-lista").hidden, busy: card().attrs["aria-busy"] }));
+""")
+        self.assertIn("Nenhum computador está ligado ao DERVS ainda.", r["resumo"])
+        self.assertIn("não conectado", r["marca"])
+        self.assertTrue(r["lista_oculta"])
+        self.assertEqual(r["busy"], "false")
+
+    def test_conectado_com_projetos_diz_quantos_e_quando(self):
+        r = self.rode(r"""
+COMPUTADORES = [{ id: 1, nome: "PC-ESCRITORIO", visto_em: ha(12), relatado_em: ha(12),
+  projetos: 7, executa: false, so_mede: true, projetos_vistos: [] }];
+COMPUTADORES_LIDO_EM = ha(1);
+pintarEsteComputador();
+console.log(JSON.stringify({ marca: $("#pc-marca").textContent, carimbo: $("#pc-carimbo").textContent,
+  botoes: acoes().map(b => [b.textContent, b.className]), lista_oculta: $("#pc-lista").hidden }));
+""")
+        self.assertIn("Conectado — achei 7 projetos", r["marca"])
+        self.assertEqual(r["carimbo"], "PC-ESCRITORIO deu notícia há 12 segundos.")
+        self.assertEqual(r["botoes"], [["Conectar outro computador", "botao botao--secundario"]])
+        self.assertFalse(r["lista_oculta"])
+
+    def test_um_projeto_so_fica_no_singular(self):
+        r = self.rode(r"""
+COMPUTADORES = [{ id: 1, nome: "PC", visto_em: ha(5), relatado_em: ha(5), projetos: 1, so_mede: true }];
+COMPUTADORES_LIDO_EM = ha(1);
+pintarEsteComputador();
+console.log(JSON.stringify({ marca: $("#pc-marca").textContent }));
+""")
+        self.assertIn("achei 1 projeto", r["marca"])
+        self.assertNotIn("projetos", r["marca"])
+
+    def test_apareceu_e_ainda_nao_mediu_nunca_escreve_zero(self):
+        r = self.rode(r"""
+COMPUTADORES = [{ id: 1, nome: "PC", visto_em: ha(5), relatado_em: null, projetos: 0, so_mede: true }];
+COMPUTADORES_LIDO_EM = ha(1);
+pintarEsteComputador();
+console.log(JSON.stringify({ resumo: $("#pc-resumo").textContent, marca: $("#pc-marca").textContent,
+  linha: $("#lista-computadores").textContent }));
+""")
+        self.assertIn("O computador apareceu e ainda não mandou a primeira medição.", r["resumo"])
+        self.assertIn("Isso leva menos de um minuto.", r["resumo"])
+        self.assertNotRegex(r["marca"] + r["resumo"] + r["linha"], r"\b0 projeto")
+        self.assertIn("ainda não mandou a primeira medição", r["linha"])
+
+    def test_mediu_e_nao_achou_nada_oferece_baixar_de_novo(self):
+        r = self.rode(r"""
+COMPUTADORES = [{ id: 1, nome: "PC", visto_em: ha(5), relatado_em: ha(5), projetos: 0, so_mede: true }];
+COMPUTADORES_LIDO_EM = ha(1);
+pintarEsteComputador();
+console.log(JSON.stringify({ resumo: $("#pc-resumo").textContent, botoes: acoes().map(b => b.textContent) }));
+""")
+        self.assertIn("Olhei a pasta que você escolheu e não achei nenhum projeto com histórico de versões.",
+                      r["resumo"])
+        self.assertNotIn("C:\\", r["resumo"])    # o servidor nao sabe a pasta
+        self.assertEqual(r["botoes"], ["Baixar de novo"])
+
+    def test_computador_mudo_nao_e_conectado_e_nada_e_apagado(self):
+        r = self.rode(r"""
+COMPUTADORES = [{ id: 1, nome: "PC-ESCRITORIO", visto_em: ha(3 * 3600), relatado_em: ha(3 * 3600),
+  projetos: 7, so_mede: true }];
+COMPUTADORES_LIDO_EM = ha(1);
+pintarEsteComputador();
+console.log(JSON.stringify({ resumo: $("#pc-resumo").textContent, marca: $("#pc-marca").textContent,
+  linhas: $("#lista-computadores").filhos.length }));
+""")
+        self.assertIn("O PC-ESCRITORIO não dá notícia há 3 horas.", r["resumo"])
+        self.assertIn("Os projetos dele continuam no painel, parados no último carimbo.", r["resumo"])
+        self.assertIn("não deu para conferir", r["marca"])
+        self.assertEqual(r["linhas"], 1)
+
+    def test_t3_sem_nenhum_carimbo_diz_que_ainda_nao_deu_a_primeira_noticia(self):
+        r = self.rode(r"""
+COMPUTADORES = [{ id: 1, nome: "PC", visto_em: null, relatado_em: null, projetos: 0 }];
+COMPUTADORES_LIDO_EM = ha(1);
+pintarEsteComputador();
+console.log(JSON.stringify({ resumo: $("#pc-resumo").textContent }));
+""")
+        self.assertEqual(
+            "O computador foi autorizado e ainda não deu a primeira notícia. "
+            "Isso leva menos de um minuto.", r["resumo"])
+
+    def test_mudo_ha_semanas_diz_desde_a_data(self):
+        r = self.rode(r"""
+COMPUTADORES = [{ id: 1, nome: "PC", visto_em: ha(40 * 86400), relatado_em: null, projetos: 0 }];
+COMPUTADORES_LIDO_EM = ha(1);
+pintarEsteComputador();
+console.log(JSON.stringify({ resumo: $("#pc-resumo").textContent }));
+""")
+        self.assertRegex(r["resumo"], r"não dá notícia desde \d\d/\d\d/\d{4}\.")
+
+    def test_a_linha_so_mede_nao_tem_deixar_consertar_aqui(self):
+        r = self.rode(r"""
+const li = linhaDeComputador({ id: 3, nome: "PC-ESCRITORIO", visto_em: ha(12), relatado_em: ha(12),
+  projetos: 2, executa: false, so_mede: true, projetos_vistos: [] });
+const botoes = achaTodos(li, n => n.tag === "button").map(b => b.textContent);
+console.log(JSON.stringify({ botoes, texto: li.textContent }));
+""")
+        self.assertNotIn("Deixar consertar aqui", r["botoes"])
+        self.assertIn("Remover", r["botoes"])
+        self.assertIn("Este computador só acompanha os projetos. Ele não faz alterações.", r["texto"])
+        self.assertIn("Só mede", r["texto"])
+
+    def test_computador_pareado_por_comando_mantem_os_dois_botoes(self):
+        r = self.rode(r"""
+const li = linhaDeComputador({ id: 3, nome: "SERVIDOR", visto_em: ha(12), relatado_em: ha(12),
+  projetos: 2, executa: false, so_mede: false });
+console.log(JSON.stringify({ botoes: achaTodos(li, n => n.tag === "button").map(b => b.textContent) }));
+""")
+        self.assertEqual(r["botoes"], ["Deixar consertar aqui", "Remover"])
+
+    def test_remover_confirma_com_o_texto_do_design(self):
+        r = self.rode(r"""
+const li = linhaDeComputador({ id: 3, nome: "PC-ESCRITORIO", visto_em: ha(12), relatado_em: ha(12),
+  projetos: 2, so_mede: true });
+await achaTodos(li, n => n.tag === "button").find(b => b.textContent === "Remover").clicar();
+console.log(JSON.stringify(confirmou[0]));
+""")
+        self.assertEqual(r["titulo"], "Desconectar “PC-ESCRITORIO”?")
+        self.assertIn("só volta se você baixar o arquivo de novo e abrir", r["texto"])
+        self.assertEqual((r["sim"], r["nao"]), ("Desconectar", "Manter conectado"))
+
+    def test_nome_de_outro_computador_entra_como_texto(self):
+        r = self.rode(r"""
+const li = linhaDeComputador({ id: 3, nome: "<b onmouseover=x>", visto_em: ha(1), relatado_em: ha(1),
+  projetos: 1, so_mede: true });
+console.log(JSON.stringify({ texto: li.textContent, bs: achaTodos(li, n => n.tag === "b").length }));
+""")
+        self.assertIn("<b onmouseover=x>", r["texto"])
+        self.assertEqual(r["bs"], 0)
+
+
+class ASituacaoDoComputadorEPura(unittest.TestCase):
+    def situacao(self, lista):
+        return roda(self, fontes("situacaoDoComputador", "estadoDosComputadores",
+                                 consts=("COMPUTADOR_CALADO_APOS_MS",)),
+                    PRELUDIO_DE_TEMPO + "console.log(JSON.stringify(situacaoDoComputador(%s, Date.now())));"
+                    % lista)
+
+    def test_t3_sem_nenhum_carimbo_e_aguardando_nunca_mudo(self):
+        for lista in ('[{nome:"a", visto_em: null, relatado_em: null, projetos: 0}]',
+                      '[{nome:"a", relatado_em: null, projetos: 0}]'):
+            r = self.situacao(lista)
+            self.assertEqual((r["tipo"], r["estado"]), ("aguardando", "sem_dados"))
+        r = roda(self, fontes("situacaoDoComputador", "estadoDosComputadores",
+                              consts=("COMPUTADOR_CALADO_APOS_MS",)),
+                 PRELUDIO_DE_TEMPO + "console.log(JSON.stringify(situacaoDoComputador("
+                 '[{nome:"a", visto_em: ha(99999), relatado_em: null, projetos: 0}], Date.now())));')
+        self.assertEqual(r["tipo"], "mudo")
+
+    def test_cada_tipo(self):
+        casos = [
+            ("[]", "vazio", "desconectado"),
+            ('[{nome:"a", visto_em: ha(5), relatado_em: null, projetos: 0}]', "pendente", "conectado"),
+            ('[{nome:"a", visto_em: ha(5), relatado_em: ha(5), projetos: 0}]', "zero", "conectado"),
+            ('[{nome:"a", visto_em: ha(5), relatado_em: ha(5), projetos: 3}]', "com_projetos", "conectado"),
+            ('[{nome:"a", visto_em: ha(99999), relatado_em: ha(99999), projetos: 3}]', "mudo", "sem_dados"),
+        ]
+        for lista, tipo, estado in casos:
+            with self.subTest(tipo=tipo):
+                r = self.situacao(lista)
+                self.assertEqual((r["tipo"], r["estado"]), (tipo, estado))
+
+    def test_soma_os_projetos_so_de_quem_ja_mediu(self):
+        r = self.situacao('[{nome:"a", visto_em: ha(5), relatado_em: ha(5), projetos: 3},'
+                          '{nome:"b", visto_em: ha(5), relatado_em: null, projetos: 0},'
+                          '{nome:"c", visto_em: ha(5), relatado_em: ha(5), projetos: 4}]')
+        self.assertEqual((r["tipo"], r["projetos"]), ("com_projetos", 7))
+
+    def test_o_mais_recente_e_quem_da_o_nome(self):
+        r = self.situacao('[{nome:"velho", visto_em: ha(500), relatado_em: ha(500), projetos: 1},'
+                          '{nome:"novo", visto_em: ha(5), relatado_em: ha(5), projetos: 1}]')
+        self.assertEqual(r["nome"], "novo")
+
+
+class AEsperaSabeQuandoOComputadorMediu(unittest.TestCase):
+    def situacao(self, lista, antes_ids, relato_antes):
+        return roda(self, fontes("situacaoDaEspera", "maiorRelato"),
+                    PRELUDIO_DE_TEMPO + "console.log(JSON.stringify(situacaoDaEspera(%s, new Set(%s), %s)));"
+                    % (lista, antes_ids, relato_antes))
+
+    def test_nada_mudou_continua_esperando(self):
+        self.assertEqual(self.situacao('[{id: 1, visto_em: ha(9), relatado_em: ha(9)}]',
+                                       "[1]", "maiorRelato([{relatado_em: ha(9)}])"), "esperando")
+
+    def test_maquina_nova_sem_relato_apareceu_mas_nao_mediu(self):
+        self.assertEqual(self.situacao('[{id: 1, visto_em: ha(9), relatado_em: ha(9)}, '
+                                       '{id: 2, visto_em: ha(1), relatado_em: null}]',
+                                       "[1]", "maiorRelato([{relatado_em: ha(9)}])"), "apareceu")
+
+    def test_relato_mais_novo_que_o_do_inicio_da_espera_e_sucesso(self):
+        self.assertEqual(self.situacao('[{id: 1, visto_em: ha(1), relatado_em: ha(1)}]',
+                                       "[1]", "maiorRelato([{relatado_em: ha(600)}])"), "medido")
+
+    def test_maquina_nova_que_ja_mediu_e_sucesso(self):
+        self.assertEqual(self.situacao('[{id: 2, visto_em: ha(1), relatado_em: ha(1)}]',
+                                       "[]", "0"), "medido")
+
+    def test_relatado_em_ausente_ou_torto_nunca_e_sucesso(self):
+        self.assertEqual(self.situacao('[{id: 1, visto_em: ha(9)}, {id: 2, visto_em: ha(9), relatado_em: "lixo"}]',
+                                       "[1, 2]", "0"), "esperando")
+
+
+class ACortinaGuardaSoOFormatoExato(unittest.TestCase):
+    def rode(self, hash_):
+        node = node_ou_pula(self)
+        prog = r"""
+const guardado = {};
+const el = () => ({ addEventListener() {}, setAttribute() {}, removeAttribute() {},
+  hasAttribute() { return false; }, value: "", hidden: true, focus() {}, closest() { return null; } });
+globalThis.location = { hash: %s };
+globalThis.sessionStorage = { setItem(k, v) { guardado[k] = v; },
+  getItem(k) { return guardado[k] || null; }, removeItem(k) { delete guardado[k]; } };
+globalThis.document = { getElementById: el, querySelectorAll: () => [], querySelector: () => null };
+""" % json.dumps(hash_) + CORTINA + "\nconsole.log(JSON.stringify(guardado));\n"
+        r = subprocess.run([node, "-"], input=prog, capture_output=True, text=True,
+                           timeout=30, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout.strip().splitlines()[-1])
+
+    def test_codigo_valido_e_guardado_normalizado(self):
+        self.assertEqual(self.rode("#/conectar?autorizar=k7m4-2qxp"),
+                         {"dervs-autorizar": "K7M4-2QXP"})
+        self.assertEqual(self.rode("#/conectar?autorizar=K7M42QXP"),
+                         {"dervs-autorizar": "K7M4-2QXP"})
+
+    def test_o_resto_nao_e_guardado(self):
+        for h in ("", "#/painel", "#/conectar", "#/conectar?autorizar=",
+                  "#/conectar?autorizar=<script>", "#/conectar?autorizar=K7M0-2QXP",
+                  "#/projeto/x?autorizar=K7M4-2QXP", "#/conectar?outro=K7M4-2QXP"):
+            with self.subTest(hash=h):
+                self.assertEqual(self.rode(h), {})
+
+
+class OPedidoGuardadoVoltaParaAutorizar(unittest.TestCase):
+    def rode(self, guardado, hash_):
+        return roda(self, fontes("voltarAoPedidoGuardado", "codigoDeAutorizar", "rota"), r"""
+const trocas = [];
+const arm = %s;
+globalThis.sessionStorage = { getItem: (k) => arm[k] || null, removeItem: (k) => { delete arm[k]; } };
+globalThis.location = { hash: %s };
+globalThis.history = { replaceState(a, b, c) { trocas.push(c); location.hash = c; } };
+voltarAoPedidoGuardado();
+console.log(JSON.stringify({ trocas, sobrou: Object.keys(arm) }));
+""" % (json.dumps(guardado), json.dumps(hash_)))
+
+    def test_volta_para_o_pedido_e_apaga_a_chave(self):
+        r = self.rode({"dervs-autorizar": "K7M4-2QXP"}, "")
+        self.assertEqual(r, {"trocas": ["#/conectar?autorizar=K7M4-2QXP"], "sobrou": []})
+
+    def test_valor_torto_no_armazenamento_e_ignorado_e_apagado(self):
+        r = self.rode({"dervs-autorizar": "<img src=x>"}, "")
+        self.assertEqual(r, {"trocas": [], "sobrou": []})
+
+    def test_nao_atropela_um_endereco_que_ja_tem_pedido(self):
+        r = self.rode({"dervs-autorizar": "K7M4-2QXP"}, "#/conectar?autorizar=ABCD-2345")
+        self.assertEqual(r["trocas"], [])
+
+
+class OPassoAPassoAbreNaPrimeiraVisita(unittest.TestCase):
+    def rode(self, storage_js):
+        return roda(self, ["let PASSOS_JA_DECIDIDOS = false;\n",
+                           funcao("abrirPassosNaPrimeiraVisita")], storage_js + r"""
+abrirPassosNaPrimeiraVisita();
+abrirPassosNaPrimeiraVisita();
+console.log(JSON.stringify({ aberto: $("#o-que-vai-aparecer").open }));
+""")
+
+    def test_primeira_visita_abre(self):
+        r = self.rode("const m = {}; globalThis.localStorage = { getItem: k => m[k] || null, setItem: (k, v) => { m[k] = v; } };")
+        self.assertTrue(r["aberto"])
+
+    def test_visita_seguinte_fica_fechada(self):
+        r = self.rode('const m = {"dervs-conectar-visto": "1"}; globalThis.localStorage = { getItem: k => m[k] || null, setItem: (k, v) => { m[k] = v; } };')
+        self.assertFalse(r["aberto"])
+
+    def test_sem_armazenamento_a_tela_nasce_aberta(self):
+        r = self.rode("globalThis.localStorage = { getItem() { throw new Error('bloqueado'); }, setItem() { throw new Error('x'); } };")
+        self.assertTrue(r["aberto"])
+
+
+class AMarcacaoDoCartaoEstaNoHtml(unittest.TestCase):
+    def test_os_vaos_que_o_script_preenche_existem(self):
+        for ident in ("conectar-autorizar", "cartao-computador", "pc-titulo", "pc-marca",
+                      "pc-resumo", "pc-carimbo", "pc-acoes", "espera-maquina", "pc-lista",
+                      "lista-computadores", "computadores-carimbo", "o-que-vai-aparecer",
+                      "o-que-faz", "prefiro-comando", "btn-gerar-numero", "pareamento",
+                      "numero-pareamento", "comando-pareamento", "btn-copiar-comando",
+                      "espera-pareamento", "conectar-corpo"):
+            with self.subTest(id=ident):
+                self.assertIn('id="%s"' % ident, HTML)
+
+    def test_cada_id_que_o_script_pede_existe_no_html(self):
+        # Um `$("#x")` para um id que nao existe estoura em silencio no navegador.
+        usados = set(re.findall(r'\$\("#(pc-[a-z]+|espera-[a-z]+|conectar-[a-z]+|'
+                                r'o-que-[a-z-]+|lista-computadores|computadores-carimbo|'
+                                r'cartao-computador)"\)', JS))
+        self.assertGreater(len(usados), 8)
+        for ident in usados:
+            with self.subTest(id=ident):
+                self.assertIn('id="%s"' % ident, HTML)
+
+    def test_o_pc_titulo_recebe_foco_e_o_bloco_de_autorizar_comeca_escondido(self):
+        self.assertRegex(HTML, r'<h2 id="pc-titulo" tabindex="-1">')
+        self.assertRegex(HTML, r'<div class="cartao" id="conectar-autorizar"[^>]*\bhidden\b')
+
+    def test_os_textos_do_design_estao_na_tela(self):
+        for texto in ("Ligue o DERVS ao que você usa.",
+                      "Este computador",
+                      "O que vai aparecer?",
+                      "O que vai aparecer quando você clicar",
+                      "O fornecedor não pôde ser verificado",
+                      "O que esse arquivo faz no meu computador?",
+                      "Prefiro colar um comando",
+                      "Funciona no Windows 10 (versão 1803 ou mais nova) e no Windows 11.",
+                      "Precisa de internet, mas não precisa de administrador.",
+                      "O Windows vai perguntar se você confia no arquivo. É normal"):
+            with self.subTest(texto=texto):
+                junto = re.sub(r"\s+", " ", HTML)
+                self.assertIn(texto, junto)
+
+    def test_o_passo_a_passo_tem_sete_passos_e_tres_desenhos_sem_estilo_embutido(self):
+        i = HTML.index('id="o-que-vai-aparecer"')
+        bloco = HTML[i:HTML.index("</details>", i)]
+        self.assertEqual(len(re.findall(r"<li>", bloco)), 7)
+        self.assertEqual(len(re.findall(r"<svg\b", bloco)), 3)
+        self.assertNotIn("style=", bloco)
+        self.assertNotRegex(bloco, r'(fill|stroke)="[^"]*"')
+        self.assertEqual(bloco.count('aria-hidden="true"'), 3)
+
+    def test_os_desenhos_so_usam_classes_que_o_css_define(self):
+        i = HTML.index('id="o-que-vai-aparecer"')
+        bloco = HTML[i:HTML.index("</details>", i)]
+        classes = set(re.findall(r'class="(desenho[a-z_-]*)"', bloco))
+        self.assertGreaterEqual(len(classes), 5)
+        css = sem_comentarios(CSS)
+        for c in classes:
+            with self.subTest(classe=c):
+                self.assertIn("." + c, css)
+
+    def test_o_menu_segue_com_quatro_itens(self):
+        itens = re.findall(r'<a href="(#/[^"]+)" data-tela="([^"]+)"', HTML)
+        self.assertEqual(len(itens), 4, itens)
+
+    def test_assets_nao_ganhou_arquivo(self):
+        nomes = sorted(p.name for p in (AQUI / "assets").iterdir())
+        for novo in nomes:
+            self.assertNotRegex(novo, r"(?i)desenho|passo|conectar", novo)
+
+
+# ================================= E3-3: a chave "Mostrar no painel"
+PRELUDIO_DA_CHAVE = r"""
+const escritas = [], carregou = [];
+let PENDENTE = null;
+let RESPOSTA_DA_CHAVE = { ok: true, status: 200 };
+globalThis.escrever = (url, corpo) => {
+  escritas.push([url, corpo]);
+  return new Promise((res) => { PENDENTE = () => res(RESPOSTA_DA_CHAVE); });
+};
+async function carregar() { carregou.push(1); }
+const chaveDe = (li) => acha(li, n => n.tag === "input");
+"""
+
+FONTES_DA_CHAVE = ("criar", "linhaComChave", "linhaDeProjetoVisto", "blocoDeProjetosVistos")
+
+
+class AChaveMostrarNoPainel(unittest.TestCase):
+    def rode(self, script):
+        return roda(self, [PRELUDIO_DA_CHAVE] + fontes(*FONTES_DA_CHAVE), script)
+
+    def test_a_linha_tem_a_chave_com_nome_e_estado(self):
+        r = self.rode(r"""
+const li = linhaDeProjetoVisto({ projeto: "clinica-agenda", caminho: "C:\\projetos\\clinica-agenda", oculto: false });
+const c = chaveDe(li);
+console.log(JSON.stringify({ tipo: c.type, papel: c.attrs.role, nome: c.attrs["aria-label"],
+  ligada: c.checked, texto: li.textContent, classe: li.className }));
+""")
+        self.assertEqual((r["tipo"], r["papel"]), ("checkbox", "switch"))
+        self.assertEqual(r["nome"], "Mostrar no painel: clinica-agenda")
+        self.assertTrue(r["ligada"])
+        self.assertIn("Aparece no painel", r["texto"])
+        self.assertIn("clinica-agenda", r["texto"])
+        self.assertEqual(r["classe"], "visto")
+
+    def test_oculto_pinta_cinza_e_diz_escondido_mas_nao_some(self):
+        r = self.rode(r"""
+const li = linhaDeProjetoVisto({ projeto: "loja-da-ana", caminho: "x", oculto: true });
+console.log(JSON.stringify({ ligada: chaveDe(li).checked, texto: li.textContent, classe: li.className }));
+""")
+        self.assertFalse(r["ligada"])
+        self.assertIn("Escondido do painel", r["texto"])
+        self.assertIn("loja-da-ana", r["texto"])
+        self.assertIn("visto--oculto", r["classe"])
+
+    def test_durante_o_pedido_a_chave_fica_desligada_para_o_clique_e_ocupada(self):
+        r = self.rode(r"""
+const li = linhaDeProjetoVisto({ projeto: "a", caminho: "", oculto: false });
+const c = chaveDe(li);
+c.checked = false;
+const p = c.disparar("change");
+const durante = { desativada: c.disabled, ocupada: c.attrs["aria-busy"] };
+PENDENTE(); await p;
+console.log(JSON.stringify({ durante, depois: { desativada: c.disabled, ocupada: c.attrs["aria-busy"] || null },
+  escritas, carregou: carregou.length, texto: li.textContent, classe: li.className }));
+""")
+        self.assertEqual(r["durante"], {"desativada": True, "ocupada": "true"})
+        self.assertEqual(r["depois"], {"desativada": False, "ocupada": None})
+        self.assertEqual(r["escritas"], [["/api/projetos/mostrar",
+                                          {"projeto": "a", "mostrar": False}]])
+        self.assertEqual(r["carregou"], 1)     # o painel relê o que sobrou
+        self.assertIn("Escondido do painel", r["texto"])
+        self.assertIn("visto--oculto", r["classe"])
+
+    def test_se_o_servidor_recusa_a_chave_volta_e_a_linha_diz(self):
+        r = self.rode(r"""
+RESPOSTA_DA_CHAVE = { ok: false, status: 404 };
+const li = linhaDeProjetoVisto({ projeto: "a", caminho: "", oculto: false });
+const c = chaveDe(li);
+c.checked = false;
+const p = c.disparar("change"); PENDENTE(); await p;
+console.log(JSON.stringify({ ligada: c.checked, texto: li.textContent, classe: li.className,
+  foco: FOCO.atual === c, carregou: carregou.length, desativada: c.disabled }));
+""")
+        self.assertTrue(r["ligada"], "a chave tem de voltar para onde estava")
+        self.assertIn("Não consegui mudar agora. A chave voltou para onde estava.", r["texto"])
+        self.assertIn("Aparece no painel", r["texto"])
+        self.assertEqual(r["classe"], "visto")
+        self.assertTrue(r["foco"])
+        self.assertEqual(r["carregou"], 0)
+        self.assertFalse(r["desativada"])
+
+    def test_falha_de_rede_tambem_devolve_a_chave(self):
+        r = self.rode(r"""
+globalThis.escrever = () => Promise.reject(new Error("rede"));
+const li = linhaDeProjetoVisto({ projeto: "a", caminho: "", oculto: true });
+const c = chaveDe(li);
+c.checked = true;
+await c.disparar("change");
+console.log(JSON.stringify({ ligada: c.checked, texto: li.textContent }));
+""")
+        self.assertFalse(r["ligada"])
+        self.assertIn("A chave voltou para onde estava.", r["texto"])
+
+    def test_o_foco_fica_na_chave_depois_de_dar_certo(self):
+        r = self.rode(r"""
+const li = linhaDeProjetoVisto({ projeto: "a", caminho: "", oculto: false });
+const c = chaveDe(li);
+c.checked = false;
+const p = c.disparar("change"); PENDENTE(); await p;
+console.log(JSON.stringify({ foco: FOCO.atual === c }));
+""")
+        self.assertTrue(r["foco"])
+
+    def test_o_objeto_do_servidor_acompanha_a_chave(self):
+        r = self.rode(r"""
+const a = { projeto: "a", caminho: "", oculto: false };
+const li = linhaDeProjetoVisto(a);
+const c = chaveDe(li);
+c.checked = false;
+const p = c.disparar("change"); PENDENTE(); await p;
+console.log(JSON.stringify({ oculto: a.oculto }));
+""")
+        self.assertTrue(r["oculto"])
+
+    def test_nome_e_pasta_de_fora_entram_como_texto(self):
+        r = self.rode(r"""
+const li = linhaDeProjetoVisto({ projeto: "<img src=x onerror=1>", caminho: "<script>x</script>", oculto: false });
+console.log(JSON.stringify({ texto: li.textContent,
+  perigosos: achaTodos(li, n => n.tag === "img" || n.tag === "script").length }));
+""")
+        self.assertIn("<img src=x onerror=1>", r["texto"])
+        self.assertEqual(r["perigosos"], 0)
+
+    def test_mais_de_vinte_projetos_rola_dentro_de_uma_caixa_com_foco_e_nome(self):
+        r = self.rode(r"""
+const lista = (n) => Array.from({ length: n }, (_, i) => ({ projeto: "p" + i, caminho: "", oculto: false }));
+const grande = blocoDeProjetosVistos({ projetos_vistos: lista(21) });
+const pequeno = blocoDeProjetosVistos({ projetos_vistos: lista(20) });
+const ul = (b) => acha(b, n => n.tag === "ul");
+console.log(JSON.stringify({ g: [ul(grande).className, ul(grande).attrs.tabindex, ul(grande).attrs["aria-label"]],
+  p: [ul(pequeno).className, ul(pequeno).attrs.tabindex || null], linhas: achaTodos(grande, n => n.tag === "li").length }));
+""")
+        self.assertEqual(r["g"], ["lista lista--rolavel", "0", "Projetos que achei neste computador"])
+        self.assertEqual(r["p"], ["lista", None])
+        self.assertEqual(r["linhas"], 21)
+
+    def test_sem_projetos_nao_ha_bloco_e_ha_a_explicacao_quando_ha(self):
+        r = self.rode(r"""
+const vazio = blocoDeProjetosVistos({ projetos_vistos: [] });
+const ausente = blocoDeProjetosVistos({});
+const cheio = blocoDeProjetosVistos({ projetos_vistos: [{ projeto: "a", caminho: "", oculto: false }] });
+console.log(JSON.stringify({ vazio, ausente, texto: cheio.textContent }));
+""")
+        self.assertIsNone(r["vazio"])
+        self.assertIsNone(r["ausente"])
+        self.assertIn("Projetos que achei neste computador", r["texto"])
+        self.assertIn("A escolha vale só para a sua conta.", r["texto"])
+
+    def test_a_chamada_vai_por_escrever_e_so_com_projeto_e_mostrar(self):
+        corpo = funcao("linhaComChave")
+        self.assertIn('escrever("/api/projetos/mostrar", { projeto, mostrar: quer })', corpo)
+        self.assertNotRegex(corpo, r'fetch\(')
+
+    def test_as_classes_da_chave_existem_nos_dois_lados(self):
+        css = sem_comentarios(CSS)
+        for classe in ("chave", "chave__trilho", "chave__texto", "visto",
+                       "visto--oculto", "lista--rolavel", "projetos-vistos"):
+            with self.subTest(classe=classe):
+                self.assertIn("." + classe, css, "o CSS nao estiliza ." + classe)
+                self.assertIn(classe, JS, "o JS nao escreve " + classe)
+
+    def test_a_chave_ligada_usa_acao_e_nunca_verde(self):
+        css = sem_comentarios(CSS)
+        ini = css.index(".chave {")
+        bloco = css[ini:css.index(".lista--rolavel", ini)]
+        self.assertIn("--acao", bloco)
+        self.assertNotIn("--estado-", bloco)
+        self.assertIn("focus-visible", bloco)
+        self.assertIn("min-height: 44px", bloco)
+
+
+class OPainelDizQuantosProjetosEstaoEscondidos(unittest.TestCase):
+    def rode(self, ocultos_js):
+        return roda(self, fontes("criar", "pintarOcultos"), r"""
+globalThis.ESTADO = { ocultos: %s };
+pintarOcultos();
+const l = $("#painel-ocultos");
+console.log(JSON.stringify({ oculto: l.hidden, texto: l.textContent,
+  link: (acha(l, n => n.tag === "a") || {}).href || null }));
+""" % ocultos_js)
+
+    def test_com_escondidos_diz_quantos_e_leva_a_conectar(self):
+        r = self.rode('["a", "b"]')
+        self.assertFalse(r["oculto"])
+        self.assertIn("2 projetos escondidos do painel.", r["texto"])
+        self.assertEqual(r["link"], "#/conectar")
+
+    def test_um_so_fica_no_singular(self):
+        self.assertIn("1 projeto escondido do painel.", self.rode('["a"]')["texto"])
+
+    def test_sem_nenhum_ou_servidor_antigo_a_linha_some(self):
+        self.assertTrue(self.rode("[]")["oculto"])
+        self.assertTrue(self.rode("undefined")["oculto"])
+
+    def test_a_linha_existe_no_html_da_tela_do_painel(self):
+        self.assertRegex(HTML, r'<p class="mole" id="painel-ocultos" hidden>')
+
+
+# ===================================== E3-5: o cartao "Seus sites"
+FUNCOES_DOS_SITES = (
+    "criar", "haQuanto", "marcaDaPorta", "sitesDoProjeto", "nomesDosProjetos",
+    "medidaDoSite", "projetoMaisParecido", "sugestoesDoSite", "linhaDeSugestao",
+    "motivoDoSite", "segundosEmPalavras", "campoDeEscolha", "razaoDeNaoGuardar",
+    "blocoDeGuardar", "pintarResultadoDaMedicao", "limparResultadoDoSite",
+    "conferirSite", "guardarSite", "linhaDeSite", "pintarSites")
+
+PRELUDIO_DOS_SITES = PRELUDIO_DA_REDE + PRELUDIO_DE_TEMPO + r"""
+let ESTADO = { projetos: [{ nome: "loja-da-ana", camadas: {}, github: null },
+                          { nome: "clinica-agenda", camadas: {}, github: null }] };
+let ENDERECOS = [], ENDERECOS_LIDO_EM = ha(1);
+let SERVIDORES = [{ id: 7, nome: "Meus sites" }], SERVIDORES_LIDO_EM = ha(1);
+let MEDIDAS = {};
+let SUGESTOES = {};
+const SUGESTOES_IGNORADAS = new Set();
+let PAGINA_VELHA = false;
+function chaveDaMedida(s, p) { return s + "|" + p; }
+const escritas = [], lidos = [];
+globalThis.escrever = async (url, corpo) => {
+  escritas.push([url, corpo]);
+  const r = FILA.shift();
+  if (r instanceof Error) throw r;
+  return r;
+};
+let FILA = [];
+async function olharOsServidores() { lidos.push("servidores"); }
+async function olharOsEnderecos() { lidos.push("enderecos"); }
+async function guardarEndereco(s, p, u) { escritas.push(["tirar", s, p, u]); }
+function formularioDeServidorNovo() { return document.createElement("form"); }
+function blocoDeServidor(i) { return document.createElement("div"); }
+function pintarConectar() {}
+const resultado = () => $("#site-resultado");
+const botoes = () => achaTodos(resultado(), n => n.tag === "button").map(b => [b.textContent, b.disabled]);
+"""
+
+
+class OCartaoSeusSites(unittest.TestCase):
+    def rode(self, script, fila="[]"):
+        fontes_ = [PRELUDIO_DOS_SITES, constante("SITE")] + [funcao(n) for n in FUNCOES_DOS_SITES] \
+            + [constante("ESTADO_DA_PORTA")]
+        return roda(self, fontes_, "FILA = " + fila + ";\n" + script)
+
+    # ---- os quatro desfechos
+    def test_respondeu_mostra_codigo_tempo_e_o_botao_de_guardar_este_site(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://loja-da-ana.com.br", ok: true, codigo: 200, ms: 400 });
+console.log(JSON.stringify({ texto: resultado().textContent, botoes: botoes() }));
+""")
+        self.assertIn("respondeu", r["texto"])
+        self.assertIn("O site respondeu (código 200) em 0,4 segundo.", r["texto"])
+        self.assertEqual(r["botoes"][0][0], "Guardar este site")
+
+    def test_dois_segundos_ou_mais_ficam_no_plural(self):
+        r = self.rode(r"""
+console.log(JSON.stringify([segundosEmPalavras(400), segundosEmPalavras(1000), segundosEmPalavras(2300), segundosEmPalavras(undefined)]));
+""")
+        self.assertEqual(r, [" em 0,4 segundo", " em 1,0 segundo", " em 2,3 segundos", ""])
+
+    def test_nao_respondeu_diz_o_motivo_e_guarda_mesmo_assim(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://x.com", ok: false, codigo: 0, erro: "TimeoutError" });
+console.log(JSON.stringify({ texto: resultado().textContent, botoes: botoes() }));
+""")
+        self.assertIn("não respondeu", r["texto"])
+        self.assertIn("O site não respondeu em 10 segundos. (TimeoutError)", r["texto"])
+        self.assertEqual(r["botoes"][0][0], "Guardar mesmo assim")
+
+    def test_nao_deu_para_conferir_nao_diz_fora_do_ar_e_oferece_tentar_de_novo(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://x.com", ok: null });
+console.log(JSON.stringify({ texto: resultado().textContent, botoes: botoes() }));
+""")
+        self.assertIn("não deu para conferir", r["texto"])
+        self.assertIn("Isso não quer dizer que ele esteja fora do ar — quer dizer que não olhei.", r["texto"])
+        self.assertNotIn("não respondeu", r["texto"])
+        self.assertEqual([b[0] for b in r["botoes"]], ["Guardar mesmo assim", "Tentar de novo"])
+
+    def test_rede_interna_nao_tem_botao_de_guardar(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "http://10.0.0.1", motivo: "nao_publico" });
+console.log(JSON.stringify({ texto: resultado().textContent, botoes: botoes() }));
+""")
+        self.assertIn("Este endereço é de uma rede interna. O painel só confere sites públicos.", r["texto"])
+        self.assertEqual(r["botoes"], [])
+
+    def test_endereco_mal_escrito_liga_aria_invalid_e_mostra_a_mensagem(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "loja", motivo: "forma" });
+console.log(JSON.stringify({ invalido: $("#site-endereco").attrs["aria-invalid"],
+  erro: $("#site-erro").textContent, oculto: $("#site-erro").hidden, botoes: botoes() }));
+""")
+        self.assertEqual(r["invalido"], "true")
+        self.assertIn("Escreva o endereço completo, começando por https://, por exemplo https://loja-da-ana.com.br.", r["erro"])
+        self.assertFalse(r["oculto"])
+        self.assertEqual(r["botoes"], [])
+
+    def test_o_proximo_resultado_limpa_o_aria_invalid(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "loja", motivo: "forma" });
+pintarResultadoDaMedicao({ url: "https://x.com", ok: true, codigo: 200, ms: 10 });
+console.log(JSON.stringify({ invalido: $("#site-endereco").attrs["aria-invalid"] || null, oculto: $("#site-erro").hidden }));
+""")
+        self.assertEqual(r, {"invalido": None, "oculto": True})
+
+    # ---- o dicionario de motivos
+    def test_traducao_do_erro(self):
+        casos = [
+            ({"erro": "TimeoutError"}, "O site não respondeu em 10 segundos."),
+            ({"erro": "timeout"}, "O site não respondeu em 10 segundos."),
+            ({"erro": "SSLCertVerificationError"}, "O certificado de segurança do site não é válido."),
+            ({"erro": "CertificateError"}, "O certificado de segurança do site não é válido."),
+            ({"erro": "", "codigo": 502}, "O site respondeu com erro do lado dele (código 502)."),
+            ({"erro": "ConnectionRefusedError"}, "O site recusou a conexão."),
+            ({"erro": "nao_resolveu"}, "Não achei esse endereço. Confira se você digitou certo."),
+            ({"erro": "OSError"}, "Não consegui falar com o site."),
+            ({"erro": ""}, "Não consegui falar com o site."),
+        ]
+        r = self.rode("console.log(JSON.stringify(%s.map(motivoDoSite)));" % json.dumps([c for c, _ in casos]))
+        for (entrada, esperado), saida in zip(casos, r):
+            with self.subTest(entrada=entrada):
+                self.assertTrue(saida.startswith(esperado), saida)
+
+    def test_o_erro_do_servidor_remoto_entra_como_texto(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://x.com", ok: false, codigo: 0, erro: "<img src=x onerror=1>" });
+console.log(JSON.stringify({ texto: resultado().textContent, imgs: achaTodos(resultado(), n => n.tag === "img").length }));
+""")
+        self.assertIn("<img src=x onerror=1>", r["texto"])
+        self.assertEqual(r["imgs"], 0)
+
+    # ---- projeto, servidor, guardar
+    def test_o_projeto_mais_parecido_vem_escolhido_e_sem_parecido_fica_vazio(self):
+        r = self.rode(r"""
+const nomes = ["loja-da-ana", "clinica-agenda", "api"];
+console.log(JSON.stringify([
+  projetoMaisParecido("https://loja-da-ana.com.br", nomes),
+  projetoMaisParecido("https://www.clinica-agenda.com.br/x", nomes),
+  projetoMaisParecido("https://outra-coisa.com", nomes),
+  projetoMaisParecido("isto nao e url", nomes)]));
+""")
+        self.assertEqual(r, ["loja-da-ana", "clinica-agenda", "", ""])
+
+    def test_o_select_ja_vem_no_projeto_parecido(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://loja-da-ana.com.br", ok: true, codigo: 200, ms: 10 });
+console.log(JSON.stringify({ projeto: $("#site-projeto") === undefined ? null : acha(resultado(), n => n.id === "site-projeto").value,
+  botoes: botoes() }));
+""")
+        self.assertEqual(r["projeto"], "loja-da-ana")
+        self.assertEqual(r["botoes"][0], ["Guardar este site", False])
+
+    def test_sem_projeto_parecido_o_botao_espera_a_escolha_e_nao_adivinha(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://outra-coisa.com", ok: true, codigo: 200, ms: 10 });
+const sel = acha(resultado(), n => n.id === "site-projeto");
+const antes = botoes()[0];
+sel.value = "clinica-agenda"; await sel.disparar("change");
+console.log(JSON.stringify({ vazio: sel.filhos[0].textContent, antes, depois: botoes()[0] }));
+""")
+        self.assertEqual(r["vazio"], "Escolha o projeto")
+        self.assertEqual(r["antes"], ["Guardar este site", True])
+        self.assertEqual(r["depois"], ["Guardar este site", False])
+
+    def test_sem_nenhum_projeto_diz_para_conectar_um_computador(self):
+        r = self.rode(r"""
+ESTADO.projetos = [];
+pintarResultadoDaMedicao({ url: "https://x.com", ok: true, codigo: 200, ms: 10 });
+console.log(JSON.stringify({ texto: resultado().textContent, botoes: botoes(),
+  select: !!acha(resultado(), n => n.id === "site-projeto") }));
+""")
+        self.assertIn("Ainda não há projetos no painel para ligar a este site. Conecte um computador primeiro.", r["texto"])
+        self.assertEqual(r["botoes"][0], ["Guardar este site", True])
+        self.assertFalse(r["select"])
+
+    def test_dois_servidores_ou_mais_exigem_escolha_visivel(self):
+        r = self.rode(r"""
+SERVIDORES = [{ id: 7, nome: "OVH" }, { id: 8, nome: "TineHost" }];
+pintarResultadoDaMedicao({ url: "https://loja-da-ana.com.br", ok: true, codigo: 200, ms: 10 });
+const sel = acha(resultado(), n => n.id === "site-servidor");
+const antes = botoes()[0][1];
+sel.value = "8"; await sel.disparar("change");
+console.log(JSON.stringify({ rotulo: acha(resultado(), n => n.tag === "label" && n.attrs["for"] === "site-servidor").textContent,
+  convite: sel.filhos[0].textContent, antes, depois: botoes()[0][1] }));
+""")
+        self.assertEqual(r["rotulo"], "Em qual servidor?")
+        self.assertEqual(r["convite"], "Escolha o servidor")
+        self.assertTrue(r["antes"])
+        self.assertFalse(r["depois"])
+
+    def test_guardar_manda_medir_falso_e_o_servidor_unico(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://loja-da-ana.com.br", ok: true, codigo: 200, ms: 10, medido_em: ha(1) });
+$("#site-endereco").value = "https://loja-da-ana.com.br";
+await acha(resultado(), n => n.tag === "button").clicar();
+console.log(JSON.stringify({ escritas, campo: $("#site-endereco").value, aviso: $("#sites-guardado").textContent,
+  medida: MEDIDAS["7|loja-da-ana"] && MEDIDAS["7|loja-da-ana"].codigo, lidos,
+  foco: FOCO.atual === $("#site-endereco") }));
+""", "[{ok: true, status: 200}]")
+        self.assertEqual(r["escritas"], [["/api/enderecos/guardar",
+            {"servidor_id": 7, "projeto": "loja-da-ana", "url": "https://loja-da-ana.com.br", "medir": False}]])
+        self.assertEqual(r["campo"], "")
+        self.assertEqual(r["aviso"], "Guardei https://loja-da-ana.com.br para o projeto loja-da-ana.")
+        self.assertEqual(r["medida"], 200)
+        self.assertIn("enderecos", r["lidos"])
+        self.assertTrue(r["foco"])
+
+    def test_sem_servidor_cadastrado_cria_meus_sites_antes_de_guardar(self):
+        r = self.rode(r"""
+SERVIDORES = [];
+pintarResultadoDaMedicao({ url: "https://loja-da-ana.com.br", ok: false, codigo: 0, erro: "TimeoutError" });
+globalThis.olharOsServidores = async () => { SERVIDORES = [{ id: 11, nome: "Meus sites" }]; };
+await acha(resultado(), n => n.tag === "button").clicar();
+console.log(JSON.stringify({ escritas, medida: Object.keys(MEDIDAS) }));
+""", "[{ok: true, status: 200}, {ok: true, status: 200}]")
+        self.assertEqual(r["escritas"][0], ["/api/servidores/guardar", {"nome": "Meus sites", "padrao_subdominio": ""}])
+        self.assertEqual(r["escritas"][1][1]["servidor_id"], 11)
+        self.assertFalse(r["escritas"][1][1]["medir"])
+        self.assertEqual(r["medida"], ["11|loja-da-ana"])    # mediu e respondeu falso: fica o que a pessoa viu
+
+    def test_guardar_que_falha_mantem_o_campo_e_diz_isso(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://loja-da-ana.com.br", ok: true, codigo: 200, ms: 10 });
+$("#site-endereco").value = "https://loja-da-ana.com.br";
+await acha(resultado(), n => n.tag === "button").clicar();
+console.log(JSON.stringify({ campo: $("#site-endereco").value, aviso: $("#sites-guardado").textContent,
+  guardado: Object.keys(MEDIDAS) }));
+""", "[{ok: false, status: 500}]")
+        self.assertEqual(r["campo"], "https://loja-da-ana.com.br")
+        self.assertEqual(r["aviso"], "Não consegui guardar agora. O que você digitou continua no campo.")
+        self.assertEqual(r["guardado"], [])
+
+    def test_guardar_sem_medicao_nao_inventa_carimbo(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://x.com", ok: null });
+await acha(resultado(), n => n.tag === "button").clicar();
+console.log(JSON.stringify({ medidas: Object.keys(MEDIDAS) }));
+""", "[{ok: true, status: 200}]")
+        self.assertEqual(r["medidas"], [])
+
+    # ---- conferir
+    def test_conferir_chama_a_rota_de_medir_e_pinta_o_que_voltou(self):
+        r = self.rode(r"""
+$("#site-endereco").value = "  https://loja-da-ana.com.br ";
+const p = conferirSite();
+const durante = { texto: $("#site-conferir").textContent, desativado: $("#site-conferir").disabled,
+                  ocupado: resultado().attrs["aria-busy"] };
+await p;
+console.log(JSON.stringify({ durante, depois: { texto: $("#site-conferir").textContent, desativado: $("#site-conferir").disabled },
+  escritas, resultado: resultado().textContent }));
+""", '[resposta(200, {url: "https://loja-da-ana.com.br", ok: true, codigo: 200, ms: 300, medido_em: "x"})]')
+        self.assertEqual(r["durante"], {"texto": "Conferindo…", "desativado": True, "ocupado": "true"})
+        self.assertEqual(r["depois"], {"texto": "Conferir o site", "desativado": False})
+        self.assertEqual(r["escritas"], [["/api/enderecos/medir", {"url": "https://loja-da-ana.com.br"}]])
+        self.assertIn("O site respondeu (código 200) em 0,3 segundo.", r["resultado"])
+
+    def test_400_forma_e_400_nao_publico_vem_do_servidor(self):
+        for motivo in ("forma", "nao_publico"):
+            with self.subTest(motivo=motivo):
+                r = self.rode(r"""
+$("#site-endereco").value = "x";
+await conferirSite();
+console.log(JSON.stringify({ texto: resultado().textContent, invalido: $("#site-endereco").attrs["aria-invalid"] || null }));
+""", '[resposta(400, {erro: "x", motivo: "%s"})]' % motivo)
+                if motivo == "forma":
+                    self.assertEqual(r["invalido"], "true")
+                else:
+                    self.assertIn("rede interna", r["texto"])
+
+    def test_teto_429_ou_rede_caida_viram_nao_deu_para_conferir_nunca_fora_do_ar(self):
+        for fila in ('[resposta(429, {erro: "nao deu"})]', '[new Error("rede")]', '[resposta(500, {})]'):
+            with self.subTest(fila=fila):
+                r = self.rode(r"""
+$("#site-endereco").value = "https://x.com";
+await conferirSite();
+console.log(JSON.stringify({ texto: resultado().textContent }));
+""", fila)
+                self.assertIn("não deu para conferir", r["texto"])
+                self.assertNotIn("não respondeu", r["texto"])
+
+    def test_campo_vazio_nao_vai_a_rede(self):
+        r = self.rode(r"""
+$("#site-endereco").value = "   ";
+await conferirSite();
+console.log(JSON.stringify({ escritas, invalido: $("#site-endereco").attrs["aria-invalid"] }));
+""")
+        self.assertEqual(r, {"escritas": [], "invalido": "true"})
+
+    def test_pagina_velha_na_conferencia_nao_pinta_resultado(self):
+        r = self.rode(r"""
+PAGINA_VELHA = true;
+$("#site-endereco").value = "https://x.com";
+await conferirSite();
+console.log(JSON.stringify({ filhos: resultado().filhos.length }));
+""", '[resposta(403, {motivo: "pagina_velha"})]')
+        self.assertEqual(r["filhos"], 0)
+
+    def test_resposta_atrasada_de_outro_endereco_nunca_pinta(self):
+        r = self.rode(r"""
+let solta;
+globalThis.escrever = (u, c) => new Promise((res) => { solta = () => res(resposta(200, { url: c.url, ok: true, codigo: 200, ms: 1 })); });
+$("#site-endereco").value = "https://antigo.com";
+const p = conferirSite();
+limparResultadoDoSite();            // a pessoa digitou outra coisa
+solta(); await p;
+console.log(JSON.stringify({ filhos: resultado().filhos.length, botao: $("#site-conferir").textContent }));
+""")
+        self.assertEqual(r, {"filhos": 0, "botao": "Conferir o site"})
+
+    def test_depois_de_8_segundos_a_tela_diz_que_e_normal(self):
+        r = self.rode(r"""
+let tique;
+globalThis.setTimeout = (f, ms) => { tique = [f, ms]; return 1; };
+let solta;
+globalThis.escrever = () => new Promise((res) => { solta = () => res(resposta(200, { ok: true, codigo: 200, ms: 1 })); });
+$("#site-endereco").value = "https://x.com";
+const p = conferirSite();
+tique[0]();
+const texto = resultado().textContent;
+solta(); await p;
+console.log(JSON.stringify({ ms: tique[1], texto }));
+""")
+        self.assertEqual(r["ms"], 8000)
+        self.assertEqual(r["texto"], "Ainda conferindo… alguns sites demoram.")
+
+    # ---- sugestoes
+    def test_sugestoes_vem_do_que_o_projeto_declara_e_do_padrao_e_nao_repetem_o_guardado(self):
+        r = self.rode(r"""
+ESTADO.projetos[0].camadas = { github: "x" };
+ESTADO.projetos[0].github = { sites: [{ servidor_id: 0, url: "https://loja-da-ana.com.br" },
+                                      { servidor_id: 7, url: "https://ja-medido.com" }] };
+SUGESTOES = { 7: [{ projeto: "clinica-agenda", url: "https://clinica-agenda.com.br" },
+                  { projeto: "loja-da-ana", url: "https://loja-da-ana.com.br" }] };
+ENDERECOS = [{ servidor_id: 7, projeto: "clinica-agenda", url: "https://clinica-agenda.com.br" }];
+console.log(JSON.stringify(sugestoesDoSite()));
+""")
+        self.assertEqual(r, [{"projeto": "loja-da-ana", "url": "https://loja-da-ana.com.br"}])
+
+    def test_ignorar_some_e_nunca_grava(self):
+        r = self.rode(r"""
+SUGESTOES = { 7: [{ projeto: "loja-da-ana", url: "https://loja-da-ana.com.br" }] };
+pintarSites();
+const antes = $("#sites-sugestoes").textContent;
+await acha($("#sites-sugestoes"), n => n.tag === "button" && n.textContent === "Ignorar").clicar();
+console.log(JSON.stringify({ antes, depois: $("#sites-sugestoes").textContent, escritas }));
+""")
+        self.assertIn("Sugestão: loja-da-ana parece estar em https://loja-da-ana.com.br", r["antes"])
+        self.assertEqual(r["depois"], "")
+        self.assertEqual(r["escritas"], [])
+
+    def test_usar_este_preenche_o_campo_e_confere_sem_gravar(self):
+        r = self.rode(r"""
+SUGESTOES = { 7: [{ projeto: "clinica-agenda", url: "https://clinica-agenda.com.br" }] };
+pintarSites();
+await acha($("#sites-sugestoes"), n => n.tag === "button" && n.textContent === "Usar este").clicar();
+const sel = acha(resultado(), n => n.id === "site-projeto");
+console.log(JSON.stringify({ campo: $("#site-endereco").value, escritas: escritas.map(e => e[0]), projeto: sel.value }));
+""", "[resposta(200, {url: 'https://clinica-agenda.com.br', ok: true, codigo: 200, ms: 5})]")
+        self.assertEqual(r["campo"], "https://clinica-agenda.com.br")
+        self.assertEqual(r["escritas"], ["/api/enderecos/medir"])
+        self.assertEqual(r["projeto"], "clinica-agenda")
+
+    def test_sem_proposta_a_area_nao_aparece_nem_diz_nenhuma_sugestao(self):
+        r = self.rode("pintarSites();\nconsole.log(JSON.stringify({ t: $('#sites-sugestoes').textContent }));")
+        self.assertEqual(r["t"], "")
+
+    # ---- a lista e o carimbo
+    def test_nada_pinta_antes_da_leitura_e_nao_diz_nenhum_site(self):
+        r = self.rode(r"""
+ENDERECOS_LIDO_EM = "";
+pintarSites();
+console.log(JSON.stringify({ resumo: $("#sites-resumo").textContent, oculto: $("#sites-resumo").hidden,
+  lista: $("#sites-lista").filhos.length, marca: $("#sites-marca").textContent }));
+""")
+        self.assertIn("Isso não quer dizer que não há — quer dizer que não olhei.", r["resumo"])
+        self.assertNotIn("Nenhum site cadastrado", r["resumo"])
+        self.assertEqual(r["lista"], 0)
+        self.assertIn("não deu para conferir", r["marca"])
+
+    def test_leu_e_nao_ha_nenhum(self):
+        r = self.rode(r"""
+pintarSites();
+console.log(JSON.stringify({ resumo: $("#sites-resumo").textContent, marca: $("#sites-marca").textContent }));
+""")
+        self.assertIn("Nenhum site cadastrado ainda. Cole o endereço acima", r["resumo"])
+        self.assertIn("não conectado", r["marca"])
+
+    def test_a_lista_mostra_os_tres_estados_e_o_botao_tirar(self):
+        r = self.rode(r"""
+ENDERECOS = [{ servidor_id: 7, projeto: "clinica-agenda", url: "https://clinica-agenda.com.br" },
+             { servidor_id: 7, projeto: "loja-da-ana", url: "https://loja-da-ana.com.br" },
+             { servidor_id: 7, projeto: "padaria", url: "https://padaria-central.com.br" }];
+MEDIDAS["7|clinica-agenda"] = { ok: true, codigo: 200, medido_em: ha(180) };
+MEDIDAS["7|loja-da-ana"] = { ok: false, codigo: 0, erro: "TimeoutError", medido_em: ha(180) };
+pintarSites();
+const lis = achaTodos($("#sites-lista"), n => n.tag === "li").map(l => l.textContent);
+await acha($("#sites-lista"), n => n.tag === "button" && n.textContent === "Tirar").clicar();
+console.log(JSON.stringify({ lis, escritas }));
+""")
+        junto = " | ".join(r["lis"])
+        self.assertIn("respondeu 200 · medido há 3 minutos", junto)
+        self.assertIn("não respondeu · medido há 3 minutos", junto)
+        self.assertIn("ainda não medi", junto)
+        self.assertIn("não medi", junto)
+        self.assertNotIn("servidor:", junto)           # um servidor só: nome nao aparece
+        self.assertEqual(r["escritas"], [["tirar", 7, "clinica-agenda", ""]])
+
+    def test_o_nome_do_servidor_so_aparece_com_mais_de_um(self):
+        r = self.rode(r"""
+SERVIDORES = [{ id: 7, nome: "OVH" }, { id: 8, nome: "TineHost" }];
+ENDERECOS = [{ servidor_id: 8, projeto: "loja-da-ana", url: "https://loja-da-ana.com.br" }];
+pintarSites();
+console.log(JSON.stringify({ t: $("#sites-lista").textContent }));
+""")
+        self.assertIn("servidor: TineHost", r["t"])
+
+    def test_a_medicao_do_coletor_vale_quando_a_tela_nao_mediu(self):
+        r = self.rode(r"""
+ESTADO.projetos[1].camadas = { github: "x" };
+ESTADO.projetos[1].github = { sites: [{ servidor_id: 7, url: "https://clinica-agenda.com.br", ok: true, codigo: 200, medido_em: ha(60) }] };
+ENDERECOS = [{ servidor_id: 7, projeto: "clinica-agenda", url: "https://clinica-agenda.com.br" }];
+pintarSites();
+console.log(JSON.stringify({ t: $("#sites-lista").textContent }));
+""")
+        self.assertIn("respondeu 200 · medido há 1 minutos", r["t"].replace("há 60 segundos", "há 1 minutos"))
+
+    def test_url_e_projeto_de_fora_entram_como_texto(self):
+        r = self.rode(r"""
+ENDERECOS = [{ servidor_id: 7, projeto: "<b>x</b>", url: "<script>1</script>" }];
+pintarSites();
+console.log(JSON.stringify({ t: $("#sites-lista").textContent, perigosos: achaTodos($("#sites-lista"), n => n.tag === "b" || n.tag === "script").length }));
+""")
+        self.assertIn("<b>x</b>", r["t"])
+        self.assertEqual(r["perigosos"], 0)
+
+    def test_as_opcoes_avancadas_so_aparecem_com_servidores_lidos(self):
+        r = self.rode(r"""
+SERVIDORES_LIDO_EM = "";
+pintarSites();
+const sem = $("#sites-servidores").filhos.length;
+SERVIDORES_LIDO_EM = ha(1);
+pintarSites();
+console.log(JSON.stringify({ sem, com: $("#sites-servidores").filhos.length }));
+""")
+        self.assertEqual(r, {"sem": 0, "com": 2})     # o formulario + 1 servidor
+
+
+class OHtmlDosSitesEstaCerto(unittest.TestCase):
+    def test_o_campo_e_fixo_no_html_com_label_ligada_e_sem_estilo_embutido(self):
+        i = HTML.index('id="cartao-sites"')
+        cartao = HTML[i:HTML.index("</div>\n    </div>\n  </section>", i)]
+        self.assertRegex(cartao, r'<label for="site-endereco">Endereço do site</label>')
+        campo = re.search(r'<input id="site-endereco"[^>]*>', cartao, re.S).group(0)
+        for atributo in ('inputmode="url"', 'autocomplete="off"', 'spellcheck="false"',
+                         'placeholder="https://clinica-agenda.com.br"', 'aria-describedby="site-erro"'):
+            self.assertIn(atributo, campo)
+        self.assertNotIn("style=", cartao)
+        self.assertIn(">Conferir o site<", cartao)
+        self.assertRegex(cartao, r'id="site-resultado" aria-live="polite"')
+        self.assertIn("<summary>Opções avançadas</summary>", cartao)
+
+    def test_cada_id_que_o_script_pede_do_cartao_existe(self):
+        usados = set(re.findall(r'\$\("#(sites?-[a-z]+)"\)', JS))
+        self.assertGreaterEqual(len(usados), 8)
+        for ident in usados:
+            with self.subTest(id=ident):
+                self.assertIn('id="%s"' % ident, HTML)
+
+    def test_o_script_chama_as_rotas_certas_por_escrever(self):
+        for rota_ in ('escrever("/api/enderecos/medir"', 'escrever("/api/enderecos/guardar"',
+                      'escrever("/api/servidores/guardar"'):
+            with self.subTest(rota=rota_):
+                self.assertIn(rota_, JS)
+        self.assertNotRegex(JS, r'fetch\("/api/enderecos/(medir|guardar)')
+
+    def test_guardar_manda_medir_falso(self):
+        self.assertRegex(funcao("guardarSite"), r"medir:\s*false")
+
+
+# ===================== E3-6: a tela nao fala a lingua de quem a construiu
+JARGAO = (r"\bagente\b", r"\btoken\b", r"\bgit\b", r"linha de comando",
+          r"instala[cç][aã]o", r"\bdashboard\b", r"\bloading\b", r"\bdeploy\b",
+          r"\blogin\b")
+
+
+def jargao_em(texto: str) -> list[str]:
+    return [p for p in JARGAO if re.search(p, texto, re.I)]
+
+
+def texto_visivel_do_html() -> str:
+    """O texto das telas Conectar e Computadores (que abre junto), SEM o
+    `<details>` 'Prefiro colar um comando' e SEM os recados do VOZ -- os dois
+    lugares onde a palavra tecnica e permitida."""
+    ini = HTML.index('<section id="tela-conectar"')
+    fim = HTML.index("</section>", HTML.index('<section id="tela-computadores"'))
+    trecho = HTML[ini:fim]
+    trecho = re.sub(r"<!--.*?-->", " ", trecho, flags=re.S)
+    trecho = re.sub(r'<details class="ajuda" id="prefiro-comando">.*?</details>', " ", trecho, flags=re.S)
+    trecho = re.sub(r'<details class="ajuda" id="recados-do-voz">.*', " ", trecho, flags=re.S)
+    atributos = " ".join(re.findall(r'(?:aria-label|placeholder|title|alt)="([^"]*)"', trecho))
+    return re.sub(r"<[^>]+>", " ", trecho) + " " + atributos
+
+
+def literais_da_tela_em_js() -> str:
+    ini = JS.index("/* === CONECTAR: início === */")
+    fim = JS.index("/* === CONECTAR: fim === */")
+    codigo = sem_comentarios(JS[ini:fim])
+    literais = re.findall(r'"(?:[^"\\\n]|\\.)*"', codigo)
+    # A linha do comando (`gerarNumero`) so aparece dentro de "Prefiro colar um
+    # comando", onde o nome do arquivo (`agente/enviar.py`) e o proprio comando.
+    return "\n".join(l for l in literais if "CAMINHO DO DERVS" not in l)
+
+
+class AColoridaNaoFalaJargao(unittest.TestCase):
+    def test_a_extracao_acha_texto_de_verdade(self):
+        self.assertGreater(len(texto_visivel_do_html()), 3000)
+        self.assertGreater(len(literais_da_tela_em_js()), 8000)
+        self.assertIn("Autorizar este computador", literais_da_tela_em_js())
+        self.assertIn("Conectar este computador", texto_visivel_do_html() + literais_da_tela_em_js())
+
+    def test_nenhuma_palavra_de_jargao_no_html_da_tela(self):
+        self.assertEqual(jargao_em(texto_visivel_do_html()), [])
+
+    def test_nenhuma_palavra_de_jargao_nos_textos_do_script(self):
+        self.assertEqual(jargao_em(literais_da_tela_em_js()), [])
+
+    def test_o_detector_reprovaria_de_verdade(self):
+        """A guarda da guarda: texto com a palavra tem de acusar."""
+        for ruim in ("o agente roda", "um token novo", "histórico do Git", "a linha de comando",
+                     "a instalação do app", "veja o dashboard", "login", "Deploy"):
+            with self.subTest(ruim=ruim):
+                self.assertNotEqual(jargao_em(ruim), [])
+        self.assertEqual(jargao_em("Conectar conta do GitHub. Gitano não conta."), [])
+
+    def test_o_jargao_inserido_num_textcontent_do_script_seria_pego(self):
+        sabotado = JS.replace('"Procurando suas contas no GitHub…"',
+                              '"Procurando o agente no GitHub…"', 1)
+        self.assertNotEqual(sabotado, JS)
+        ini = sabotado.index("/* === CONECTAR: início === */")
+        fim = sabotado.index("/* === CONECTAR: fim === */")
+        literais = "\n".join(re.findall(r'"(?:[^"\\\n]|\\.)*"', sem_comentarios(sabotado[ini:fim])))
+        self.assertEqual(jargao_em(literais), [r"\bagente\b"])
+
+    def test_o_comando_e_a_pasta_do_dervs_so_vivem_no_details_do_comando(self):
+        fora = re.sub(r"\s+", " ", texto_visivel_do_html()).lower()
+        self.assertNotIn("CAMINHO DO DERVS", fora.upper())
+        self.assertNotIn("comando", fora.replace("prefiro colar um comando", ""))
+        self.assertIn("CAMINHO DO DERVS", HTML)
+
+    def test_o_paragrafo_antigo_do_agente_saiu(self):
+        self.assertNotIn("programinha que roda no seu computador", HTML)
+
+
+class OVozFicaForaDaTelaCheia(unittest.TestCase):
+    def test_voz_dentro_de_details_fechado_com_o_resumo(self):
+        m = re.search(r'<details class="ajuda" id="recados-do-voz">\s*<summary>([^<]*)</summary>', HTML)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "Recados do DERVS-VOZ")
+
+    def test_o_titulo_computadores_segue_existindo_para_o_roteiro_de_operacao(self):
+        self.assertIn(">Computadores<", HTML)
+
+    def test_nenhum_arquivo_novo_entrou_em_assets(self):
+        base = {"cortina.css", "cortina.js", "dervs.css", "favicon-180.png", "favicon.svg",
+                "fontes", "logo.svg", "painel.css", "painel.js", "portas.js", "selos.svg",
+                "CREDITOS.md"}
+        achados = {p.name for p in (AQUI / "assets").iterdir()}
+        self.assertEqual(achados - base, set(),
+                         "arquivo novo em assets/: a lista de caminhos exatos so le a pasta na subida")
+
+    def test_os_creditos_registram_os_desenhos(self):
+        cr = (AQUI / "assets" / "CREDITOS.md").read_text(encoding="utf-8")
+        self.assertIn("Desenhos de ajuda da tela Conectar", cr)
+        self.assertIn("sem licença de terceiro", cr)
+
+
+class AsMenoresDaRevisaoDaTela(unittest.TestCase):
+    def test_t1_ajuda_global_nao_colide_com_o_campo(self):
+        css = sem_comentarios(CSS)
+        self.assertNotRegex(css, r"(?m)^\.ajuda\b")
+        self.assertIn("details.ajuda > summary", css)
+        self.assertIn("details.ajuda h3", css)
+
+    def test_t4_lista_numerada_e_codigo_lido_letra_a_letra(self):
+        self.assertIn('<ol class="passos" role="list">', HTML)
+        self.assertIn("so-leitor", funcao("pintarAutorizar"))
+        self.assertIn(".so-leitor", (AQUI / "assets" / "dervs.css").read_text(encoding="utf-8"))
+
+    def test_t4_a_faixa_de_pagina_velha_tem_duas_linhas(self):
+        css = sem_comentarios(CSS)
+        self.assertIn(".faixa__titulo", css)
+        self.assertIn("faixa__titulo", funcao("abrirFaixaPaginaVelha"))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

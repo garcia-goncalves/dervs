@@ -40,7 +40,16 @@ AQUI = Path(__file__).resolve().parent
 DOCKERFILE = AQUI / "Dockerfile"
 
 # O que NUNCA pode entrar, mesmo que alguém acrescente sem querer.
-PROIBIDOS = ("execucao.py", "fila.py", "barreira.py", "hub.db", "cofre.chave")
+PROIBIDOS = ("execucao.py", "fila.py", "barreira.py", "hub.db", "cofre.chave",
+             "agente/executor.py")
+
+# O pacote que `GET /agente/pacote` entrega a um computador (contrato C6 do
+# plano do Conectar simples), na mesma ordem de `Hub.PACOTE`. O servidor LE
+# estes arquivos do disco: nenhum e importado por ele por este caminho, entao
+# so este teste os pega faltando. `agente/executor.py` NAO esta aqui de
+# proposito - o computador so mede.
+PACOTE_DO_COMPUTADOR = ("agente/__init__.py", "agente/enviar.py", "coletar.py",
+                        "banco.py", "documentos.py", "tarefas.py")
 
 
 def copiados() -> set[str]:
@@ -130,7 +139,8 @@ class OQueAImagemPrecisa(unittest.TestCase):
         """
         copia = copiados()
         for arquivo in ("index.html", "index-cortina.html", "portas.html",
-                        "casos.json", "robots.txt", "assets", "conectador.py"):
+                        "casos.json", "robots.txt", "assets", "conectador.py",
+                        "conectador.cmd"):
             self.assertIn(arquivo, copia,
                           "%s e servido em producao e nao esta na imagem"
                           % arquivo)
@@ -157,6 +167,26 @@ class OQueAImagemPrecisa(unittest.TestCase):
                 self.assertNotIn("conectador", [a.name for a in no.names])
             elif isinstance(no, ast.ImportFrom):
                 self.assertNotEqual("conectador", no.module)
+
+
+    def test_o_pacote_do_computador_inteiro_entra_na_imagem(self):
+        """O servidor LE estes seis arquivos e os entrega por `/agente/pacote`.
+        Faltar um na imagem e o servidor responder 503 so em producao."""
+        copia = copiados()
+        for arquivo in PACOTE_DO_COMPUTADOR:
+            with self.subTest(arquivo=arquivo):
+                self.assertIn(arquivo, copia,
+                              "%s e entregue ao computador e nao esta na imagem"
+                              % arquivo)
+
+    def test_o_pacote_nao_leva_o_braco_executor(self):
+        self.assertNotIn("agente/executor.py", PACOTE_DO_COMPUTADOR)
+        self.assertNotIn("agente/executor.py", copiados())
+
+    def test_o_pacote_e_lido_nunca_importado(self):
+        """`agente` e pacote, nao modulo da raiz: se `servir.py` o importasse,
+        o executor viria junto e o Dockerfile teria de leva-lo."""
+        self.assertNotIn("agente", modulos_de_runtime())
 
 
 class OQueAImagemNaoPodeLevar(unittest.TestCase):

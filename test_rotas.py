@@ -432,5 +432,35 @@ class AsRotasDaFatia2(unittest.TestCase):
         self.assertTrue(_sys.modules["tarefas"].__file__.endswith("tarefas.py"))
 
 
+class AsRotasDoConectarSimples(unittest.TestCase):
+    """Conectar simples (A): o acesso e o método de cada rota nova, nomeados.
+
+    Rota nova sem classificação reprova em outro lugar; aqui a classificação
+    é CONTRATO (C0): `pedir`/`esperar` abertas porque quem chega ainda não tem
+    token, `pacote` por token de máquina, o resto atrás de sessão.
+    """
+
+    ESPERADAS = {
+        "/agente/pedir":         ("POST", "_agente_pedir",       "aberta"),
+        "/agente/esperar":       ("POST", "_agente_esperar",     "aberta"),
+        "/agente/pacote":        ("GET",  "_agente_pacote",      "maquina"),
+        "/api/pedido":           ("GET",  "_pedido_ver",         "dado"),
+        "/api/pedido/autorizar": ("POST", "_pedido_autorizar",   "dado"),
+        "/api/conectar.cmd":     ("GET",  "_arquivo_de_conectar", "dado"),
+        "/api/projetos/mostrar": ("POST", "_projeto_mostrar",    "dado"),
+        "/api/enderecos/medir":  ("POST", "_endereco_medir",     "dado"),
+    }
+
+    def test_acesso_metodo_e_funcao_de_cada_uma(self):
+        for caminho, (metodo, funcao, acesso) in self.ESPERADAS.items():
+            rota = servir.ROTAS[caminho]
+            self.assertEqual((metodo, funcao, acesso),
+                             (rota.metodo, rota.funcao.__name__, rota.acesso),
+                             caminho)
+
+    def test_a_rota_antiga_do_conectador_nao_existe(self):
+        self.assertNotIn("/api/conectador", servir.ROTAS)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)
