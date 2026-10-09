@@ -985,5 +985,88 @@ class ArquivarEParaSempre(unittest.TestCase):
         self.assertEqual(g["n"], 3)
         self.assertNotIn("d", g["projetos"])
 
+
+PONTA = "96eb3fc" + "a" * 33
+
+
+class ONoArDoProjeto(unittest.TestCase):
+    def test_casa_com_hifen_e_caixa_diferente(self):
+        d = {"sistemas": [{"projeto": "ClinicaAgenda", "estado": "running",
+                           "sha": "96eb3fc"}]}
+        self.assertEqual(regras.no_ar_do_projeto("clinica-agenda", d)["sha"],
+                         "96eb3fc")
+
+    def test_nada_casa_e_none(self):
+        d = {"sistemas": [{"projeto": "outro", "estado": "running"}],
+             "publicacoes": [{"projeto": "outro", "sha": "96eb3fc"}]}
+        self.assertIsNone(regras.no_ar_do_projeto("dervs", d))
+
+    def test_rotulo_vence_a_publicacao(self):
+        d = {"sistemas": [{"projeto": "dervs", "estado": "running", "sha": "1111111"}],
+             "publicacoes": [{"projeto": "dervs", "sha": "2222222",
+                              "quando": "2026-10-01T10:00:00+00:00"}]}
+        r = regras.no_ar_do_projeto("dervs", d)
+        self.assertEqual(r["sha"], "1111111")
+        self.assertEqual(r["publicado_em"], "2026-10-01T10:00:00+00:00")
+
+    def test_rotulos_divergentes_viram_nao_sei(self):
+        d = {"sistemas": [{"projeto": "dervs", "estado": "running", "sha": "1111111"},
+                          {"projeto": "dervs", "estado": "running", "sha": "2222222"}]}
+        self.assertEqual(regras.no_ar_do_projeto("dervs", d)["sha"], "")
+
+    def test_so_a_publicacao(self):
+        d = {"publicacoes": [{"projeto": "dervs", "sha": "96eb3fc"}]}
+        self.assertEqual(regras.no_ar_do_projeto("dervs", d)["sha"], "96eb3fc")
+
+    def test_dados_tortos_nao_levantam(self):
+        for torto in (None, [], "texto", 3, {"sistemas": "x"}):
+            self.assertIsNone(regras.no_ar_do_projeto("dervs", torto))
+
+
+class CompararNoAr(unittest.TestCase):
+    def test_prefixo_curto_e_igual(self):
+        r = regras.comparar_no_ar("96eb3fc", {"head_sha": PONTA})
+        self.assertEqual(r, {"veredito": "igual", "atras": None})
+
+    def test_atras_so_com_o_mesmo_sha(self):
+        g = {"head_sha": "b" * 40, "no_ar": [{"sha": "96eb3fc", "atras": 3}]}
+        self.assertEqual(regras.comparar_no_ar("96eb3fc", g),
+                         {"veredito": "atras", "atras": 3})
+
+    def test_sha_diferente_sem_comparacao(self):
+        g = {"head_sha": "b" * 40, "no_ar": [{"sha": "1111111", "atras": 3}]}
+        self.assertEqual(regras.comparar_no_ar("96eb3fc", g)["veredito"], "diferente")
+
+    def test_atras_zero_e_diferente(self):
+        g = {"head_sha": "b" * 40, "no_ar": [{"sha": "96eb3fc", "atras": 0}]}
+        self.assertEqual(regras.comparar_no_ar("96eb3fc", g)["veredito"], "diferente")
+
+    def test_nao_sei(self):
+        for sha, g in (("", {"head_sha": PONTA}), ("96EB3FC", {"head_sha": PONTA}),
+                       ("zz", {"head_sha": PONTA}), ("96eb3fc", None),
+                       ("96eb3fc", {"head_sha": ""}), (None, {"head_sha": PONTA})):
+            self.assertEqual(regras.comparar_no_ar(sha, g)["veredito"], "nao_sei",
+                             (sha, g))
+
+
+class AValidadeDoServidor(unittest.TestCase):
+    AGORA = datetime(2026, 10, 9, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _iso(self, s):
+        return (self.AGORA - timedelta(seconds=s)).isoformat()
+
+    def test_limite(self):
+        self.assertEqual(regras.estado_do_servidor(self._iso(179), self.AGORA), "medido")
+        self.assertEqual(regras.estado_do_servidor(self._iso(181), self.AGORA), "sem_dados")
+
+    def test_sem_carimbo(self):
+        for torto in (None, "", "ontem", 5):
+            self.assertEqual(regras.estado_do_servidor(torto, self.AGORA), "sem_dados")
+
+    def test_fora_do_selo(self):
+        self.assertEqual(regras.VALIDADE_DO_SERVIDOR, 180)
+        self.assertNotIn("servidor", regras.VALIDADE)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
