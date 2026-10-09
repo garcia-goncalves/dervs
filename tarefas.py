@@ -278,6 +278,69 @@ def projeto_bloqueado(nome) -> bool:
     return any(n == b or n.startswith(b + "-") for b in PROJETOS_BLOQUEADOS)
 
 
+# ---------------------------------------------------------------------------
+# Os pedidos ao servidor (entrega C). O texto da ordem (C0) tem DUAS copias: esta
+# e a do `ajudante_servidor.py`, que e lido e nunca importa nada daqui. O
+# desafio que o dono assina e o SHA-256 deste texto, e quem confere remonta o
+# texto dos campos que recebeu. Duas contas que divergem em um byte e a ordem
+# nunca passa; `test_acoes_fio` cobra as duas lado a lado.
+# ---------------------------------------------------------------------------
+
+# Lista fechada do porque uma ordem foi recusada. Igual nas tres pontas.
+MOTIVOS_DA_RECUSA = ("forma", "outro_servidor", "vencida", "assinatura",
+                     "desafio", "origem", "aparelho", "bloqueado",
+                     "desconhecido", "repetida", "cheio", "teto")
+
+_HEX_MINUSCULO = frozenset("0123456789abcdef")
+_ALNUM = frozenset("abcdefghijklmnopqrstuvwxyz"
+                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+_MINUSCULO = frozenset("abcdefghijklmnopqrstuvwxyz0123456789")
+_CAMPOS_DA_ORDEM = ("servidor", "tipo", "alvo", "numero", "criado", "vence")
+
+
+def _hex32(valor) -> bool:
+    return (isinstance(valor, str) and len(valor) == 32
+            and all(c in _HEX_MINUSCULO for c in valor))
+
+
+def _alvo_da_ordem(tipo, alvo) -> bool:
+    """`reiniciar`: nome de conteiner; `voltar`: nome de projeto. Sem regex:
+    nada de `re.compile` alcancavel por rota (`test_rotas.EXECUTA`)."""
+    if not isinstance(alvo, str) or not alvo:
+        return False
+    if tipo == "reiniciar":
+        primeiras, resto, teto = _ALNUM, _ALNUM | set("_.-"), 128
+    else:
+        primeiras, resto, teto = _MINUSCULO, _MINUSCULO | {"-"}, 63
+    return (len(alvo) <= teto and alvo[0] in primeiras
+            and all(c in resto for c in alvo))
+
+
+def _segundos_da_ordem(valor) -> bool:
+    return (isinstance(valor, int) and not isinstance(valor, bool)
+            and 0 <= valor <= 9999999999)
+
+
+def texto_da_ordem(campos):
+    """O texto canonico da ordem (C0), ou `None` se QUALQUER campo foge do
+    formato — campo a mais tambem. Nenhum valor carrega `=` nem `\\n`."""
+    if not isinstance(campos, dict) or set(campos) != set(_CAMPOS_DA_ORDEM):
+        return None
+    tipo = campos["tipo"]
+    if tipo not in ("reiniciar", "voltar"):
+        return None
+    if not (_hex32(campos["servidor"]) and _hex32(campos["numero"])
+            and _alvo_da_ordem(tipo, campos["alvo"])
+            and _segundos_da_ordem(campos["criado"])
+            and _segundos_da_ordem(campos["vence"])
+            and campos["vence"] - campos["criado"] == 300):
+        return None
+    return ("dervs-ordem=1\nservidor=%s\ntipo=%s\nalvo=%s\nnumero=%s\n"
+            "criado=%d\nvence=%d" % (campos["servidor"], tipo, campos["alvo"],
+                                     campos["numero"], campos["criado"],
+                                     campos["vence"]))
+
+
 def projeto_pode_desenvolver(nome) -> bool:
     """O DERVS pode desenvolver neste projeto? Falha fechada: duvida e NAO.
 

@@ -416,6 +416,34 @@ CREATE TABLE IF NOT EXISTS medicao_de_servidor (
     dados      TEXT NOT NULL CHECK (length(dados) <= 131072)
 );
 
+-- Os pedidos ao servidor (Conectar simples, C). Uma linha por ordem: preparada
+-- pelo DERVS, assinada com a digital do dono, entregue ao ajudante e fechada
+-- pelo desfecho que ELE conta. Os carimbos (`*_em`) sao o relogio do DERVS;
+-- `criado`/`vence` sao os segundos que entram no texto assinado (C0). Toda
+-- leitura e escrita leva `usuario_id` E `maquina_id` no WHERE.
+CREATE TABLE IF NOT EXISTS ordem_de_servidor (
+    numero       TEXT PRIMARY KEY CHECK (length(numero) = 32),
+    usuario_id   INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    maquina_id   INTEGER NOT NULL REFERENCES maquina(id) ON DELETE CASCADE,
+    ident        TEXT NOT NULL,
+    tipo         TEXT NOT NULL CHECK (tipo IN ('reiniciar','voltar')),
+    alvo         TEXT NOT NULL CHECK (length(alvo) BETWEEN 1 AND 128),
+    criado       INTEGER NOT NULL,
+    vence        INTEGER NOT NULL,
+    assinada_em  TEXT,
+    entregue_em  TEXT,
+    terminada_em TEXT,
+    cred_id      TEXT,
+    cliente      TEXT,
+    autenticador TEXT,
+    assinatura   TEXT,
+    desfecho     TEXT CHECK (desfecho IN ('feita','falhou','recusada','nao_sei')),
+    codigo       INTEGER CHECK (codigo BETWEEN 0 AND 255),
+    motivo       TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_ordem_de_servidor_maquina
+    ON ordem_de_servidor (maquina_id, criado);
+
 -- Esconder do painel e por NOME de projeto e por conta. `arquivado_em` nao
 -- serve: `ver_projeto` o zera a cada relatorio.
 CREATE TABLE IF NOT EXISTS projeto_oculto (
@@ -779,7 +807,7 @@ FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento",
                      "servidor", "endereco_producao", "instalacao_github",
                      "auditoria", "achado", "prova_rodada",
                      "pedido_de_computador", "projeto_oculto",
-                     "medicao_de_servidor")
+                     "medicao_de_servidor", "ordem_de_servidor")
 
 
 # Fatia 2. Nome da coluna -> o pedaco de DDL do `ALTER TABLE`. A ordem e a do
@@ -3586,6 +3614,194 @@ def ultima_medicao_de_servidor(usuario_id: int, con=None):
             con.close()
 
 
+# ------------------------------------------- os pedidos ao servidor (C)
+
+PRAZO_DA_ORDEM = 300          # `vence - criado`, em segundos (C0)
+ENTREGA_ATE = 120             # so se entrega ordem assinada ha ate 120 s
+ORDEM_FAZENDO_ATE = 1800      # entregue sem desfecho: ocupa a maquina 30 min
+MAX_ORDENS_POR_MAQUINA = 50
+
+
+def _iso_de(segundos) -> str:
+    """O carimbo ISO UTC de um instante em segundos. O relogio entra por
+    parametro: e ele que os testes fixam."""
+    return datetime.fromtimestamp(int(segundos), timezone.utc).isoformat(
+        timespec="seconds")
+
+
+def criar_ordem_de_servidor(usuario_id: int, maquina_id: int, ident: str,
+                            tipo: str, alvo: str, numero: str, criado: int,
+                            con=None) -> bool:
+    """Grava uma ordem preparada. False se a maquina ja tem uma em andamento.
+
+    "Em andamento" e decidido AQUI, na mesma transacao que insere
+    (`BEGIN IMMEDIATE`): preparada e nao vencida, ou entregue sem desfecho ha
+    menos de 30 minutos. Conferir na rota e inserir depois deixaria duas
+    abas prepararem juntas. Poda alem das 50 mais novas da maquina."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            ocupada = con.execute(
+                "SELECT 1 FROM ordem_de_servidor WHERE maquina_id = ?"
+                " AND usuario_id = ? AND desfecho IS NULL AND ("
+                "  (entregue_em IS NULL AND vence >= ?)"
+                "  OR (entregue_em IS NOT NULL AND entregue_em > ?)) LIMIT 1",
+                (maquina_id, usuario_id, criado,
+                 _iso_de(criado - ORDEM_FAZENDO_ATE))).fetchone()
+            if ocupada:
+                con.rollback()
+                return False
+            con.execute(
+                "INSERT INTO ordem_de_servidor (numero, usuario_id,"
+                " maquina_id, ident, tipo, alvo, criado, vence)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (numero, usuario_id, maquina_id, ident, tipo, alvo, criado,
+                 criado + PRAZO_DA_ORDEM))
+            con.execute(
+                "DELETE FROM ordem_de_servidor WHERE maquina_id = ?"
+                " AND usuario_id = ? AND numero NOT IN ("
+                "  SELECT numero FROM ordem_de_servidor WHERE maquina_id = ?"
+                "  AND usuario_id = ? ORDER BY criado DESC, rowid DESC"
+                "  LIMIT ?)",
+                (maquina_id, usuario_id, maquina_id, usuario_id,
+                 MAX_ORDENS_POR_MAQUINA))
+            con.commit()
+            return True
+        except Exception:
+            con.rollback()
+            raise
+    finally:
+        if fechar:
+            con.close()
+
+
+def ordem_para_assinar(usuario_id: int, numero: str, agora_s: int, con=None):
+    """A ordem preparada, desta conta, de servidor vivo, nao vencida e ainda
+    nao assinada — ou None. Os campos de que o texto (C0) e remontado."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute(
+            "SELECT o.numero, o.ident, o.tipo, o.alvo, o.criado, o.vence,"
+            "       o.maquina_id FROM ordem_de_servidor o"
+            "  JOIN maquina m ON m.id = o.maquina_id"
+            "   AND m.usuario_id = o.usuario_id"
+            " WHERE o.numero = ? AND o.usuario_id = ? AND o.assinada_em IS NULL"
+            "   AND o.vence >= ? AND m.revogada_em IS NULL"
+            "   AND m.tipo = 'servidor'", (numero, usuario_id, agora_s)
+        ).fetchone()
+        return dict(l) if l else None
+    finally:
+        if fechar:
+            con.close()
+
+
+def assinar_ordem_de_servidor(usuario_id: int, numero: str, cred_id: str,
+                              cliente: str, autenticador: str,
+                              assinatura: str, agora_s: int, con=None) -> bool:
+    """Grava as quatro pecas da assinatura. O UPDATE e a guarda: so a ordem
+    desta conta, nao vencida e ainda nao assinada; quem nao levar
+    `rowcount == 1` perdeu."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        cur = con.execute(
+            "UPDATE ordem_de_servidor SET assinada_em = ?, cred_id = ?,"
+            " cliente = ?, autenticador = ?, assinatura = ?"
+            " WHERE numero = ? AND usuario_id = ? AND assinada_em IS NULL"
+            "   AND vence >= ?",
+            (_iso_de(agora_s), cred_id, cliente, autenticador, assinatura,
+             numero, usuario_id, agora_s))
+        con.commit()
+        return cur.rowcount == 1
+    finally:
+        if fechar:
+            con.close()
+
+
+def entregar_ordem_de_servidor(maquina_id: int, usuario_id: int,
+                               agora_s: int, con=None):
+    """A ordem assinada mais velha desta maquina, ou None. Marca
+    `entregue_em` no mesmo UPDATE que a escolhe (`entregue_em IS NULL`): quem
+    nao levar `rowcount == 1` nao entrega. Assinada ha mais de 120 s nunca mais
+    sai — a tela ja disse "o servidor nao pegou"."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        corte = _iso_de(agora_s - ENTREGA_ATE)
+        l = con.execute(
+            "SELECT numero, ident, tipo, alvo, criado, vence, cliente,"
+            "       autenticador, assinatura FROM ordem_de_servidor"
+            " WHERE maquina_id = ? AND usuario_id = ?"
+            "   AND assinada_em IS NOT NULL AND entregue_em IS NULL"
+            "   AND assinada_em >= ? AND vence >= ?"
+            " ORDER BY assinada_em, criado LIMIT 1",
+            (maquina_id, usuario_id, corte, agora_s)).fetchone()
+        if not l:
+            return None
+        cur = con.execute(
+            "UPDATE ordem_de_servidor SET entregue_em = ?"
+            " WHERE numero = ? AND maquina_id = ? AND usuario_id = ?"
+            "   AND entregue_em IS NULL AND assinada_em IS NOT NULL"
+            "   AND assinada_em >= ? AND vence >= ?",
+            (_iso_de(agora_s), l["numero"], maquina_id, usuario_id, corte,
+             agora_s))
+        con.commit()
+        if cur.rowcount != 1:
+            return None
+        return {"servidor": l["ident"], "tipo": l["tipo"], "alvo": l["alvo"],
+                "numero": l["numero"], "criado": l["criado"],
+                "vence": l["vence"], "cliente": l["cliente"],
+                "autenticador": l["autenticador"],
+                "assinatura": l["assinatura"]}
+    finally:
+        if fechar:
+            con.close()
+
+
+def desfecho_da_ordem_de_servidor(maquina_id: int, usuario_id: int,
+                                  numero: str, desfecho: str, codigo,
+                                  motivo, agora_s: int, con=None) -> bool:
+    """Grava o desfecho que o ajudante contou. So a ordem DESTA maquina,
+    entregue e ainda sem desfecho; senao False (a rota responde 404)."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        cur = con.execute(
+            "UPDATE ordem_de_servidor SET desfecho = ?, codigo = ?,"
+            " motivo = ?, terminada_em = ?"
+            " WHERE numero = ? AND maquina_id = ? AND usuario_id = ?"
+            "   AND entregue_em IS NOT NULL AND desfecho IS NULL",
+            (desfecho, codigo, motivo, _iso_de(agora_s), numero, maquina_id,
+             usuario_id))
+        con.commit()
+        return cur.rowcount == 1
+    finally:
+        if fechar:
+            con.close()
+
+
+def ordens_do_servidor(usuario_id: int, maquina_id: int, limite: int = 5,
+                       con=None) -> list:
+    """As ordens ASSINADAS mais novas de um servidor da conta."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return [dict(l) for l in con.execute(
+            "SELECT numero, tipo, alvo, assinada_em, entregue_em,"
+            "       terminada_em, desfecho, codigo, motivo"
+            "  FROM ordem_de_servidor"
+            " WHERE usuario_id = ? AND maquina_id = ?"
+            "   AND assinada_em IS NOT NULL"
+            " ORDER BY assinada_em DESC, criado DESC LIMIT ?",
+            (usuario_id, maquina_id, limite))]
+    finally:
+        if fechar:
+            con.close()
+
+
 def maquina_so_mede(maquina_id: int, usuario_id: int, con=None) -> bool:
     """A maquina e desta conta, esta viva e foi pareada so para medir."""
     fechar = con is None
@@ -4796,6 +5012,39 @@ def chaves_de_acesso(usuario_id: int, con=None) -> list:
                     "  FROM chave_de_acesso"
                     " WHERE usuario_id = ? AND revogada_em IS NULL"
                     " ORDER BY criado_em", (usuario_id,))]
+    finally:
+        if fechar:
+            con.close()
+
+
+def impressao_da_chave(x: int, y: int) -> str:
+    """16 primeiros hex de SHA-256(x || y), 32 bytes cada. E como o ajudante
+    diz ao DERVS quais chaves conhece, sem mandar a chave. A mesma conta mora
+    em `ajudante_servidor.impressao`; `test_acoes_fio` cobra as duas."""
+    return hashlib.sha256(x.to_bytes(32, "big")
+                          + y.to_bytes(32, "big")).hexdigest()[:16]
+
+
+def chaves_publicas_da_conta(usuario_id: int, limite: int = 5,
+                             con=None) -> list:
+    """As chaves VIVAS da conta COM a parte publica, as `limite` mais novas.
+
+    `chaves_de_acesso` continua sem a publica de proposito (e a lista da tela).
+    Esta serve a linha do ajudante e a conferencia de impressao: a chave
+    publica nao abre nada, mas so sai pelas rotas que precisam dela."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return [{"cred_id": l["cred_id"], "apelido": l["apelido"],
+                 "x": int(l["chave_x"], 16), "y": int(l["chave_y"], 16)}
+                for l in con.execute(
+                    "SELECT c.cred_id, c.apelido, c.chave_x, c.chave_y"
+                    "  FROM chave_de_acesso c JOIN usuario u"
+                    "    ON u.id = c.usuario_id"
+                    " WHERE c.usuario_id = ? AND c.revogada_em IS NULL"
+                    "   AND u.desativado_em IS NULL"
+                    " ORDER BY c.criado_em DESC, c.id DESC LIMIT ?",
+                    (usuario_id, limite))]
     finally:
         if fechar:
             con.close()

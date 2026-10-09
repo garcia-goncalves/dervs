@@ -496,5 +496,74 @@ class AsRotasDoServidorLigado(unittest.TestCase):
                 self.assertLess(trava, balcao)
 
 
+class AsRotasDosPedidos(unittest.TestCase):
+    """Conectar simples (C): as duas rotas da tela escrevem com sessão; as duas
+    do ajudante são de máquina e só atendem servidor."""
+
+    ESPERADAS = {
+        "/api/maquinas/ordem/preparar": ("POST", "_maquina_ordem_preparar",
+                                         "dado"),
+        "/api/maquinas/ordem/assinar":  ("POST", "_maquina_ordem_assinar",
+                                         "dado"),
+        "/agente/servidor/ordens":      ("POST", "_agente_servidor_ordens",
+                                         "maquina"),
+        "/agente/servidor/desfecho":    ("POST", "_agente_servidor_desfecho",
+                                         "maquina"),
+    }
+
+    def test_acesso_metodo_e_funcao_de_cada_uma(self):
+        for caminho, (metodo, funcao, acesso) in self.ESPERADAS.items():
+            rota = servir.ROTAS[caminho]
+            self.assertEqual((metodo, funcao, acesso),
+                             (rota.metodo, rota.funcao.__name__, rota.acesso),
+                             caminho)
+
+    def test_os_nomes_passam_pela_lista_proibida(self):
+        for caminho, (_m, funcao, _a) in self.ESPERADAS.items():
+            self.assertIsNone(PROIBIDO.search(caminho), caminho)
+            self.assertIsNone(PROIBIDO.search(funcao), funcao)
+        for nome in ("_frase_do_pedido", "_numero_da_ordem",
+                     "_segundos_agora", "_pedido_do_painel",
+                     "_bloco_de_ordens", "_ordens_limpas"):
+            self.assertIsNone(PROIBIDO.search(nome), nome)
+
+    def test_nenhum_atributo_amputado_voltou(self):
+        for nome in AMPUTADOS:
+            self.assertFalse(hasattr(servir, nome), nome)
+            self.assertFalse(hasattr(servir.Hub, nome), nome)
+
+    def test_quem_so_olha_e_conferido_antes_do_balcao(self):
+        import inspect
+        for funcao in (servir.Hub._agente_servidor_ordens,
+                       servir.Hub._agente_servidor_desfecho):
+            fonte = inspect.getsource(funcao)
+            self.assertLess(fonte.index("_maquina_do_servidor"),
+                            fonte.index("registrar_tentativa"),
+                            funcao.__name__)
+
+    def test_cada_rota_paga_o_proprio_balcao(self):
+        import inspect
+        esperado = {"_maquina_ordem_preparar": "ordem_preparar",
+                    "_maquina_ordem_assinar": "ordem_assinar",
+                    "_agente_servidor_ordens": "servidor_ordens",
+                    "_agente_servidor_desfecho": "servidor_desfecho"}
+        usados = {}
+        for nome, balcao in esperado.items():
+            fonte = inspect.getsource(getattr(servir.Hub, nome))
+            self.assertIn('balcao="%s"' % balcao, fonte, nome)
+            usados[balcao] = nome
+        self.assertEqual(4, len(usados))        # nenhum emprestado do outro
+
+    def test_preparar_chama_o_helper_unico_de_projeto_bloqueado(self):
+        """A forma antiga (`.lower() in PROJETOS_BLOQUEADOS`) deixou
+        `Ajudei_Saude` escapar de cinco pontos em 01/10/2026."""
+        import inspect
+        fonte = inspect.getsource(servir.Hub._maquina_ordem_preparar)
+        self.assertIn("tarefas.projeto_bloqueado(", fonte)
+        self.assertNotRegex(fonte, r"\.lower\(\)\s+in\s+")
+        self.assertNotIn("PROJETOS_BLOQUEADOS", fonte)
+        self.assertIn("tarefas.projeto_bloqueado(r)", fonte)   # o rotulo
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)
