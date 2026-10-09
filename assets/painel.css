@@ -1100,3 +1100,12 @@ main { padding-bottom: var(--e12); }
   outline: var(--foco-largura) solid var(--acao);
   outline-offset: var(--foco-afastamento);
 }
+
+/* ----------------------------------------------------- as contas do GitHub
+   Cada conta é uma coluna: nome e tipo em cima, medição e link embaixo, e a
+   lista dos repositórios dentro de um `<details>`. */
+.conta-gh { flex-direction: column; align-items: stretch; gap: var(--e2); }
+.conta-gh__topo { display: flex; align-items: baseline; gap: var(--e2); flex-wrap: wrap; }
+.conta-gh .nome { font-size: var(--fs-destaque); overflow-wrap: anywhere; }
+.conta-gh p { margin: 0; }
+.conta-gh .lista { margin-top: var(--e2); }

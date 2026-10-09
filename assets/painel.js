@@ -2012,15 +2012,18 @@ async function olharOGithub() {
     GITHUB = await r.json();
     GITHUB_LIDO_EM = new Date().toISOString();
   } catch {
-    return;                 /* sem carimbo: a porta 2 dirá que não olhou */
+    return;                 /* sem carimbo: o cartão dirá que não olhou */
   }
-  if (rota().tela === "conectar") pintarConectar();
+  if (rota().tela === "conectar") {
+    pintarConectar();
+    procurarContasUmaVez();
+  }
 }
 
 async function ligarOGithub() {
   const r = await escrever("/api/github/instalar");
   if (!r.ok) {
-    recado("não conseguimos abrir a instalação agora. Tente de novo.", true);
+    recado("não conseguimos abrir o GitHub agora. Tente de novo.", true);
     return;
   }
   const d = await r.json();
@@ -2030,25 +2033,61 @@ async function ligarOGithub() {
   location.href = d.url;
 }
 
-/* "Procurar minhas contas": o servidor pergunta ao GitHub quais instalações do
-   aplicativo existem e liga as que são desta conta. Serve para quem instalou
-   direto no GitHub e a volta nunca chegou aqui. */
+/* A PROCURA É SOZINHA. Não há botão de procurar: o servidor
+   pergunta ao GitHub quais instalações do aplicativo existem e liga as que são
+   desta conta, uma vez por carga da tela (a volta do GitHub com `?github=` é
+   uma carga). Quem instalou direto no GitHub e nunca voltou aqui vê a conta
+   aparecer sozinha.
+
+   Procura que NÃO achou nada não escreve nada: silêncio não é erro nem
+   sucesso. Um 429 também fica calado — é o nosso automatismo batendo no
+   próprio teto, e a pessoa não fez nada de errado. */
+let PROCUROU_GITHUB = false;
+let GITHUB_PROCURA = { fase: "", achou: "" };   /* fase: "" | "procurando" | "erro" */
+
+function procurarContasUmaVez() {
+  if (PROCUROU_GITHUB || !GITHUB || !GITHUB.da_para_instalar) return;
+  procurarContasDoGithub();
+}
+
+function repintarGithub() {
+  if (rota().tela === "conectar") pintarConectar();
+}
+
 async function procurarContasDoGithub() {
-  const r = await escrever("/api/github/procurar");
-  if (!r.ok) {
-    recado("não consegui procurar agora. Tente de novo.", true);
+  PROCUROU_GITHUB = true;
+  GITHUB_PROCURA = { fase: "procurando", achou: "" };
+  repintarGithub();
+  const antes = new Set(((GITHUB && GITHUB.instalacoes) || []).map(c => c.conta_login));
+  let r = null;
+  try { r = await escrever("/api/github/procurar"); } catch (_) { r = null; }
+  /* 429: calado. 403 de página velha: a faixa do alto explica, o cartão não
+     repete. */
+  if (r && (r.status === 429 || (r.status === 403 && PAGINA_VELHA))) {
+    GITHUB_PROCURA = { fase: "", achou: "" };
+    repintarGithub();
     return;
   }
-  const d = await r.json();
-  if (!d.ok) {
-    recado("o GitHub não respondeu agora. Isso não quer dizer que não há "
-           + "contas: tente de novo daqui a pouco.", true);
+  let d = null;
+  if (r && r.ok) {
+    try { d = await r.json(); } catch (_) { d = null; }
+  }
+  if (!d || !d.ok) {
+    GITHUB_PROCURA = { fase: "erro", achou: "" };
+    repintarGithub();
     return;
   }
   await olharOGithub();
-  recado(d.ligadas
-    ? "liguei " + d.ligadas + (d.ligadas === 1 ? " conta nova." : " contas novas.")
-    : "não achei conta nova. Se acabou de instalar, use Conectar outra conta.");
+  const novas = ((GITHUB && GITHUB.instalacoes) || [])
+    .filter(c => c.conta_login && !antes.has(c.conta_login))
+    .map(c => c.conta_login);
+  GITHUB_PROCURA = {
+    fase: "",
+    achou: !novas.length ? ""
+      : novas.length === 1 ? "Achei e liguei a conta " + novas[0] + "."
+      : "Achei e liguei as contas " + novas.join(", ") + "."
+  };
+  repintarGithub();
 }
 
 async function olharOsEnderecos() {
@@ -2478,6 +2517,179 @@ function linhaDeComputador(m) {
 }
 
 
+/* Os <details> que o repintar do minuto não pode fechar: a escolha da pessoa
+   vive aqui, e não no elemento (que é recriado). */
+const DETALHES_ABERTOS = new Set();
+function detalhes(chave, resumo) {
+  const d = criar("details", "ajuda");
+  d.open = DETALHES_ABERTOS.has(chave);
+  d.append(criar("summary", "", resumo));
+  d.addEventListener("toggle", () => {
+    if (d.open) DETALHES_ABERTOS.add(chave); else DETALHES_ABERTOS.delete(chave);
+  });
+  return d;
+}
+
+/* A cabeça de um cartão de ligação: título e a marca de estado, uma montagem só
+   (duas divergem, e a que divergir é a que esquece o rótulo escrito). */
+function cartaoDeLigacao(titulo, estado, rotulo) {
+  const cartao = criar("div", "cartao porta");
+  const cabeca = criar("div", "porta__cabeca");
+  cabeca.append(criar("h2", "", titulo), marcaDaPorta(estado, rotulo));
+  cartao.append(cabeca);
+  return cartao;
+}
+
+/* Um repositório da lista de uma conta. É um projeto que o painel já conhece,
+   por isso tem a mesma chave "Mostrar no painel" da lista do computador. */
+function linhaDeRepositorio(r) {
+  return linhaComChave(r.projeto, (r.slug || "") + (r.medido ? "" : " · ainda não medido"),
+                       r.oculto, (v) => { r.oculto = v; });
+}
+
+/* Uma conta do GitHub ligada. O nome e o tipo vêm do GitHub: texto, nunca
+   HTML. O link para fora só nasce se o endereço for https do github.com. */
+function linhaDeContaDoGithub(c) {
+  const li = criar("li", "conta-gh");
+  const topo = criar("div", "conta-gh__topo");
+  topo.append(criar("strong", "nome", c.conta_login || "Conta ainda sem nome"));
+  if (c.conta_login) {
+    topo.append(criar("span", "carimbo", c.conta_tipo === "Organization" ? "organização" : "pessoal"));
+  }
+  li.append(topo);
+
+  const medicao = criar("p", "carimbo");
+  if (c.medidos === null || c.medidos === undefined) {
+    medicao.append("ainda não mediu repositórios");
+  } else {
+    medicao.append("mede ", criar("span", "mono", String(c.medidos)),
+                   c.medidos === 1 ? " repositório" : " repositórios",
+                   " · mediu " + haQuanto(c.medido_em));
+  }
+  li.append(medicao);
+
+  if (c.gerenciar_url && /^https:\/\/github\.com\//.test(c.gerenciar_url)) {
+    const a = criar("a", "", "Escolher repositórios no GitHub");
+    a.href = c.gerenciar_url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.append(criar("span", "so-leitor", " (abre o GitHub em outra aba)"));
+    li.append(a);
+  }
+
+  const repos = c.repositorios || [];
+  if (repos.length) {
+    const d = detalhes("gh:" + (c.conta_login || ""),
+                       repos.length === 1 ? "Ver o repositório" : "Ver os " + repos.length + " repositórios");
+    const ul = criar("ul", repos.length > 20 ? "lista lista--rolavel" : "lista");
+    if (repos.length > 20) {
+      ul.setAttribute("tabindex", "0");
+      ul.setAttribute("aria-label", "Repositórios de " + (c.conta_login || "esta conta"));
+    }
+    for (const r of repos) ul.append(linhaDeRepositorio(r));
+    d.append(ul);
+    li.append(d);
+  }
+  return li;
+}
+
+/* O cartão "GitHub": o estado vem de `GITHUB` (a leitura de /api/github) e da
+   procura sozinha. Quem não conseguiu ler vê "não olhei", nunca "nenhuma
+   conta". */
+function cartaoDoGithub() {
+  const leu = !!GITHUB_LIDO_EM;
+  const contas = leu ? (GITHUB.instalacoes || []) : [];
+  const ligado = leu && (contas.length > 0 || !!GITHUB.instalacao);
+  const voltou = new URLSearchParams(location.search).get("github");
+  const erro = GITHUB_PROCURA.fase === "erro";
+
+  let estado, resumo;
+  if (!leu) {
+    estado = "sem_dados";
+    resumo = "Não consegui ler o estado desta conta. Isso não quer dizer que ela "
+           + "não está conectada — quer dizer que não olhei.";
+  } else if (ligado) {
+    estado = "conectado";
+    resumo = (contas.length === 1 ? "Conta ligada: 1. " : "Contas ligadas: " + contas.length + ". ")
+           + "O DERVS traz sozinho os pedidos de alteração, a verificação "
+           + "automática e os alertas de segurança dos repositórios que você "
+           + "liberou em cada conta.";
+  } else if (voltou === "nao-deu") {
+    estado = "sem_dados";
+    resumo = "Não deu para confirmar a conta. Se você fechou a página do GitHub "
+           + "no meio, é isso mesmo e não é erro: é só tentar de novo. O DERVS "
+           + "só liga a conta depois que o GitHub confirma.";
+  } else {
+    estado = "desconectado";
+    resumo = "Nenhuma conta do GitHub ligada ainda. Ligada, ela traz sozinha os "
+           + "pedidos de alteração, a verificação automática e os alertas de "
+           + "segurança dos repositórios que você liberar.";
+  }
+  /* Procura que falhou: "não olhei" vale mais que "nenhuma conta". */
+  if (erro) estado = "sem_dados";
+
+  const cartao = cartaoDeLigacao("GitHub", estado);
+  cartao.append(criar("p", "", resumo));
+  if (leu) cartao.append(criar("p", "carimbo", "estado lido " + haQuanto(GITHUB_LIDO_EM)));
+
+  /* Procurando / achou / erro: dentro de `.espera`, com `aria-live` posto junto
+     com o primeiro texto — região viva que nasce vazia não anuncia nada. */
+  const fala = criar("div", "espera");
+  fala.setAttribute("aria-live", "polite");
+  if (GITHUB_PROCURA.fase === "procurando") {
+    fala.append(criar("p", "espera__linha", "Procurando suas contas no GitHub…"));
+  } else if (erro) {
+    fala.append(criar("p", "espera__linha",
+      "Não consegui procurar suas contas agora. Isso não quer dizer que não há "
+      + "— quer dizer que não olhei."));
+  } else if (GITHUB_PROCURA.achou) {
+    fala.append(criar("p", "espera__linha", GITHUB_PROCURA.achou));
+  }
+  cartao.append(fala);
+
+  if (contas.length) {
+    const ul = criar("ul", "lista");
+    for (const c of contas) ul.append(linhaDeContaDoGithub(c));
+    cartao.append(ul);
+  }
+
+  const acoes = criar("div", "acoes");
+  if (leu && !GITHUB.da_para_instalar) {
+    const b = criar("button", "botao", "Conectar conta do GitHub");
+    b.type = "button";
+    b.disabled = true;
+    acoes.append(b);
+    cartao.append(acoes);
+    cartao.append(criar("p", "mole", "o aplicativo do GitHub ainda não foi registrado neste servidor"));
+  } else {
+    const b = criar("button", "botao", ligado ? "Conectar outra conta do GitHub" : "Conectar conta do GitHub");
+    b.type = "button";
+    b.addEventListener("click", ligarOGithub);
+    acoes.append(b);
+    /* "Tentar de novo" só existe no ESTADO DE ERRO da procura. */
+    if (erro) {
+      const t = criar("button", "botao botao--secundario", "Tentar de novo");
+      t.type = "button";
+      t.addEventListener("click", procurarContasDoGithub);
+      acoes.append(t);
+    }
+    cartao.append(acoes);
+  }
+  cartao.append(criar("p", "mole",
+    "Serve para conta pessoal e para organização. Você escolhe no GitHub quais "
+    + "repositórios liberar e pode mudar depois. Nenhuma senha nem chave é "
+    + "digitada aqui."));
+  /* DESCONECTAR ACONTECE NO GITHUB, e a tela DIZ isso: esconder o corte seria
+     mentir por omissão. */
+  if (ligado) {
+    cartao.append(criar("p", "mole",
+      "Para desligar uma conta, remova o aplicativo no próprio GitHub, em "
+      + "Configurações → Aplicativos. O DERVS não faz isso por aqui de propósito: "
+      + "tirar o acesso é decisão de quem deu o acesso."));
+  }
+  return cartao;
+}
+
 /* "O que vai aparecer?" abre sozinho na PRIMEIRA visita e fica fechado nas
    seguintes. Lembrado só neste navegador (`localStorage`); sem armazenamento
    (modo privado, bloqueado) a tela nasce aberta, que é o lado seguro. */
@@ -2503,73 +2715,8 @@ function pintarConectar() {
      perdem quando a tela se repinta sozinha. */
   pintarEsteComputador();
 
-  /* PORTA 2 — a conta do GitHub (etapa C3).
-
-     QUEM CANCELOU NO MEIO vê "não deu para conferir", com o caminho de tentar
-     de novo — nunca um erro vermelho, e nunca "conectado". Cancelar não é
-     defeito: é o quarto estado, e ele é de primeira classe aqui. */
-  const leuGh = !!GITHUB_LIDO_EM;
-  const contasGh = leuGh ? (GITHUB.instalacoes || []) : [];
-  const ligado = leuGh && (contasGh.length > 0 || !!GITHUB.instalacao);
-  const voltou = new URLSearchParams(location.search).get("github");
-  const caminhos2 = [];
-  if (leuGh && !GITHUB.da_para_instalar) {
-    caminhos2.push({ rotulo: "Conectar a conta", desligado: true,
-                     porque: "o aplicativo do GitHub ainda não foi registrado "
-                           + "neste servidor" });
-  } else {
-    caminhos2.push({ rotulo: ligado ? "Conectar outra conta do GitHub"
-                                    : "Conectar a conta",
-                     aoClicar: ligarOGithub });
-    caminhos2.push({ rotulo: "Procurar minhas contas", secundario: true,
-                     aoClicar: procurarContasDoGithub });
-  }
-  onde.append(porta({
-    titulo: "A sua conta do GitHub",
-    estado: !leuGh ? "sem_dados"
-          : (ligado ? "conectado"
-                    : (voltou === "nao-deu" ? "sem_dados" : "desconectado")),
-    resumo: !leuGh
-      ? "Não consegui ler o estado desta conta. Isso não quer dizer que ela "
-        + "não está conectada — quer dizer que não olhei."
-      : (ligado
-         ? (contasGh.length > 1
-             ? "Conectadas: " + contasGh.length + " contas do GitHub. "
-             : "Conectada. ")
-           + "O DERVS traz sozinho os pedidos de alteração, a "
-           + "verificação automática e os alertas de segurança dos "
-           + "repositórios que você liberou em cada conta."
-         : (voltou === "nao-deu"
-            ? "Não deu para confirmar a instalação. Se você fechou a página do "
-              + "GitHub no meio, é isso mesmo e não é erro: é só tentar de "
-              + "novo. O DERVS só liga a conta depois que o GitHub confirma."
-            : "Conectada, ela traz sozinha os pedidos de alteração, a "
-              + "verificação automática e os alertas de segurança dos seus "
-              + "repositórios — sem você colar chave nenhuma.")),
-    carimbo: leuGh ? "estado lido " + haQuanto(GITHUB_LIDO_EM) : "",
-    lista: contasGh.map((c) => ({
-      texto: c.conta_login
-        ? c.conta_login + (c.conta_tipo === "Organization" ? " (organização)"
-                                                          : " (pessoal)")
-        : "Conta ainda sem nome — toque em Procurar minhas contas",
-      detalhe: (c.medidos === null || c.medidos === undefined)
-        ? "ainda não mediu repositórios"
-        : "mediu " + c.medidos + (c.medidos === 1 ? " repositório " : " repositórios ")
-          + haQuanto(c.medido_em),
-      link: c.gerenciar_url
-        ? { rotulo: "escolher repositórios no GitHub", url: c.gerenciar_url }
-        : null
-    })),
-    caminhos: caminhos2,
-    /* DESCONECTAR ACONTECE EM github.com, e a tela DIZ isso. Foi cortado do
-       escopo de propósito, e esconder o corte é mentir por omissão. */
-    nota: ligado
-      ? "Para desconectar, remova o aplicativo em github.com → Settings → "
-        + "Applications. Não fazemos isso por aqui de propósito: revogar o "
-        + "acesso é decisão que tem de morar do lado de quem dá o acesso."
-      : "Você escolhe no GitHub quais repositórios liberar, e pode mudar "
-        + "depois. Nenhuma chave é digitada aqui."
-  }));
+  /* PORTA 2 — a conta do GitHub. */
+  onde.append(cartaoDoGithub());
 
   /* PORTA 3 — os SEUS SERVIDORES (servidores multiplos, etapa 7). "O seu
      servidor" virou uma lista: o mesmo projeto pode responder em mais de um
