@@ -537,8 +537,9 @@ baixa o programa (`/agente/pacote`). O que a próxima sessão erraria:
 
 ## O ajudante no servidor (entrega B, 09/10/2026)
 
-O botao **Ligar um servidor** mostra uma linha para colar no servidor do dono; ela baixa
-`GET /ajudante/servidor.py`, confere o SHA-256 e roda `sudo python3`. O ajudante pareia
+O botao **Ligar um servidor** mostra uma linha para colar no servidor do dono; ela entra
+numa pasta nova (`mktemp -d`), baixa `GET /ajudante/servidor.py`, confere o SHA-256 e roda
+`sudo python3 -I` (sem `-I`, o root importaria da pasta atual). O ajudante pareia
 (`tipo: "servidor"`), instala um temporizador de 30 s e manda `POST /agente/servidor`.
 Contratos C0-C10 em `docs/superpowers/plans/dervs-conectar-servidor-b.md`. O que a proxima
 sessao erraria:
@@ -555,7 +556,19 @@ sessao erraria:
   importado** (como o conectador): entra no `Dockerfile` e em `test_imagem` por nome. Sem
   `re.compile` em rota; nome de rota/funcao sem `acao`/`exec`.
 - **A linha da tela traz o resumo SHA-256, que prova integridade e NAO origem.** Quem
-  tomar `dervs.com.br` serve outro arquivo com outro resumo. A tela hoje so mostra a impressao digital, sem dizer isso.
+  tomar `dervs.com.br` serve outro arquivo com outro resumo. A tela diz isso com todas as
+  letras, em "O que isso faz?".
+- **A pasta `/var/lib/dervs-ajudante` e do usuario do ajudante**: dentro dela, modo e dono
+  vao no DESCRITOR (`fchmod`, e `dono(fd, ...)`) antes do `os.replace`, nunca por caminho:
+  um link posto ali faria o root entregar um arquivo do sistema. `setfacl` sempre com `-P`.
+  A unidade leva `UMask=0077`, `CapabilityBoundingSet=` vazio e os `Protect*`;
+  `test_ajudante_servidor` confere diretiva por diretiva.
+- **Desligar e pela tela, e reinstalar resolve.** "Desligar este servidor" chama a mesma
+  `POST /api/maquinas/remover` dos computadores (o `usuario_id` no `UPDATE` recusa a de
+  outra conta). Colar a linha num servidor desligado da 401 na primeira medicao: o
+  `instalar` apaga o `agente.json` e pareia de novo, UMA vez (nunca um laco).
+- **Linha do `inspect` descartada e `docker_mudo: true`**, nunca um sistema a menos calado;
+  `inspect` que falha (id sumiu entre as duas perguntas) refaz `ps`+`inspect` uma vez.
 - **A primeira medicao roda como root dentro do `instalar`** (antes de o temporizador
   passar a rodar como `dervs-ajudante`): o que a medicao le (`/proc`, Docker, historico)
   e lido com poder de root nessa primeira volta.
@@ -578,9 +591,11 @@ sessao erraria:
   instala numa raiz temporaria com Docker falso e confere que cada campo que o `painel.js`
   le existe na resposta (subconjunto, nao igualdade). Sabotar `veredito` so no JS, ou
   `sha256` so no servidor, o deixa vermelho.
-- **Dividas nomeadas:** `remover` nao revoga a maquina no DERVS (fica "Sem dados", sem botao
-  de tirar); o `historico.log` e hora local, e fuso diferente no processo erra a hora (nao o
-  commit); Docker e systemd de verdade so a conferencia manual F-2 prova (rotulo ausente no
+- **Dividas nomeadas:** tirar sao DOIS passos (`remover` no servidor e o botao no painel),
+  e um so deixa meio feito; o `historico.log` e hora local, e fuso diferente no processo erra
+  a hora (nao o commit; o teste com `TZ` so roda fora do Windows); o `branch` do compare vai
+  escapado inteiro, e branch padrao com `/` vira "nao sei" no caminho HTTP (a peneira
+  `_url_da_api` recusa `%`); Docker e systemd de verdade so a conferencia manual F-2 prova (rotulo ausente no
   `--format`, `ProtectSystem=strict` com o soquete); revisao de seguranca obrigatoria antes de
   ligar na VPS que hospeda outros sistemas.
 

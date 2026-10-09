@@ -164,10 +164,12 @@ obrigatório torto: descartado inteiro, +1):
 - `/ajudante/servidor.py`: 200 `application/octet-stream`, `Content-Disposition: attachment;
   filename="dervs-ajudante.py"`, `Content-Length`; 503 `{"erro":"o ajudante nao esta nesta
   copia"}`; 429 balcão `ajudante`; não cria estado.
-- `/api/ajudante/linha`: 200 `{"linha": "curl -fsSL <alvo>/ajudante/servidor.py -o
-  dervs-ajudante.py && echo \"<sha256>  dervs-ajudante.py\" | sha256sum -c - && sudo python3
-  dervs-ajudante.py", "sha256": "<64 hex>", "endereco": "<alvo>/ajudante/servidor.py"}` (dois
-  espaços entre sha e nome); 503 igual; 403 `{"erro":"entre de novo"}` se a sessão venceu.
+- `/api/ajudante/linha`: 200 `{"linha": "cd \"$(mktemp -d)\" && curl -fsSL
+  <alvo>/ajudante/servidor.py -o dervs-ajudante.py && echo \"<sha256>  dervs-ajudante.py\" |
+  sha256sum -c - && sudo python3 -I dervs-ajudante.py", "sha256": "<64 hex>", "endereco":
+  "<alvo>/ajudante/servidor.py"}` (dois espaços entre sha e nome; pasta nova e privada, e `-I`
+  isola o caminho de busca do Python — revisão de segurança, 09/10/2026); 503 igual; 403
+  `{"erro":"entre de novo"}` se a sessão venceu.
 
 ### C5. `GET /api/dados` (em `_dados`, depois da poda dos ocultos)
 
@@ -283,7 +285,10 @@ Literais: `fetch("/api/ajudante/linha"`, `new EventSource("/api/eventos")` (sem 
    obrigatória (VPS hospeda o Ajudei).
 3. dervs.com.br tomado vê inventário, não ganha comando. O SHA-256 prova integridade, não origem.
 4. Local: `ALVO` vem do `Host`; host diferente na VM → resumo não casa (só local).
-5. `remover` não revoga a máquina no DERVS (fica "Sem dados"); sem botão de tirar. Dívida nomeada.
+5. `remover` não revoga a máquina no DERVS (fica "Sem dados"). **Fechado em 09/10/2026:** cada
+   servidor do cartão tem "Desligar este servidor", que chama a mesma `POST /api/maquinas/remover`
+   (o `usuario_id` no `UPDATE` recusa máquina de outra conta). Tirar é os dois passos: `remover` no
+   servidor e o botão no painel. Colar a linha de novo num servidor desligado pede código novo.
 6. Fuso: `historico.log` é hora local; `strptime(...).astimezone(timezone.utc)` assume o TZ do
    processo. TZ diferente erra a hora (não o commit).
 7. Segundo fluxo SSE por aba gasta 1 das 4 vagas: só abre com `servidores_ligados.length > 0` e

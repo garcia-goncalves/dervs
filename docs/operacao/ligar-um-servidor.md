@@ -17,6 +17,8 @@ instala uma vez.
   registros de funcionamento deles. Não guarda **quem** publicou: esse dado é
   descartado na leitura.
 - **Não recebe ordens** do DERVS e **não se atualiza sozinho**.
+- **Para ficar de pé, a linha cria um usuário e um temporizador** no servidor.
+  Você tira os dois quando quiser (veja "Como tirar").
 - **Roda separado**, num usuário só dele (`dervs-ajudante`), sem terminal de
   entrada. Atenção: para ver o Docker, esse usuário entra no grupo `docker`, que
   na prática equivale a administrador. Ou seja, "só olhar" é garantia do
@@ -36,8 +38,9 @@ Docker e acesso à internet. Você precisa poder usar `sudo` nele.
 2. Abra o terminal do servidor (o PuTTY ou o terminal do DERVS-VOZ) e entre
    como de costume.
 3. **Cole a linha e aperte Enter.** Ela pode pedir a sua senha do servidor
-   (é o `sudo`). A linha baixa o ajudante, **confere a soma de verificação**
-   (SHA-256) e só então o roda.
+   (é o `sudo`). A linha entra numa pasta nova e só sua, baixa o ajudante,
+   **compara o arquivo com o código de conferência** (SHA-256) e só então o
+   roda. O código prova que o arquivo chegou inteiro, não de quem ele veio.
 4. Aparece no terminal um **código de 8 letras e números** (por exemplo
    `K7M4-2QXP`) e um endereço. Abra esse endereço **no seu computador**, onde
    você já entrou no DERVS. A tela mostra o nome do servidor e o código.
@@ -62,15 +65,18 @@ servidor, "medido há N s" e a lista dos sistemas ("de pé", "parado",
 | `python3: command not found` | O servidor não tem Python. | Cole `sudo apt install -y python3` e rode a linha de novo. |
 | `FAILED` ou `soma de verificação` | O arquivo chegou diferente do esperado. | **Não rode nada.** Recarregue a página do DERVS e copie a linha de novo. |
 | "Preciso de poder de administrador" | Faltou o `sudo`. | Rode de novo com `sudo` na frente. |
-| "Este servidor não usa o gerenciador de serviços…" | Não é um Linux com `systemd` (ou é um contêiner). | O ajudante não serve nessa máquina; nada foi alterado. |
-| "Nao achei o Docker neste servidor" | O Docker não está instalado ou não está no caminho do `sudo`. | Instale o Docker e rode de novo. |
+| "Este servidor nao usa o gerenciador de servicos" | Não é um Linux com `systemd` (ou é um ambiente de teste). | Esta máquina não serve para o ajudante; nada foi alterado. |
+| "Nao achei o Docker" | O Docker não está instalado ou não está no caminho do `sudo`. | Esta máquina não serve para o ajudante como está; nada foi alterado. Com o Docker instalado, rode de novo. |
 | "Nao consegui falar com o painel" | O servidor não alcança o DERVS. | Confira a internet do servidor e rode de novo. |
-| "O painel nao liberou este servidor" | O pedido venceu ou foi recusado. | Rode a linha de novo e autorize dentro de alguns minutos. |
+| "O painel nao liberou este servidor" | O pedido venceu ou foi recusado. | O pedido venceu. Rode a linha de novo e autorize em poucos minutos. |
+| "Aviso: nao consegui dar ao ajudante a leitura do historico de publicacoes." | O servidor não tem `setfacl`, ou ele falhou. | O resto funciona; a versão no ar de cada projeto aparece como "não sei". |
+| "O painel nao reconhece mais este servidor. Cole a linha do painel de novo neste servidor." | O servidor foi desligado no painel (ou o acesso guardado se perdeu). | Cole a linha de novo: ela pede um código novo sozinha. |
 | O servidor aparece com **"Sem dados há N min — o servidor parou de contar."** | O ajudante parou ou perdeu a internet. | No servidor: `systemctl status dervs-ajudante.timer`. Se estiver parado, rode a linha de novo (ela não pede novo código). |
-| "Não consegui ver os sistemas deste servidor." | O ajudante está vivo mas o Docker não respondeu a ele. | Confira `docker ps` no servidor e o grupo `docker` do usuário `dervs-ajudante`. |
+| "Não consegui ver os sistemas deste servidor." | O ajudante está vivo mas o Docker não respondeu a ele, ou respondeu alguma linha que ele não soube ler (ele não esconde: prefere dizer que não viu a mostrar um sistema a menos). | Confira `docker ps` no servidor e o grupo `docker` do usuário `dervs-ajudante`. |
 
 Rodar a linha de novo é seguro: se o servidor já foi autorizado para o mesmo
-endereço, ela não pede outro código.
+endereço, ela não pede outro código. Se o painel não reconhece mais o acesso
+guardado (o servidor foi desligado no painel), ela pede um código novo, uma vez.
 
 ## A versão "no ar"
 
@@ -85,16 +91,20 @@ costuma ser só do administrador; a instalação dá ao usuário do ajudante ape
 
 ## Como tirar
 
-No servidor, cole:
+São dois passos, um em cada lado:
 
-```
-sudo python3 /opt/dervs-ajudante/dervs-ajudante.py remover
-```
+1. **No servidor**, cole:
 
-Isso desliga o temporizador, apaga os arquivos do ajudante, tira a permissão
-de leitura do histórico e remove o usuário `dervs-ajudante`. **No DERVS o
-servidor continua na lista, mostrando "Sem dados"** — ainda não há botão de
-tirá-lo da tela. Isso é uma dívida conhecida.
+   ```
+   sudo python3 /opt/dervs-ajudante/dervs-ajudante.py remover
+   ```
+
+   Isso desliga o temporizador, apaga os arquivos do ajudante, tira a
+   permissão de leitura do histórico e remove o usuário `dervs-ajudante`.
+2. **No painel**, em **Seus servidores**, clique em **Desligar este servidor**
+   e confirme. O acesso dele morre na hora e ele sai da lista. Só o passo 1
+   deixaria o servidor na lista, mostrando "Sem dados"; só o passo 2 deixaria
+   o ajudante instalado lá, falando com um painel que não o aceita mais.
 
 ## Onde as coisas ficam no servidor
 
