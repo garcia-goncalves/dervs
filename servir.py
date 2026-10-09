@@ -3391,7 +3391,7 @@ class Hub(SimpleHTTPRequestHandler):
 
     @staticmethod
     def _texto_gravavel(valor) -> bool:
-        """Texto que o SQLite aceita: um surrogate solto (`"\ud800"`) e JSON
+        """Texto que o SQLite aceita: um surrogate solto (`"\\ud800"`) e JSON
         valido, passa pelo tamanho, e estoura UnicodeEncodeError no INSERT."""
         if not isinstance(valor, str):
             return False
