@@ -206,11 +206,18 @@ def pasta_pelo_teclado(sugestao: str) -> str:
 
 # --------------------------------------------------------------------- a rede
 
+_NOME_OK = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._-")
+
+
 def nome_desta_maquina() -> str:
+    """O nome do computador no formato que o painel aceita: so letras,
+    digitos, espaco, ponto, sublinhado e hifen, ate 40. O resto vira `-`."""
     try:
-        return socket.gethostname() or "computador"
+        bruto = socket.gethostname() or "computador"
     except OSError:
-        return "computador"
+        bruto = "computador"
+    return "".join(c if c in _NOME_OK else "-" for c in bruto)[:40].strip()         or "computador"
 
 
 class _SemRedirecionar(urllib.request.HTTPRedirectHandler):
@@ -541,10 +548,17 @@ def token_gravado(alvo: str) -> str:
     return str(gravado.get("token") or "")
 
 
-def _sem_pacote() -> int:
+def _sem_pacote(gravou: bool = False) -> int:
     fala("")
-    fala("Nao consegui receber o programa do painel. Nada foi gravado neste")
-    fala("computador. Tente de novo em alguns minutos.")
+    if gravou:
+        # O token so existe uma vez (o painel nao o entrega de novo): ja esta
+        # guardado, e a proxima rodada entra por ele sem pedir nada.
+        fala("Nao consegui receber o programa do painel agora, mas este")
+        fala("computador ja esta autorizado. Rode este arquivo de novo em")
+        fala("alguns minutos.")
+    else:
+        fala("Nao consegui receber o programa do painel. Nada foi gravado neste")
+        fala("computador. Tente de novo em alguns minutos.")
     pausa()
     return SEM_PACOTE
 
@@ -597,9 +611,12 @@ def main() -> int:
             fala("Nada foi alterado neste computador.")
             pausa()
             return SEM_PAREAMENTO
+        # O token sai UMA vez do painel: guarda JA, antes de qualquer outra
+        # chamada que possa falhar (o pacote), senao o resgate se perde.
+        gravar(alvo, cred, str(pasta), nome)
         codigo, pacote = buscar_pacote(alvo, cred)
         if codigo != 200:
-            return _sem_pacote()
+            return _sem_pacote(gravou=True)
 
     if pacote.get("so_mede") is not True:
         # Este PC tem o braco executor ligado (ou o painel nao disse): trocar a
@@ -613,7 +630,7 @@ def main() -> int:
 
     casa = casa_do_programa()
     if not gravar_pacote(pacote, casa):
-        return _sem_pacote()
+        return _sem_pacote(gravou=True)
     gravar(alvo, cred, str(pasta), nome)
     fala("Conectado. Este computador ja aparece no painel.")
 

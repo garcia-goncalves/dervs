@@ -957,9 +957,32 @@ class OFluxoInteiroComServidorDeMentira(ComCasaEArquivoTemporarios):
         self.assertEqual([], self.agendados)
         self.assertEqual([], self.relatos)
         self.assertFalse(self.casa.exists())
-        self.assertFalse(self.arquivo.exists(), "nada gravado: nem o token")
+        # O resgate e UMA vez so: o token ja existe e e gravado antes do pacote.
+        self.assertEqual("tk-novo", self._json()[d.alvo.lower()]["token"])
+        self.assertNotIn("Nada foi gravado", self.saida.getvalue())
         self.assertEqual(5, conectador.SEM_PACOTE)
         self.assertTrue(d.chamadas("/agente/pacote"))
+
+    def test_pacote_503_depois_do_resgate_grava_o_token_e_a_proxima_entra(self):
+        d = self._duble({"/agente/pedir": [PEDIDO_OK],
+                         "/agente/esperar": [(200, {"token": "tk-novo"})],
+                         "/agente/pacote": [(503, {"erro": "x"}), um_pacote()]})
+        self.assertEqual(conectador.SEM_PACOTE, conectador.main())
+        self.assertEqual("tk-novo", self._json()[d.alvo.lower()]["token"])
+        self.assertNotIn("Nada foi gravado", self.saida.getvalue())
+        self.assertEqual(conectador.SAIU_BEM, conectador.main())
+        self.assertEqual(1, len(d.chamadas("/agente/pedir")),
+                         "a segunda rodada entra pelo token gravado")
+
+    def test_s3_o_nome_mandado_e_saneado(self):
+        antes = conectador.socket.gethostname
+        conectador.socket.gethostname = lambda: "CAFÉ <PC>/1" + "x" * 60
+        self.addCleanup(setattr, conectador.socket, "gethostname", antes)
+        nome = conectador.nome_desta_maquina()
+        self.assertLessEqual(len(nome), 40)
+        self.assertEqual("CAF- -PC--1", nome[:11])
+        self.assertTrue(set(nome) <= set(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._-"))
 
     def test_com_token_gravado_nao_pede_de_novo_e_usa_o_pacote(self):
         d = self._duble({"/agente/pacote": [um_pacote()]})
