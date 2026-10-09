@@ -501,7 +501,10 @@ class NenhumNumeroSemCarimbo(unittest.TestCase):
     # e sempre uma das duas acima.)
     CARIMBO = re.compile(r"haQuanto\(|\bhora\(")
     # Ler dado medido.
-    DADO = re.compile(r"\bESTADO\b|\bprojetos\b|\bCOMPUTADORES\b|carimboDe\(|"
+    # `projetos` como PALAVRA solta (a lista, ou `m.projetos`). Como pedaco de
+    # rota (`/api/projetos/mostrar`) ou de classe (`projetos-vistos`) nao e dado
+    # medido: a chave "Mostrar no painel" nao escreve numero nenhum.
+    DADO = re.compile(r"\bESTADO\b|(?<![/\w-])projetos(?![\w/-])|\bCOMPUTADORES\b|carimboDe\(|"
                       r"\.pendencias\b|\.arquivadas\b|d\.maquinas")
 
     TEXTO_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"' + r"|'(?:[^'\\]|\\.)*'")

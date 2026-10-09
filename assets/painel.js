@@ -307,6 +307,20 @@ function fraseDeResumo(conta, total) {
   return frase;
 }
 
+/* Projeto escondido some do resumo, e um projeto escondido e quebrado sumiria
+   calado. Por isso o painel diz quantos há, com o caminho para trazê-los de
+   volta. Servidor antigo (sem `ocultos`) não mostra a linha. */
+function pintarOcultos() {
+  const lugar = $("#painel-ocultos");
+  const n = ((ESTADO && ESTADO.ocultos) || []).length;
+  lugar.hidden = !n;
+  if (!n) return;
+  const a = criar("a", "", "Ver em Conectar");
+  a.href = "#/conectar";
+  lugar.replaceChildren(n + (n === 1 ? " projeto escondido" : " projetos escondidos")
+                        + " do painel. ", a, ".");
+}
+
 function pintarPainel() {
   if (!ESTADO) return;
   const projetos = ESTADO.projetos || [];
@@ -315,6 +329,7 @@ function pintarPainel() {
 
   $("#resumo").textContent = fraseDeResumo(conta, projetos.length);
   pintarRecomendada();
+  pintarOcultos();
 
   /* A régua de contagem: quatro contadores, um por estado, cada um com forma,
      glifo e rótulo. São filtros — tocar em "quebrado" reduz a lista. */
@@ -2303,6 +2318,95 @@ function pintarEsteComputador() {
   }
 }
 
+/* ---------------------------------------- a chave "Mostrar no painel"
+   Uma linha de projeto com a chave. Serve à lista dos achados de um
+   computador E à lista de repositórios de uma conta do GitHub: uma montagem só,
+   porque duas divergem, e a que divergir é a que esquece o rótulo escrito.
+
+   A chave NUNCA muda de posição por conta própria: ela vai para onde o servidor
+   disse que foi. Enquanto o pedido viaja ela fica desligada para o clique; se
+   o servidor recusa, volta para onde estava e a linha diz isso. O foco fica na
+   chave nos dois casos. Esconder não apaga nada: a linha continua na lista, em
+   cinza, porque sem ela não haveria como voltar. */
+function linhaComChave(projeto, caminho, oculto, aoMudar) {
+  const li = criar("li", "visto" + (oculto ? " visto--oculto" : ""));
+  const dizeres = criar("div", "dizeres");
+  dizeres.append(criar("div", "nome", projeto));
+  if (caminho) dizeres.append(criar("div", "caminho", caminho));
+  const erro = criar("p", "mole");
+  erro.setAttribute("role", "status");
+  erro.hidden = true;
+  dizeres.append(erro);
+
+  const rotulo = criar("label", "chave");
+  const entrada = document.createElement("input");
+  entrada.type = "checkbox";
+  entrada.setAttribute("role", "switch");
+  entrada.setAttribute("aria-label", "Mostrar no painel: " + projeto);
+  entrada.checked = !oculto;
+  const trilho = criar("span", "chave__trilho");
+  trilho.setAttribute("aria-hidden", "true");
+  const texto = criar("span", "chave__texto", oculto ? "Escondido do painel" : "Aparece no painel");
+  rotulo.append(entrada, trilho, texto);
+
+  entrada.addEventListener("change", async () => {
+    const quer = entrada.checked;
+    entrada.disabled = true;
+    entrada.setAttribute("aria-busy", "true");
+    erro.hidden = true;
+    let ok = false;
+    try {
+      const r = await escrever("/api/projetos/mostrar", { projeto, mostrar: quer });
+      ok = r.ok;
+    } catch (_) { ok = false; }
+    entrada.disabled = false;
+    entrada.removeAttribute("aria-busy");
+    if (ok) {
+      texto.textContent = quer ? "Aparece no painel" : "Escondido do painel";
+      li.className = "visto" + (quer ? "" : " visto--oculto");
+      if (aoMudar) aoMudar(!quer);
+      await carregar();
+    } else {
+      entrada.checked = !quer;
+      erro.textContent = "Não consegui mudar agora. A chave voltou para onde estava.";
+      erro.hidden = false;
+    }
+    entrada.focus();
+  });
+
+  li.append(dizeres, rotulo);
+  return li;
+}
+
+/* Um projeto achado num computador (`projetos_vistos` de /api/maquinas). */
+function linhaDeProjetoVisto(a) {
+  return linhaComChave(a.projeto, a.caminho, a.oculto, (v) => { a.oculto = v; });
+}
+
+/* O bloco "Projetos que achei neste computador", dentro da linha dele. Mais de
+   20: a lista rola dentro de uma caixa (com foco e nome), para o cartão não
+   empurrar os outros dois para fora da tela. */
+function blocoDeProjetosVistos(m) {
+  const vistos = m.projetos_vistos || [];
+  if (!vistos.length) return null;
+  const bloco = criar("div", "projetos-vistos");
+  bloco.append(criar("h4", "", "Projetos que achei neste computador"));
+  bloco.append(criar("p", "mole",
+    "Esconder um projeto tira ele do painel, mas não apaga nada. Ele continua "
+    + "aqui na lista e volta quando você ligar a chave. A escolha vale só para "
+    + "a sua conta."));
+  const ul = criar("ul", "lista");
+  for (const a of vistos) ul.append(linhaDeProjetoVisto(a));
+  const muitos = vistos.length > 20;
+  if (muitos) {
+    ul.className = "lista lista--rolavel";
+    ul.setAttribute("tabindex", "0");
+    ul.setAttribute("aria-label", "Projetos que achei neste computador");
+  }
+  bloco.append(ul);
+  return bloco;
+}
+
 /* Uma linha da lista de computadores. Nome, quando deu notícia e o que ele
    pode fazer. Tudo que é do outro computador entra por `textContent`. */
 function linhaDeComputador(m) {
@@ -2368,6 +2472,8 @@ function linhaDeComputador(m) {
   acoes.append(b);
 
   li.append(txt, acoes);
+  const vistos = blocoDeProjetosVistos(m);
+  if (vistos) li.append(vistos);
   return li;
 }
 
