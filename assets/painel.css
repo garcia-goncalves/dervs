@@ -1127,3 +1127,20 @@ details.ajuda h3 { margin: var(--e3) 0; font-size: var(--fs-corpo); }
 .site .endereco__dizeres { flex: 1; min-width: min(100%, 14rem); }
 .site .endereco__url { overflow-wrap: anywhere; word-break: normal; }
 .site .carimbo, .site-guardar p { margin: 0; }
+
+/* ------------------------------------------------------- seus servidores
+   Cada servidor é uma coluna, como as contas do GitHub: nome e marca em cima,
+   carimbo e sistemas embaixo. Em 360px a linha para colar rola DENTRO do
+   próprio `<pre class="receita">` (a página nunca rola de lado), e o Copiar
+   fica acima dela, na largura cheia (o `.porta .acoes` já faz isso). */
+.servidor-ligado { flex-direction: column; align-items: stretch; gap: var(--e2); }
+.servidor-ligado__topo { display: flex; align-items: center; gap: var(--e2); flex-wrap: wrap; }
+.servidor-ligado .nome { font-size: var(--fs-destaque); overflow-wrap: anywhere; }
+.servidor-ligado p { margin: 0; }
+.servidor-ligado .lista { margin-top: var(--e2); }
+.sistema-do-servidor { flex-wrap: wrap; align-items: center; gap: var(--e2); }
+.sistema-do-servidor .nome { overflow-wrap: anywhere; }
+.ajudante { display: flex; flex-direction: column; gap: var(--e2); }
+.ajudante p, .ajudante h3 { margin: 0; }
+.ajudante .receita { max-width: 100%; box-sizing: border-box; }
+.no-ar { margin: 0; }
