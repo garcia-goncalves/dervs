@@ -564,6 +564,7 @@ class OLinkDeBaixarEOCartaoDoComputador(unittest.TestCase):
                 "COMPUTADORES_FALHOU = false;\n"] + fontes(
             "haQuanto", "criar", "marcaDaPorta", "linkDeBaixar", "estadoDosComputadores",
             "situacaoDoComputador", "pintarEsteComputador", "linhaDeComputador",
+            "blocoDeProjetosVistos", "linhaDeProjetoVisto", "linhaComChave",
             consts=("ESTADO_DA_PORTA", "COMPUTADOR_CALADO_APOS_MS"))
 
     PRELUDIO = PRELUDIO_DE_TEMPO + r"""
@@ -958,6 +959,204 @@ class AMarcacaoDoCartaoEstaNoHtml(unittest.TestCase):
         nomes = sorted(p.name for p in (AQUI / "assets").iterdir())
         for novo in nomes:
             self.assertNotRegex(novo, r"(?i)desenho|passo|conectar", novo)
+
+
+# ================================= E3-3: a chave "Mostrar no painel"
+PRELUDIO_DA_CHAVE = r"""
+const escritas = [], carregou = [];
+let PENDENTE = null;
+let RESPOSTA_DA_CHAVE = { ok: true, status: 200 };
+globalThis.escrever = (url, corpo) => {
+  escritas.push([url, corpo]);
+  return new Promise((res) => { PENDENTE = () => res(RESPOSTA_DA_CHAVE); });
+};
+async function carregar() { carregou.push(1); }
+const chaveDe = (li) => acha(li, n => n.tag === "input");
+"""
+
+FONTES_DA_CHAVE = ("criar", "linhaComChave", "linhaDeProjetoVisto", "blocoDeProjetosVistos")
+
+
+class AChaveMostrarNoPainel(unittest.TestCase):
+    def rode(self, script):
+        return roda(self, [PRELUDIO_DA_CHAVE] + fontes(*FONTES_DA_CHAVE), script)
+
+    def test_a_linha_tem_a_chave_com_nome_e_estado(self):
+        r = self.rode(r"""
+const li = linhaDeProjetoVisto({ projeto: "clinica-agenda", caminho: "C:\\projetos\\clinica-agenda", oculto: false });
+const c = chaveDe(li);
+console.log(JSON.stringify({ tipo: c.type, papel: c.attrs.role, nome: c.attrs["aria-label"],
+  ligada: c.checked, texto: li.textContent, classe: li.className }));
+""")
+        self.assertEqual((r["tipo"], r["papel"]), ("checkbox", "switch"))
+        self.assertEqual(r["nome"], "Mostrar no painel: clinica-agenda")
+        self.assertTrue(r["ligada"])
+        self.assertIn("Aparece no painel", r["texto"])
+        self.assertIn("clinica-agenda", r["texto"])
+        self.assertEqual(r["classe"], "visto")
+
+    def test_oculto_pinta_cinza_e_diz_escondido_mas_nao_some(self):
+        r = self.rode(r"""
+const li = linhaDeProjetoVisto({ projeto: "loja-da-ana", caminho: "x", oculto: true });
+console.log(JSON.stringify({ ligada: chaveDe(li).checked, texto: li.textContent, classe: li.className }));
+""")
+        self.assertFalse(r["ligada"])
+        self.assertIn("Escondido do painel", r["texto"])
+        self.assertIn("loja-da-ana", r["texto"])
+        self.assertIn("visto--oculto", r["classe"])
+
+    def test_durante_o_pedido_a_chave_fica_desligada_para_o_clique_e_ocupada(self):
+        r = self.rode(r"""
+const li = linhaDeProjetoVisto({ projeto: "a", caminho: "", oculto: false });
+const c = chaveDe(li);
+c.checked = false;
+const p = c.disparar("change");
+const durante = { desativada: c.disabled, ocupada: c.attrs["aria-busy"] };
+PENDENTE(); await p;
+console.log(JSON.stringify({ durante, depois: { desativada: c.disabled, ocupada: c.attrs["aria-busy"] || null },
+  escritas, carregou: carregou.length, texto: li.textContent, classe: li.className }));
+""")
+        self.assertEqual(r["durante"], {"desativada": True, "ocupada": "true"})
+        self.assertEqual(r["depois"], {"desativada": False, "ocupada": None})
+        self.assertEqual(r["escritas"], [["/api/projetos/mostrar",
+                                          {"projeto": "a", "mostrar": False}]])
+        self.assertEqual(r["carregou"], 1)     # o painel relê o que sobrou
+        self.assertIn("Escondido do painel", r["texto"])
+        self.assertIn("visto--oculto", r["classe"])
+
+    def test_se_o_servidor_recusa_a_chave_volta_e_a_linha_diz(self):
+        r = self.rode(r"""
+RESPOSTA_DA_CHAVE = { ok: false, status: 404 };
+const li = linhaDeProjetoVisto({ projeto: "a", caminho: "", oculto: false });
+const c = chaveDe(li);
+c.checked = false;
+const p = c.disparar("change"); PENDENTE(); await p;
+console.log(JSON.stringify({ ligada: c.checked, texto: li.textContent, classe: li.className,
+  foco: FOCO.atual === c, carregou: carregou.length, desativada: c.disabled }));
+""")
+        self.assertTrue(r["ligada"], "a chave tem de voltar para onde estava")
+        self.assertIn("Não consegui mudar agora. A chave voltou para onde estava.", r["texto"])
+        self.assertIn("Aparece no painel", r["texto"])
+        self.assertEqual(r["classe"], "visto")
+        self.assertTrue(r["foco"])
+        self.assertEqual(r["carregou"], 0)
+        self.assertFalse(r["desativada"])
+
+    def test_falha_de_rede_tambem_devolve_a_chave(self):
+        r = self.rode(r"""
+globalThis.escrever = () => Promise.reject(new Error("rede"));
+const li = linhaDeProjetoVisto({ projeto: "a", caminho: "", oculto: true });
+const c = chaveDe(li);
+c.checked = true;
+await c.disparar("change");
+console.log(JSON.stringify({ ligada: c.checked, texto: li.textContent }));
+""")
+        self.assertFalse(r["ligada"])
+        self.assertIn("A chave voltou para onde estava.", r["texto"])
+
+    def test_o_foco_fica_na_chave_depois_de_dar_certo(self):
+        r = self.rode(r"""
+const li = linhaDeProjetoVisto({ projeto: "a", caminho: "", oculto: false });
+const c = chaveDe(li);
+c.checked = false;
+const p = c.disparar("change"); PENDENTE(); await p;
+console.log(JSON.stringify({ foco: FOCO.atual === c }));
+""")
+        self.assertTrue(r["foco"])
+
+    def test_o_objeto_do_servidor_acompanha_a_chave(self):
+        r = self.rode(r"""
+const a = { projeto: "a", caminho: "", oculto: false };
+const li = linhaDeProjetoVisto(a);
+const c = chaveDe(li);
+c.checked = false;
+const p = c.disparar("change"); PENDENTE(); await p;
+console.log(JSON.stringify({ oculto: a.oculto }));
+""")
+        self.assertTrue(r["oculto"])
+
+    def test_nome_e_pasta_de_fora_entram_como_texto(self):
+        r = self.rode(r"""
+const li = linhaDeProjetoVisto({ projeto: "<img src=x onerror=1>", caminho: "<script>x</script>", oculto: false });
+console.log(JSON.stringify({ texto: li.textContent,
+  perigosos: achaTodos(li, n => n.tag === "img" || n.tag === "script").length }));
+""")
+        self.assertIn("<img src=x onerror=1>", r["texto"])
+        self.assertEqual(r["perigosos"], 0)
+
+    def test_mais_de_vinte_projetos_rola_dentro_de_uma_caixa_com_foco_e_nome(self):
+        r = self.rode(r"""
+const lista = (n) => Array.from({ length: n }, (_, i) => ({ projeto: "p" + i, caminho: "", oculto: false }));
+const grande = blocoDeProjetosVistos({ projetos_vistos: lista(21) });
+const pequeno = blocoDeProjetosVistos({ projetos_vistos: lista(20) });
+const ul = (b) => acha(b, n => n.tag === "ul");
+console.log(JSON.stringify({ g: [ul(grande).className, ul(grande).attrs.tabindex, ul(grande).attrs["aria-label"]],
+  p: [ul(pequeno).className, ul(pequeno).attrs.tabindex || null], linhas: achaTodos(grande, n => n.tag === "li").length }));
+""")
+        self.assertEqual(r["g"], ["lista lista--rolavel", "0", "Projetos que achei neste computador"])
+        self.assertEqual(r["p"], ["lista", None])
+        self.assertEqual(r["linhas"], 21)
+
+    def test_sem_projetos_nao_ha_bloco_e_ha_a_explicacao_quando_ha(self):
+        r = self.rode(r"""
+const vazio = blocoDeProjetosVistos({ projetos_vistos: [] });
+const ausente = blocoDeProjetosVistos({});
+const cheio = blocoDeProjetosVistos({ projetos_vistos: [{ projeto: "a", caminho: "", oculto: false }] });
+console.log(JSON.stringify({ vazio, ausente, texto: cheio.textContent }));
+""")
+        self.assertIsNone(r["vazio"])
+        self.assertIsNone(r["ausente"])
+        self.assertIn("Projetos que achei neste computador", r["texto"])
+        self.assertIn("A escolha vale só para a sua conta.", r["texto"])
+
+    def test_a_chamada_vai_por_escrever_e_so_com_projeto_e_mostrar(self):
+        corpo = funcao("linhaComChave")
+        self.assertIn('escrever("/api/projetos/mostrar", { projeto, mostrar: quer })', corpo)
+        self.assertNotRegex(corpo, r'fetch\(')
+
+    def test_as_classes_da_chave_existem_nos_dois_lados(self):
+        css = sem_comentarios(CSS)
+        for classe in ("chave", "chave__trilho", "chave__texto", "visto",
+                       "visto--oculto", "lista--rolavel", "projetos-vistos"):
+            with self.subTest(classe=classe):
+                self.assertIn("." + classe, css, "o CSS nao estiliza ." + classe)
+                self.assertIn(classe, JS, "o JS nao escreve " + classe)
+
+    def test_a_chave_ligada_usa_acao_e_nunca_verde(self):
+        css = sem_comentarios(CSS)
+        ini = css.index(".chave {")
+        bloco = css[ini:css.index(".lista--rolavel", ini)]
+        self.assertIn("--acao", bloco)
+        self.assertNotIn("--estado-", bloco)
+        self.assertIn("focus-visible", bloco)
+        self.assertIn("min-height: 44px", bloco)
+
+
+class OPainelDizQuantosProjetosEstaoEscondidos(unittest.TestCase):
+    def rode(self, ocultos_js):
+        return roda(self, fontes("criar", "pintarOcultos"), r"""
+globalThis.ESTADO = { ocultos: %s };
+pintarOcultos();
+const l = $("#painel-ocultos");
+console.log(JSON.stringify({ oculto: l.hidden, texto: l.textContent,
+  link: (acha(l, n => n.tag === "a") || {}).href || null }));
+""" % ocultos_js)
+
+    def test_com_escondidos_diz_quantos_e_leva_a_conectar(self):
+        r = self.rode('["a", "b"]')
+        self.assertFalse(r["oculto"])
+        self.assertIn("2 projetos escondidos do painel.", r["texto"])
+        self.assertEqual(r["link"], "#/conectar")
+
+    def test_um_so_fica_no_singular(self):
+        self.assertIn("1 projeto escondido do painel.", self.rode('["a"]')["texto"])
+
+    def test_sem_nenhum_ou_servidor_antigo_a_linha_some(self):
+        self.assertTrue(self.rode("[]")["oculto"])
+        self.assertTrue(self.rode("undefined")["oculto"])
+
+    def test_a_linha_existe_no_html_da_tela_do_painel(self):
+        self.assertRegex(HTML, r'<p class="mole" id="painel-ocultos" hidden>')
 
 
 if __name__ == "__main__":
