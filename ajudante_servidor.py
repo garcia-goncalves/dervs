@@ -30,6 +30,7 @@ LEIS QUE ESTE ARQUIVO OBEDECE, e o motivo de cada uma:
 """
 
 import datetime
+import http.client
 import json
 import os
 import re
@@ -123,9 +124,10 @@ def abrir(metodo, url, corpo, token, prazo):
         codigo = e.code
         try:
             bruto = e.read(TETO_DA_RESPOSTA + 1)
-        except OSError:
+        except (OSError, http.client.HTTPException):
             bruto = b""
-    except (urllib.error.URLError, OSError, ValueError):
+    except (urllib.error.URLError, OSError, ValueError,
+            http.client.HTTPException):
         return 0, None
     if len(bruto) > TETO_DA_RESPOSTA:
         return codigo, None
@@ -162,8 +164,13 @@ def nome_desta_maquina():
     return limpo or "servidor"
 
 
-def _gravar(caminho, texto, modo):
-    """Grava por arquivo novo + troca atomica: nunca um arquivo pela metade."""
+def _gravar(caminho, texto, modo, dono=None):
+    """Grava por arquivo novo + troca atomica: nunca um arquivo pela metade.
+
+    Modo e dono sao trocados no DESCRITOR, antes da troca: na pasta do usuario
+    do ajudante, um chmod/chown por caminho seguiria um link que ele pusesse
+    ali, e o root daria a ele um arquivo do sistema. O `O_EXCL` recusa link.
+    """
     passagem = caminho + ".novo"
     try:
         os.unlink(passagem)
@@ -172,9 +179,12 @@ def _gravar(caminho, texto, modo):
     fd = os.open(passagem, os.O_WRONLY | os.O_CREAT | os.O_EXCL, modo)
     with os.fdopen(fd, "w", encoding="ascii", newline="\n") as arq:
         arq.write(texto)
+        arq.flush()
+        if hasattr(os, "fchmod") and os.name != "nt":
+            os.fchmod(arq.fileno(), modo)
+        if dono is not None:
+            dono(arq.fileno(), USUARIO)
     os.replace(passagem, caminho)
-    if os.name != "nt":
-        os.chmod(caminho, modo)
 
 
 def _ler_pareamento(raiz):
@@ -220,6 +230,14 @@ def texto_do_servico():
         "PrivateTmp=yes",
         "ReadWritePaths=" + PASTA_DOS_DADOS,
         "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+        "UMask=0077",
+        "PrivateDevices=yes",
+        "ProtectKernelTunables=yes",
+        "ProtectKernelModules=yes",
+        "ProtectControlGroups=yes",
+        "RestrictSUIDSGID=yes",
+        "LockPersonality=yes",
+        "CapabilityBoundingSet=",
         ""])
 
 
@@ -282,6 +300,23 @@ def _parear(alvo, nome, abrir, dormir, saida):
     return SEM_PAREAMENTO, ""
 
 
+def _novo_acesso(alvo, nome, raiz, abrir, dormir, saida, dono):
+    """Pareia e guarda o token JA, antes de qualquer outro passo: ele sai UMA
+    vez do painel. (codigo_de_saida, token)."""
+    fim, token = _parear(alvo, nome, abrir, dormir, saida)
+    if fim != OK:
+        return fim, ""
+    arquivo = _p(raiz, ARQUIVO_DO_PAREAMENTO)
+    try:
+        _gravar(arquivo, json.dumps({"alvo": alvo, "token": token}), 0o600,
+                dono)
+    except (OSError, LookupError):
+        saida("Autorizado, mas nao consegui guardar o acesso. Rode de novo.")
+        return SEM_REQUISITO, ""
+    saida("Autorizado.")
+    return OK, token
+
+
 # ------------------------------------------------------------------ instalar
 
 def instalar(alvo=ALVO, raiz="/", rodar=None, abrir=None, dormir=time.sleep,
@@ -331,19 +366,11 @@ def instalar(alvo=ALVO, raiz="/", rodar=None, abrir=None, dormir=time.sleep,
     token = ""
     if _alvo_limpo(cred.get("alvo")) == alvo and isinstance(cred.get("token"), str):
         token = cred["token"]
+    guardado = bool(token)
     if not token:
-        fim, token = _parear(alvo, nome, abrir, dormir, saida)
+        fim, token = _novo_acesso(alvo, nome, raiz, abrir, dormir, saida, dono)
         if fim != OK:
             return fim
-        # O token sai UMA vez do painel: guarda JA, antes de qualquer outro passo.
-        arquivo = _p(raiz, ARQUIVO_DO_PAREAMENTO)
-        try:
-            _gravar(arquivo, json.dumps({"alvo": alvo, "token": token}), 0o600)
-            dono(arquivo, USUARIO)
-        except (OSError, LookupError):
-            saida("Autorizado, mas nao consegui guardar o acesso. Rode de novo.")
-            return SEM_REQUISITO
-        saida("Autorizado.")
 
     try:
         casa = _p(raiz, PASTA_DO_PROGRAMA)
@@ -358,12 +385,23 @@ def instalar(alvo=ALVO, raiz="/", rodar=None, abrir=None, dormir=time.sleep,
         return SEM_REQUISITO
 
     pasta_log = _p(raiz, PASTA_DO_HISTORICO)
-    if os.path.isdir(pasta_log) and shutil.which("setfacl"):
-        rodar(["setfacl", "-m", "u:%s:x" % USUARIO, pasta_log], 10)
-        arquivo_log = _p(raiz, HISTORICO)
-        if os.path.isfile(arquivo_log):
-            rodar(["setfacl", "-m", "u:%s:r" % USUARIO, arquivo_log], 10)
-        rodar(["setfacl", "-d", "-m", "u:%s:r" % USUARIO, pasta_log], 10)
+    if os.path.isdir(pasta_log):
+        # `-P`: nunca seguir link simbolico.
+        leu = bool(shutil.which("setfacl"))
+        if leu:
+            leu = rodar(["setfacl", "-P", "-m", "u:%s:x" % USUARIO, pasta_log],
+                        10)[0]
+            arquivo_log = _p(raiz, HISTORICO)
+            if os.path.isfile(arquivo_log):
+                leu = rodar(["setfacl", "-P", "-m", "u:%s:r" % USUARIO,
+                             arquivo_log], 10)[0] and leu
+            leu = rodar(["setfacl", "-P", "-d", "-m", "u:%s:r" % USUARIO,
+                         pasta_log], 10)[0] and leu
+        if not leu:
+            saida("Aviso: nao consegui dar ao ajudante a leitura do historico de"
+                  " publicacoes.")
+            saida("O resto funciona, mas a versao no ar de cada projeto vai"
+                  " aparecer como 'nao sei'.")
 
     try:
         for caminho, texto in ((SERVICO, texto_do_servico()),
@@ -381,10 +419,29 @@ def instalar(alvo=ALVO, raiz="/", rodar=None, abrir=None, dormir=time.sleep,
         return SEM_REQUISITO
 
     saida("Ligado: a cada 30 segundos este servidor conta ao painel o que roda nele.")
-    if medir(alvo, raiz, rodar, abrir) != OK:
+    ditos = []
+    fim = medir(alvo, raiz, rodar, abrir, saida=ditos.append)
+    if fim == SEM_PAREAMENTO and guardado:
+        # O acesso guardado morreu (o dono desligou o servidor no painel):
+        # colar a linha de novo tem de resolver. Uma vez so, nunca um laco.
+        saida("O painel nao reconhece mais o acesso guardado. Vamos autorizar"
+              " de novo.")
+        try:
+            os.unlink(_p(raiz, ARQUIVO_DO_PAREAMENTO))
+        except OSError:
+            pass
+        fim, token = _novo_acesso(alvo, nome, raiz, abrir, dormir, saida, dono)
+        if fim != OK:
+            return fim
+        ditos = []
+        fim = medir(alvo, raiz, rodar, abrir, saida=ditos.append)
+    if fim != OK:
+        for texto in ditos:
+            saida(texto)
         saida("A primeira medicao nao subiu agora; o temporizador tenta de novo.")
     saida("Em ate um minuto o servidor aparece no painel, em Seus servidores.")
     saida("Para tirar: sudo python3 " + PROGRAMA + " remover")
+    saida("e clique em Desligar este servidor no painel.")
     return OK
 
 
@@ -409,23 +466,33 @@ def _iso_do_docker(texto):
 
 
 def _sistemas(rodar):
-    """(docker_mudo, lista). `docker_mudo` e verdade quando nao deu para ver."""
-    ok, bruto = rodar(list(ARGV_DO_PS), 30)
-    if not ok:
+    """(docker_mudo, lista). `docker_mudo` e verdade quando nao deu para ver
+    TUDO: linha descartada nunca vira um sistema a menos em silencio."""
+    for _volta in range(2):
+        ok, bruto = rodar(list(ARGV_DO_PS), 30)
+        if not ok:
+            return True, []
+        ids = [i for i in bruto.split() if all(c in _HEX for c in i)][:MAX_ITENS]
+        if not ids:
+            return False, []
+        # Um id que sumiu entre as duas perguntas faz o inspect falhar
+        # inteiro: pergunta de novo a lista, uma vez.
+        ok, bruto = rodar(list(ARGV_DO_INSPECT) + ids, 60)
+        if ok:
+            break
+    else:
         return True, []
-    ids = [i for i in bruto.split() if all(c in _HEX for c in i)][:MAX_ITENS]
-    if not ids:
-        return False, []
-    ok, bruto = rodar(list(ARGV_DO_INSPECT) + ids, 60)
-    if not ok:
-        return True, []
-    achados = []
+    achados, mudo = [], False
     for linha in bruto.splitlines():
+        if not linha.strip():
+            continue
         campos = linha.split("\t")
         if len(campos) != 8:
+            mudo = True
             continue
         nome = _tira(campos[0]).lstrip("/")
         if not nome:
+            mudo = True
             continue
         try:
             reinicios = int(_tira(campos[4]))
@@ -437,7 +504,7 @@ def _sistemas(rodar):
             "saude": _tira(campos[2]).lower(),
             "desde": _iso_do_docker(campos[3]), "reinicios": reinicios,
             "imagem": _tira(campos[5]), "sha": _sha_ou_vazio(_tira(campos[7]))})
-    return False, achados
+    return mudo, achados
 
 
 def _ler_proc(raiz, nome):
@@ -541,14 +608,14 @@ def _publicacoes(raiz):
     return saida[:MAX_ITENS]
 
 
-def medir(alvo=ALVO, raiz="/", rodar=None, abrir=None):
+def medir(alvo=ALVO, raiz="/", rodar=None, abrir=None, saida=print):
     rodar = rodar or _RODAR
     abrir = abrir or _ABRIR
     cred = _ler_pareamento(raiz)
     token = cred.get("token") if isinstance(cred.get("token"), str) else ""
     destino = _alvo_limpo(cred.get("alvo")) or _alvo_limpo(alvo)
     if not token or not destino:
-        print("Este servidor ainda nao foi autorizado no painel.")
+        saida("Este servidor ainda nao foi autorizado no painel.")
         return SEM_PAREAMENTO
     mudo, sistemas = _sistemas(rodar)
     corpo = {"versao": 1, "docker_mudo": mudo, "servidor": _servidor(raiz),
@@ -558,12 +625,13 @@ def medir(alvo=ALVO, raiz="/", rodar=None, abrir=None):
     if codigo == 200 or codigo == 429:
         return OK
     if codigo == 401:
-        print("O painel nao reconhece mais este servidor. Rode a instalacao de novo.")
+        saida("O painel nao reconhece mais este servidor. Cole a linha do painel"
+              " de novo neste servidor.")
         return SEM_PAREAMENTO
     if codigo == 403:
-        print("O painel recusou a medicao deste servidor.")
+        saida("O painel recusou a medicao deste servidor.")
         return RECUSADO
-    print("Nao consegui falar com o painel agora.")
+    saida("Nao consegui falar com o painel agora.")
     return SEM_REDE
 
 
@@ -584,15 +652,16 @@ def remover(raiz="/", rodar=None, eh_root=None):
     rodar(["systemctl", "daemon-reload"], 60)
     pasta_log = _p(raiz, PASTA_DO_HISTORICO)
     if os.path.isdir(pasta_log) and shutil.which("setfacl"):
-        rodar(["setfacl", "-x", "u:" + USUARIO, pasta_log], 10)
+        rodar(["setfacl", "-P", "-x", "u:" + USUARIO, pasta_log], 10)
         arquivo_log = _p(raiz, HISTORICO)
         if os.path.isfile(arquivo_log):
-            rodar(["setfacl", "-x", "u:" + USUARIO, arquivo_log], 10)
-        rodar(["setfacl", "-d", "-x", "u:" + USUARIO, pasta_log], 10)
+            rodar(["setfacl", "-P", "-x", "u:" + USUARIO, arquivo_log], 10)
+        rodar(["setfacl", "-P", "-d", "-x", "u:" + USUARIO, pasta_log], 10)
     rodar(["userdel", USUARIO], 30)
     shutil.rmtree(_p(raiz, PASTA_DO_PROGRAMA), ignore_errors=True)
     shutil.rmtree(_p(raiz, PASTA_DOS_DADOS), ignore_errors=True)
-    print("Removido. No painel este servidor passa a mostrar 'Sem dados'.")
+    print("Removido deste servidor. Para tira-lo tambem da lista, clique em")
+    print("Desligar este servidor no painel.")
     return OK
 
 
