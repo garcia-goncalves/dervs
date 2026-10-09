@@ -380,47 +380,98 @@ def gravar(alvo: str, token: str, raiz: str, nome: str = "") -> Path:
     return destino
 
 
+# ------------------------------------------------------------------ o pacote
+
+# O pacote do painel (contrato C6) e CODIGO que este PC vai executar: so passa
+# nome de arquivo `.py` da raiz ou de `agente/`, em minusculas, sem barra
+# invertida, sem `..`, sem caminho absoluto. UM caminho fora disso recusa o
+# pacote INTEIRO - pacote parcial seria um programa que ninguem testou.
+TETO_DO_PACOTE = 16 * 1024 * 1024
+_CAMINHO_DO_PACOTE = re.compile(r"(agente/)?[a-z_]{1,40}\.py")
+
+
+def casa_do_programa() -> Path:
+    """Onde o programa mora nesta maquina. Fora da pasta de projetos."""
+    bruto = os.environ.get("DERVS_CASA")
+    if bruto:
+        return Path(bruto).expanduser()
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return Path(local) / "DERVS" / "programa"
+    return Path.home() / ".dervs" / "programa"
+
+
+def buscar_pacote(alvo: str, token: str):
+    """GET /agente/pacote. Devolve (codigo, dict)."""
+    return _chamar(alvo, "/agente/pacote", token=token, teto=TETO_DO_PACOTE)
+
+
+def gravar_pacote(pacote, casa: Path) -> bool:
+    """Valida TUDO e so depois grava. False = nada foi gravado."""
+    arquivos = pacote.get("arquivos") if isinstance(pacote, dict) else None
+    if not isinstance(arquivos, list) or not arquivos:
+        return False
+    prontos = {}
+    for item in arquivos:
+        if not isinstance(item, dict):
+            return False
+        caminho, conteudo = item.get("caminho"), item.get("conteudo")
+        if not isinstance(caminho, str) or not isinstance(conteudo, str):
+            return False
+        if not _CAMINHO_DO_PACOTE.fullmatch(caminho):
+            return False
+        try:
+            prontos[caminho] = conteudo.encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+    if "agente/enviar.py" not in prontos:
+        return False
+    try:
+        (casa / "agente").mkdir(parents=True, exist_ok=True)
+        for caminho, bruto in prontos.items():
+            destino = casa / caminho
+            passagem = destino.with_name(destino.name + ".novo")
+            passagem.write_bytes(bruto)
+            os.replace(passagem, destino)
+    except OSError:
+        return False
+    return True
+
+
+def primeiro_relato(agente: str, alvo: str) -> bool:
+    """Roda o agente uma vez, com o Python do console, para o painel ja ver dados."""
+    try:
+        fim = subprocess.run([sys.executable, agente, "--alvo", alvo.rstrip("/")],
+                             shell=False, capture_output=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if fim.returncode != 0:
+        fala("O primeiro relato falhou:")
+        fala((fim.stderr or b"")[-400:].decode("utf-8", "replace").strip())
+        return False
+    return True
+
+
 # ------------------------------------------------------------ a tarefa agendada
 
-def achar_o_agente(raiz: str = "") -> str:
-    """Onde esta `agente/enviar.py` nesta maquina. "" quando nao esta.
+def interprete_da_tarefa() -> str:
+    """`pythonw.exe` (sem janela) ao lado do Python do console, quando existe.
 
-    LEITURA 1 DO PLANO, e a razao de ela existir: o conectador NAO distribui
-    codigo-fonte. Uma medicao precisa de ~4.600 linhas do repositorio na
-    maquina; este arquivo so acha o que ja esta la. Quando nao acha, quem chama
-    pareia assim mesmo e DIZ que o relato continuo depende disso.
-
-    A ordem: a variavel de ambiente, depois a pasta deste proprio arquivo (o
-    caso de quem clonou e rodou daqui de dentro), depois as filhas diretas da
-    raiz escolhida (o caso de quem tem o `dervs` em `source\\repos`).
+    A tarefa agendada roda a cada login; com `python.exe` ela abriria uma
+    janela preta de console toda vez.
     """
-    candidatos = []
-    bruto = os.environ.get("DERVS_REPO")
-    if bruto:
-        candidatos.append(Path(bruto).expanduser())
-    # A RAIZ ESCOLHIDA VEM ANTES da pasta do proprio arquivo, e a ordem importa:
-    # na pratica este arquivo mora em Downloads, que e a pasta menos confiavel
-    # da maquina. Achar ali um `agente/enviar.py` e agenda-lo para rodar a cada
-    # logon seria deixar a pasta de downloads escolher o que o Windows executa.
-    # Apontado pela revisao de seguranca de 01/09/2026.
-    if raiz:
-        try:
-            candidatos.extend(sorted(p for p in Path(raiz).iterdir() if p.is_dir()))
-        except OSError:
-            pass
-    aqui = Path(__file__).resolve().parent
-    candidatos.extend([aqui, aqui.parent])
-    for pasta in candidatos:
-        alvo = pasta / "agente" / "enviar.py"
-        try:
-            if alvo.is_file():
-                return str(alvo)
-        except OSError:
-            continue
-    return ""
+    atual = sys.executable or "python"
+    sem_janela = Path(atual).with_name("pythonw.exe")
+    try:
+        if sem_janela.is_file():
+            return str(sem_janela)
+    except OSError:
+        pass
+    return atual
 
 
-def comando_da_tarefa(agente: str, alvo: str, uma_vez: bool = False) -> str:
+def comando_da_tarefa(agente: str, alvo: str, uma_vez: bool = False,
+                      interprete: str = "") -> str:
     """O valor de /TR, montado como DADO.
 
     `schtasks` tem regra de aspas propria: o valor de /TR e uma linha de comando
@@ -430,10 +481,11 @@ def comando_da_tarefa(agente: str, alvo: str, uma_vez: bool = False) -> str:
     """
     fim = "" if uma_vez else " --intervalo 60"
     return '"%s" "%s" --alvo "%s"%s' % (
-        sys.executable or "python", agente, alvo.rstrip("/"), fim)
+        interprete or sys.executable or "python", agente, alvo.rstrip("/"), fim)
 
 
-def argumentos_do_schtasks(agente: str, alvo: str, plano_b: bool = False) -> list:
+def argumentos_do_schtasks(agente: str, alvo: str, plano_b: bool = False,
+                           interprete: str = "") -> list:
     """A LISTA de argumentos. Nunca string unica, nunca `shell=True`.
 
     Uma string unica com `shell=True` faz o caminho da pasta escolhida pela
@@ -446,14 +498,15 @@ def argumentos_do_schtasks(agente: str, alvo: str, plano_b: bool = False) -> lis
     """
     if plano_b:
         return ["schtasks", "/Create", "/TN", NOME_DA_TAREFA,
-                "/TR", comando_da_tarefa(agente, alvo, uma_vez=True),
+                "/TR", comando_da_tarefa(agente, alvo, True, interprete),
                 "/SC", "MINUTE", "/MO", "10", "/F"]
     return ["schtasks", "/Create", "/TN", NOME_DA_TAREFA,
-            "/TR", comando_da_tarefa(agente, alvo),
+            "/TR", comando_da_tarefa(agente, alvo, False, interprete),
             "/SC", "ONLOGON", "/F"]
 
 
-def agendar(agente: str, alvo: str, plano_b: bool = False) -> bool:
+def agendar(agente: str, alvo: str, plano_b: bool = False,
+            interprete: str = "") -> bool:
     """Registra a tarefa. Devolve False sem levantar quando nao deu.
 
     `schtasks` e do Windows. No macOS e no Linux este arquivo pareia e grava a
@@ -463,8 +516,9 @@ def agendar(agente: str, alvo: str, plano_b: bool = False) -> bool:
     if os.name != "nt":
         return False
     try:
-        fim = subprocess.run(argumentos_do_schtasks(agente, alvo, plano_b),
-                             shell=False, capture_output=True, timeout=60)
+        fim = subprocess.run(
+            argumentos_do_schtasks(agente, alvo, plano_b, interprete),
+            shell=False, capture_output=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return False
     return fim.returncode == 0
@@ -477,6 +531,22 @@ def perguntar(rotulo: str) -> str:
         return (input(rotulo) or "").strip()
     except (EOFError, KeyboardInterrupt):
         return ""
+
+
+def token_gravado(alvo: str) -> str:
+    """O token que este PC ja tem para este alvo ("" se nao tem)."""
+    gravado = _lido(arquivo_de_configuracao()).get(alvo.rstrip("/").lower())
+    if not isinstance(gravado, dict):
+        return ""
+    return str(gravado.get("token") or "")
+
+
+def _sem_pacote() -> int:
+    fala("")
+    fala("Nao consegui receber o programa do painel. Nada foi gravado neste")
+    fala("computador. Tente de novo em alguns minutos.")
+    pausa()
+    return SEM_PACOTE
 
 
 def main() -> int:
@@ -505,36 +575,59 @@ def main() -> int:
         return SEM_PASTA
     fala("Pasta escolhida: " + str(pasta))
 
-    fala("")
-    fala("Passo 2 de 3 - conectando com o painel pelo navegador.")
     nome = nome_desta_maquina()
-    liberado = conectar_pelo_navegador(alvo, nome)
-    if not liberado:
+    cred = token_gravado(alvo)
+    pacote = {}
+    if cred:
+        # Este PC ja foi ligado: nao pede de novo. O pacote e a prova de que o
+        # token ainda vale (401 = recusado, e ai pareia como se fosse a 1a vez).
+        codigo, pacote = buscar_pacote(alvo, cred)
+        if codigo == 401:
+            cred = ""
+        elif codigo != 200:
+            return _sem_pacote()
+    if not cred:
         fala("")
-        fala("O painel nao liberou este computador (o pedido vale 10 minutos).")
-        fala("Rode este arquivo de novo e clique em Autorizar no navegador.")
-        fala("Nada foi alterado neste computador.")
-        pausa()
-        return SEM_PAREAMENTO
+        fala("Passo 2 de 3 - conectando com o painel pelo navegador.")
+        cred = conectar_pelo_navegador(alvo, nome)
+        if not cred:
+            fala("")
+            fala("O painel nao liberou este computador (o pedido vale 10 minutos).")
+            fala("Rode este arquivo de novo e clique em Autorizar no navegador.")
+            fala("Nada foi alterado neste computador.")
+            pausa()
+            return SEM_PAREAMENTO
+        codigo, pacote = buscar_pacote(alvo, cred)
+        if codigo != 200:
+            return _sem_pacote()
 
-    gravar(alvo, liberado, str(pasta), nome)
+    if pacote.get("so_mede") is not True:
+        # Este PC tem o braco executor ligado (ou o painel nao disse): trocar a
+        # tarefa agendada o mataria. So acrescenta a pasta.
+        gravar(alvo, cred, str(pasta), nome)
+        fala("")
+        fala("Este computador ja estava ligado ao painel e faz mais do que medir.")
+        fala("Acrescentei a pasta escolhida e nao mexi no resto.")
+        pausa()
+        return SAIU_BEM
+
+    casa = casa_do_programa()
+    if not gravar_pacote(pacote, casa):
+        return _sem_pacote()
+    gravar(alvo, cred, str(pasta), nome)
     fala("Conectado. Este computador ja aparece no painel.")
 
     fala("")
     fala("Passo 3 de 3 - manter o relato ligado sozinho.")
-    agente = achar_o_agente(str(pasta))
-    if not agente:
-        fala("Nao achei o DERVS nesta maquina, entao NAO agendei nada.")
-        fala("O pareamento acima valeu; o que falta e o relato continuo, que")
-        fala("precisa dos arquivos do DERVS aqui. Clone o repositorio e rode")
-        fala("este arquivo de novo, ou aponte a variavel DERVS_REPO para ele.")
+    agente = str(casa / "agente" / "enviar.py")
+    interprete = interprete_da_tarefa()
+    if agendar(agente, alvo, interprete=interprete):
+        fala("Pronto: a tarefa '" + NOME_DA_TAREFA + "' roda a cada login.")
     elif os.name != "nt":
         fala("Este sistema nao e Windows, entao NAO agendei nada - o agendador")
         fala("usado aqui e o do Windows. Para reportar sozinho, chame:")
         fala("  python " + agente + " --alvo " + alvo.rstrip("/") + " --intervalo 60")
-    elif agendar(agente, alvo):
-        fala("Pronto: a tarefa '" + NOME_DA_TAREFA + "' roda a cada login.")
-    elif agendar(agente, alvo, plano_b=True):
+    elif agendar(agente, alvo, plano_b=True, interprete=interprete):
         fala("Sem permissao de administrador para rodar a cada login, entao usei")
         fala("o plano B: a tarefa '" + NOME_DA_TAREFA + "' acorda a cada 10 minutos.")
     else:
@@ -544,8 +637,14 @@ def main() -> int:
         fala("  python " + agente + " --alvo " + alvo.rstrip("/") + " --intervalo 60")
 
     fala("")
-    fala("Terminado.")
-    pausa()
+    fala("Mandando a primeira medicao...")
+    if primeiro_relato(agente, alvo):
+        fala("Pronto. Esta janela fecha em 10 segundos.")
+        dormir(10)
+    else:
+        fala("O computador esta ligado, mas a primeira medicao nao subiu agora.")
+        fala("A tarefa agendada tenta de novo sozinha.")
+        pausa()
     return SAIU_BEM
 
 

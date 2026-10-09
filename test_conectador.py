@@ -434,41 +434,6 @@ class APausaNaoPenduraOAgendador(unittest.TestCase):
             sys.stdin = antes
 
 
-class AcharOAgente(unittest.TestCase):
-    """Ele so ACHA o que ja esta na maquina. Nao distribui codigo-fonte."""
-
-    def setUp(self):
-        self.casa = tempfile.TemporaryDirectory()
-        self.addCleanup(self.casa.cleanup)
-        os.environ.pop("DERVS_REPO", None)
-
-    def test_acha_o_agente_numa_filha_da_raiz_escolhida(self):
-        repo = Path(self.casa.name) / "dervs" / "agente"
-        repo.mkdir(parents=True)
-        (repo / "enviar.py").write_text("# de mentira", encoding="utf-8")
-        achado = conectador.achar_o_agente(self.casa.name)
-        self.assertTrue(achado.endswith(os.path.join("agente", "enviar.py")))
-
-    def test_a_variavel_de_ambiente_vence(self):
-        outro = Path(self.casa.name) / "escolhido" / "agente"
-        outro.mkdir(parents=True)
-        (outro / "enviar.py").write_text("# de mentira", encoding="utf-8")
-        os.environ["DERVS_REPO"] = str(outro.parent)
-        self.addCleanup(os.environ.pop, "DERVS_REPO", None)
-        self.assertEqual(str(outro / "enviar.py"),
-                         conectador.achar_o_agente(self.casa.name))
-
-    def test_sem_o_repositorio_ele_devolve_vazio_em_vez_de_levantar(self):
-        vazia = Path(self.casa.name) / "so-projetos"
-        vazia.mkdir()
-        antes = conectador.__file__
-        # Aponta o proprio arquivo para uma pasta sem `agente/`, senao ele
-        # acharia o repositorio de VERDADE em que este teste roda.
-        conectador.__file__ = str(vazia / "conectador.py")
-        self.addCleanup(setattr, conectador, "__file__", antes)
-        self.assertEqual("", conectador.achar_o_agente(str(vazia)))
-
-
 class ODuble:
     """Servidor de mentira que fala os contratos C2, C3 e C6 do plano.
 
@@ -797,6 +762,283 @@ class OMoldeDoArquivoCmd(unittest.TestCase):
             extraido = saida.read_text(encoding="utf-8")
         ast.parse(extraido)
         self.assertEqual(fonte.splitlines(), extraido.splitlines())
+
+
+PACOTE_6 = ("agente/__init__.py", "agente/enviar.py", "coletar.py", "banco.py",
+            "documentos.py", "tarefas.py")
+
+
+def um_pacote(so_mede=True, caminhos=PACOTE_6):
+    return (200, {"versao": "0" * 64, "so_mede": so_mede,
+                  "arquivos": [{"caminho": c, "conteudo": "# %s\n" % c}
+                               for c in caminhos]})
+
+
+class ComCasaEArquivoTemporarios(unittest.TestCase):
+    """Isola `DERVS_CASA` e `DERVS_AGENTE_ARQUIVO`: nada toca o PC de quem testa."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.casa = Path(self.tmp.name) / "programa"
+        self.arquivo = Path(self.tmp.name) / "agente.json"
+        for k, v in (("DERVS_CASA", str(self.casa)),
+                     ("DERVS_AGENTE_ARQUIVO", str(self.arquivo))):
+            os.environ[k] = v
+            self.addCleanup(os.environ.pop, k, None)
+
+
+class OPacoteDoPainel(ComCasaEArquivoTemporarios):
+    """Contrato C6: o PC passa a medir sem o repositorio clonado."""
+
+    def test_a_casa_padrao_e_a_pasta_do_programa_no_localappdata(self):
+        os.environ.pop("DERVS_CASA")
+        with unittest.mock.patch.dict(os.environ, {"LOCALAPPDATA": "C:\\L"}):
+            self.assertEqual(Path("C:\\L") / "DERVS" / "programa",
+                             conectador.casa_do_programa())
+
+    def test_dervs_casa_vence(self):
+        self.assertEqual(self.casa, conectador.casa_do_programa())
+
+    def test_grava_os_arquivos_na_casa(self):
+        pacote = um_pacote()[1]
+        self.assertTrue(conectador.gravar_pacote(pacote, self.casa))
+        for c in PACOTE_6:
+            self.assertEqual("# %s\n" % c,
+                             (self.casa / c).read_text(encoding="utf-8"))
+
+    def test_caminho_fora_do_formato_recusa_o_pacote_inteiro(self):
+        ruins = ("../x.py", "agente/../../x.py", "/etc/x.py", "C:\\x.py",
+                 "agente\\enviar.py", "a/b/c.py", "agente/enviar.PY",
+                 "enviar.txt", "agente/.py", "x" * 41 + ".py", "agente/en viar.py",
+                 "agente/enviar.py\n", "")
+        for ruim in ruins:
+            with self.subTest(ruim=ruim):
+                pacote = um_pacote(caminhos=PACOTE_6 + (ruim,))[1]
+                self.assertFalse(conectador.gravar_pacote(pacote, self.casa))
+                self.assertFalse(self.casa.exists(),
+                                 "recusa o pacote INTEIRO: nada gravado")
+                self.assertFalse((Path(self.tmp.name) / "x.py").exists())
+
+    def test_pacote_torto_e_recusado(self):
+        for torto in ({}, {"arquivos": []}, {"arquivos": "x"},
+                      {"arquivos": ["agente/enviar.py"]},
+                      {"arquivos": [{"caminho": "agente/enviar.py"}]},
+                      {"arquivos": [{"caminho": "agente/enviar.py",
+                                     "conteudo": 5}]},
+                      {"arquivos": [{"caminho": "coletar.py", "conteudo": "x"}]}):
+            with self.subTest(torto=torto):
+                self.assertFalse(conectador.gravar_pacote(torto, self.casa))
+                self.assertFalse(self.casa.exists())
+
+    def test_o_pacote_pede_com_o_token_no_cabecalho(self):
+        d = ODuble({"/agente/pacote": [um_pacote()]})
+        self.addCleanup(d.fechar)
+        codigo, dados = conectador.buscar_pacote(d.alvo, "tk-do-pc")
+        self.assertEqual(200, codigo)
+        self.assertEqual(6, len(dados["arquivos"]))
+        pedido = d.chamadas("/agente/pacote")[0]
+        self.assertEqual("GET", pedido[0])
+        self.assertEqual("Token tk-do-pc", pedido[3].get("Authorization"))
+
+
+class OInterpretadorDaTarefa(unittest.TestCase):
+    def test_pythonw_ao_lado_quando_existe(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            (Path(pasta) / "python.exe").write_bytes(b"")
+            (Path(pasta) / "pythonw.exe").write_bytes(b"")
+            with unittest.mock.patch.object(
+                    sys, "executable", str(Path(pasta) / "python.exe")):
+                self.assertEqual(str(Path(pasta) / "pythonw.exe"),
+                                 conectador.interprete_da_tarefa())
+                tr = conectador.argumentos_do_schtasks(
+                    "C:/c/agente/enviar.py", "https://d",
+                    interprete=conectador.interprete_da_tarefa())
+                self.assertIn(str(Path(pasta) / "pythonw.exe"),
+                              tr[tr.index("/TR") + 1])
+
+    def test_sem_pythonw_fica_o_python_do_console(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            (Path(pasta) / "python.exe").write_bytes(b"")
+            with unittest.mock.patch.object(
+                    sys, "executable", str(Path(pasta) / "python.exe")):
+                self.assertEqual(str(Path(pasta) / "python.exe"),
+                                 conectador.interprete_da_tarefa())
+
+    def test_aspas_e_plano_b_continuam_valendo_com_o_interprete(self):
+        argv = conectador.argumentos_do_schtasks(
+            "C:/c/agente/enviar.py", "https://d", plano_b=True,
+            interprete=r"C:\Arquivos de Programa\py\pythonw.exe")
+        tr = argv[argv.index("/TR") + 1]
+        self.assertTrue(tr.startswith(r'"C:\Arquivos de Programa\py\pythonw.exe" '))
+        self.assertEqual("MINUTE", argv[argv.index("/SC") + 1])
+        self.assertNotIn("--intervalo", tr)
+
+
+class OFluxoInteiroComServidorDeMentira(ComCasaEArquivoTemporarios):
+    """`main()` do começo ao fim, contra o dublê do painel (C2, C3 e C6)."""
+
+    def setUp(self):
+        super().setUp()
+        self.pasta = Path(self.tmp.name) / "projetos"
+        self.pasta.mkdir()
+        self.dormidos, self.abertos = [], []
+        self.agendados, self.relatos = [], []
+        for nome, valor in (
+                ("escolher_pasta", lambda *a, **k: str(self.pasta)),
+                ("dormir", self.dormidos.append),
+                ("agendar", self._agendar)):
+            antes = getattr(conectador, nome)
+            setattr(conectador, nome, valor)
+            self.addCleanup(setattr, conectador, nome, antes)
+        navegador = conectador.webbrowser.open
+        conectador.webbrowser.open = lambda url, *a, **k: self.abertos.append(url)
+        self.addCleanup(setattr, conectador.webbrowser, "open", navegador)
+
+        def falso_run(argv, **kw):
+            self.relatos.append((argv, kw))
+
+            class Fim:
+                returncode = 0
+            return Fim()
+        run = unittest.mock.patch.object(subprocess, "run", falso_run)
+        run.start()
+        self.addCleanup(run.stop)
+        self.antes_out = sys.stdout
+        sys.stdout = self.saida = io.StringIO()
+        self.addCleanup(setattr, sys, "stdout", self.antes_out)
+        antes_in = sys.stdin
+        sys.stdin = io.StringIO("")
+        self.addCleanup(setattr, sys, "stdin", antes_in)
+
+    def _agendar(self, agente, alvo, plano_b=False, interprete=""):
+        self.agendados.append((agente, alvo, plano_b, interprete))
+        return True
+
+    def _duble(self, respostas):
+        d = ODuble(respostas)
+        self.addCleanup(d.fechar)
+        os.environ["DERVS_ALVO"] = d.alvo
+        self.addCleanup(os.environ.pop, "DERVS_ALVO", None)
+        return d
+
+    def _json(self):
+        return json.loads(self.arquivo.read_text(encoding="utf-8"))
+
+    def test_do_pedido_ao_primeiro_relato(self):
+        d = self._duble({"/agente/pedir": [PEDIDO_OK],
+                         "/agente/esperar": [(202, {"estado": "esperando"}),
+                                             (200, {"token": "tk-novo"})],
+                         "/agente/pacote": [um_pacote()]})
+        self.assertEqual(conectador.SAIU_BEM, conectador.main())
+        dados = self._json()
+        self.assertEqual("tk-novo", dados[d.alvo.lower()]["token"])
+        self.assertEqual([str(self.pasta)], dados["raizes"])
+        for c in PACOTE_6:
+            self.assertTrue((self.casa / c).is_file(), c)
+        enviar = str(self.casa / "agente" / "enviar.py")
+        self.assertEqual(1, len(self.agendados))
+        self.assertEqual((enviar, d.alvo), self.agendados[0][:2])
+        argv, kw = self.relatos[-1]
+        self.assertEqual([sys.executable, enviar, "--alvo", d.alvo], argv)
+        self.assertIn("timeout", kw)
+        self.assertFalse(kw.get("shell", False))
+        self.assertIn("Pronto. Esta janela fecha em 10 segundos.",
+                      self.saida.getvalue())
+        self.assertEqual(10, self.dormidos[-1])
+        self.assertNotIn("tk-novo", self.saida.getvalue())
+
+    def test_pacote_com_caminho_perigoso_sai_com_sem_pacote_e_nao_agenda(self):
+        d = self._duble({"/agente/pedir": [PEDIDO_OK],
+                         "/agente/esperar": [(200, {"token": "tk-novo"})],
+                         "/agente/pacote": [um_pacote(
+                             caminhos=PACOTE_6 + ("agente/../../x.py",))]})
+        self.assertEqual(conectador.SEM_PACOTE, conectador.main())
+        self.assertEqual([], self.agendados)
+        self.assertEqual([], self.relatos)
+        self.assertFalse(self.casa.exists())
+        self.assertFalse(self.arquivo.exists(), "nada gravado: nem o token")
+        self.assertEqual(5, conectador.SEM_PACOTE)
+        self.assertTrue(d.chamadas("/agente/pacote"))
+
+    def test_com_token_gravado_nao_pede_de_novo_e_usa_o_pacote(self):
+        d = self._duble({"/agente/pacote": [um_pacote()]})
+        conectador.gravar(d.alvo, "tk-velho", "D:/outra", "pc")
+        self.assertEqual(conectador.SAIU_BEM, conectador.main())
+        self.assertEqual([], d.chamadas("/agente/pedir"))
+        self.assertEqual("Token tk-velho",
+                         d.chamadas("/agente/pacote")[0][3].get("Authorization"))
+        dados = self._json()
+        self.assertEqual("tk-velho", dados[d.alvo.lower()]["token"])
+        self.assertEqual(["D:/outra", str(self.pasta)], dados["raizes"])
+        self.assertEqual(1, len(self.agendados))
+
+    def test_token_recusado_com_401_pareia_de_novo(self):
+        d = self._duble({"/agente/pacote": [(401, {"erro": "x"}), um_pacote()],
+                         "/agente/pedir": [PEDIDO_OK],
+                         "/agente/esperar": [(200, {"token": "tk-novo"})]})
+        conectador.gravar(d.alvo, "tk-velho", "D:/outra", "pc")
+        self.assertEqual(conectador.SAIU_BEM, conectador.main())
+        self.assertEqual(1, len(d.chamadas("/agente/pedir")))
+        self.assertEqual("tk-novo", self._json()[d.alvo.lower()]["token"])
+
+    def test_so_mede_falso_nao_instala_nem_agenda_so_acrescenta_a_pasta(self):
+        """Risco 15: trocar a tarefa mataria o braco executor deste PC."""
+        d = self._duble({"/agente/pacote": [um_pacote(so_mede=False)]})
+        conectador.gravar(d.alvo, "tk-velho", "D:/outra", "pc")
+        self.assertEqual(conectador.SAIU_BEM, conectador.main())
+        self.assertEqual([], self.agendados)
+        self.assertEqual([], self.relatos)
+        self.assertFalse(self.casa.exists(), "nao instala por cima do repositorio")
+        dados = self._json()
+        self.assertEqual("tk-velho", dados[d.alvo.lower()]["token"])
+        self.assertEqual(["D:/outra", str(self.pasta)], dados["raizes"])
+
+    def test_pacote_indisponivel_com_token_gravado_sai_com_sem_pacote(self):
+        d = self._duble({"/agente/pacote": [(503, {"erro": "x"})]})
+        conectador.gravar(d.alvo, "tk-velho", "D:/outra", "pc")
+        self.assertEqual(conectador.SEM_PACOTE, conectador.main())
+        self.assertEqual([], self.agendados)
+
+
+class OPacoteSemOBraco(ComCasaEArquivoTemporarios):
+    """O pacote nao leva `agente/executor.py`: o PC so mede."""
+
+    def _copiar_o_pacote(self, destino):
+        aqui = Path(conectador.__file__).parent
+        for c in PACOTE_6:
+            (destino / c).parent.mkdir(parents=True, exist_ok=True)
+            (destino / c).write_bytes((aqui / c).read_bytes())
+
+    def test_enviar_help_roda_sem_o_repositorio(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            raiz = Path(pasta)
+            self._copiar_o_pacote(raiz)
+            self.assertFalse((raiz / "agente" / "executor.py").exists())
+            ambiente = {k: v for k, v in os.environ.items()
+                        if k != "PYTHONPATH"}
+            fim = subprocess.run(
+                [sys.executable, str(raiz / "agente" / "enviar.py"), "--help"],
+                cwd=pasta, env=ambiente, capture_output=True, timeout=60)
+            self.assertEqual(0, fim.returncode, fim.stderr)
+
+    def test_tarefa_sem_o_braco_sobe_falha_em_vez_de_levantar(self):
+        sys.path.insert(0, str(Path(conectador.__file__).parent))
+        self.addCleanup(sys.path.remove, str(Path(conectador.__file__).parent))
+        from agente import enviar
+        subidos = []
+        with unittest.mock.patch.dict(sys.modules, {"agente.executor": None}), \
+                unittest.mock.patch.object(
+                    enviar, "_falar",
+                    lambda alvo, caminho, corpo, token="": subidos.append(
+                        (caminho, corpo)) or {}):
+            desfecho = enviar.fazer_a_tarefa(
+                "https://d", "tk", {"id": "t1", "projeto": "p",
+                                    "executor": "claude"})
+        self.assertEqual("falha", desfecho["estado"])
+        self.assertIn("so mede", desfecho["erro"])
+        self.assertEqual("/agente/resultado", subidos[0][0])
+        self.assertEqual("falha", subidos[0][1]["estado"])
 
 
 if __name__ == "__main__":
