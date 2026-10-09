@@ -340,7 +340,14 @@ CREATE TABLE IF NOT EXISTS maquina (
     -- Fatia 2: a maquina so RECEBE tarefa se alguem ligou isto. Padrao 0, e
     -- isso e a lei 3 do repositorio — falha fechada. Parear um computador nao
     -- da a ele o direito de rodar codigo; e um segundo sim, explicito.
-    executa     INTEGER NOT NULL DEFAULT 0
+    executa     INTEGER NOT NULL DEFAULT 0,
+    -- Conectar simples: o computador pareado PELO ARQUIVO nasce so medindo. O
+    -- servidor grava isto no pareamento (o relatorio nao muda), e
+    -- `ligar_execucao` recusa ligar a execucao aqui: duas trancas.
+    so_mede     INTEGER NOT NULL DEFAULT 0,
+    -- O primeiro (e o ultimo) relatorio de medicao. `visto_em` nao serve para
+    -- separar "pareou" de "mandou a primeira medicao": o pareamento ja o grava.
+    relatado_em TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_maquina_dono ON maquina (usuario_id);
 
@@ -370,6 +377,31 @@ CREATE TABLE IF NOT EXISTS projeto_conectado (
     visto_em     TEXT NOT NULL,
     arquivado_em TEXT,
     UNIQUE (maquina_id, projeto)
+);
+
+-- Conectar simples (A): o computador pede, o dono autoriza no navegador. O
+-- `pedido` (segredo do computador) e o `codigo` curto (o que o dono confere)
+-- entram AQUI so como hash. `usuario_id` e NULL ate alguem autorizar.
+CREATE TABLE IF NOT EXISTS pedido_de_computador (
+    pedido_hash   TEXT PRIMARY KEY,
+    codigo_hash   TEXT NOT NULL UNIQUE,
+    maquina_nome  TEXT NOT NULL DEFAULT '',
+    criado_em     TEXT NOT NULL,
+    expira_em     TEXT NOT NULL
+                  CHECK (expira_em LIKE '____-__-__T__:__:__+00:00'),
+    usuario_id    INTEGER REFERENCES usuario(id) ON DELETE CASCADE,
+    autorizado_em TEXT,
+    usado_em      TEXT,
+    maquina_id    INTEGER REFERENCES maquina(id) ON DELETE SET NULL
+);
+
+-- Esconder do painel e por NOME de projeto e por conta. `arquivado_em` nao
+-- serve: `ver_projeto` o zera a cada relatorio.
+CREATE TABLE IF NOT EXISTS projeto_oculto (
+    usuario_id   INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    projeto      TEXT NOT NULL CHECK (length(trim(projeto)) > 0),
+    escondido_em TEXT NOT NULL,
+    PRIMARY KEY (usuario_id, projeto)
 );
 
 -- O cadastro de servidores nomeados de cada conta (Servidores multiplos,
@@ -714,6 +746,7 @@ def migrar(con: sqlite3.Connection) -> None:
     _migrar_instalacao_github_varias(con)
     _migrar_auditoria(con)
     _migrar_achado_dono(con)
+    _migrar_maquina_conectar_simples(con)
 
 
 # As tabelas que apontam para `usuario`. A migracao confere so estas: varrer o
@@ -721,7 +754,8 @@ def migrar(con: sqlite3.Connection) -> None:
 FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento",
                      "chave_de_acesso", "codigo_recuperacao",
                      "servidor", "endereco_producao", "instalacao_github",
-                     "auditoria", "achado", "prova_rodada")
+                     "auditoria", "achado", "prova_rodada",
+                     "pedido_de_computador", "projeto_oculto")
 
 
 # Fatia 2. Nome da coluna -> o pedaco de DDL do `ALTER TABLE`. A ordem e a do
@@ -779,6 +813,49 @@ def _migrar_fila_semaforo(con: sqlite3.Connection) -> None:
         if tem_maq and "executa" not in tem_maq:
             con.execute("ALTER TABLE maquina ADD COLUMN"
                         " executa INTEGER NOT NULL DEFAULT 0")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        _religar_fk(con)
+
+
+def _migrar_maquina_conectar_simples(con: sqlite3.Connection) -> None:
+    """A `maquina` ganha `so_mede` e `relatado_em` (Conectar simples, A).
+
+    Um `ALTER` por coluna, cada um com a propria checagem de "ja rodou" (relida
+    dentro da transacao, como em `_migrar_fila_semaforo`). `so_mede` nasce 0: o
+    computador que ja existia pareou pelo caminho antigo e nao perde nada.
+
+    `relatado_em` do historico = `visto_em`, mas SO de quem ja tem projeto
+    conectado: quem so pareou nunca mandou medicao, e dizer o contrario seria
+    mentir sobre o que o painel viu.
+
+    Nunca `executescript` aqui (COMMIT implicito; licao de 26/08/2026).
+    """
+    tem = {l[1] for l in con.execute("PRAGMA table_info(maquina)")}
+    if not tem:
+        return                                   # banco novo: o ESQUEMA faz certo
+    if "so_mede" in tem and "relatado_em" in tem:
+        return
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        tem = {l[1] for l in con.execute("PRAGMA table_info(maquina)")}
+        if "so_mede" not in tem:
+            con.execute("ALTER TABLE maquina ADD COLUMN"
+                        " so_mede INTEGER NOT NULL DEFAULT 0")
+        if "relatado_em" not in tem:
+            con.execute("ALTER TABLE maquina ADD COLUMN relatado_em TEXT")
+            tem_pc = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table'"
+                " AND name='projeto_conectado'").fetchone()
+            if tem_pc:
+                con.execute(
+                    "UPDATE maquina SET relatado_em = visto_em"
+                    " WHERE relatado_em IS NULL AND EXISTS ("
+                    "SELECT 1 FROM projeto_conectado p"
+                    " WHERE p.maquina_id = maquina.id)")
         con.commit()
     except Exception:
         con.rollback()
@@ -2623,8 +2700,11 @@ def ligar_execucao(maquina_id: int, usuario_id: int, ligado: bool,
     try:
         cur = con.execute(
             "UPDATE maquina SET executa = ?"
-            " WHERE id = ? AND usuario_id = ? AND revogada_em IS NULL",
-            (1 if ligado else 0, maquina_id, usuario_id))
+            " WHERE id = ? AND usuario_id = ? AND revogada_em IS NULL"
+            # SEGUNDA TRANCA do computador que so mede: ligar e recusado,
+            # desligar continua valendo.
+            " AND (so_mede = 0 OR ? = 0)",
+            (1 if ligado else 0, maquina_id, usuario_id, 1 if ligado else 0))
         con.commit()
         return cur.rowcount == 1
     finally:
@@ -3169,6 +3249,193 @@ def usar_pareamento(codigo: str, nome_maquina: str = "", agora_iso: str = "", co
             con.close()
 
 
+# ------------------------------------------- o pedido de computador (A)
+#
+# O computador PEDE (recebe um `pedido` secreto e um `codigo` curto para o dono
+# conferir), o dono AUTORIZA no navegador, e o computador RESGATA o token. O
+# `codigo` e o `pedido` so existem aqui como hash.
+
+def novo_codigo_de_pedido() -> str:
+    """`XXXX-XXXX` no alfabeto sem ambiguos (sem 0, O, 1, I, L)."""
+    letras = [secrets.choice(ALFABETO_DE_RECUPERACAO) for _ in range(8)]
+    return "".join(letras[:4]) + "-" + "".join(letras[4:])
+
+
+def normalizar_codigo_de_pedido(texto) -> str:
+    """Maiusculas, sem espaco nem hifen, 8 simbolos do alfabeto -> `XXXX-XXXX`.
+    Devolve `""` para qualquer coisa que nao seja isso. Nunca levanta."""
+    if not isinstance(texto, str):
+        return ""
+    corpo = "".join(c for c in texto.upper() if c not in " -")
+    if len(corpo) != 8 or any(c not in ALFABETO_DE_RECUPERACAO for c in corpo):
+        return ""
+    return corpo[:4] + "-" + corpo[4:]
+
+
+def limpar_pedidos_vencidos(con=None) -> int:
+    """Apaga os pedidos vencidos. `codigo_hash` e UNIQUE global: sem limpeza, o
+    espaco dos codigos curtos enche (mesmo defeito de `pareamento`)."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        cur = con.execute("DELETE FROM pedido_de_computador WHERE expira_em < ?",
+                          (agora(),))
+        if fechar:
+            con.commit()
+        return cur.rowcount or 0
+    finally:
+        if fechar:
+            con.close()
+
+
+def abrir_pedido_de_computador(nome_maquina: str, minutos: int, con=None):
+    """(pedido, codigo). INSERT puro: colisao do codigo levanta `IntegrityError`
+    e quem chamou sorteia outro (mesma regra de `abrir_pareamento`)."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        pedido, codigo = novo_token(), novo_codigo_de_pedido()
+        con.execute(
+            "INSERT INTO pedido_de_computador"
+            " (pedido_hash, codigo_hash, maquina_nome, criado_em, expira_em)"
+            " VALUES (?,?,?,?,?)",
+            (hash_token(pedido), hash_codigo(codigo), nome_maquina or "",
+             agora(), prazo(int(minutos) * 60)))
+        con.commit()
+        return pedido, codigo
+    finally:
+        if fechar:
+            con.close()
+
+
+def ver_pedido_de_computador(codigo: str, usuario_id: int, agora_iso: str = "",
+                             con=None):
+    """O pedido como a conta `usuario_id` pode ve-lo, ou `None`.
+
+    `None` para: nao existe, vencido, ou autorizado por OUTRA conta (a mesma
+    resposta nos tres casos, de proposito). `conectado` = ja resgatado, e so
+    aparece para a conta que autorizou.
+    """
+    corte = agora_iso or agora()
+    fechar = con is None
+    con = con or conectar()
+    try:
+        l = con.execute(
+            "SELECT maquina_nome, expira_em, usuario_id, usado_em"
+            "  FROM pedido_de_computador WHERE codigo_hash = ?",
+            (hash_codigo(codigo),)).fetchone()
+        if l is None:
+            return None
+        if l["usado_em"]:
+            if l["usuario_id"] != usuario_id:
+                return None
+            estado = "conectado"
+        else:
+            if l["expira_em"] <= corte:
+                return None
+            if l["usuario_id"] is None:
+                estado = "esperando"
+            elif l["usuario_id"] == usuario_id:
+                estado = "autorizado"
+            else:
+                return None
+        falta = (datetime.fromisoformat(l["expira_em"])
+                 - datetime.fromisoformat(corte)).total_seconds()
+        return {"codigo": codigo, "maquina": l["maquina_nome"],
+                "minutos": max(0, -(-int(falta) // 60)),
+                "expira_em": l["expira_em"], "estado": estado}
+    finally:
+        if fechar:
+            con.close()
+
+
+def autorizar_pedido_de_computador(codigo: str, usuario_id: int,
+                                   agora_iso: str = "", con=None) -> str:
+    """"ok" | "ja_estava" | "nao_existe". O PROPRIO UPDATE e a guarda: so leva
+    quem ainda nao tem dono, nao foi resgatado e nao venceu. Autorizado, o
+    prazo ganha pelo menos 120 s para o computador resgatar."""
+    from datetime import timedelta
+    corte = agora_iso or agora()
+    folga = (datetime.fromisoformat(corte) + timedelta(seconds=120)
+             ).isoformat(timespec="seconds")
+    fechar = con is None
+    con = con or conectar()
+    try:
+        h = hash_codigo(codigo)
+        cur = con.execute(
+            "UPDATE pedido_de_computador SET usuario_id = ?, autorizado_em = ?,"
+            " expira_em = MAX(expira_em, ?)"
+            " WHERE codigo_hash = ? AND usuario_id IS NULL AND usado_em IS NULL"
+            " AND expira_em > ?", (usuario_id, corte, folga, h, corte))
+        if cur.rowcount == 1:
+            con.commit()
+            return "ok"
+        con.rollback()
+        ja = con.execute(
+            "SELECT 1 FROM pedido_de_computador WHERE codigo_hash = ?"
+            " AND usuario_id = ? AND (usado_em IS NOT NULL OR expira_em > ?)",
+            (h, usuario_id, corte)).fetchone()
+        return "ja_estava" if ja else "nao_existe"
+    finally:
+        if fechar:
+            con.close()
+
+
+def resgatar_pedido_de_computador(pedido: str, agora_iso: str = "", con=None):
+    """("esperando", None) | ("token", token) | ("nao_existe", None).
+
+    O token sai UMA vez. Desconhecido, vencido e ja resgatado dao a mesma
+    resposta. O `UPDATE ... SET usado_em` e a guarda atomica (mesmo molde de
+    `usar_pareamento`) e a maquina nasce na MESMA transacao, so medindo."""
+    corte = agora_iso or agora()
+    fechar = con is None
+    con = con or conectar()
+    try:
+        h = hash_token(pedido)
+        l = con.execute(
+            "SELECT usuario_id, maquina_nome FROM pedido_de_computador"
+            " WHERE pedido_hash = ? AND usado_em IS NULL AND expira_em > ?",
+            (h, corte)).fetchone()
+        if l is None:
+            return ("nao_existe", None)
+        if l["usuario_id"] is None:
+            return ("esperando", None)
+        cur = con.execute(
+            "UPDATE pedido_de_computador SET usado_em = ?"
+            " WHERE pedido_hash = ? AND usado_em IS NULL AND expira_em > ?"
+            " AND usuario_id IS NOT NULL", (corte, h, corte))
+        if cur.rowcount != 1:
+            con.rollback()
+            return ("nao_existe", None)
+        token = novo_token()
+        maq = con.execute(
+            "INSERT INTO maquina (usuario_id, nome, token_hash, criado_em,"
+            " visto_em, so_mede) VALUES (?,?,?,?,?,1)",
+            (l["usuario_id"], l["maquina_nome"] or "", hash_token(token),
+             agora(), corte))
+        con.execute("UPDATE pedido_de_computador SET maquina_id = ?"
+                    " WHERE pedido_hash = ?", (maq.lastrowid, h))
+        con.commit()
+        return ("token", token)
+    finally:
+        if fechar:
+            con.close()
+
+
+def maquina_so_mede(maquina_id: int, usuario_id: int, con=None) -> bool:
+    """A maquina e desta conta, esta viva e foi pareada so para medir."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return con.execute(
+            "SELECT 1 FROM maquina WHERE id = ? AND usuario_id = ?"
+            " AND so_mede = 1 AND revogada_em IS NULL",
+            (maquina_id, usuario_id)).fetchone() is not None
+    finally:
+        if fechar:
+            con.close()
+
+
 def maquina_por_token(token: str, con=None):
     """Maquina viva DE CONTA VIVA — mesmo motivo do `JOIN` em `sessao_valida`."""
     fechar = con is None
@@ -3213,18 +3480,91 @@ def maquinas_do_usuario(usuario_id: int, con=None) -> list:
     NAO DEVOLVE `token_hash`. A lista vai para a tela; hash de token na tela e
     hash de token no cache do navegador, no log do proxy e na captura de tela
     que o dono manda para pedir ajuda.
+
+    `projetos_vistos` leva os projetos nao arquivados (teto 300) com a chave
+    `oculto` da CONTA; `so_mede` sai booleano.
     """
     fechar = con is None
     con = con or conectar()
     try:
-        return [dict(l) for l in con.execute(
-            "SELECT m.id, m.nome, m.criado_em, m.visto_em, m.executa,"
-            "       (SELECT COUNT(*) FROM projeto_conectado p"
-            "         WHERE p.maquina_id = m.id AND p.arquivado_em IS NULL)"
-            "       AS projetos"
-            "  FROM maquina m"
-            " WHERE m.usuario_id = ? AND m.revogada_em IS NULL"
-            " ORDER BY m.criado_em", (usuario_id,))]
+        ocultos = projetos_ocultos(usuario_id, con=con)
+        lista = []
+        for l in con.execute(
+                "SELECT m.id, m.nome, m.criado_em, m.visto_em, m.executa,"
+                "       m.so_mede, m.relatado_em,"
+                "       (SELECT COUNT(*) FROM projeto_conectado p"
+                "         WHERE p.maquina_id = m.id AND p.arquivado_em IS NULL)"
+                "       AS projetos"
+                "  FROM maquina m"
+                " WHERE m.usuario_id = ? AND m.revogada_em IS NULL"
+                " ORDER BY m.criado_em", (usuario_id,)).fetchall():
+            m = dict(l)
+            m["so_mede"] = bool(m["so_mede"])
+            m["projetos_vistos"] = [
+                {"projeto": v["projeto"], "caminho": v["caminho"],
+                 "visto_em": v["visto_em"], "oculto": v["projeto"] in ocultos}
+                for v in con.execute(
+                    "SELECT projeto, caminho, visto_em FROM projeto_conectado"
+                    " WHERE maquina_id = ? AND arquivado_em IS NULL"
+                    " ORDER BY projeto LIMIT 300", (m["id"],))]
+            lista.append(m)
+        return lista
+    finally:
+        if fechar:
+            con.close()
+
+
+def projetos_ocultos(usuario_id: int, con=None) -> set:
+    """Os nomes de projeto que a conta escondeu do painel."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return {l[0] for l in con.execute(
+            "SELECT projeto FROM projeto_oculto WHERE usuario_id = ?",
+            (usuario_id,))}
+    finally:
+        if fechar:
+            con.close()
+
+
+def projeto_da_conta(usuario_id: int, projeto: str, con=None) -> bool:
+    """O projeto existe NESTA conta: tem medida `local` dela ou foi visto por
+    uma maquina dela. "Nao existe" e "e de outra conta" sao a mesma resposta
+    para quem pergunta (IDOR), e e por isso que a pergunta e so booleana."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return con.execute(
+            "SELECT 1 FROM medida WHERE usuario_id = ? AND projeto = ?"
+            " AND camada = 'local'"
+            " UNION ALL"
+            " SELECT 1 FROM projeto_conectado p JOIN maquina m"
+            "   ON m.id = p.maquina_id WHERE m.usuario_id = ? AND p.projeto = ?"
+            " LIMIT 1", (usuario_id, projeto, usuario_id, projeto)
+        ).fetchone() is not None
+    finally:
+        if fechar:
+            con.close()
+
+
+def mostrar_projeto(usuario_id: int, projeto: str, mostrar: bool,
+                    con=None) -> None:
+    """Esconde (ou volta a mostrar) um projeto no painel DESTA conta.
+
+    Por NOME e por conta, em tabela propria: `arquivado_em` nao serve, porque
+    `ver_projeto` o zera a cada relatorio. Esconder duas vezes e inofensivo."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        if mostrar:
+            con.execute("DELETE FROM projeto_oculto"
+                        " WHERE usuario_id = ? AND projeto = ?",
+                        (usuario_id, projeto))
+        else:
+            con.execute("INSERT OR IGNORE INTO projeto_oculto"
+                        " (usuario_id, projeto, escondido_em) VALUES (?,?,?)",
+                        (usuario_id, projeto, agora()))
+        con.commit()
     finally:
         if fechar:
             con.close()
@@ -3619,8 +3959,9 @@ def receber_relatorio(maquina_id: int, projetos: list, infra=None,
             for antigo in projetos_da_maquina(maquina_id, con=con):
                 if antigo["projeto"] not in vistos:
                     arquivar_projeto(maquina_id, antigo["projeto"], con=con)
-        con.execute("UPDATE maquina SET visto_em = ? WHERE id = ?",
-                    (agora(), maquina_id))
+        carimbo = agora()
+        con.execute("UPDATE maquina SET visto_em = ?, relatado_em = ?"
+                    " WHERE id = ?", (carimbo, carimbo, maquina_id))
         if propria:                   # so encerra a transacao quem a abriu
             con.commit()
         # `cortados` e `invalidos` VOLTAM na resposta em vez de sumir. Truncagem
@@ -3949,6 +4290,44 @@ def instalacoes_da_conta(usuario_id: int, con=None) -> list:
             "SELECT installation_id, conta_login, conta_tipo, medidos,"
             " medido_em FROM instalacao_github"
             " WHERE usuario_id = ? ORDER BY id", (usuario_id,))]
+    finally:
+        if fechar:
+            con.close()
+
+
+def repositorios_do_github_por_dono(usuario_id: int, con=None) -> dict:
+    """{dono do repositorio (casefold): [{projeto, slug, medido, oculto}]}.
+
+    A fonte e o relatorio DA CONTA: entra o projeto cujo `remoto_slug` do
+    controle de versao tem dono. O dono do repositorio (a parte antes da barra)
+    e a conta da instalacao que o alcanca. `medido` = ja existe a camada
+    `github` do projeto.
+
+    O slug e dado do agente: so entra string com UMA barra e ate 200
+    caracteres, validada SEM regex compilada (o vigia de rotas proibe
+    `compile` em tudo que uma rota alcanca). Torto e ignorado, nunca levanta.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        ocultos = projetos_ocultos(usuario_id, con=con)
+        fora: dict = {}
+        for nome, camadas in sorted(ler_tudo(con, usuario_id=usuario_id).items()):
+            local = camadas.get("local")
+            if nome in RESERVADOS or not local:
+                continue
+            versao = (local["dados"] or {}).get("git")
+            slug = versao.get("remoto_slug") if isinstance(versao, dict) else None
+            if not isinstance(slug, str) or len(slug) > 200 \
+                    or slug.count("/") != 1:
+                continue
+            dono, _, repo = slug.partition("/")
+            if not dono.strip() or not repo.strip():
+                continue
+            fora.setdefault(dono.casefold(), []).append({
+                "projeto": nome, "slug": slug,
+                "medido": "github" in camadas, "oculto": nome in ocultos})
+        return fora
     finally:
         if fechar:
             con.close()
