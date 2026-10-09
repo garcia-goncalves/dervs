@@ -12,6 +12,9 @@ let COMPUTADORES = null;  // último /api/maquinas
    hora do desenho: a tela "Conectar" mostra a contagem sem ter buscado nada,
    e "agora" ali seria uma data inventada para um dado antigo. */
 let COMPUTADORES_LIDO_EM = null;
+/* A última leitura de `/api/maquinas` falhou. Só vale enquanto não houve
+   leitura nenhuma: "não consegui ler" e "ainda não li" não são a mesma coisa. */
+let COMPUTADORES_FALHOU = false;
 
 /* --------------------------------------------------------------- vocabulário
    Os quatro estados, escritos. Quatro sinais independentes: cor, forma, glifo
@@ -116,8 +119,16 @@ function selo(estado, { como = "button", aoClicar = null, texto = "" } = {}) {
    defender. O `robots.txt` já bloqueia /painel, /projeto e /maquinas para a
    Fatia 2, quando essas telas ganharem endereço próprio. */
 function rota() {
-  const cru = (location.hash || "#/painel").slice(2).split("/");
-  return { tela: cru[0] || "painel", alvo: decodeURIComponent(cru[1] || "") };
+  /* `#/conectar?autorizar=K7M4-2QXP`: o que vem depois do `?` é parâmetro, e
+     não parte do nome da tela (antes, a tela virava "conectar?autorizar=X" e
+     caía no painel). O valor sai CRU: quem o usa o valida (`codigoDeAutorizar`). */
+  const bruto = (location.hash || "#/painel").slice(2);
+  const corte = bruto.indexOf("?");
+  const caminho = corte < 0 ? bruto : bruto.slice(0, corte);
+  const busca = corte < 0 ? "" : bruto.slice(corte + 1);
+  const cru = caminho.split("/");
+  return { tela: cru[0] || "painel", alvo: decodeURIComponent(cru[1] || ""),
+           autorizar: new URLSearchParams(busca).get("autorizar") || "" };
 }
 
 /* O menu tem QUATRO lugares (Painel, Consertar, Conectar, Conta), mas as telas
@@ -161,7 +172,7 @@ function mostrar(tela, { aba = "", tambem = [] } = {}) {
 function navegar() {
   const antiga = ROTAS_ANTIGAS[rota().tela];
   if (antiga) history.replaceState(null, "", antiga);
-  const { tela, alvo } = rota();
+  const { tela, alvo, autorizar } = rota();
   /* Sair da tela encerra a espera da máquina nova. Repintar a MESMA tela não —
      esse caso é tratado por `reencontrarEspera`. */
   if (ESPERA.t && ESPERA.tela !== tela) pararDeEsperar();
@@ -185,7 +196,8 @@ function navegar() {
        da de conectar projeto, na mesma página. */
     case "conectar":     mostrar("conectar", { tambem: ["computadores"] });
                          pintarConectar();
-                         olharOsComputadores(); olharOsServidores();
+                         abrirOuFecharAutorizar(autorizar);
+                         olharOsServidores();
                          olharOsEnderecos(); olharOGithub();
                          carregarComputadores(); carregarVoz(); break;
     default:             mostrar("painel"); pintarPainel(); break;
@@ -1500,30 +1512,231 @@ function porta({ titulo, estado, resumo, carimbo, caminhos = [], nota = "",
   return cartao;
 }
 
-async function baixarConectador() {
-  const r = await escrever("/api/conectador");
-  if (!r.ok) {
-    recado("não conseguimos preparar o conectador agora. Tente de novo.", true);
+/* ---------------------------------------------------------- pequenos ajudantes
+   Um jeito só de montar um elemento com texto. O texto entra SEMPRE por
+   `textContent`: nome de computador, de pasta e de projeto vêm de fora. */
+function criar(tag, classe, texto) {
+  const e = document.createElement(tag);
+  if (classe) e.className = classe;
+  if (texto) e.textContent = texto;
+  return e;
+}
+
+/* Um botão dentro de `.acoes`: é lá que mora o `min-height: 44px`. */
+function botaoEmAcoes(rotulo, secundario, aoClicar) {
+  const acoes = criar("div", "acoes");
+  const b = criar("button", "botao" + (secundario ? " botao--secundario" : ""), rotulo);
+  b.type = "button";
+  b.addEventListener("click", aoClicar);
+  acoes.append(b);
+  return { acoes, botao: b };
+}
+
+/* "mais 8 minutos" / "mais 1 minuto" / "menos de um minuto": o que vai depois
+   de "Vale por". Zero minuto nunca é escrito como "0". */
+function prazoEmPalavras(n) {
+  if (!(n >= 1)) return "menos de um minuto";
+  return n === 1 ? "mais 1 minuto" : "mais " + n + " minutos";
+}
+
+/* O botão principal do cartão é um LINK com GET, e não um botão que chama
+   `escrever`: o navegador baixa na hora, dentro do gesto do clique, e o
+   servidor não precisa de pedido de escrita para entregar um arquivo.
+   Na marcação: href="/api/conectar.cmd" e download="conectar-dervs.cmd".
+   A espera começa AQUI, no clique de baixar — o intervalo entre baixar e
+   abrir é justamente onde a pessoa não sabe se deu certo. O clique não é
+   cancelado: o download segue. */
+function linkDeBaixar(rotulo, secundario) {
+  const a = criar("a", "botao" + (secundario ? " botao--secundario" : ""), rotulo);
+  a.href = "/api/conectar.cmd";
+  a.download = "conectar-dervs.cmd";
+  a.addEventListener("click", () => esperarMaquinaNova($("#espera-maquina"), 10));
+  return a;
+}
+
+/* -------------------------------------------- o bloco "Autorizar este computador"
+   O arquivo baixado abre o navegador em `#/conectar?autorizar=<código>`. O
+   código vem DE FORA (da barra de endereço): só entra se for do formato exato,
+   e nunca é lido como HTML. Aqui o dono confere o nome e o código com a janela
+   preta do computador e autoriza — sem o clique, nada é ligado. */
+const AUTORIZAR = { codigo: "", dados: null, fase: "", prazo: null,
+                    fim: 0, botao: null, focou: false };
+
+/* O formato exato do código curto: oito símbolos de um alfabeto sem 0/O/1/I/L,
+   mostrado como XXXX-XXXX. Devolve "" para qualquer outra coisa. */
+function codigoDeAutorizar(texto) {
+  const limpo = String(texto || "").toUpperCase().replace(/[\s-]/g, "");
+  if (!/^[2-9A-HJKMNP-Z]{8}$/.test(limpo)) return "";
+  return limpo.slice(0, 4) + "-" + limpo.slice(4);
+}
+
+function pintarAutorizar(p) {
+  const bloco = $("#conectar-autorizar");
+  bloco.hidden = false;
+  AUTORIZAR.fase = p.estado;
+  AUTORIZAR.prazo = null;
+  AUTORIZAR.botao = null;
+  bloco.setAttribute("aria-busy", p.estado === "carregando" ? "true" : "false");
+
+  const titulo = criar("h2", "", "Autorizar este computador?");
+  titulo.id = "autorizar-titulo";
+  titulo.setAttribute("tabindex", "-1");
+  const partes = [titulo];
+
+  if (p.estado === "carregando") {
+    partes.push(criar("p", "mole", "Conferindo o pedido…"));
+  } else if (p.estado === "nao_existe") {
+    partes.push(criar("p", "", "Este pedido venceu ou não existe. Baixe o arquivo de novo e abra."));
+    partes.push(botaoEmAcoes("Voltar para Conectar", false, fecharAutorizar).acoes);
+  } else if (p.estado === "erro_rede") {
+    partes.push(criar("p", "", "Não consegui falar com o DERVS agora. Isso não quer dizer que o pedido venceu — quer dizer que não olhei."));
+    partes.push(botaoEmAcoes("Tentar de novo", true,
+                             () => olharOPedido(AUTORIZAR.codigo)).acoes);
+  } else if (p.estado === "autorizado" || p.estado === "conectado") {
+    partes.push(criar("p", "", "Este computador já foi autorizado. Veja abaixo se ele apareceu."));
+  } else if (p.estado === "sucesso") {
+    partes.push(criar("p", "", "Autorizado. Volte à janela preta do computador: ela termina sozinha."));
+  } else {
+    /* "esperando", "enviando" e "erro_autorizar": o pedido existe e ainda não
+       foi autorizado. O botão só existe COM os dados na tela — ninguém
+       autoriza às cegas. */
+    const corpo = criar("p");
+    corpo.append("O computador ", criar("strong", "", p.maquina || "sem nome"),
+                 " pediu para se ligar ao seu painel. Confira se o nome e o "
+                 + "código abaixo são os mesmos da janela preta no computador.");
+    const codigo = String(p.codigo || "");
+    const numero = criar("p", "numerao", codigo);
+    /* O código é lido letra a letra: "K7M4" falado como palavra não confere
+       com nada. */
+    numero.setAttribute("aria-label", "Código: " + codigo.replace("-", "").split("").join(", "));
+    const prazo = criar("p", "carimbo", "Vale por " + prazoEmPalavras(p.minutos) + ".");
+    AUTORIZAR.prazo = prazo;
+    partes.push(corpo, criar("p", "carimbo", "Código"), numero, prazo);
+    if (p.estado === "erro_autorizar") {
+      partes.push(criar("p", "", "Não consegui falar com o DERVS agora. Isso não quer dizer que o pedido venceu — quer dizer que não olhei."));
+    }
+    const { acoes, botao } = botaoEmAcoes("Autorizar este computador", false, autorizarPedido);
+    if (p.estado === "enviando") {
+      botao.disabled = true;
+      botao.setAttribute("aria-busy", "true");
+    }
+    AUTORIZAR.botao = botao;
+    partes.push(acoes);
+    partes.push(criar("p", "mole", "Não reconhece este computador? Não clique em nada: o pedido vence sozinho e nada é ligado."));
+  }
+
+  bloco.replaceChildren(...partes);
+  /* Ao abrir a página o foco vai para o título (lido: "Autorizar este
+     computador?"); depois disso o foco é da pessoa. */
+  if (!AUTORIZAR.focou) { AUTORIZAR.focou = true; titulo.focus(); }
+  if (p.estado === "erro_autorizar" && AUTORIZAR.botao) AUTORIZAR.botao.focus();
+}
+
+/* UMA leitura por página: `GET /api/pedido` tem balcão de 20 por origem em 15
+   minutos, e sondá-lo gastaria o balcão do próprio dono. Quem sonda é
+   `/api/maquinas`. O prazo que anda a cada minuto é calculado aqui, com o
+   relógio, a partir dos minutos que o servidor disse na leitura. */
+async function olharOPedido(codigo) {
+  pintarAutorizar({ estado: "carregando" });
+  let r = null;
+  try { r = await fetch("/api/pedido?codigo=" + encodeURIComponent(codigo)); }
+  catch (_) { r = null; }
+  /* Outra página abriu, ou o dono já clicou, enquanto a resposta viajava. */
+  if (codigo !== AUTORIZAR.codigo) return;
+  if (AUTORIZAR.fase === "enviando" || AUTORIZAR.fase === "sucesso") return;
+  if (r && (r.status === 404 || r.status === 400)) {
+    pintarAutorizar({ estado: "nao_existe" });
     return;
   }
-  /* O arquivo sai com um número de dez minutos dentro. A espera começa aqui,
-     e não quando a pessoa abre o arquivo — é justamente o intervalo entre uma
-     coisa e outra que ela passa sem saber se deu certo. */
-  const caixa = $("#espera-maquina");
-  if (caixa) esperarMaquinaNova(caixa, 10);
-  /* `Blob` mais `<a download>`: a rota é POST, então não dá para apontar um
-     link direto para ela — e POST é o certo aqui, porque este pedido CRIA o
-     número de seis dígitos que vai dentro do arquivo. */
-  const texto = await r.text();
-  const url = URL.createObjectURL(new Blob([texto], { type: "text/plain" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "conectar-dervs.py";
-  document.body.append(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  recado("baixado. Abra o arquivo com dois cliques — o número já vai dentro.");
+  let d = null;
+  if (r && r.ok) {
+    try { d = await r.json(); } catch (_) { d = null; }
+  }
+  if (!d) {
+    /* "Não olhei" não é "venceu". */
+    pintarAutorizar({ estado: "erro_rede" });
+    return;
+  }
+  AUTORIZAR.dados = d;
+  AUTORIZAR.fim = Date.now() + Math.max(0, d.minutos || 0) * 60000;
+  pintarAutorizar(d);
+}
+
+/* Repintar do minuto: só o prazo anda (sem rede); repintar o bloco tiraria o
+   foco do botão. */
+function andarOPrazoDoPedido() {
+  if (!AUTORIZAR.prazo || !AUTORIZAR.fim) return;
+  const falta = Math.floor((AUTORIZAR.fim - Date.now()) / 60000);
+  AUTORIZAR.prazo.textContent = "Vale por " + prazoEmPalavras(falta) + ".";
+}
+
+async function autorizarPedido() {
+  const d = AUTORIZAR.dados;
+  if (!d || AUTORIZAR.fase === "enviando") return;
+  pintarAutorizar(Object.assign({}, d, { estado: "enviando" }));
+  let r = null;
+  try { r = await escrever("/api/pedido/autorizar", { codigo: d.codigo }); }
+  catch (_) { r = null; }
+  if (r && r.ok) {
+    pintarAutorizar({ estado: "sucesso" });
+    esperarMaquinaNova($("#espera-maquina"), 10);
+    return;
+  }
+  if (r && r.status === 404) {
+    pintarAutorizar({ estado: "nao_existe" });
+    return;
+  }
+  /* Página velha: a faixa do alto explica, e aqui o botão só volta a ficar
+     ativo — sem repetir o erro com outra frase. */
+  const velha = PAGINA_VELHA && r && r.status === 403;
+  pintarAutorizar(Object.assign({}, d, { estado: velha ? "esperando" : "erro_autorizar" }));
+}
+
+function fecharAutorizar() {
+  AUTORIZAR.codigo = "";
+  AUTORIZAR.dados = null;
+  AUTORIZAR.fase = "";
+  AUTORIZAR.focou = false;
+  $("#conectar-autorizar").hidden = true;
+  /* `replaceState` não dispara `hashchange`: a tela não se repinta. */
+  history.replaceState(null, "", "#/conectar");
+  $("#pc-titulo").focus();
+}
+
+/* Quem decide o que o bloco mostra é o endereço. Chamada a cada abertura da
+   tela, inclusive no repintar de um minuto: o código igual não recomeça do
+   "Conferindo…". */
+function abrirOuFecharAutorizar(bruto) {
+  if (!bruto) {
+    $("#conectar-autorizar").hidden = true;
+    AUTORIZAR.codigo = "";
+    AUTORIZAR.dados = null;
+    AUTORIZAR.fase = "";
+    AUTORIZAR.focou = false;
+    return;
+  }
+  const codigo = codigoDeAutorizar(bruto);
+  if (!codigo) {
+    AUTORIZAR.codigo = "";
+    pintarAutorizar({ estado: "nao_existe" });
+    return;
+  }
+  if (codigo !== AUTORIZAR.codigo) {
+    AUTORIZAR.codigo = codigo;
+    AUTORIZAR.dados = null;
+    AUTORIZAR.focou = false;
+    olharOPedido(codigo);
+    return;
+  }
+  if (AUTORIZAR.fase === "sucesso" || AUTORIZAR.fase === "enviando") return;
+  andarOPrazoDoPedido();
+}
+
+/* Quando o computador deu a primeira medição, o bloco se recolhe e o foco vai
+   para o cartão do computador, onde agora está "Conectado — achei N projetos". */
+function recolherAutorizar() {
+  if (AUTORIZAR.fase !== "sucesso") return;
+  fecharAutorizar();
 }
 
 /* ------------------------------------------------- a espera da máquina nova
@@ -1588,12 +1801,14 @@ const SUGESTOES_IGNORADAS = new Set();   /* "servidorId:projeto", nesta sessao *
 
 const ESPERA = {
   t: null,           /* o relógio da sondagem */
-  ate: 0,            /* quando o número vence, em ms */
-  antes: null,       /* os ids que já existiam quando a espera começou */
+  ate: 0,            /* quando o pedido vence, em ms */
+  antes: null,       /* os ids que já existiam quando a espera começou; null = ainda não li */
+  relatoAntes: 0,    /* o relato mais novo que já existia quando ela começou, em ms */
   onde: null,        /* o elemento que ela pinta */
   caixa: "",         /* o id desse elemento, para reencontrá-lo */
   tela: "",          /* a tela em que ela nasceu */
-  viu: 0,            /* quando a máquina apareceu, em ms */
+  modo: "arquivo",   /* "arquivo" (baixou o arquivo) ou "numero" (colou o comando) */
+  apareceu: false,   /* o computador já apareceu na lista */
   ultimo: null       /* o último estado pintado, para repintar igual */
 };
 
@@ -1603,6 +1818,30 @@ function pararDeEsperar() {
   ESPERA.onde = null;
   ESPERA.ultimo = null;
   ESPERA.tela = "";
+  ESPERA.apareceu = false;
+}
+
+/* O relato mais recente que a lista conhece, em ms (0 = nenhum). */
+function maiorRelato(lista) {
+  let maior = 0;
+  for (const m of (lista || [])) {
+    const t = Date.parse(m.relatado_em);
+    if (t > maior) maior = t;
+  }
+  return maior;
+}
+
+/* O que a espera enxerga na lista: "esperando", "apareceu" (a linha existe e
+   ainda não mandou a primeira medição) ou "medido". Dá "medido" também quando
+   um computador que JÁ estava ligado manda uma medição mais nova que a de antes
+   — é o caso de quem abre o arquivo de novo num PC já conectado. Compara com o
+   relato de ANTES, e não com o relógio deste navegador: o carimbo é do
+   servidor, e os dois relógios não precisam concordar. Função pura. */
+function situacaoDaEspera(lista, antes, relatoAntes) {
+  const l = lista || [];
+  if (l.some(m => Date.parse(m.relatado_em) > relatoAntes)) return "medido";
+  if (l.some(m => m.visto_em && !antes.has(m.id))) return "apareceu";
+  return "esperando";
 }
 
 /* A TELA SE REPINTA SOZINHA A CADA MINUTO, e o repintar jogava fora o elemento
@@ -1621,31 +1860,35 @@ function reencontrarEspera() {
   if (ESPERA.ultimo) pintarEspera(ESPERA.ultimo);
 }
 
-function esperarMaquinaNova(onde, minutos) {
+function esperarMaquinaNova(onde, minutos, modo) {
   pararDeEsperar();
   if (!onde) return;
   ESPERA.onde = onde;
   ESPERA.caixa = onde.id;
   ESPERA.tela = rota().tela;
+  ESPERA.modo = modo || "arquivo";
   ESPERA.ate = Date.now() + Math.max(1, minutos || 10) * 60000;
-  ESPERA.viu = 0;
-  ESPERA.antes = new Set((COMPUTADORES || [])
-    .filter(m => m.visto_em).map(m => m.id));
+  /* Sem a lista lida, a foto de "antes" ainda não existe: a primeira leitura
+     da sondagem a tira. Sem isso todo computador antigo pareceria novo. */
+  ESPERA.antes = COMPUTADORES
+    ? new Set(COMPUTADORES.filter(m => m.visto_em).map(m => m.id)) : null;
+  ESPERA.relatoAntes = maiorRelato(COMPUTADORES);
   pintarEspera({ estado: "esperando" });
   ESPERA.t = setInterval(sondarMaquinaNova, 5000);
   sondarMaquinaNova();
 }
 
 async function sondarMaquinaNova() {
-  /* A sondagem PARA quando o número vence ou quando a tela sai. Relógio
+  /* A sondagem PARA quando o pedido vence ou quando a tela sai. Relógio
      girando para sempre numa aba esquecida é pedido de graça para o servidor,
      e ninguém está lendo o resultado. */
-  /* A tela saiu: nada de relógio girando para sempre numa aba esquecida. */
   if (rota().tela !== ESPERA.tela) return pararDeEsperar();
   if (!ESPERA.onde || !ESPERA.onde.isConnected) reencontrarEspera();
   if (!ESPERA.onde) return;
   if (Date.now() > ESPERA.ate) {
-    pintarEspera({ estado: "vencido" });
+    /* Se o computador apareceu e ainda não mediu, "venceu e ninguém apareceu"
+       seria falso: o cartão já diz o que está acontecendo. */
+    if (!ESPERA.apareceu) pintarEspera({ estado: "vencido" });
     return pararDeEsperar();
   }
   let d;
@@ -1660,55 +1903,47 @@ async function sondarMaquinaNova() {
   }
   COMPUTADORES = d.maquinas || [];
   COMPUTADORES_LIDO_EM = new Date().toISOString();
-  const nova = COMPUTADORES.find(m => m.visto_em && !ESPERA.antes.has(m.id));
-  if (nova) {
-    pintarEspera({ estado: "apareceu", maquina: nova });
-    /* NAO PARE NO PRIMEIRO SIM, e este foi um numero errado com cara de certo,
-       pego clicando: a maquina nasce no pareamento e a primeira medicao chega
-       alguns segundos depois. Quem parasse aqui escreveria "apareceu, com 0
-       projeto(s)" para uma maquina que tinha acabado de mandar tres.
-
-       Entao a espera continua enquanto a contagem for zero, ate meio minuto
-       depois de a maquina aparecer. Passado isso, zero e zero de verdade — e
-       a frase diz isso com todas as letras, em vez de fingir um numero. */
-    ESPERA.viu = ESPERA.viu || Date.now();
-    if (nova.projetos > 0 || Date.now() - ESPERA.viu > 30000) pararDeEsperar();
+  if (ESPERA.antes === null) {
+    ESPERA.antes = new Set(COMPUTADORES.filter(m => m.visto_em).map(m => m.id));
+    ESPERA.relatoAntes = maiorRelato(COMPUTADORES);
+    pintarEsteComputador();
+    pintarEspera({ estado: "esperando" });
+    return;
+  }
+  const s = situacaoDaEspera(COMPUTADORES, ESPERA.antes, ESPERA.relatoAntes);
+  pintarEsteComputador();
+  if (s === "medido") {
+    pintarEspera({ estado: "medido" });
+    pararDeEsperar();
+    recolherAutorizar();
+    return;
+  }
+  if (s === "apareceu") {
+    /* A espera NÃO para no primeiro sim, e este foi um número errado com cara
+       de certo, pego clicando: a máquina nasce no pareamento e a primeira
+       medição chega alguns segundos depois. Quem parasse aqui escreveria "com
+       0 projetos" para uma máquina que tinha acabado de mandar três. O cartão
+       diz "ainda não mandou a primeira medição" até ela chegar. */
+    ESPERA.apareceu = true;
+    pintarEspera({ estado: "apareceu" });
     return;
   }
   pintarEspera({ estado: "esperando" });
 }
 
-function pintarEspera({ estado, maquina }) {
+function pintarEspera({ estado }) {
   const onde = ESPERA.onde;
   if (!onde) return;
   /* Guardado para o repintar da tela — ver `reencontrarEspera`. */
-  ESPERA.ultimo = { estado, maquina };
+  ESPERA.ultimo = { estado };
   onde.textContent = "";
   onde.dataset.estado = estado;
 
+  /* O computador apareceu: quem fala dele, daqui em diante, é o cartão. */
+  if (estado === "apareceu" || estado === "medido") return;
+
   const linha = document.createElement("p");
   linha.className = "espera__linha";
-
-  if (estado === "apareceu") {
-    linha.append(marcaDaPorta("conectado"));
-    const txt = document.createElement("span");
-    const nome = "“" + (maquina.nome || "o computador") + "”";
-    /* Zero projetos NAO se escreve como numero: "com 0 projeto(s)" se le como
-       uma medicao que deu zero, e nesses primeiros segundos ela ainda nao
-       aconteceu. Duas frases diferentes para duas coisas diferentes. */
-    txt.textContent = maquina.projetos > 0
-      ? nome + " apareceu, com " + maquina.projetos + " projeto(s)."
-      : nome + " apareceu, e ainda não mandou a primeira medição.";
-    linha.append(txt);
-    onde.append(linha);
-    const c = document.createElement("p");
-    c.className = "carimbo";
-    /* O carimbo é o `visto_em` DELA, e não a hora desta tela: o que interessa
-       é quando a máquina deu notícia, não quando o navegador perguntou. */
-    c.textContent = "deu notícia " + haQuanto(maquina.visto_em);
-    onde.append(c);
-    return;
-  }
 
   if (estado === "sem_dados") {
     linha.append(marcaDaPorta("sem_dados"));
@@ -1724,10 +1959,16 @@ function pintarEspera({ estado, maquina }) {
   if (estado === "vencido") {
     linha.append(marcaDaPorta("desconectado"));
     const txt = document.createElement("span");
-    txt.textContent = "O número venceu e nenhum computador apareceu. Gere "
-                    + "outro e tente de novo.";
+    txt.textContent = ESPERA.modo === "numero"
+      ? "O número venceu e nenhum computador apareceu. Gere outro e tente de novo."
+      : "O pedido venceu e nenhum computador apareceu. Baixe o arquivo de novo.";
     linha.append(txt);
     onde.append(linha);
+    if (ESPERA.modo !== "numero") {
+      const acoes = criar("div", "acoes");
+      acoes.append(linkDeBaixar("Baixar de novo", false));
+      onde.append(acoes);
+    }
     return;
   }
 
@@ -1737,8 +1978,9 @@ function pintarEspera({ estado, maquina }) {
   linha.append(ponto);
   const txt = document.createElement("span");
   const faltam = Math.max(0, Math.round((ESPERA.ate - Date.now()) / 60000));
-  txt.textContent = "Esperando o computador dar a primeira notícia. O número "
-                  + "vale por mais " + faltam + " minuto(s).";
+  txt.textContent = "Esperando o computador dar a primeira notícia. "
+                  + (ESPERA.modo === "numero" ? "O número" : "O pedido")
+                  + " vale por " + prazoEmPalavras(faltam) + ".";
   linha.append(txt);
   onde.setAttribute("aria-live", "polite");
   onde.append(linha);
@@ -1931,21 +2173,6 @@ async function guardarEndereco(servidorId, projeto, url) {
   if (rota().tela === "conectar") pintarConectar();
 }
 
-async function olharOsComputadores() {
-  try {
-    const r = await fetch("/api/maquinas");
-    if (!r.ok) throw new Error("recusado");
-    const d = await r.json();
-    COMPUTADORES = d.maquinas || [];
-    COMPUTADORES_LIDO_EM = new Date().toISOString();
-  } catch {
-    /* Deixa como estava: sem carimbo, a porta 1 se pinta de "nao deu para
-       conferir", que e exatamente o que aconteceu. */
-    return;
-  }
-  if (rota().tela === "conectar") pintarConectar();
-}
-
 /* A PORTA 1 NÃO PODE DIZER "conectado" SÓ PORQUE HÁ LINHAS NA LISTA.
    Em 29/09/2026 a tela mostrava "[OK] conectado" para dois computadores que
    não davam notícia havia 26 dias — o painel inteiro "sem dados" e a porta
@@ -1967,53 +2194,208 @@ function estadoDosComputadores(lista, agoraMs) {
            vistoEm: new Date(ultimo).toISOString(), calado };
 }
 
+/* O que o cartão "Este computador" diz, a partir da lista. Função pura, sem
+   DOM: `test_conectar_tela.py` a executa de verdade.
+
+   Seis situações, e a ordem importa:
+     vazio         olhou e não há nenhum computador;
+     mudo          há, mas nenhum deu notícia há mais de duas horas — "não deu
+                   para conferir", e nada é apagado;
+     pendente      apareceu e AINDA NÃO mandou a primeira medição — nunca "0";
+     zero          mediu, olhou a pasta e não achou nenhum projeto;
+     com_projetos  mediu e achou.
+   "0 projetos" só existe depois de uma medição que olhou e não achou. */
+function situacaoDoComputador(lista, agoraMs) {
+  if (!lista || !lista.length) return { tipo: "vazio", estado: "desconectado" };
+  const vida = estadoDosComputadores(lista, agoraMs);
+  let recente = lista[0];
+  for (const m of lista) {
+    if (Date.parse(m.visto_em) > Date.parse(recente.visto_em) || !recente.visto_em) recente = m;
+  }
+  if (vida.calado) {
+    return { tipo: "mudo", estado: "sem_dados", nome: recente.nome,
+             vistoEm: recente.visto_em };
+  }
+  const medidos = lista.filter(m => m.relatado_em);
+  if (!medidos.length) {
+    return { tipo: "pendente", estado: "conectado", nome: recente.nome,
+             vistoEm: recente.visto_em };
+  }
+  let total = 0;
+  for (const m of medidos) total += m.projetos || 0;
+  return { tipo: total > 0 ? "com_projetos" : "zero", estado: "conectado",
+           projetos: total, nome: recente.nome, vistoEm: recente.visto_em };
+}
+
+/* Preenche os vãos do cartão "Este computador" (o esqueleto está no
+   index.html, e por isso a espera e o resto sobrevivem ao repintar). */
+function pintarEsteComputador() {
+  const leu = !!COMPUTADORES_LIDO_EM;
+  const lista = COMPUTADORES || [];
+  let estado = "sem_dados", rotulo = "", resumo = "", carimbo = "";
+  let baixarDeNovo = false, tentarDeNovo = false;
+  const s = leu ? situacaoDoComputador(lista, Date.now()) : null;
+
+  if (!leu && COMPUTADORES_FALHOU) {
+    resumo = "Não consegui ler os computadores desta conta. Isso não quer dizer "
+           + "que nenhum esteja ligado — quer dizer que não olhei.";
+    tentarDeNovo = true;
+  } else if (!leu) {
+    resumo = "Olhando os computadores desta conta…";
+  } else if (s.tipo === "vazio") {
+    estado = "desconectado";
+    resumo = "Nenhum computador está ligado ao DERVS ainda. Sem um, o painel só "
+           + "enxerga o que está no GitHub.";
+  } else if (s.tipo === "mudo") {
+    const quando = haQuanto(s.vistoEm);
+    resumo = "O " + (s.nome || "computador") + " não dá notícia "
+           + (quando.startsWith("em ") ? "desde " + quando.slice(3) : quando)
+           + ". Os projetos dele continuam no painel, parados no último "
+           + "carimbo. Veja se o computador está ligado.";
+  } else {
+    estado = "conectado";
+    carimbo = (s.nome || "O computador") + " deu notícia " + haQuanto(s.vistoEm) + ".";
+    if (s.tipo === "pendente") {
+      resumo = "O computador apareceu e ainda não mandou a primeira medição. "
+             + "Isso leva menos de um minuto.";
+    } else if (s.tipo === "zero") {
+      resumo = "Olhei a pasta que você escolheu e não achei nenhum projeto com "
+             + "histórico de versões. Para escolher outra pasta, baixe o "
+             + "arquivo de novo e abra.";
+      baixarDeNovo = true;
+    } else {
+      rotulo = "Conectado — achei " + s.projetos
+             + (s.projetos === 1 ? " projeto" : " projetos");
+    }
+  }
+
+  $("#cartao-computador").setAttribute("aria-busy", leu || COMPUTADORES_FALHOU ? "false" : "true");
+  $("#pc-marca").replaceChildren(marcaDaPorta(estado, rotulo));
+  $("#pc-resumo").textContent = resumo;
+  $("#pc-resumo").hidden = !resumo;
+  $("#pc-carimbo").textContent = carimbo;
+
+  /* O botão principal é o próximo passo. Com computador ligado ele continua
+     existindo (conectar mais um), mas recua: o principal passa a ser a lista. */
+  const temComputador = leu && s.tipo !== "vazio";
+  const botoes = [];
+  if (baixarDeNovo) botoes.push(linkDeBaixar("Baixar de novo", false));
+  else botoes.push(temComputador
+    ? linkDeBaixar("Conectar outro computador", true)
+    : linkDeBaixar("Conectar este computador", false));
+  if (tentarDeNovo) {
+    const b = criar("button", "botao botao--secundario", "Tentar de novo");
+    b.type = "button";
+    b.addEventListener("click", () => {
+      COMPUTADORES_FALHOU = false;
+      pintarEsteComputador();
+      carregarComputadores();
+    });
+    botoes.push(b);
+  }
+  $("#pc-acoes").replaceChildren(...botoes);
+
+  const nenhum = !lista.length;
+  $("#pc-lista").hidden = nenhum;
+  $("#lista-computadores").replaceChildren(...lista.map(linhaDeComputador));
+  if (leu) {
+    $("#computadores-carimbo").textContent = "lido " + haQuanto(COMPUTADORES_LIDO_EM);
+  }
+}
+
+/* Uma linha da lista de computadores. Nome, quando deu notícia e o que ele
+   pode fazer. Tudo que é do outro computador entra por `textContent`. */
+function linhaDeComputador(m) {
+  const li = document.createElement("li");
+  const txt = criar("div", "dizeres");
+  txt.append(criar("div", "nome", m.nome || "computador sem nome"));
+
+  const meta = criar("div", "carimbo");
+  /* "Mandou a primeira medição" é `relatado_em`; `visto_em` já existe desde o
+     pareamento. Sem a diferença, "17 projetos" apareceria para quem nunca mediu. */
+  meta.textContent = !m.visto_em ? "nunca deu notícia"
+    : m.relatado_em
+      ? "deu notícia " + haQuanto(m.visto_em) + " · " + m.projetos
+        + (m.projetos === 1 ? " projeto" : " projetos")
+      : "ligou " + haQuanto(m.visto_em) + " · ainda não mandou a primeira medição";
+  txt.append(meta);
+
+  /* A AUTORIZAÇÃO PARA TRABALHAR é separada de estar conectado. Parear nunca
+     deu o direito de rodar código; a coluna do banco nasce desligada.
+
+     Etiqueta, e não `.carimbo`: em 29/08/2026 este era o fato mais grave da
+     linha escrito no mesmo cinza mudo do horário. */
+  const trabalha = criar("div", "permissao");
+  trabalha.dataset.permissao = m.executa ? "executa" : "mede";
+  trabalha.textContent = m.executa ? "Pode consertar aqui" : "Só mede";
+  txt.append(trabalha);
+
+  const acoes = criar("div", "acoes");
+  if (m.so_mede) {
+    /* Ligado pelo arquivo: o programa dele não leva o braço que executa, e o
+       servidor recusaria. Botão que o servidor sempre recusa é botão que mente. */
+    txt.append(criar("p", "mole",
+      "Este computador só acompanha os projetos. Ele não faz alterações."));
+  } else {
+    const aut = criar("button", "botao botao--secundario",
+                      m.executa ? "Deixar só medindo" : "Deixar consertar aqui");
+    aut.type = "button";
+    aut.addEventListener("click", () => {
+      if (m.executa) { autorizarComputador(m.id, false); return; }
+      confirmar({
+        titulo: "Deixar o DERVS consertar em “" + (m.nome || "este computador") + "”?",
+        texto: "Ele vai abrir uma cópia isolada do projeto, trabalhar nela e "
+             + "devolver um ramo com as mudanças. Nada é enviado ao GitHub, e "
+             + "nada é publicado. Tarefas vermelhas continuam esperando o seu "
+             + "clique; só as verdes andam sozinhas.",
+        sim: "Pode consertar", nao: "Deixar só medindo"
+      }, () => autorizarComputador(m.id, true));
+    });
+    acoes.append(aut);
+  }
+
+  /* `botao--remover` é só o freio visual: ver o porquê em painel.css. */
+  const b = criar("button", "botao botao--secundario botao--remover", "Remover");
+  b.type = "button";
+  b.addEventListener("click", () => confirmar({
+    titulo: "Desconectar “" + (m.nome || "este computador") + "”?",
+    texto: "Ele para de acompanhar na hora, e só volta se você baixar o "
+         + "arquivo de novo e abrir. As medições que ele já mandou não são "
+         + "apagadas, e os projetos dele continuam no painel — parados no "
+         + "último carimbo.",
+    sim: "Desconectar", nao: "Manter conectado"
+  }, () => removerComputador(m.id)));
+  acoes.append(b);
+
+  li.append(txt, acoes);
+  return li;
+}
+
+
+/* "O que vai aparecer?" abre sozinho na PRIMEIRA visita e fica fechado nas
+   seguintes. Lembrado só neste navegador (`localStorage`); sem armazenamento
+   (modo privado, bloqueado) a tela nasce aberta, que é o lado seguro. */
+let PASSOS_JA_DECIDIDOS = false;
+function abrirPassosNaPrimeiraVisita() {
+  if (PASSOS_JA_DECIDIDOS) return;
+  PASSOS_JA_DECIDIDOS = true;
+  let visto = false;
+  try {
+    visto = !!localStorage.getItem("dervs-conectar-visto");
+    localStorage.setItem("dervs-conectar-visto", "1");
+  } catch (_) { visto = false; }
+  $("#o-que-vai-aparecer").open = !visto;
+}
+
 function pintarConectar() {
+  abrirPassosNaPrimeiraVisita();
   const onde = $("#conectar-corpo");
   onde.textContent = "";
 
-  /* PORTA 1 — o seu computador. `COMPUTADORES` vem de `/api/maquinas`; quando
-     a leitura falhou, `COMPUTADORES_LIDO_EM` fica vazio e o estado é "não deu
-     para conferir" — nunca "nenhum computador", que é outra coisa. */
-  const ligados = COMPUTADORES ? COMPUTADORES.length : 0;
-  const leu = !!COMPUTADORES_LIDO_EM;
-  const vida = estadoDosComputadores(COMPUTADORES, Date.now());
-  onde.append(porta({
-    titulo: "O seu computador",
-    estado: !leu ? "sem_dados" : vida.estado,
-    resumo: !leu
-      ? "Não consegui ler a lista de computadores desta conta. Isso não quer "
-        + "dizer que nenhum está conectado — quer dizer que não olhei."
-      : (vida.calado
-         ? "Há " + ligados + " computador(es) pareado(s) com esta conta, mas "
-           + "nenhum deu notícia " + (vida.vistoEm
-               ? "desde " + new Date(vida.vistoEm).toLocaleDateString("pt-BR")
-               : "até hoje")
-           + ". Sem o agente rodando, o painel não recebe medição nova e "
-           + "mostra tudo como “sem dados”. Abra o computador e rode o agente."
-      : ligados
-         ? "Há " + ligados + " computador(es) reportando para esta conta. O "
-           + "agente varre as pastas com Git e manda o que achou; não há nada "
-           + "para escolher aqui."
-         : "Nenhum computador reporta para esta conta ainda. Sem um deles, o "
-           + "painel só enxerga o que está no GitHub."),
-    carimbo: leu ? "contagem lida " + haQuanto(COMPUTADORES_LIDO_EM) : "",
-    /* OS DOIS CAMINHOS LADO A LADO, e como IGUAIS. Não é principal e plano B:
-       o conectador serve a máquina de trabalho, a linha serve o servidor sem
-       tela e quem prefere terminal. */
-    caminhos: [
-      { rotulo: "Baixar o conectador", aoClicar: baixarConectador },
-      { rotulo: "Usar a linha de comando", secundario: true,
-        /* Os computadores moram embaixo desta mesma tela: descer até eles. */
-        aoClicar: () => $("#tela-computadores").scrollIntoView({ behavior: "smooth" }) }
-    ],
-    depois: "espera-maquina",
-    nota: "O conectador é um arquivo que você abre com dois cliques: ele "
-        + "pergunta a pasta dos seus projetos e conecta sozinho. A tela azul "
-        + "de proteção do Windows não aparece — ela vigia por extensão, e a "
-        + "deste arquivo não está na lista dela. O que pode aparecer é o aviso "
-        + "de arquivo baixado da internet, e o Windows vai abri-lo com o "
-        + "programa associado a essa extensão na sua máquina."
-  }));
+  /* PORTA 1 — o seu computador. O cartão tem esqueleto fixo no index.html e
+     é preenchido por `pintarEsteComputador`: a espera e os vãos não se
+     perdem quando a tela se repinta sozinha. */
+  pintarEsteComputador();
 
   /* PORTA 2 — a conta do GitHub (etapa C3).
 
@@ -2318,6 +2700,11 @@ function formularioDeEndereco(servidorId) {
 
 async function autorizarComputador(id, ligado) {
   const r = await escrever("/api/maquinas/autorizar", { id, ligado });
+  if (r.status === 409) {
+    /* Ligado pelo arquivo: o servidor recusa dar o direito de consertar. */
+    recado("este computador só acompanha os projetos. Ele não faz alterações.", true);
+    return;
+  }
   if (!r.ok) { recado("não deu para mudar esse computador.", true); return; }
   recado(ligado
     ? "pronto. Esse computador pode consertar sozinho o que estiver verde."
@@ -2325,95 +2712,29 @@ async function autorizarComputador(id, ligado) {
   await carregarComputadores();
 }
 
+/* Lê `/api/maquinas` e repinta o cartão. Falha NÃO apaga o que já estava na
+   tela: só quando nunca houve leitura o cartão diz "não consegui ler". */
 async function carregarComputadores() {
   let d;
-  try { d = await (await fetch("/api/maquinas")).json(); }
-  catch { recado("não conseguimos ler a lista de computadores.", true); return; }
-  COMPUTADORES = d.maquinas || [];
-  COMPUTADORES_LIDO_EM = new Date().toISOString();
-
-  const lista = $("#lista-computadores");
-  lista.textContent = "";
-  $("#computadores-carimbo").textContent = "lido " + haQuanto(COMPUTADORES_LIDO_EM);
-
-  if (!COMPUTADORES.length) {
-    lista.append(vazio(
-      "Nenhum computador conectado. O DERVS precisa de um agente rodando no seu "
-      + "computador para enxergar contêineres, Git e as portas. Sem ele, só dá "
-      + "para ver o que está no GitHub.",
-      "Gerar o número", null, () => $("#btn-gerar-numero").click()));
+  try {
+    const r = await fetch("/api/maquinas");
+    if (!r.ok) throw new Error("recusado");
+    d = await r.json();
+  } catch {
+    COMPUTADORES_FALHOU = true;
+    pintarEsteComputador();
     return;
   }
-  for (const m of COMPUTADORES) {
-    const li = document.createElement("li");
-    const txt = document.createElement("div");
-    txt.className = "dizeres";
-    const nome = document.createElement("div");
-    nome.className = "nome";
-    // textContent, nunca innerHTML: o nome vem do OUTRO computador, e quem
-    // pareia escolhe o texto.
-    nome.textContent = m.nome || "computador sem nome";
-    const meta = document.createElement("div");
-    meta.className = "carimbo";
-    meta.textContent = (m.visto_em ? "deu notícia " + haQuanto(m.visto_em)
-                                   : "nunca deu notícia")
-                     + " · " + m.projetos + (m.projetos === 1 ? " projeto" : " projetos");
-    txt.append(nome, meta);
-
-    /* A AUTORIZACAO PARA TRABALHAR, e ela e separada de estar conectado.
-       Parear um computador nunca deu a ele o direito de rodar codigo; a coluna
-       do banco nasce desligada, e este e o segundo sim, explicito.
-
-       Etiqueta, e nao `.carimbo`: em 29/08/2026 este era o fato mais grave da
-       linha escrito no mesmo cinza mudo do horario. Quem varre a lista atras
-       de "quais podem rodar codigo" tinha de LER cada linha inteira. */
-    const trabalha = document.createElement("div");
-    trabalha.className = "permissao";
-    trabalha.dataset.permissao = m.executa ? "executa" : "mede";
-    trabalha.textContent = m.executa ? "Pode consertar aqui" : "Só mede";
-    txt.append(trabalha);
-
-    const aut = document.createElement("button");
-    aut.className = "botao botao--secundario";
-    aut.type = "button";
-    aut.textContent = m.executa ? "Deixar só medindo" : "Deixar consertar aqui";
-    aut.addEventListener("click", () => {
-      if (m.executa) { autorizarComputador(m.id, false); return; }
-      confirmar({
-        titulo: "Deixar o DERVS consertar em “" + (m.nome || "este computador") + "”?",
-        texto: "Ele vai abrir uma cópia isolada do projeto, trabalhar nela e "
-             + "devolver um ramo com as mudanças. Nada é enviado ao GitHub, e "
-             + "nada é publicado. Tarefas vermelhas continuam esperando o seu "
-             + "clique; só as verdes andam sozinhas.",
-        sim: "Pode consertar", nao: "Deixar só medindo"
-      }, () => autorizarComputador(m.id, true));
-    });
-
-    const b = document.createElement("button");
-    /* `botao--remover` e so o freio visual: ver o porque em painel.css. */
-    b.className = "botao botao--secundario botao--remover";
-    b.type = "button";
-    b.textContent = "Remover";
-    b.addEventListener("click", () => confirmar({
-      titulo: "Desconectar “" + (m.nome || "este computador") + "”?",
-      texto: "Ele para de reportar na hora, e só volta com um número novo. As "
-           + "medições que ele já mandou não são apagadas, e os projetos dele "
-           + "continuam no painel — parados no último carimbo.",
-      sim: "Desconectar", nao: "Manter conectado"
-    }, () => removerComputador(m.id)));
-    /* Os dois botoes num invólucro so: ver `.computadores .acoes` no CSS. */
-    const acoes = document.createElement("div");
-    acoes.className = "acoes";
-    acoes.append(aut, b);
-    li.append(txt, acoes);
-    lista.append(li);
-  }
+  COMPUTADORES_FALHOU = false;
+  COMPUTADORES = d.maquinas || [];
+  COMPUTADORES_LIDO_EM = new Date().toISOString();
+  pintarEsteComputador();
 }
 
 async function removerComputador(id) {
   const r = await escrever("/api/maquinas/remover", { id });
   if (!r.ok) { recado("não conseguimos remover. Tente de novo.", true); return; }
-  recado("removido. Ele não reporta mais.");
+  recado("removido. Ele não acompanha mais.");
   carregarComputadores();
 }
 
@@ -2451,7 +2772,7 @@ async function gerarNumero() {
   /* A MESMA espera da porta 1, aqui. Quem cola a linha de comando merece a
      mesma confirmação de quem usa o conectador — os dois caminhos são iguais,
      e o que os igualava até aqui era só o texto da tela. */
-  esperarMaquinaNova($("#espera-pareamento"), d.minutos);
+  esperarMaquinaNova($("#espera-pareamento"), d.minutos, "numero");
   /* Quando vence, o número fica riscado — não some. Número antigo na tela é
      número que a pessoa digita e não funciona, sem entender por quê. */
   clearTimeout(gerarNumero.t);
@@ -3557,8 +3878,25 @@ async function carregar() {
   }
 }
 
+/* O pedido de autorizar que a capa guardou (`cortina.js`): entrar pelo GitHub
+   ou pela porta local perde o fragmento do endereço, e sem isto o dono veria o
+   painel sem o pedido que estava esperando. Revalidado aqui — a chave de
+   armazenamento é de fora, como qualquer outra. `replaceState`, e não
+   `location.hash`: a navegação é feita uma vez só, ao fim de `inicio`. */
+function voltarAoPedidoGuardado() {
+  let codigo = "";
+  try {
+    codigo = codigoDeAutorizar(sessionStorage.getItem("dervs-autorizar"));
+    sessionStorage.removeItem("dervs-autorizar");
+  } catch (_) { return; }
+  if (codigo && !rota().autorizar) {
+    history.replaceState(null, "", "#/conectar?autorizar=" + codigo);
+  }
+}
+
 async function inicio() {
   aplicarTema(temaGuardado());
+  voltarAoPedidoGuardado();
   await carregar();
   await carregarTarefas();
   pintarFreio();
