@@ -410,7 +410,7 @@ class TetoDeChamadasEPrazo(Base):
 
     def test_as_constantes_sao_derivadas_e_o_prazo_cabe_no_do_servidor(self):
         c = coletar_github
-        self.assertEqual(c.TETO_CHAMADAS_POR_CONTA, 1 + 2 + 3 * c.TETO_REPOS_POR_CONTA)
+        self.assertEqual(c.TETO_CHAMADAS_POR_CONTA, 1 + 2 + (3 + c.MAX_SHAS_NO_AR) * c.TETO_REPOS_POR_CONTA)
         self.assertEqual(c.TETO_CHAMADAS_POR_RODADA, 5 * c.TETO_CHAMADAS_POR_CONTA)
         fonte = Path("servir.py").read_text(encoding="utf-8")
         self.assertIn("timeout=600", fonte)
@@ -767,7 +767,8 @@ class OCaminhoPorContaNaoTemCredencialImplicita(unittest.TestCase):
     def test_as_funcoes_do_por_conta_nao_tocam_o_caminho_antigo(self):
         for nome in ("coletar_por_conta", "_medir_uma_conta",
                      "_medir_com_instalacao", "_graphql_com",
-                     "_json_com", "_http_com", "_gravar_medicao", "mede_deploy"):
+                     "_json_com", "_http_com", "_gravar_medicao", "mede_deploy",
+                     "mede_no_ar"):
             fonte = inspect.getsource(getattr(coletar_github, nome))
             for proibido in self.PROIBIDOS:
                 self.assertNotIn(proibido, fonte, "%s contem %s" % (nome, proibido))

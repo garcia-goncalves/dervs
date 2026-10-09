@@ -51,6 +51,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 import github_app
+import regras
 
 import banco
 
@@ -458,7 +459,7 @@ PEDACO = """
     url
     defaultBranchRef {
       name
-      target { ... on Commit { statusCheckRollup { state } } }
+      target { ... on Commit { oid statusCheckRollup { state } } }
     }
     pullRequests(states: OPEN, first: 5, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes { number title url updatedAt isDraft }
@@ -894,6 +895,35 @@ def mede_deploy(slug: str, branch: str, buscar=None) -> dict:
             "url": "https://github.com/%s/actions" % slug}
 
 
+MAX_SHAS_NO_AR = 3
+
+
+def mede_no_ar(slug: str, branch: str, head_sha: str, shas, buscar=None) -> list:
+    """Quantos commits a ponta esta na frente de cada versao que esta no ar.
+
+    Uma chamada `compare` por sha distinto, no maximo MAX_SHAS_NO_AR. Sha que
+    e prefixo da ponta nao custa chamada (esta em dia). Compare que falhou
+    deixa o item de fora: ignorancia nao vira numero. O sha vem do servidor
+    do dono e vai na URL, por isso so passa se for hexadecimal.
+
+    `buscar` leva a credencial da conta no modo por conta; sem ele, `_gh_json`.
+    """
+    buscar = buscar or _gh_json
+    saida, vistos = [], set()
+    for sha in shas or []:
+        if len(vistos) >= MAX_SHAS_NO_AR:
+            break
+        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{7,40}", sha):
+            continue
+        if sha in vistos or (head_sha and head_sha.startswith(sha)):
+            continue
+        vistos.add(sha)
+        atras = atras_de(buscar("repos/%s/compare/%s...%s" % (slug, sha, branch)))
+        if atras is not None:
+            saida.append({"sha": sha, "atras": atras})
+    return saida
+
+
 def _dias(iso: str):
     try:
         t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
@@ -980,6 +1010,8 @@ def traduz(no: dict, com_vulns: bool) -> dict:
     alvo = ramo.get("target") or {}
     rollup = alvo.get("statusCheckRollup") or {}
     estado = (rollup.get("state") or "").upper()
+    oid = alvo.get("oid")
+    head_sha = oid if isinstance(oid, str) and re.fullmatch(r"[0-9a-f]{40}", oid) else ""
 
     prs = []
     for pr in ((no.get("pullRequests") or {}).get("nodes") or []):
@@ -1022,6 +1054,7 @@ def traduz(no: dict, com_vulns: bool) -> dict:
         "slug": no.get("nameWithOwner") or "",
         "url": url,
         "branch_padrao": ramo.get("name", ""),
+        "head_sha": head_sha,
         # ERROR e FAILURE viram falha; PENDING e EXPECTED nao sao pendencia (ainda
         # esta rodando); ausencia de rollup significa "esse repo nao tem CI", que e
         # outra regra, nao esta.
@@ -1117,6 +1150,12 @@ def _gravar_medicao(con, dono, tudo, por_alias, dados, com_vulns, buscar,
         por_servidor = banco.enderecos_por_servidor(dono, con=con)
     except Exception:                  # noqa: BLE001 — medir vale mais
         por_servidor = {}
+    # AS MEDICOES DOS SERVIDORES, lidas uma vez fora do laco; falha fechada
+    # em vazio, como acima: sem elas `no_ar` fica `[]` e a coleta segue.
+    try:
+        medicoes = banco.medicoes_de_servidor(dono, con=con)
+    except Exception:                  # noqa: BLE001 — medir vale mais
+        medicoes = []
     for alias, nome in por_alias.items():
         no = dados.get(alias)
         if not no:
@@ -1199,6 +1238,16 @@ def _gravar_medicao(con, dono, tudo, por_alias, dados, com_vulns, buscar,
                   buscar=buscar)
         novo["deploy"] = dep or antes_gh.get("deploy") or {}
 
+        # O QUE ESTA NO AR, segundo os servidores desta conta, contra a ponta.
+        shas = []
+        for m in medicoes if isinstance(medicoes, list) else []:
+            no_ar = regras.no_ar_do_projeto(
+                nome, m.get("dados") if isinstance(m, dict) else None)
+            if no_ar and no_ar["sha"] and no_ar["sha"] not in shas:
+                shas.append(no_ar["sha"])
+        novo["no_ar"] = mede_no_ar(novo["slug"], novo["branch_padrao"] or "main",
+                                   novo["head_sha"], shas, buscar=buscar)
+
         banco.gravar(nome, "github", novo, con, usuario_id=dono)
         gravados += 1
     return gravados, reusados
@@ -1243,7 +1292,7 @@ MAX_NOMES_NO_MOTIVO = 5
 # fica abaixo do `timeout=600` com que `servir.py` roda este coletor: estourar
 # la mata o processo sem gravar motivo nenhum.
 TETO_REPOS_POR_CONTA = 50
-TETO_CHAMADAS_POR_CONTA = 1 + 2 + 3 * TETO_REPOS_POR_CONTA
+TETO_CHAMADAS_POR_CONTA = 1 + 2 + (3 + MAX_SHAS_NO_AR) * TETO_REPOS_POR_CONTA
 TETO_CHAMADAS_POR_RODADA = 5 * TETO_CHAMADAS_POR_CONTA
 PRAZO_DA_RODADA = 480        # segundos
 # Sites: rede FORA do orcamento de chamadas. Uma conta cheia de sites mortos
