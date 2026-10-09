@@ -524,6 +524,7 @@ main { padding-bottom: var(--e12); }
 }
 
 .faixa--pagina-velha .botao { min-height: 44px; }
+.faixa__titulo, .faixa__texto { display: block; }
 
 @media (max-width: 30rem) {
   .faixa--pagina-velha { flex-direction: column; align-items: stretch; }
@@ -617,19 +618,19 @@ main { padding-bottom: var(--e12); }
 /* ------------------------------------------------- ajuda que abre e fecha
    `<details>` nativo: abre com Enter e Espaço, sem script. Dentro dos cartões
    da tela Conectar ela guarda o que só interessa a quem quer conferir. */
-.ajuda { margin-top: var(--e4); padding-top: var(--e3); border-top: var(--traco) solid var(--borda); }
-.ajuda > summary {
+details.ajuda { margin-top: var(--e4); padding-top: var(--e3); border-top: var(--traco) solid var(--borda); }
+details.ajuda > summary {
   display: flex;
   align-items: center;
   min-height: 44px;
   cursor: pointer;
   font-weight: var(--peso-medio);
 }
-.ajuda > summary:focus-visible {
+details.ajuda > summary:focus-visible {
   outline: var(--foco-largura) solid var(--acao);
   outline-offset: var(--foco-afastamento);
 }
-.ajuda h3 { margin: var(--e3) 0; font-size: var(--fs-corpo); }
+details.ajuda h3 { margin: var(--e3) 0; font-size: var(--fs-corpo); }
 
 /* O passo a passo do que vai aparecer. O número vem do contador, em mono; o
    desenho fica ACIMA do texto em tela estreita e ao lado a partir de 40rem. */

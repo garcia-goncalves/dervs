@@ -13,6 +13,8 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 import ssl
 import tempfile
 import time
@@ -2304,6 +2306,29 @@ class OIpEFIXADOEntreAPeneiraEAConexao(unittest.TestCase):
         self.addCleanup(setattr, coletar_github.socket, "getaddrinfo", antes_get)
         coletar_github.enderecos_publicos("exemplo.com.br")
         self.assertEqual(coletar_github.PRAZO_DO_DNS, vistos.get("posto"))
+
+
+class APastaDoProgramaNaoEProjeto(unittest.TestCase):
+    """P4: rodando do pacote instalado pelo .cmd, `AQUI` nao e projeto."""
+
+    def _avulsos(self, casa):
+        env = dict(os.environ)
+        env.pop("DERVS_CASA", None)
+        if casa is not None:
+            env["DERVS_CASA"] = casa
+        r = subprocess.run(
+            [sys.executable, "-I", "-c",
+             "import sys; sys.path.insert(0, %r); import coletar;"
+             " print(len(coletar.AVULSOS))" % str(Path(coletar.__file__).parent)],
+            capture_output=True, text=True, env=env, timeout=60)
+        return r.stdout.strip()
+
+    def test_com_a_casa_igual_a_pasta_o_avulso_some(self):
+        self.assertEqual("0", self._avulsos(str(Path(coletar.__file__).parent)))
+
+    def test_do_repositorio_clonado_continua_medido(self):
+        self.assertEqual("1", self._avulsos(None))
+        self.assertEqual("1", self._avulsos(os.path.join(os.sep, "outra", "casa")))
 
 
 if __name__ == "__main__":

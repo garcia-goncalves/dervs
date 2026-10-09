@@ -320,7 +320,7 @@ class OCodigoDeAutorizarSoAceitaOFormatoExato(unittest.TestCase):
 
 def fontes_do_autorizar() -> list[str]:
     return ["const AUTORIZAR = { codigo: '', dados: null, fase: '', prazo: null, "
-            "fim: 0, botao: null, focou: false };\n", "let PAGINA_VELHA = false;\n"] + [
+            "fim: 0, botao: null, focou: false, digitado: '' };\n", "let PAGINA_VELHA = false;\n"] + [
         funcao(n) for n in ("criar", "botaoEmAcoes", "prazoEmPalavras",
                             "codigoDeAutorizar", "pintarAutorizar", "olharOPedido",
                             "autorizarPedido", "fecharAutorizar",
@@ -354,10 +354,13 @@ pintarAutorizar({ codigo: "K7M4-2QXP", maquina: "PC-ESCRITORIO", minutos: 8, est
 const b = bloco();
 const botao = acha(b, n => n.tag === "button");
 const cod = acha(b, n => n.className === "numerao");
+const visivel = acha(cod, n => n.attrs["aria-hidden"] === "true");
+const falado = acha(cod, n => n.className === "so-leitor");
 const titulo = acha(b, n => n.id === "autorizar-titulo");
 console.log(JSON.stringify({
   oculto: b.hidden, texto: textoDoBloco(), botao: botao.textContent,
-  codigo: cod.textContent, leitura: cod.attrs["aria-label"],
+  codigo: visivel.textContent, leitura: falado.textContent,
+  sem_aria_label: !("aria-label" in cod.attrs),
   foco_no_titulo: FOCO.atual === titulo, tabindex: titulo.attrs.tabindex,
   busy: b.attrs["aria-busy"] }));
 """)
@@ -368,9 +371,65 @@ console.log(JSON.stringify({
         self.assertEqual(r["botao"], "Autorizar este computador")
         self.assertEqual(r["codigo"], "K7M4-2QXP")
         self.assertEqual(r["leitura"], "Código: K, 7, M, 4, 2, Q, X, P")
+        self.assertTrue(r["sem_aria_label"])
         self.assertTrue(r["foco_no_titulo"])
         self.assertEqual(r["tabindex"], "-1")
         self.assertEqual(r["busy"], "false")
+
+    def test_t2_o_foco_so_vai_ao_titulo_no_primeiro_desenho_com_dados(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ estado: "carregando" });
+const depois_do_carregando = FOCO.atual;
+pintarAutorizar({ codigo: "K7M4-2QXP", maquina: "PC", minutos: 8, estado: "esperando" });
+console.log(JSON.stringify({ no_carregando: depois_do_carregando === null,
+  no_titulo: FOCO.atual === acha(bloco(), n => n.id === "autorizar-titulo") }));
+""")
+        self.assertTrue(r["no_carregando"])
+        self.assertTrue(r["no_titulo"])
+
+    def test_t2_enviando_atualiza_o_botao_no_lugar(self):
+        r = self.rode("[]", r"""
+const d = { codigo: "K7M4-2QXP", maquina: "PC", minutos: 8, estado: "esperando" };
+pintarAutorizar(d);
+const botao = acha(bloco(), n => n.tag === "button");
+pintarAutorizar(Object.assign({}, d, { estado: "enviando" }));
+const depois = acha(bloco(), n => n.tag === "button");
+console.log(JSON.stringify({ mesmo: botao === depois, desligado: depois.disabled,
+  busy: depois.attrs["aria-busy"] }));
+""")
+        self.assertEqual((r["mesmo"], r["desligado"], r["busy"]), (True, True, "true"))
+
+    def test_t2_o_bloco_e_regiao_viva_no_html(self):
+        i = HTML.index('id="conectar-autorizar"')
+        marca = HTML[HTML.rindex("<", 0, i):HTML.index(">", i) + 1]
+        self.assertIn('aria-live="polite"', marca)
+
+    def test_s2_pedido_de_outra_rede_exige_digitar_o_codigo(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ codigo: "K7M4-2QXP", maquina: "PC", minutos: 8, estado: "esperando", mesma_rede: false });
+const entrada = acha(bloco(), n => n.tag === "input");
+const botao = acha(bloco(), n => n.tag === "button");
+const antes = { desligado: botao.disabled, vazio: entrada.value };
+entrada.value = "k7m4-2qxq"; await entrada.disparar("input");
+const errado = botao.disabled;
+entrada.value = " k7m4 2qxp "; await entrada.disparar("input");
+console.log(JSON.stringify({ antes, errado, certo: botao.disabled,
+  texto: textoDoBloco(), cod_na_tela: textoDoBloco().includes("K7M4-2QXP") }));
+""")
+        self.assertEqual(r["antes"], {"desligado": True, "vazio": ""})
+        self.assertTrue(r["errado"])
+        self.assertFalse(r["certo"])
+        self.assertIn("Este pedido veio de outra rede. Só autorize se você acabou "
+                      "de abrir o arquivo neste computador.", r["texto"])
+        self.assertNotIn("Confira se o nome e o código abaixo", r["texto"])
+
+    def test_s2_pedido_da_mesma_rede_segue_como_antes(self):
+        r = self.rode("[]", r"""
+pintarAutorizar({ codigo: "K7M4-2QXP", maquina: "PC", minutos: 8, estado: "esperando", mesma_rede: true });
+console.log(JSON.stringify({ entradas: achaTodos(bloco(), n => n.tag === "input").length,
+  desligado: acha(bloco(), n => n.tag === "button").disabled }));
+""")
+        self.assertEqual((r["entradas"], r["desligado"]), (0, False))
 
     def test_o_nome_do_computador_entra_como_texto(self):
         r = self.rode("[]", r"""
@@ -704,6 +763,17 @@ console.log(JSON.stringify({ resumo: $("#pc-resumo").textContent, marca: $("#pc-
         self.assertIn("não deu para conferir", r["marca"])
         self.assertEqual(r["linhas"], 1)
 
+    def test_t3_sem_nenhum_carimbo_diz_que_ainda_nao_deu_a_primeira_noticia(self):
+        r = self.rode(r"""
+COMPUTADORES = [{ id: 1, nome: "PC", visto_em: null, relatado_em: null, projetos: 0 }];
+COMPUTADORES_LIDO_EM = ha(1);
+pintarEsteComputador();
+console.log(JSON.stringify({ resumo: $("#pc-resumo").textContent }));
+""")
+        self.assertEqual(
+            "O computador foi autorizado e ainda não deu a primeira notícia. "
+            "Isso leva menos de um minuto.", r["resumo"])
+
     def test_mudo_ha_semanas_diz_desde_a_data(self):
         r = self.rode(r"""
 COMPUTADORES = [{ id: 1, nome: "PC", visto_em: ha(40 * 86400), relatado_em: null, projetos: 0 }];
@@ -760,6 +830,17 @@ class ASituacaoDoComputadorEPura(unittest.TestCase):
                                  consts=("COMPUTADOR_CALADO_APOS_MS",)),
                     PRELUDIO_DE_TEMPO + "console.log(JSON.stringify(situacaoDoComputador(%s, Date.now())));"
                     % lista)
+
+    def test_t3_sem_nenhum_carimbo_e_aguardando_nunca_mudo(self):
+        for lista in ('[{nome:"a", visto_em: null, relatado_em: null, projetos: 0}]',
+                      '[{nome:"a", relatado_em: null, projetos: 0}]'):
+            r = self.situacao(lista)
+            self.assertEqual((r["tipo"], r["estado"]), ("aguardando", "sem_dados"))
+        r = roda(self, fontes("situacaoDoComputador", "estadoDosComputadores",
+                              consts=("COMPUTADOR_CALADO_APOS_MS",)),
+                 PRELUDIO_DE_TEMPO + "console.log(JSON.stringify(situacaoDoComputador("
+                 '[{nome:"a", visto_em: ha(99999), relatado_em: null, projetos: 0}], Date.now())));')
+        self.assertEqual(r["tipo"], "mudo")
 
     def test_cada_tipo(self):
         casos = [
@@ -1733,6 +1814,24 @@ class OVozFicaForaDaTelaCheia(unittest.TestCase):
         cr = (AQUI / "assets" / "CREDITOS.md").read_text(encoding="utf-8")
         self.assertIn("Desenhos de ajuda da tela Conectar", cr)
         self.assertIn("sem licença de terceiro", cr)
+
+
+class AsMenoresDaRevisaoDaTela(unittest.TestCase):
+    def test_t1_ajuda_global_nao_colide_com_o_campo(self):
+        css = sem_comentarios(CSS)
+        self.assertNotRegex(css, r"(?m)^\.ajuda\b")
+        self.assertIn("details.ajuda > summary", css)
+        self.assertIn("details.ajuda h3", css)
+
+    def test_t4_lista_numerada_e_codigo_lido_letra_a_letra(self):
+        self.assertIn('<ol class="passos" role="list">', HTML)
+        self.assertIn("so-leitor", funcao("pintarAutorizar"))
+        self.assertIn(".so-leitor", (AQUI / "assets" / "dervs.css").read_text(encoding="utf-8"))
+
+    def test_t4_a_faixa_de_pagina_velha_tem_duas_linhas(self):
+        css = sem_comentarios(CSS)
+        self.assertIn(".faixa__titulo", css)
+        self.assertIn("faixa__titulo", funcao("abrirFaixaPaginaVelha"))
 
 
 if __name__ == "__main__":

@@ -816,8 +816,36 @@ class Hub(SimpleHTTPRequestHandler):
         if ocultos:
             estado["projetos"] = [p for p in estado["projetos"]
                                   if p.get("nome") not in ocultos]
+            sumidas = [x for x in estado["pendencias"]
+                       if x.get("projeto") in ocultos]
             estado["pendencias"] = [x for x in estado["pendencias"]
                                     if x.get("projeto") not in ocultos]
+            # A tendencia e global (conta `pendencia_vida` inteira): tira dela
+            # o que o dono escondeu, senao o briefing diz "5 abertas" e a tela
+            # mostra 2. `fechadas_24h` e `resolvidas_7d` nao tem projeto no
+            # banco e ficam como estao.
+            tend = dict(estado["tendencia"])
+            abertas = dict(tend.get("abertas") or {})
+            for x in sumidas:
+                g = x.get("gravidade")
+                if abertas.get(g):
+                    abertas[g] -= 1
+            abertas["total"] = sum(abertas.get(g, 0) for g in
+                                   ("alta", "media", "baixa"))
+            tend["abertas"] = abertas
+            tend["novas_24h"] = max(0, (tend.get("novas_24h") or 0)
+                                    - sum(1 for x in sumidas if x.get("nova")))
+            tend["direcao"] = ("piorando"
+                               if tend["novas_24h"] > tend.get("fechadas_24h", 0)
+                               else "melhorando"
+                               if tend.get("fechadas_24h", 0) > tend["novas_24h"]
+                               else "estavel")
+            estado["tendencia"] = tend
+            # Alerta arquivado de projeto escondido tambem sai (o id e
+            # `regra:projeto[:sufixo]`).
+            estado["arquivadas"] = [
+                a for a in estado["arquivadas"]
+                if (str(a.get("id")).split(":") + ["", ""])[1] not in ocultos]
             estado["grupos"] = regras.agrupar(estado["pendencias"])
             estado["briefing"] = memoria.briefing(estado["pendencias"],
                                                   estado["tendencia"])
@@ -1591,17 +1619,56 @@ class Hub(SimpleHTTPRequestHandler):
     TETO_DE_PACOTES = 10          # `/agente/pacote`, por maquina
     INTERVALO_DE_ESPERA = 5       # segundos entre uma pergunta e outra
 
+    # Letras, digitos, espaco, ponto, sublinhado e hifen: o nome do computador
+    # aparece na tela do dono, ao lado do botao Autorizar, e e o que ele confere.
+    NOME_DE_COMPUTADOR_OK = frozenset(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._-")
+    NOME_DE_COMPUTADOR_MAX = 40
+
+    @staticmethod
+    def _chave_do_balcao_de_pedido(origem: str) -> str:
+        """A origem como o balcao `pedir` a conta. IPv6 agrupa por /64: quem
+        tem um /64 tem 2**64 enderecos, e por endereco o teto nunca pegaria."""
+        try:
+            ip = ipaddress.ip_address(origem)
+        except ValueError:
+            return origem
+        if ip.version == 6:
+            return str(ipaddress.ip_network((ip, 64), strict=False))
+        return origem
+
+    def _veio_como_json(self) -> bool:
+        """`Content-Type: application/json`, senao 415 JA respondido. As duas
+        rotas abertas do computador so aceitam JSON: um formulario de outro
+        site manda `text/plain` sem pedir licenca ao navegador."""
+        tipo = (self.headers.get("Content-Type") or "").split(";")[0]
+        if tipo.strip().lower() == "application/json":
+            return True
+        self._json(415, {"erro": "mande application/json"})
+        return False
+
     def _agente_pedir(self):
-        """O computador abre um pedido e recebe o segredo dele e o codigo curto."""
-        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+        """O computador abre um pedido e recebe o segredo dele e o codigo curto.
+
+        A tela que o dono usa para autorizar so desconfia do pedido de OUTRA
+        rede (`mesma_rede` em `GET /api/pedido`); o POST de autorizar nao muda,
+        a defesa e de tela. A origem fica gravada para essa conta."""
+        if not self._veio_como_json():
+            return
+        origem = self._chave_do_balcao_de_pedido(self._origem_do_pedido())
+        if not cortina.registrar_tentativa(origem, time.time(),
                                            balcao="pedir",
                                            teto=self.TETO_DE_PEDIDOS):
             return self._json(429, self.RECUSA)
         corpo = self._corpo_json(teto=4096)
         if corpo is None:
             return self._json(400, {"erro": "pedido invalido"})
-        nome = self._limpo(corpo.get("maquina"), 120) \
-            if isinstance(corpo.get("maquina"), str) else ""
+        nome = corpo.get("maquina") if isinstance(corpo.get("maquina"), str) \
+            else ""
+        if (len(nome) > self.NOME_DE_COMPUTADOR_MAX
+                or not set(nome) <= self.NOME_DE_COMPUTADOR_OK):
+            return self._json(400, {"erro": "pedido invalido"})
+        nome = nome.strip()
         try:
             banco.limpar_pedidos_vencidos()
         except sqlite3.Error:
@@ -1609,7 +1676,8 @@ class Hub(SimpleHTTPRequestHandler):
         for _ in range(5):
             try:
                 pedido, codigo = banco.abrir_pedido_de_computador(
-                    nome or "computador", self.MINUTOS_DO_CODIGO)
+                    nome or "computador", self.MINUTOS_DO_CODIGO,
+                    origem=origem)
             except sqlite3.IntegrityError:
                 continue              # colisao do codigo: sorteia outro
             return self._json(200, {"pedido": pedido, "codigo": codigo,
@@ -1619,6 +1687,8 @@ class Hub(SimpleHTTPRequestHandler):
 
     def _agente_esperar(self):
         """O computador pergunta se o dono ja autorizou. O token sai UMA vez."""
+        if not self._veio_como_json():
+            return
         if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
                                            balcao="esperar",
                                            teto=self.TETO_DE_ESPERAS):
@@ -1662,7 +1732,9 @@ class Hub(SimpleHTTPRequestHandler):
         if not codigo:
             return
         # "nao existe", vencido e "autorizado por outra conta": a mesma resposta.
-        visto = banco.ver_pedido_de_computador(codigo, sessao["usuario_id"])
+        visto = banco.ver_pedido_de_computador(
+            codigo, sessao["usuario_id"],
+            origem=self._chave_do_balcao_de_pedido(self._origem_do_pedido()))
         if visto is None:
             return self._json(404, {"erro": "nao existe"})
         return self._json(200, visto)
@@ -1993,11 +2065,17 @@ class Hub(SimpleHTTPRequestHandler):
         try:
             partes = urllib.parse.urlsplit(url)
             lido = partes.scheme in ("http", "https") and bool(partes.hostname)
+            porta = partes.port
         except ValueError:
-            lido = False
+            lido, porta = False, None
         if not url or not lido:
             return self._json(400, dict(self.FORMA_DO_ENDERECO))
         nao_publico = {"erro": self.ENDERECO_RECUSADO, "motivo": "nao_publico"}
+        # So a porta padrao do esquema: sem isto a rota sonda qualquer porta
+        # de um host publico, e a resposta (ok/codigo/erro) vira varredor.
+        if porta is not None and porta != (443 if partes.scheme == "https"
+                                           else 80):
+            return self._json(400, nao_publico)
         if not coletar_github.url_segura(url):
             return self._json(400, nao_publico)
         # O teto vem ANTES de qualquer coisa que toque a rede (`host_publico`
@@ -3665,6 +3743,11 @@ class Hub(SimpleHTTPRequestHandler):
         maquina = getattr(self, "_maquina", None)
         if maquina is None:            # cinto, alem do guarda do despacho
             self._json(401, {"erro": "token de maquina invalido"})
+            return None
+        # Computador pareado so para medir (pelo arquivo) nao fala com o VOZ:
+        # o VOZ pode pedir conserto, e quem so mede nao tem esse poder.
+        if banco.maquina_so_mede(maquina["id"], maquina["usuario_id"]):
+            self._json(403, {"erro": "este computador so mede"})
             return None
         if not cortina.registrar_tentativa(
                 "maquina:%d" % maquina["id"], time.time(), balcao="voz",

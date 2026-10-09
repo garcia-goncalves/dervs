@@ -392,7 +392,8 @@ CREATE TABLE IF NOT EXISTS pedido_de_computador (
     usuario_id    INTEGER REFERENCES usuario(id) ON DELETE CASCADE,
     autorizado_em TEXT,
     usado_em      TEXT,
-    maquina_id    INTEGER REFERENCES maquina(id) ON DELETE SET NULL
+    maquina_id    INTEGER REFERENCES maquina(id) ON DELETE SET NULL,
+    origem        TEXT NOT NULL DEFAULT ''
 );
 
 -- Esconder do painel e por NOME de projeto e por conta. `arquivado_em` nao
@@ -747,6 +748,7 @@ def migrar(con: sqlite3.Connection) -> None:
     _migrar_auditoria(con)
     _migrar_achado_dono(con)
     _migrar_maquina_conectar_simples(con)
+    _migrar_pedido_origem(con)
 
 
 # As tabelas que apontam para `usuario`. A migracao confere so estas: varrer o
@@ -856,6 +858,30 @@ def _migrar_maquina_conectar_simples(con: sqlite3.Connection) -> None:
                     " WHERE relatado_em IS NULL AND EXISTS ("
                     "SELECT 1 FROM projeto_conectado p"
                     " WHERE p.maquina_id = maquina.id)")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        _religar_fk(con)
+
+
+def _migrar_pedido_origem(con: sqlite3.Connection) -> None:
+    """O `pedido_de_computador` ganha `origem` (de onde o computador pediu).
+
+    Serve so para a tela dizer ao dono se o pedido veio da MESMA rede dele
+    (defesa contra phishing do codigo). Linha antiga fica com `''`, que a tela
+    trata como "outra rede": na duvida, desconfia. Idempotente."""
+    tem = {l[1] for l in con.execute("PRAGMA table_info(pedido_de_computador)")}
+    if not tem or "origem" in tem:
+        return
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        tem = {l[1] for l in con.execute(
+            "PRAGMA table_info(pedido_de_computador)")}
+        if "origem" not in tem:
+            con.execute("ALTER TABLE pedido_de_computador ADD COLUMN"
+                        " origem TEXT NOT NULL DEFAULT ''")
         con.commit()
     except Exception:
         con.rollback()
@@ -3288,7 +3314,8 @@ def limpar_pedidos_vencidos(con=None) -> int:
             con.close()
 
 
-def abrir_pedido_de_computador(nome_maquina: str, minutos: int, con=None):
+def abrir_pedido_de_computador(nome_maquina: str, minutos: int, con=None,
+                               origem: str = ""):
     """(pedido, codigo). INSERT puro: colisao do codigo levanta `IntegrityError`
     e quem chamou sorteia outro (mesma regra de `abrir_pareamento`)."""
     fechar = con is None
@@ -3297,10 +3324,10 @@ def abrir_pedido_de_computador(nome_maquina: str, minutos: int, con=None):
         pedido, codigo = novo_token(), novo_codigo_de_pedido()
         con.execute(
             "INSERT INTO pedido_de_computador"
-            " (pedido_hash, codigo_hash, maquina_nome, criado_em, expira_em)"
-            " VALUES (?,?,?,?,?)",
+            " (pedido_hash, codigo_hash, maquina_nome, criado_em, expira_em,"
+            " origem) VALUES (?,?,?,?,?,?)",
             (hash_token(pedido), hash_codigo(codigo), nome_maquina or "",
-             agora(), prazo(int(minutos) * 60)))
+             agora(), prazo(int(minutos) * 60), origem or ""))
         con.commit()
         return pedido, codigo
     finally:
@@ -3309,19 +3336,21 @@ def abrir_pedido_de_computador(nome_maquina: str, minutos: int, con=None):
 
 
 def ver_pedido_de_computador(codigo: str, usuario_id: int, agora_iso: str = "",
-                             con=None):
+                             con=None, origem: str = ""):
     """O pedido como a conta `usuario_id` pode ve-lo, ou `None`.
 
     `None` para: nao existe, vencido, ou autorizado por OUTRA conta (a mesma
     resposta nos tres casos, de proposito). `conectado` = ja resgatado, e so
-    aparece para a conta que autorizou.
+    aparece para a conta que autorizou. `mesma_rede` e um booleano: a origem
+    do pedido == `origem` de quem consulta (vazia = falso). A origem em si
+    NUNCA sai daqui.
     """
     corte = agora_iso or agora()
     fechar = con is None
     con = con or conectar()
     try:
         l = con.execute(
-            "SELECT maquina_nome, expira_em, usuario_id, usado_em"
+            "SELECT maquina_nome, expira_em, usuario_id, usado_em, origem"
             "  FROM pedido_de_computador WHERE codigo_hash = ?",
             (hash_codigo(codigo),)).fetchone()
         if l is None:
@@ -3343,7 +3372,8 @@ def ver_pedido_de_computador(codigo: str, usuario_id: int, agora_iso: str = "",
                  - datetime.fromisoformat(corte)).total_seconds()
         return {"codigo": codigo, "maquina": l["maquina_nome"],
                 "minutos": max(0, -(-int(falta) // 60)),
-                "expira_em": l["expira_em"], "estado": estado}
+                "expira_em": l["expira_em"], "estado": estado,
+                "mesma_rede": bool(origem) and l["origem"] == origem}
     finally:
         if fechar:
             con.close()
@@ -3370,7 +3400,8 @@ def autorizar_pedido_de_computador(codigo: str, usuario_id: int,
         if cur.rowcount == 1:
             con.commit()
             return "ok"
-        con.rollback()
+        if fechar:
+            con.rollback()
         ja = con.execute(
             "SELECT 1 FROM pedido_de_computador WHERE codigo_hash = ?"
             " AND usuario_id = ? AND (usado_em IS NOT NULL OR expira_em > ?)",
@@ -3405,7 +3436,8 @@ def resgatar_pedido_de_computador(pedido: str, agora_iso: str = "", con=None):
             " WHERE pedido_hash = ? AND usado_em IS NULL AND expira_em > ?"
             " AND usuario_id IS NOT NULL", (corte, h, corte))
         if cur.rowcount != 1:
-            con.rollback()
+            if fechar:
+                con.rollback()
             return ("nao_existe", None)
         token = novo_token()
         maq = con.execute(
@@ -3731,7 +3763,7 @@ def voz_destinos_de_aviso(agora_iso: str, con=None) -> dict:
                 "SELECT e.usuario_id, e.maquina_id, e.recebido_em"
                 "  FROM voz_estado e JOIN maquina m ON m.id = e.maquina_id"
                 "   AND m.usuario_id = e.usuario_id"
-                " WHERE m.revogada_em IS NULL"):
+                " WHERE m.revogada_em IS NULL AND m.so_mede = 0"):
             idade = _segundos_desde(l["recebido_em"], agora_iso)
             if idade is None or idade > VIGILIA_LIMITE_S:
                 continue

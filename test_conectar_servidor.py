@@ -503,6 +503,34 @@ class OProjetoOculto(_Base):
         self.assertNotIn('"x"', json.dumps(d["grupos"]))
         self.assertNotIn("projeto x", d["briefing"])
 
+    def test_p2_o_briefing_nao_conta_o_que_foi_escondido(self):
+        self.relatar("x", "y")
+        pend = self.dados()["pendencias"]
+        con = banco.conectar()
+        try:
+            con.execute("DELETE FROM pendencia_vida")
+            for p in pend:
+                con.execute(
+                    "INSERT INTO pendencia_vida (id, visto_em, ultimo_em,"
+                    " gravidade) VALUES (?,?,?,?)",
+                    (p["id"], banco.agora(), banco.agora(), p["gravidade"]))
+            con.commit()
+        finally:
+            con.close()
+        antes = self.dados()
+        n_antes = antes["tendencia"]["abertas"]["total"]
+        self.assertEqual(len(pend), n_antes)
+        self.mostrar("x", False)
+        d = self.dados()
+        visiveis = [p for p in pend if p["projeto"] == "y"]
+        self.assertEqual(len(visiveis), d["tendencia"]["abertas"]["total"])
+        self.assertLess(d["tendencia"]["abertas"]["total"], n_antes)
+        arquivada = next(p["id"] for p in pend if p["projeto"] == "x")
+        banco.arquivar(arquivada, usuario_id=self.uid, motivo="teste")
+        self.assertEqual([], self.dados()["arquivadas"])
+        self.mostrar("x", True)
+        self.assertEqual(1, len(self.dados()["arquivadas"]))
+
     def test_relatorio_novo_nao_traz_de_volta_e_mostrar_traz(self):
         self.relatar("x", "y")
         self.mostrar("x", False)
@@ -762,6 +790,103 @@ class OMedirSemGravar(_Base):
                        "servidor_id": servidor_id}, sessao=sessao)
         self.assertEqual(True, self.json(r)["ok"])
         self.mede_site.assert_called_once()
+
+    def test_s5_so_a_porta_padrao_do_esquema(self):
+        for url in ("https://loja.com.br:8443", "http://loja.com.br:8080/x",
+                    "https://loja.com.br:80", "http://loja.com.br:443"):
+            r = self.medir(url)
+            self.assertEqual((400, "nao_publico"),
+                             (r.status, self.json(r)["motivo"]), url)
+        self.mede_site.assert_not_called()
+        for url in ("https://loja.com.br:443", "http://loja.com.br:80",
+                    "https://loja.com.br"):
+            self.assertEqual(200, self.medir(url).status, url)
+
+
+class ARevisaoDeSeguranca(_Base):
+    """Consertos da revisao: S1 a S6."""
+
+    def maquina_pelo_pedido(self):
+        p = self.pedir_um("PC-VOZ")
+        self.dono("/api/pedido/autorizar", {"codigo": p["codigo"]})
+        token = self.json(self.computador(
+            "/agente/esperar", {"pedido": p["pedido"]}))["token"]
+        return token, banco.maquina_por_token(token)
+
+    def como_maquina(self, token, caminho, corpo=None, metodo="POST"):
+        return self.pedir(caminho, metodo, corpo, com_origem=False,
+                          cabecalhos={"Authorization": "Token " + token})
+
+    def test_s1_quem_so_mede_leva_403_nas_quatro_rotas_da_voz(self):
+        token, _m = self.maquina_pelo_pedido()
+        for caminho, metodo in (("/agente/voz/estado", "POST"),
+                                ("/agente/voz/recados", "GET"),
+                                ("/agente/voz/resultado", "POST"),
+                                ("/agente/voz/pedido", "POST")):
+            r = self.como_maquina(token, caminho,
+                                  {} if metodo == "POST" else None, metodo)
+            self.assertEqual(403, r.status, caminho)
+
+    def test_s1_quem_so_mede_nunca_vira_destino_de_aviso(self):
+        _token, m = self.maquina_pelo_pedido()
+        banco.guardar_voz_estado(m["id"], m["usuario_id"], {"versao": 1})
+        self.assertEqual({}, banco.voz_destinos_de_aviso(banco.agora()))
+
+    def test_s2_mesma_rede_e_booleano_e_nunca_o_ip(self):
+        p = self.pedir_um()
+        corpo = self.json(self.dono("/api/pedido?codigo=" + p["codigo"],
+                                    metodo="GET"))
+        self.assertIs(True, corpo["mesma_rede"])
+        self.assertNotIn("127.0.0.1", json.dumps(corpo))
+        con = banco.conectar()
+        try:
+            con.execute("UPDATE pedido_de_computador SET origem = 'outra'")
+            con.commit()
+        finally:
+            con.close()
+        corpo = self.json(self.dono("/api/pedido?codigo=" + p["codigo"],
+                                    metodo="GET"))
+        self.assertIs(False, corpo["mesma_rede"])
+        self.assertNotIn("outra", json.dumps(corpo))
+
+    def test_s2_a_migracao_da_coluna_e_idempotente(self):
+        con = banco.conectar()
+        try:
+            con.execute("ALTER TABLE pedido_de_computador DROP COLUMN origem")
+            con.commit()
+            banco._migrar_pedido_origem(con)
+            banco._migrar_pedido_origem(con)
+            tem = {l[1] for l in con.execute(
+                "PRAGMA table_info(pedido_de_computador)")}
+        finally:
+            con.close()
+        self.assertIn("origem", tem)
+
+    def test_s3_nome_fora_do_conjunto_e_400(self):
+        for torto in ("PC<script>", "a" * 41, "café", "x\ny", "../x"):
+            r = self.computador("/agente/pedir", {"maquina": torto})
+            self.assertEqual(400, r.status, torto)
+        for bom in ("PC-ESCRITORIO", "Meu PC 1.2_a", "a" * 40):
+            self.assertEqual(200, self.computador(
+                "/agente/pedir", {"maquina": bom}).status, bom)
+
+    def test_s4_sem_content_type_json_e_415_e_nao_gasta_balcao(self):
+        for caminho, corpo in (("/agente/pedir", b"{}"),
+                               ("/agente/esperar", b'{"pedido":"x"}')):
+            for tipo in ("text/plain", "application/x-www-form-urlencoded"):
+                r = self.pedir(caminho, "POST", com_origem=False,
+                               corpo_cru=corpo,
+                               cabecalhos={"Content-Type": tipo})
+                self.assertEqual(415, r.status, (caminho, tipo))
+        for _ in range(servir.Hub.TETO_DE_PEDIDOS):
+            self.assertEqual(200, self.computador("/agente/pedir", {}).status)
+
+    def test_s6_ipv6_agrupa_por_64(self):
+        f = servir.Hub._chave_do_balcao_de_pedido
+        self.assertEqual(f("2001:db8:1:2:aaaa::1"), f("2001:db8:1:2:bbbb::9"))
+        self.assertNotEqual(f("2001:db8:1:2::1"), f("2001:db8:1:3::1"))
+        self.assertEqual("10.0.0.1", f("10.0.0.1"))
+        self.assertEqual("?", f("?"))
 
 
 if __name__ == "__main__":
