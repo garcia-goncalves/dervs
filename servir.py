@@ -2100,8 +2100,14 @@ class Hub(SimpleHTTPRequestHandler):
         if sessao is None:
             return self._json(403, {"erro": "entre de novo"})
         contas = banco.instalacoes_da_conta(sessao["usuario_id"])
+        por_dono = banco.repositorios_do_github_por_dono(sessao["usuario_id"])
         for c in contas:
             c["gerenciar_url"] = self._url_de_gerenciar(c)
+            # Os projetos da conta cujo repositorio tem ESTE dono. Sem login
+            # (a instalacao ainda nao foi lida) a lista vem vazia: nunca se
+            # chuta a quem um repositorio pertence.
+            login = c.get("conta_login") or ""
+            c["repositorios"] = por_dono.get(login.casefold(), []) if login else []
         return self._json(200, {
             "instalacao": banco.instalacao_do_github(sessao["usuario_id"]) or "",
             "instalacoes": contas,

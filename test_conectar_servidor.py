@@ -587,5 +587,75 @@ class OProjetoOculto(_Base):
         self.assertTrue(all(v["visto_em"] for v in m["projetos_vistos"]))
 
 
+class OGithubComRepositorios(_Base):
+    """C11."""
+
+    def setUp(self):
+        super().setUp()
+        con = banco.conectar()
+        try:
+            for t in ("projeto_oculto", "projeto_conectado", "medida",
+                      "instalacao_github"):
+                con.execute("DELETE FROM %s" % t)
+            con.commit()
+        finally:
+            con.close()
+        banco.guardar_instalacao_do_github(
+            self.uid, "9001", conta_login="loja-da-ana", conta_tipo="User")
+
+    def projeto(self, nome, slug, uid=None):
+        banco.gravar(nome, "local", {"nome": nome, "git": {"remoto_slug": slug}},
+                     usuario_id=self.uid if uid is None else uid)
+
+    def repos(self):
+        r = self.dono("/api/github", metodo="GET")
+        self.assertEqual(200, r.status)
+        return self.json(r)["instalacoes"][0]["repositorios"]
+
+    def test_so_entra_o_projeto_cujo_dono_do_slug_e_a_conta(self):
+        self.projeto("loja", "Loja-Da-Ana/site")
+        self.projeto("outro", "outra/x")
+        self.assertEqual(
+            [{"projeto": "loja", "slug": "Loja-Da-Ana/site", "medido": False,
+              "oculto": False}], self.repos())
+
+    def test_medido_oculto_e_ordem(self):
+        self.projeto("b", "loja-da-ana/b")
+        self.projeto("a", "loja-da-ana/a")
+        banco.gravar("a", "github", {"ok": True}, usuario_id=self.uid)
+        banco.mostrar_projeto(self.uid, "b", False)
+        self.assertEqual([("a", True, False), ("b", False, True)],
+                         [(r["projeto"], r["medido"], r["oculto"])
+                          for r in self.repos()])
+
+    def test_projeto_de_outra_conta_nunca_aparece(self):
+        con = banco.conectar()
+        try:
+            outro = banco.criar_usuario("outro-gh@teste.local", con=con)
+        finally:
+            con.close()
+        self.projeto("do-outro", "loja-da-ana/x", uid=outro)
+        self.assertEqual([], self.repos())
+
+    def test_slug_torto_e_ignorado_sem_levantar(self):
+        for i, torto in enumerate(("a/b/c", 5, None, "sem-barra", "/x", "x/",
+                                   "a" * 201 + "/b", ["loja-da-ana/x"])):
+            self.projeto("t%d" % i, torto)
+        banco.gravar("sem-git", "local", {"nome": "sem-git"}, usuario_id=self.uid)
+        banco.gravar("git-torto", "local", {"nome": "git-torto", "git": "x"},
+                     usuario_id=self.uid)
+        self.assertEqual([], self.repos())
+
+    def test_sem_login_a_lista_vem_vazia(self):
+        con = banco.conectar()
+        try:
+            con.execute("UPDATE instalacao_github SET conta_login = NULL")
+            con.commit()
+        finally:
+            con.close()
+        self.projeto("loja", "loja-da-ana/site")
+        self.assertEqual([], self.repos())
+
+
 if __name__ == "__main__":
     unittest.main()

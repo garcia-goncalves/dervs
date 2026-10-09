@@ -4295,6 +4295,44 @@ def instalacoes_da_conta(usuario_id: int, con=None) -> list:
             con.close()
 
 
+def repositorios_do_github_por_dono(usuario_id: int, con=None) -> dict:
+    """{dono do repositorio (casefold): [{projeto, slug, medido, oculto}]}.
+
+    A fonte e o relatorio DA CONTA: entra o projeto cujo `remoto_slug` do
+    controle de versao tem dono. O dono do repositorio (a parte antes da barra)
+    e a conta da instalacao que o alcanca. `medido` = ja existe a camada
+    `github` do projeto.
+
+    O slug e dado do agente: so entra string com UMA barra e ate 200
+    caracteres, validada SEM regex compilada (o vigia de rotas proibe
+    `compile` em tudo que uma rota alcanca). Torto e ignorado, nunca levanta.
+    """
+    fechar = con is None
+    con = con or conectar()
+    try:
+        ocultos = projetos_ocultos(usuario_id, con=con)
+        fora: dict = {}
+        for nome, camadas in sorted(ler_tudo(con, usuario_id=usuario_id).items()):
+            local = camadas.get("local")
+            if nome in RESERVADOS or not local:
+                continue
+            versao = (local["dados"] or {}).get("git")
+            slug = versao.get("remoto_slug") if isinstance(versao, dict) else None
+            if not isinstance(slug, str) or len(slug) > 200 \
+                    or slug.count("/") != 1:
+                continue
+            dono, _, repo = slug.partition("/")
+            if not dono.strip() or not repo.strip():
+                continue
+            fora.setdefault(dono.casefold(), []).append({
+                "projeto": nome, "slug": slug,
+                "medido": "github" in camadas, "oculto": nome in ocultos})
+        return fora
+    finally:
+        if fechar:
+            con.close()
+
+
 def instalacoes_do_github(con=None) -> dict:
     """{usuario_id: installation_id} de TODAS as contas — a MAIS NOVA de cada.
 
