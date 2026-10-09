@@ -1,7 +1,7 @@
 """O ajudante do servidor: instala, pareia e conta ao DERVS o que roda ali.
 
 Este arquivo e baixado do painel, conferido por SHA-256 e rodado UMA vez com
-`sudo python3 dervs-ajudante.py`. Depois disso um temporizador do sistema o
+`sudo python3 -I dervs-ajudante.py`. Depois disso um temporizador do sistema o
 chama a cada 30 segundos com `medir`, num usuario so dele, e ele manda ao
 painel o inventario: quais sistemas estao de pe, desde quando e qual versao foi
 publicada por ultimo. `remover` desfaz tudo.
@@ -329,7 +329,7 @@ def instalar(alvo=ALVO, raiz="/", rodar=None, abrir=None, dormir=time.sleep,
 
     if not (eh_root() if eh_root is not None else _root()):
         saida("Preciso de poder de administrador. Rode de novo assim:")
-        saida("  sudo python3 dervs-ajudante.py")
+        saida("  sudo python3 -I dervs-ajudante.py")
         return SEM_ROOT
     if sys.version_info < (3, 8):
         saida("O Python deste servidor e velho demais (preciso do 3.8 ou mais novo).")

@@ -58,7 +58,7 @@ globalThis.EventSource = class {
 const abertos = [];
 const timers = [];
 globalThis.setTimeout = (f, ms) => { timers.push([f, ms]); return 1; };
-const LINHA = { linha: "cd \"$(mktemp -d)\" && curl -fsSL https://dervs.com.br/ajudante/servidor.py -o dervs-ajudante.py && "
+const LINHA = { linha: "d=\"$(mktemp -d)\" && cd \"$d\" && curl -fsSL https://dervs.com.br/ajudante/servidor.py -o dervs-ajudante.py && "
                 + "echo \"" + "a".repeat(64) + "  dervs-ajudante.py\" | sha256sum -c - && sudo python3 -I dervs-ajudante.py",
                 sha256: "a".repeat(64), endereco: "https://dervs.com.br/ajudante/servidor.py" };
 const buscas = [];
@@ -256,7 +256,7 @@ class OFluxoDaLinhaParaColar(unittest.TestCase):
 
     def test_mostra_a_linha_com_copiar_acima_e_o_roteiro_de_quatro_passos(self):
         r = self.ligando()
-        self.assertTrue(r["pre"].startswith('cd "$(mktemp -d)" && curl -fsSL https://dervs.com.br/ajudante/servidor.py'))
+        self.assertTrue(r["pre"].startswith('d="$(mktemp -d)" && cd "$d" && curl -fsSL https://dervs.com.br/ajudante/servidor.py'))
         self.assertEqual(r["ordem"][0], "Copiar")                       # acima do bloco
         self.assertEqual(r["ordem"][1], "pre")
         self.assertEqual(r["passos"], [

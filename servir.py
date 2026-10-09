@@ -1945,7 +1945,7 @@ class Hub(SimpleHTTPRequestHandler):
         # Pasta nova e privada (`mktemp -d`): na pasta em que a pessoa estava,
         # outro usuario poderia deixar um arquivo com o mesmo nome. E `-I`
         # faz o Python ignorar PYTHONPATH e nao importar nada da pasta atual.
-        linha = ('cd "$(mktemp -d)" && curl -fsSL %s -o dervs-ajudante.py && '
+        linha = ('d="$(mktemp -d)" && cd "$d" && curl -fsSL %s -o dervs-ajudante.py && '
                  'echo "%s  dervs-ajudante.py" | sha256sum -c - && sudo python3 '
                  '-I dervs-ajudante.py' % (endereco, resumo))
         return self._json(200, {"linha": linha, "sha256": resumo,

@@ -164,7 +164,7 @@ obrigatório torto: descartado inteiro, +1):
 - `/ajudante/servidor.py`: 200 `application/octet-stream`, `Content-Disposition: attachment;
   filename="dervs-ajudante.py"`, `Content-Length`; 503 `{"erro":"o ajudante nao esta nesta
   copia"}`; 429 balcão `ajudante`; não cria estado.
-- `/api/ajudante/linha`: 200 `{"linha": "cd \"$(mktemp -d)\" && curl -fsSL
+- `/api/ajudante/linha`: 200 `{"linha": "d=\"$(mktemp -d)\" && cd \"$d\" && curl -fsSL
   <alvo>/ajudante/servidor.py -o dervs-ajudante.py && echo \"<sha256>  dervs-ajudante.py\" |
   sha256sum -c - && sudo python3 -I dervs-ajudante.py", "sha256": "<64 hex>", "endereco":
   "<alvo>/ajudante/servidor.py"}` (dois espaços entre sha e nome; pasta nova e privada, e `-I`

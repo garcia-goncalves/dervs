@@ -628,7 +628,7 @@ class ALinhaDoAjudante(_Base):
         self.assertEqual(hashlib.sha256(bruto).hexdigest(), d["sha256"])
         self.assertEqual(alvo + "/ajudante/servidor.py", d["endereco"])
         self.assertEqual(
-            'cd "$(mktemp -d)" && curl -fsSL %s/ajudante/servidor.py -o '
+            'd="$(mktemp -d)" && cd "$d" && curl -fsSL %s/ajudante/servidor.py -o '
             'dervs-ajudante.py && echo "%s  dervs-ajudante.py" | sha256sum -c'
             ' - && sudo python3 -I dervs-ajudante.py' % (alvo, d["sha256"]),
             d["linha"])
