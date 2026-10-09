@@ -19,6 +19,7 @@ Este arquivo cobra tres coisas, e a terceira e a que costuma faltar:
 """
 from __future__ import annotations
 
+import hashlib
 import inspect
 import subprocess
 import sys
@@ -362,6 +363,72 @@ class Fuso(unittest.TestCase):
     def test_teto_da_sessao_nunca_e_negativo(self):
         estourado = 100.0 / tarefas.USD_BRL
         self.assertEqual(tarefas.teto_da_sessao(estourado), 0.0)
+
+
+class OTextoDaOrdem(unittest.TestCase):
+    """C0 da entrega C: o texto que vira desafio. A tabela e escrita a mao,
+    com os hashes de `docs/superpowers/plans/dervs-conectar-acoes-c.md` (I0):
+    o ajudante tem a mesma conta, e as duas pontas precisam dar os mesmos
+    bytes."""
+
+    BASE = {"servidor": "7f3a9c2e5b8d41f6a0c3e9b2d4f6a8c1",
+            "tipo": "reiniciar", "alvo": "grimoire-web",
+            "numero": "4e1d2c3b5a6978f0e1d2c3b4a5968778",
+            "criado": 1791558000, "vence": 1791558300}
+
+    def test_reiniciar_da_o_texto_e_o_hash_da_tabela(self):
+        texto = tarefas.texto_da_ordem(dict(self.BASE))
+        self.assertEqual(
+            "dervs-ordem=1\nservidor=7f3a9c2e5b8d41f6a0c3e9b2d4f6a8c1\n"
+            "tipo=reiniciar\nalvo=grimoire-web\n"
+            "numero=4e1d2c3b5a6978f0e1d2c3b4a5968778\n"
+            "criado=1791558000\nvence=1791558300", texto)
+        self.assertEqual(
+            "2358580c05214c6639569a105fe02350d2cea31d76f4fd6f6ead896445090d84",
+            hashlib.sha256(texto.encode("ascii")).hexdigest())
+
+    def test_voltar_da_o_hash_da_tabela(self):
+        texto = tarefas.texto_da_ordem(dict(self.BASE, tipo="voltar",
+                                            alvo="grimoire"))
+        self.assertEqual(
+            "27a594db73c6f445df5d478b3e32da7a34ef5204d64145723c51209efc6268fc",
+            hashlib.sha256(texto.encode("ascii")).hexdigest())
+
+    def test_cada_campo_fora_do_formato_nao_gera_ordem(self):
+        tortos = [
+            {"alvo": "a=b"}, {"alvo": "a\nb"}, {"alvo": "-a"}, {"alvo": ""},
+            {"alvo": "a" * 129}, {"alvo": "café"},
+            {"tipo": "voltar", "alvo": "Grimoire"},
+            {"tipo": "voltar", "alvo": "gri_moire"},
+            {"tipo": "voltar", "alvo": "-gri"},
+            {"tipo": "voltar", "alvo": "g" * 64},
+            {"numero": "4e1d2c3b5a6978f0e1d2c3b4a596877"},
+            {"numero": "4e1d2c3b5a6978f0e1d2c3b4a59687788"},
+            {"numero": "4E1D2C3B5A6978F0E1D2C3B4A5968778"},
+            {"servidor": "g" + "0" * 31},
+            {"criado": "01791558000"}, {"criado": 12345678901},
+            {"criado": "1791558000"}, {"criado": True}, {"criado": -1},
+            {"vence": 1791558299}, {"vence": 1791558301},
+            {"tipo": "publicar"}, {"tipo": None},
+        ]
+        for troca in tortos:
+            self.assertIsNone(tarefas.texto_da_ordem(dict(self.BASE, **troca)),
+                              troca)
+
+    def test_campo_faltando_ou_a_mais_nao_gera_ordem(self):
+        for campo in self.BASE:
+            falta = dict(self.BASE)
+            del falta[campo]
+            self.assertIsNone(tarefas.texto_da_ordem(falta), campo)
+        self.assertIsNone(tarefas.texto_da_ordem(dict(self.BASE, extra="x")))
+        self.assertIsNone(tarefas.texto_da_ordem("nao e dicionario"))
+        self.assertIsNone(tarefas.texto_da_ordem(None))
+
+    def test_a_lista_de_motivos_e_a_do_contrato(self):
+        self.assertEqual(
+            ("forma", "outro_servidor", "vencida", "assinatura", "desafio",
+             "origem", "aparelho", "bloqueado", "desconhecido", "repetida",
+             "cheio", "teto"), tarefas.MOTIVOS_DA_RECUSA)
 
 
 if __name__ == "__main__":
