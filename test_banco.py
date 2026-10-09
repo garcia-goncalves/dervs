@@ -148,7 +148,8 @@ class Esquema(unittest.TestCase):
             "chave_de_acesso", "codigo_recuperacao", "cor_da_regra",
             "credencial", "endereco_producao", "fila", "gasto",
             "historico", "instalacao", "instalacao_github",
-            "maquina", "medicao_de_servidor", "medida", "pareamento", "pedido_de_computador",
+            "maquina", "medicao_de_servidor", "medida", "ordem_de_servidor",
+            "pareamento", "pedido_de_computador",
             "pendencia_arquivada",
             "pendencia_estado", "pendencia_vida", "projeto_conectado",
             "projeto_oculto", "prova_rodada", "servidor", "sessao", "tarefa_linha", "usuario",
@@ -4007,6 +4008,7 @@ class ConectarSimplesNoBanco(unittest.TestCase):
     def test_as_filhas_de_usuario_incluem_as_tabelas_novas(self):
         self.assertIn("pedido_de_computador", banco.FILHAS_DE_USUARIO)
         self.assertIn("projeto_oculto", banco.FILHAS_DE_USUARIO)
+        self.assertIn("ordem_de_servidor", banco.FILHAS_DE_USUARIO)
 
     def test_normalizar_codigo_de_pedido(self):
         self.assertEqual("K7M4-2QXP", banco.normalizar_codigo_de_pedido("k7m4 2qxp"))
@@ -4123,6 +4125,198 @@ class ProjetoOcultoNoBanco(unittest.TestCase):
         self.con.execute("DELETE FROM usuario WHERE id = ?", (self.b,))
         self.con.commit()
         self.assertEqual(set(), banco.projetos_ocultos(self.b, con=self.con))
+
+
+class AsOrdensDeServidor(unittest.TestCase):
+    """Entrega C (C6): a tabela `ordem_de_servidor` e o que o banco decide.
+
+    O banco decide sozinho, no proprio UPDATE, quem entrega e quem fecha: o
+    mesmo desenho de `usar_pareamento`. O relogio entra por parametro."""
+
+    AGORA = 1791558000
+
+    def setUp(self):
+        self.con = banco.conectar(":memory:")
+        self.a = banco.criar_usuario("a@teste.local", con=self.con)
+        self.b = banco.criar_usuario("b@teste.local", con=self.con)
+        self.ma = self.maquina(self.a, "ha")
+        self.mb = self.maquina(self.b, "hb")
+
+    def tearDown(self):
+        self.con.close()
+
+    def maquina(self, uid, token_hash):
+        cur = self.con.execute(
+            "INSERT INTO maquina (usuario_id, nome, token_hash, criado_em,"
+            " tipo) VALUES (?, 'vps', ?, 'x', 'servidor')", (uid, token_hash))
+        self.con.commit()
+        return cur.lastrowid
+
+    def numero(self, i=1):
+        return "%032x" % i
+
+    def criar(self, i=1, uid=None, mid=None, quando=None, tipo="reiniciar",
+              alvo="grimoire-web"):
+        return banco.criar_ordem_de_servidor(
+            uid or self.a, mid or self.ma, "7f3a9c2e5b8d41f6a0c3e9b2d4f6a8c1",
+            tipo, alvo, self.numero(i), quando or self.AGORA, con=self.con)
+
+    def assinar(self, i=1, uid=None, quando=None):
+        return banco.assinar_ordem_de_servidor(
+            uid or self.a, self.numero(i), "cred", "c", "a", "s",
+            quando or self.AGORA, con=self.con)
+
+    def test_os_checks_da_tabela(self):
+        base = dict(numero=self.numero(), uid=self.a, mid=self.ma,
+                    ident="i", tipo="reiniciar", alvo="x", criado=1, vence=301,
+                    desfecho=None, codigo=None)
+        sql = ("INSERT INTO ordem_de_servidor (numero, usuario_id, maquina_id,"
+               " ident, tipo, alvo, criado, vence, desfecho, codigo)"
+               " VALUES (:numero,:uid,:mid,:ident,:tipo,:alvo,:criado,:vence,"
+               ":desfecho,:codigo)")
+        for troca in ({"numero": "a" * 31}, {"tipo": "publicar"},
+                      {"codigo": 256}, {"desfecho": "ok"}, {"alvo": ""},
+                      {"alvo": "x" * 129}):
+            with self.assertRaises(sqlite3.IntegrityError, msg=troca):
+                self.con.execute(sql, dict(base, **troca))
+        self.con.execute(sql, base)                 # o certo entra
+
+    def test_apagar_a_conta_apaga_as_ordens(self):
+        self.criar()
+        self.con.execute("DELETE FROM usuario WHERE id = ?", (self.a,))
+        self.con.commit()
+        self.assertEqual(0, self.con.execute(
+            "SELECT COUNT(*) FROM ordem_de_servidor").fetchone()[0])
+
+    def test_impressao_da_chave_do_gerador(self):
+        import p256
+        self.assertEqual("d875db7def232236",
+                         banco.impressao_da_chave(*p256.G))
+
+    def test_chaves_publicas_sem_revogada_e_ate_cinco_as_mais_novas(self):
+        for i in range(7):
+            banco.guardar_chave_de_acesso(self.a, "cred%d" % i, (i + 1, 9),
+                                          apelido="ap%d" % i, con=self.con)
+            self.con.execute("UPDATE chave_de_acesso SET criado_em = ?"
+                             " WHERE cred_id = ?",
+                             ("2026-10-0%dT00:00:00+00:00" % (i + 1),
+                              "cred%d" % i))
+        banco.guardar_chave_de_acesso(self.b, "deB", (5, 5), con=self.con)
+        self.con.execute("UPDATE chave_de_acesso SET revogada_em = 'x'"
+                         " WHERE cred_id = 'cred6'")
+        self.con.commit()
+        lista = banco.chaves_publicas_da_conta(self.a, con=self.con)
+        self.assertEqual(["cred5", "cred4", "cred3", "cred2", "cred1"],
+                         [c["cred_id"] for c in lista])
+        self.assertEqual((6, 9), (lista[0]["x"], lista[0]["y"]))
+        self.assertEqual("ap5", lista[0]["apelido"])
+
+    def test_a_segunda_ordem_em_andamento_e_recusada(self):
+        self.assertTrue(self.criar(1))
+        self.assertFalse(self.criar(2))                 # preparada, nao vencida
+        self.assertTrue(self.criar(3, quando=self.AGORA + 301))   # a 1a venceu
+        self.assertTrue(self.criar(4, uid=self.b, mid=self.mb))   # outra maquina
+
+    def test_entregue_sem_desfecho_ocupa_por_30_minutos(self):
+        self.criar(1)
+        self.assinar(1)
+        self.assertIsNotNone(banco.entregar_ordem_de_servidor(
+            self.ma, self.a, self.AGORA + 5, con=self.con))
+        self.assertFalse(self.criar(2, quando=self.AGORA + 400))
+        self.assertFalse(self.criar(3, quando=self.AGORA + 1800))
+        self.assertTrue(self.criar(4, quando=self.AGORA + 5 + 1801))
+
+    def test_com_desfecho_a_maquina_fica_livre(self):
+        self.criar(1)
+        self.assinar(1)
+        banco.entregar_ordem_de_servidor(self.ma, self.a, self.AGORA + 5,
+                                         con=self.con)
+        self.assertTrue(banco.desfecho_da_ordem_de_servidor(
+            self.ma, self.a, self.numero(1), "feita", 0, None, self.AGORA + 9,
+            con=self.con))
+        self.assertTrue(self.criar(2, quando=self.AGORA + 10))
+
+    def test_poda_deixa_as_50_mais_novas_da_maquina(self):
+        for i in range(1, 56):
+            self.assertTrue(self.criar(i, quando=self.AGORA + i * 400), i)
+        n = self.con.execute("SELECT COUNT(*) FROM ordem_de_servidor"
+                             " WHERE maquina_id = ?", (self.ma,)).fetchone()[0]
+        self.assertEqual(50, n)
+        self.assertIsNone(self.con.execute(
+            "SELECT 1 FROM ordem_de_servidor WHERE numero = ?",
+            (self.numero(1),)).fetchone())
+
+    def test_assinar_so_a_ordem_da_conta_nao_vencida_e_uma_vez(self):
+        self.criar(1)
+        self.assertFalse(self.assinar(1, uid=self.b))        # de outra conta
+        self.assertFalse(self.assinar(1, quando=self.AGORA + 301))   # vencida
+        self.assertTrue(self.assinar(1, quando=self.AGORA + 7))
+        self.assertFalse(self.assinar(1))                    # ja assinada
+        l = self.con.execute("SELECT * FROM ordem_de_servidor").fetchone()
+        self.assertEqual(("cred", "c", "a", "s", "2026-10-09T"),
+                         (l["cred_id"], l["cliente"], l["autenticador"],
+                          l["assinatura"], l["assinada_em"][:11]))
+
+    def test_entregar_uma_vez_so_e_so_ate_120_segundos(self):
+        self.criar(1)
+        self.assinar(1)
+        self.assertIsNone(banco.entregar_ordem_de_servidor(
+            self.mb, self.b, self.AGORA, con=self.con))      # outra maquina
+        self.assertIsNone(banco.entregar_ordem_de_servidor(
+            self.ma, self.b, self.AGORA, con=self.con))      # outra conta
+        o = banco.entregar_ordem_de_servidor(self.ma, self.a, self.AGORA + 120,
+                                             con=self.con)
+        self.assertEqual(("reiniciar", "grimoire-web", self.numero(1),
+                          self.AGORA, self.AGORA + 300),
+                         (o["tipo"], o["alvo"], o["numero"], o["criado"],
+                          o["vence"]))
+        self.assertEqual("7f3a9c2e5b8d41f6a0c3e9b2d4f6a8c1", o["servidor"])
+        self.assertIsNone(banco.entregar_ordem_de_servidor(
+            self.ma, self.a, self.AGORA + 121, con=self.con))     # ja entregue
+
+    def test_assinada_ha_121_segundos_nunca_mais_sai(self):
+        self.criar(1)
+        self.assinar(1)
+        self.assertIsNone(banco.entregar_ordem_de_servidor(
+            self.ma, self.a, self.AGORA + 121, con=self.con))
+
+    def test_nao_assinada_nao_sai(self):
+        self.criar(1)
+        self.assertIsNone(banco.entregar_ordem_de_servidor(
+            self.ma, self.a, self.AGORA, con=self.con))
+
+    def test_desfecho_so_da_maquina_entregue_e_sem_desfecho(self):
+        self.criar(1)
+        self.assinar(1)
+        quando = self.AGORA + 20
+        pedir = lambda mid, uid, **kw: banco.desfecho_da_ordem_de_servidor(
+            mid, uid, kw.get("numero", self.numero(1)), "falhou", 3, None,
+            quando, con=self.con)
+        self.assertFalse(pedir(self.ma, self.a))             # nao entregue
+        banco.entregar_ordem_de_servidor(self.ma, self.a, self.AGORA + 5,
+                                         con=self.con)
+        self.assertFalse(pedir(self.mb, self.b))             # outra maquina
+        self.assertFalse(pedir(self.ma, self.b))             # outra conta
+        self.assertFalse(pedir(self.ma, self.a, numero="f" * 32))
+        self.assertTrue(pedir(self.ma, self.a))
+        self.assertFalse(pedir(self.ma, self.a))             # ja tem desfecho
+        l = self.con.execute("SELECT * FROM ordem_de_servidor").fetchone()
+        self.assertEqual(("falhou", 3, None, "2026-10-09T"),
+                         (l["desfecho"], l["codigo"], l["motivo"],
+                          l["terminada_em"][:11]))
+
+    def test_ordens_do_servidor_so_as_assinadas_e_so_da_maquina(self):
+        for i in range(1, 8):
+            self.criar(i, quando=self.AGORA + i * 400)
+            if i != 3:
+                self.assinar(i, quando=self.AGORA + i * 400)
+        self.criar(9, uid=self.b, mid=self.mb)
+        self.assinar(9, uid=self.b)
+        lista = banco.ordens_do_servidor(self.a, self.ma, con=self.con)
+        self.assertEqual([self.numero(i) for i in (7, 6, 5, 4, 2)],
+                         [o["numero"] for o in lista])
+        self.assertEqual([], banco.ordens_do_servidor(self.b, self.ma,
+                                                      con=self.con))
 
 
 if __name__ == "__main__":
