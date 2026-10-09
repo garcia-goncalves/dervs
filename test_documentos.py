@@ -24,6 +24,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import banco
 import documentos
 
 AQUI = Path(__file__).resolve().parent
@@ -579,7 +580,8 @@ class OLeitorDoProjeto(unittest.TestCase):
         r = documentos.ler_projeto(self.raiz)
         tamanho = len(json.dumps(r, ensure_ascii=False).encode("utf-8"))
         self.assertLessEqual(tamanho, documentos.MAX_JSON)
-        self.assertLessEqual(documentos.MAX_JSON, 32 * 1024)
+        self.assertLessEqual(documentos.MAX_JSON, 40 * 1024)
+        self.assertLess(documentos.MAX_JSON, banco.MAX_BYTES_POR_PROJETO)
         self.assertTrue(r["documentos"], "cortou tudo, nao sobrou nada")
         self.assertTrue(any(d["cortado"] for d in r["documentos"]))
         # e o que sobrou e lido pelo servidor sem reclamar

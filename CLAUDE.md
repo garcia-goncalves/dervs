@@ -368,8 +368,9 @@ a próxima sessão erraria:
 - **O corte do leitor nunca é mudo.** Passar de `MAX_VARRIDOS` abertos ou de
   `MAX_PASTAS` listadas vira erro visível ("há mais briefings que o limite"),
   senão o painel diria "sem documentação". O teto do JSON da chave subiu para
-  32 KiB: com os 11 briefings do próprio DERVS convertidos (115 critérios,
-  ~28 KiB) o último ficava sem critério nenhum. Os briefings antigos estão em
+  40 KiB (09/10/2026; era 32): os 14 briefings do próprio DERVS (141 critérios)
+  medem 33.556 bytes, e com 32 KiB o último ficava cortado. Tem de ficar abaixo
+  dos 64 KiB do projeto inteiro (`test_documentos` cobra). Os briefings antigos estão em
   `- [ ]` (nada marcado `[x]`: marcar é julgamento por critério).
 - **Em Consertar, o comando da prova sai à parte** (`prova` em
   `banco.tarefas_do_painel`): ele fica no fim do pedido e o corte em 300 o
@@ -377,7 +378,7 @@ a próxima sessão erraria:
 - **Não nomeie rota nem função `documentacao`:** `test_rotas.PROIBIDO` casa
   `acao|exec|comando|shell`, e "documentACAO" casa.
 - **Projeto acima de 64 KiB é descartado INTEIRO** em `banco.receber_relatorio`: o
-  agente limita o tamanho da chave (32 KiB) e marca `cortado`.
+  agente limita o tamanho da chave (40 KiB) e marca `cortado`.
 - **`test_progresso_tela.py` executa as funções de montagem em node** com um DOM de
   mentira (como `test_voz_tela.py`); sem node ele pula só esses casos. Mais o
   `test_design`: `Number(`/`parseInt(` são proibidos (use `+x`).
