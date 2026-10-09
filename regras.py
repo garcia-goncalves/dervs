@@ -600,6 +600,91 @@ def _idade(iso, agora):
     return (agora - t).total_seconds()
 
 
+# --- O servidor ligado (entrega B do Conectar simples) ----------------------
+#
+# FORA de VALIDADE de proposito: aquele dicionario decide o selo, e o selo nao
+# muda nesta entrega. O ajudante conta a cada 30 s; 180 s sao seis rodadas
+# perdidas, nao uma.
+VALIDADE_DO_SERVIDOR = 180
+
+_HEX = frozenset("0123456789abcdef")
+
+
+def _sha_valido(s, minimo=7) -> bool:
+    return (isinstance(s, str) and minimo <= len(s) <= 40
+            and all(c in _HEX for c in s))
+
+
+def estado_do_servidor(medido_em, agora=None) -> str:
+    """"medido" enquanto a ultima medicao vale; "sem_dados" depois (Lei 2)."""
+    agora = agora or datetime.now(timezone.utc)
+    idade = _idade(medido_em, agora)
+    if idade is None or idade > VALIDADE_DO_SERVIDOR:
+        return "sem_dados"
+    return "medido"
+
+
+def _mesmo_projeto(a, b) -> bool:
+    # O mesmo criterio de coletar.py ao casar projeto com o rotulo do compose.
+    return (str(a).lower().replace("-", "")
+            == str(b).lower().replace("-", ""))
+
+
+def no_ar_do_projeto(nome, dados):
+    """{sha, publicado_em} do projeto numa medicao de servidor, ou None.
+
+    None quando nada daquele servidor casa com o projeto: nada e inventado.
+    sha "" quer dizer "esta la, mas nao sei qual versao".
+    """
+    if not isinstance(dados, dict) or not nome:
+        return None
+    sistemas = [s for s in (dados.get("sistemas") or [])
+                if isinstance(s, dict) and s.get("projeto")
+                and _mesmo_projeto(s.get("projeto"), nome)]
+    publicacoes = [x for x in (dados.get("publicacoes") or [])
+                   if isinstance(x, dict) and x.get("projeto")
+                   and _mesmo_projeto(x.get("projeto"), nome)]
+    if not sistemas and not publicacoes:
+        return None
+    pub = publicacoes[-1] if publicacoes else {}
+    publicado_em = pub.get("quando") or ""
+    rotulos = {s.get("sha") for s in sistemas
+               if s.get("estado") == "running" and s.get("sha")}
+    if len(rotulos) == 1:
+        sha = rotulos.pop()
+    elif len(rotulos) > 1:
+        sha = ""        # dois sistemas do mesmo projeto em versoes diferentes
+    else:
+        sha = pub.get("sha") or ""
+    if not _sha_valido(sha):
+        sha = ""
+    return {"sha": sha,
+            "publicado_em": publicado_em if isinstance(publicado_em, str) else ""}
+
+
+def comparar_no_ar(sha, github) -> dict:
+    """A versao no ar contra a ponta do GitHub. Nunca um N inventado.
+
+    "atras" so quando o coletor comparou ESTE mesmo sha; se a versao no ar
+    mudou depois da ultima comparacao, o N velho nao serve: "diferente".
+    """
+    nao_sei = {"veredito": "nao_sei", "atras": None}
+    if not _sha_valido(sha) or not isinstance(github, dict):
+        return nao_sei
+    ponta = github.get("head_sha")
+    if not _sha_valido(ponta, minimo=40):
+        return nao_sei
+    if ponta.startswith(sha):
+        return {"veredito": "igual", "atras": None}
+    for item in github.get("no_ar") or []:
+        if not isinstance(item, dict) or item.get("sha") != sha:
+            continue
+        atras = item.get("atras")
+        if isinstance(atras, int) and not isinstance(atras, bool) and atras > 0:
+            return {"veredito": "atras", "atras": atras}
+    return {"veredito": "diferente", "atras": None}
+
+
 def camadas_do_selo(p: dict, agora=None) -> dict:
     """{camada: True se a medida dela ainda vale}. A prova por tras do selo."""
     agora = agora or datetime.now(timezone.utc)

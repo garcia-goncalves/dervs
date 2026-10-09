@@ -462,5 +462,39 @@ class AsRotasDoConectarSimples(unittest.TestCase):
         self.assertNotIn("/api/conectador", servir.ROTAS)
 
 
+class AsRotasDoServidorLigado(unittest.TestCase):
+    """Conectar simples (B), contrato C0: o servidor manda a medição com token
+    de máquina; o arquivo do ajudante é aberto (quem baixa ainda não tem
+    token); a linha para colar é só do dono."""
+
+    ESPERADAS = {
+        "/agente/servidor":      ("POST", "_agente_servidor",      "maquina"),
+        "/ajudante/servidor.py": ("GET",  "_ajudante_do_servidor", "aberta"),
+        "/api/ajudante/linha":   ("GET",  "_ajudante_linha",       "dado"),
+    }
+
+    def test_acesso_metodo_e_funcao_de_cada_uma(self):
+        for caminho, (metodo, funcao, acesso) in self.ESPERADAS.items():
+            rota = servir.ROTAS[caminho]
+            self.assertEqual((metodo, funcao, acesso),
+                             (rota.metodo, rota.funcao.__name__, rota.acesso),
+                             caminho)
+
+    def test_quem_so_olha_e_conferido_antes_do_balcao(self):
+        """O 403 de servidor vem ANTES de `registrar_tentativa` nas rotas de
+        computador: lido no fonte, porque o balcão cheio esconderia a ordem."""
+        import inspect
+        for funcao in (servir.Hub._relatorio, servir.Hub._resultado,
+                       servir.Hub._agente_pacote, servir.Hub._voz_maquina,
+                       servir.Hub._agente_servidor):
+            with self.subTest(funcao=funcao.__name__):
+                fonte = inspect.getsource(funcao)
+                balcao = fonte.index("registrar_tentativa")
+                trava = min(i for i in (fonte.find("_servidor_so_olha"),
+                                        fonte.find("_maquina_do_servidor"))
+                            if i >= 0)
+                self.assertLess(trava, balcao)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0)

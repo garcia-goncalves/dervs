@@ -29,7 +29,7 @@ endereço na barra do navegador e cair direto nela.
 | Painel | `#/painel` | a frase de resumo, a ação recomendada, e um selo por projeto |
 | Projeto | `#/projeto/<nome>` | a prova do selo, nas três colunas, mais os arquivados |
 | Alerta | `#/alerta/<id>` | o que houve, e as ações: adiar 24 h ou "isto está certo assim" |
-| Conectar | `#/conectar` | as três portas (o seu computador, a sua conta do GitHub, o seu servidor) e, embaixo, os computadores: parear e "Deixar consertar aqui". `#/computadores` cai aqui |
+| Conectar | `#/conectar` | as três portas (o seu computador, a sua conta do GitHub, o seu servidor — **Seus servidores**, com a linha para colar e o que roda em cada um) e, embaixo, os computadores: parear e "Deixar consertar aqui". `#/computadores` cai aqui |
 | Consertar | `#/trabalho` e `#/auditoria` | abas Tarefas e Auditoria: o que a IA fez, o que espera o seu clique ("Pode fazer") e o que ela achou no código |
 | Conta | `#/conta` e `#/conta/entrada` | abas Consumo (quanto o painel gastou em 7 dias) e Formas de entrar (chaves de acesso e códigos do papel). `#/consumo` e `#/entrada` caem aqui |
 

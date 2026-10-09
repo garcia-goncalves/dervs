@@ -202,6 +202,7 @@ function navegar() {
                          carregarComputadores(); carregarVoz(); break;
     default:             mostrar("painel"); pintarPainel(); break;
   }
+  ligarFluxoDosServidores(tela);
   window.scrollTo(0, 0);
 }
 
@@ -409,7 +410,7 @@ function pintarPainel() {
     carimbo.textContent = (p.selo === "sem_dados" ? "última medição "
                                                   : "medido ")
                         + haQuanto(carimboDe(p));
-    dizeres.append(nome, motivo, carimbo);
+    dizeres.append(nome, motivo, carimbo, ...linhasDoNoAr(p));
 
     const abrir = document.createElement("button");
     abrir.className = "botao botao--secundario abrir";
@@ -634,6 +635,9 @@ function pintarProjeto(nome) {
 
   /* --- No ar ------------------------------------------------------------ */
   const noar = coluna("No ar", colunas);
+  /* O que está no ar em cada servidor LIGADO (olhado por dentro, não por
+     endereço): uma linha por servidor, só quando há dado. */
+  noar.append(...linhasDoNoAr(p));
   if (!vale.github || !gh) {
     noar.append(nada("Sem a medição do GitHub não dá para comparar o que está "
                      + "publicado com o que está no repositório.", c.github));
@@ -1509,7 +1513,10 @@ function pintarAutorizar(p) {
   AUTORIZAR.botao = null;
   bloco.setAttribute("aria-busy", p.estado === "carregando" ? "true" : "false");
 
-  const titulo = criar("h2", "", "Autorizar este computador?");
+  /* O pedido de um SERVIDOR (entrega B) usa o mesmo bloco, com outras palavras.
+     Pedido sem `tipo` (servidor antigo) é de computador. */
+  const servidor = p.tipo === "servidor";
+  const titulo = criar("h2", "", servidor ? "Autorizar este servidor?" : "Autorizar este computador?");
   titulo.id = "autorizar-titulo";
   titulo.setAttribute("tabindex", "-1");
   const partes = [titulo];
@@ -1524,9 +1531,13 @@ function pintarAutorizar(p) {
     partes.push(botaoEmAcoes("Tentar de novo", true,
                              () => olharOPedido(AUTORIZAR.codigo)).acoes);
   } else if (p.estado === "autorizado" || p.estado === "conectado") {
-    partes.push(criar("p", "", "Este computador já foi autorizado. Veja abaixo se ele apareceu."));
+    partes.push(criar("p", "", servidor
+      ? "Este servidor já foi autorizado. Veja em Seus servidores se ele apareceu."
+      : "Este computador já foi autorizado. Veja abaixo se ele apareceu."));
   } else if (p.estado === "sucesso") {
-    partes.push(criar("p", "", "Autorizado. Volte à janela preta do computador: ela termina sozinha."));
+    partes.push(criar("p", "", servidor
+      ? "Autorizado. Em até um minuto o servidor aparece em Seus servidores."
+      : "Autorizado. Volte à janela preta do computador: ela termina sozinha."));
   } else {
     /* "esperando", "enviando" e "erro_autorizar": o pedido existe e ainda não
        foi autorizado. O botão só existe COM os dados na tela — ninguém
@@ -1536,7 +1547,12 @@ function pintarAutorizar(p) {
        que lê na janela preta. A defesa é só de tela; o servidor não muda. */
     const deFora = p.mesma_rede === false;
     const corpo = criar("p");
-    if (deFora) {
+    if (servidor) {
+      corpo.append("Um servidor chamado ", criar("strong", "", p.maquina || "sem nome"),
+                   " quer se ligar à sua conta. Ele só vai olhar, mas precisa de poder de "
+                   + "administrador no servidor.");
+      if (deFora) corpo.append(" Só autorize se foi você quem acabou de colar a linha nele.");
+    } else if (deFora) {
       corpo.append("O computador ", criar("strong", "", p.maquina || "sem nome"),
                    " pediu para se ligar ao seu painel. Este pedido veio de "
                    + "outra rede. Só autorize se você acabou de abrir o arquivo "
@@ -1561,7 +1577,9 @@ function pintarAutorizar(p) {
     partes.push(prazo);
     let entrada = null;
     if (deFora) {
-      const rotulo = criar("label", "", "Digite o código que aparece na janela preta do computador");
+      const rotulo = criar("label", "", servidor
+        ? "Digite o código que aparece no terminal do servidor"
+        : "Digite o código que aparece na janela preta do computador");
       entrada = document.createElement("input");
       entrada.type = "text";
       entrada.id = "autorizar-digitado";
@@ -1574,7 +1592,8 @@ function pintarAutorizar(p) {
     if (p.estado === "erro_autorizar") {
       partes.push(criar("p", "", "Não consegui falar com o DERVS agora. Isso não quer dizer que o pedido venceu — quer dizer que não olhei."));
     }
-    const { acoes, botao } = botaoEmAcoes("Autorizar este computador", false, autorizarPedido);
+    const { acoes, botao } = botaoEmAcoes(servidor ? "Autorizar este servidor" : "Autorizar este computador",
+                                          false, autorizarPedido);
     if (p.estado === "enviando") {
       botao.disabled = true;
       botao.setAttribute("aria-busy", "true");
@@ -1592,7 +1611,9 @@ function pintarAutorizar(p) {
     }
     AUTORIZAR.botao = botao;
     partes.push(acoes);
-    partes.push(criar("p", "mole", "Não reconhece este computador? Não clique em nada: o pedido vence sozinho e nada é ligado."));
+    partes.push(criar("p", "mole", servidor
+      ? "Não reconhece este servidor? Não clique em nada: o pedido vence sozinho e nada é ligado."
+      : "Não reconhece este computador? Não clique em nada: o pedido vence sozinho e nada é ligado."));
   }
 
   bloco.replaceChildren(...partes);
@@ -1651,7 +1672,15 @@ async function autorizarPedido() {
   try { r = await escrever("/api/pedido/autorizar", { codigo: d.codigo }); }
   catch (_) { r = null; }
   if (r && r.ok) {
-    pintarAutorizar({ estado: "sucesso" });
+    pintarAutorizar({ estado: "sucesso", tipo: d.tipo });
+    if (d.tipo === "servidor") {
+      /* Não é o computador que se espera aqui: recarrega o estado e acende o
+         cartão (e o fluxo ao vivo) sem mexer na rolagem. */
+      await carregar();
+      cartaoDosServidores();
+      ligarFluxoDosServidores("conectar");
+      return;
+    }
     esperarMaquinaNova($("#espera-maquina"), 10);
     return;
   }
@@ -2649,6 +2678,9 @@ function pintarConectar() {
   /* PORTA 3 — os seus sites: o campo é fixo no HTML, o resto é daqui. */
   pintarSites();
 
+  /* Os servidores ligados por dentro (entrega B), logo abaixo dos sites. */
+  cartaoDosServidores();
+
   reencontrarEspera();
 }
 
@@ -3214,6 +3246,316 @@ async function gerarNumero() {
     $("#numero-pareamento").classList.add("vencido");
     $("#numero-prazo").textContent = "Este código venceu. Gere outro.";
   }, Math.max(1, d.minutos) * 60000);
+}
+
+/* ============================================= Seus servidores (entrega B) ===
+   Um servidor ligado conta ao DERVS, a cada 30 segundos, o que roda nele. O
+   cartão é FIXO no index.html (`#servidores-corpo`) e preenchido daqui; o bloco
+   da linha para colar é montado UMA vez e reaproveitado a cada repintura: a
+   tela se repinta sozinha de minuto em minuto, e uma linha recriada no meio da
+   cópia jogaria fora a seleção da pessoa e o "O que isso faz?" que ela abriu.
+
+   O que o cartão nunca pode dizer:
+   - "nenhum servidor" quando a leitura não veio (`servidores_ligados` ausente
+     é "não olhei"), nem "de pé" com medição velha: passada a validade o
+     servidor é "sem dados" e a lista de sistemas some junto;
+   - "igual ao GitHub" sem ter medido: veredito desconhecido é "não sei". */
+const LIGAR_SERVIDOR = { fase: "", antes: 0, bloco: null };
+const TELAS_DO_FLUXO_DOS_SERVIDORES = ["painel", "projeto", "conectar"];
+let FLUXO_SERVIDORES = null;   // o EventSource dos servidores, quando ligado
+
+/* "desde 08/10/2026 12:00": data e hora de quando o sistema subiu. Data que
+   não lê some (devolve ""), em vez de escrever "Invalid Date". */
+function desdeQuando(iso) {
+  const t = Date.parse(iso);
+  if (!iso || isNaN(t)) return "";
+  return new Date(t).toLocaleDateString("pt-BR") + " " + hora(iso);
+}
+
+/* Um sistema do servidor. Só o que roda de verdade é "de pé"; a saúde ruim de
+   quem está parado não vira "com problema" (ele só está parado). */
+function linhaDeSistema(x) {
+  const li = criar("li", "sistema-do-servidor");
+  let rotulo = "parado", cor = "desconectado";
+  if (x.estado === "running") {
+    if (x.saude === "unhealthy") { rotulo = "com problema"; }
+    else { rotulo = "de pé"; cor = "conectado"; }
+  } else if (x.estado === "restarting") {
+    rotulo = "reiniciando";
+  }
+  li.append(criar("strong", "nome", x.nome || "sem nome"), marcaDaPorta(cor, rotulo));
+  const partes = [];
+  const desde = desdeQuando(x.desde);
+  if (desde) partes.push("desde " + desde);
+  if (typeof x.reinicios === "number" && x.reinicios > 0) {
+    partes.push("reiniciou " + x.reinicios + (x.reinicios === 1 ? " vez" : " vezes"));
+  }
+  if (partes.length) li.append(criar("span", "carimbo", partes.join(" · ")));
+  return li;
+}
+
+/* Um servidor ligado: nome, a marca de estado (cor nunca sozinha), o carimbo e
+   os sistemas. Passados os 180 s o servidor traz `estado: "sem_dados"`. */
+function linhaDeServidorLigado(s) {
+  const li = criar("li", "servidor-ligado");
+  li.dataset.maquina = String(s.maquina_id);
+  const medido = s.estado === "medido";
+  const topo = criar("div", "servidor-ligado__topo");
+  topo.append(criar("strong", "nome", s.nome || "sem nome"),
+              medido ? marcaDaPorta("conectado", "ligado") : marcaDaPorta("sem_dados"));
+  li.append(topo);
+
+  if (!medido) {
+    li.append(criar("p", "carimbo", s.medido_em
+      ? "Sem dados " + haQuanto(s.medido_em) + " — o servidor parou de contar."
+      : "Sem dados — o servidor ainda não contou nada."));
+  } else {
+    li.append(criar("p", "carimbo", "medido " + haQuanto(s.medido_em)));
+    const sistemas = Array.isArray(s.sistemas) ? s.sistemas : [];
+    if (s.docker_mudo === true) {
+      li.append(criar("p", "", "Não consegui ver os sistemas deste servidor."));
+    } else if (s.docker_mudo === false && !sistemas.length) {
+      li.append(criar("p", "", "Nenhum sistema rodando neste servidor agora."));
+    } else if (sistemas.length) {
+      const ul = criar("ul", "lista");
+      for (const x of sistemas) ul.append(linhaDeSistema(x));
+      li.append(criar("p", "carimbo", "Sistemas rodando neste servidor"), ul);
+    }
+  }
+
+  /* Todo servidor, medido ou não, tem como ser desligado: sem isto o acesso
+     dele só morria se alguém mexesse no banco. `botao--remover`: ver painel.css. */
+  const acoes = criar("div", "acoes");
+  const b = criar("button", "botao botao--secundario botao--remover", "Desligar este servidor");
+  b.type = "button";
+  b.addEventListener("click", () => confirmar({
+    titulo: "Desligar “" + (s.nome || "este servidor") + "”?",
+    texto: "O painel para de aceitar o que ele conta, na hora, e ele sai desta lista. "
+         + "Para tirar o ajudante de dentro do servidor também, rode lá a linha de "
+         + "remover (está em “O que isso faz?”). Para ligar de novo, cole a linha outra vez.",
+    sim: "Desligar", nao: "Manter ligado"
+  }, () => desligarServidor(s.maquina_id)));
+  acoes.append(b);
+  li.append(acoes);
+  return li;
+}
+
+/* Desliga pela MESMA rota de tirar computador: o servidor confere o dono. */
+async function desligarServidor(id) {
+  const r = await escrever("/api/maquinas/remover", { id });
+  if (!r.ok) { recado("não conseguimos desligar o servidor. Tente de novo.", true); return; }
+  recado("desligado. O painel não aceita mais o que ele conta.");
+  await carregar();
+  cartaoDosServidores();
+  ligarFluxoDosServidores("conectar");
+}
+
+/* A lista dos servidores: cada linha carimba o próprio "medido há". */
+function listaDeServidoresLigados(lista) {
+  const ul = criar("ul", "lista");
+  for (const s of lista) ul.append(linhaDeServidorLigado(s));
+  return ul;
+}
+
+/* O bloco da linha para colar. `d.linha` e `d.sha256` vêm do servidor DERVS,
+   mas entram só como texto. */
+function blocoDaLinhaDoAjudante(d) {
+  const bloco = criar("div", "ajudante");
+  const aviso = criar("p", "carimbo");
+  aviso.setAttribute("aria-live", "polite");
+  const { acoes, botao } = botaoEmAcoes("Copiar", false, async () => {
+    try {
+      await navigator.clipboard.writeText(d.linha);
+      aviso.textContent = "Copiado. Agora cole no servidor.";
+    } catch (_) {
+      aviso.textContent = "Não deu para copiar. Selecione a linha e copie à mão.";
+    }
+  });
+  botao.setAttribute("aria-label", "Copiar a linha para colar no servidor");
+  const pre = criar("pre", "receita", d.linha);
+  pre.setAttribute("tabindex", "0");
+  pre.setAttribute("aria-label", "A linha para colar no servidor");
+  bloco.append(acoes, aviso, pre);
+
+  const passos = criar("ol", "porta__lista");
+  for (const t of [
+    "Abra o terminal do servidor (o PuTTY ou o terminal do DERVS-VOZ) e entre como de costume.",
+    "Cole a linha de cima e aperte Enter. Ela pode pedir a sua senha do servidor.",
+    "Vai aparecer um código de 8 letras e números, como K7M4-2QXP (mais um endereço). Abra "
+      + "esta mesma tela no seu computador e clique em Autorizar (digite o código só se a tela "
+      + "pedir).",
+    "Pronto: em até um minuto o servidor aparece aqui."]) {
+    passos.append(criar("li", "", t));
+  }
+  bloco.append(passos);
+
+  bloco.append(criar("h3", "", "Se der errado"));
+  const python = criar("p", "mole");
+  python.append("Apareceu ", criar("code", "", "python3: command not found"),
+                "? O servidor não tem Python. Cole ", criar("code", "", "sudo apt install -y python3"),
+                " e rode a linha de novo.");
+  const soma = criar("p", "mole");
+  soma.append("Apareceu ", criar("code", "", "FAILED"), " ou ", criar("code", "", "soma de verificação"),
+              "? O arquivo chegou diferente do esperado. Não rode nada: recarregue esta página e "
+              + "copie a linha de novo.");
+  /* As frases entre aspas são as que o ajudante escreve no terminal, letra a
+     letra (sem acento, como ele escreve): o teste confere no fonte dele. */
+  const sudo = criar("p", "mole");
+  sudo.append("Apareceu ", criar("code", "", "Preciso de poder de administrador"),
+              "? Rode de novo com sudo na frente.");
+  const naoServe = criar("p", "mole");
+  naoServe.append("Apareceu ", criar("code", "", "Nao achei o Docker"), " ou ",
+                  criar("code", "", "Este servidor nao usa o gerenciador de servicos"),
+                  "? Esta máquina não serve para o ajudante; nada foi alterado.");
+  const venceu = criar("p", "mole");
+  venceu.append("Apareceu ", criar("code", "", "O painel nao liberou este servidor"),
+                "? O pedido venceu. Rode a linha de novo e autorize em poucos minutos.");
+  bloco.append(python, soma, sudo, naoServe, venceu);
+
+  const faz = detalhes("servidor-o-que-faz", "O que isso faz?");
+  faz.append(criar("p", "mole",
+    "A linha baixa um programa pequeno do dervs.com.br, confere que ele chegou inteiro e o instala "
+    + "no servidor. A cada 30 segundos ele conta ao DERVS quais sistemas estão rodando, desde "
+    + "quando, e qual versão foi publicada por último. Ele nunca lê senhas, arquivos de "
+    + "configuração nem os dados dos sistemas, não recebe ordens e não se atualiza sozinho. Para "
+    + "ver o Docker ele precisa de poder de administrador no servidor: por isso roda separado, "
+    + "num usuário só dele, e só com leitura."));
+  const tirar = criar("p", "mole");
+  tirar.append("Para tirar: cole ", criar("code", "", "sudo python3 /opt/dervs-ajudante/dervs-ajudante.py remover"),
+               " no servidor e clique em Desligar este servidor, aqui no painel.");
+  faz.append(tirar);
+  faz.append(criar("p", "carimbo", "Código de conferência do arquivo (SHA-256): " + d.sha256
+    + ". A linha já compara o arquivo com este código. Ele prova que chegou inteiro, não de quem veio."));
+  bloco.append(faz);
+  return bloco;
+}
+
+/* O cartão inteiro. Repinta o corpo, mas reaproveita o bloco da linha. */
+function cartaoDosServidores() {
+  const corpo = $("#servidores-corpo");
+  const lista = ESTADO && Array.isArray(ESTADO.servidores_ligados) ? ESTADO.servidores_ligados : null;
+  if (lista === null) {
+    /* Servidor antigo, ou a leitura não veio: "não olhei" não é "nenhum". */
+    corpo.replaceChildren(criar("p", "",
+      "Não consegui ler os seus servidores agora. Isso não quer dizer que não há nenhum — "
+      + "quer dizer que não olhei."));
+    return;
+  }
+  /* O servidor que se estava ligando apareceu: o roteiro cumpriu o papel. */
+  if (LIGAR_SERVIDOR.fase === "ligando" && lista.length > LIGAR_SERVIDOR.antes) {
+    LIGAR_SERVIDOR.fase = "";
+    LIGAR_SERVIDOR.bloco = null;
+  }
+  const partes = [];
+  if (lista.length) {
+    partes.push(listaDeServidoresLigados(lista));
+  } else if (LIGAR_SERVIDOR.fase === "") {
+    partes.push(criar("p", "",
+      "Ligue um servidor para ver, por dentro, o que está rodando nele e qual versão de cada "
+      + "projeto está no ar. O ajudante só olha o que roda no servidor. Para ficar de pé, a "
+      + "linha cria um usuário e um temporizador nele; você tira quando quiser."));
+  }
+  if (LIGAR_SERVIDOR.fase === "buscando") {
+    partes.push(criar("p", "mole", "Preparando a linha…"));
+  } else if (LIGAR_SERVIDOR.fase === "ligando" && LIGAR_SERVIDOR.bloco) {
+    partes.push(LIGAR_SERVIDOR.bloco);
+  } else if (LIGAR_SERVIDOR.fase === "erro" || LIGAR_SERVIDOR.fase === "indisponivel") {
+    partes.push(criar("p", "", LIGAR_SERVIDOR.fase === "indisponivel"
+      ? "Não consegui preparar a linha agora. O programa do servidor não está nesta cópia do DERVS."
+      : "Não consegui preparar a linha agora."));
+    partes.push(botaoEmAcoes("Tentar de novo", true, ligarUmServidor).acoes);
+  } else {
+    partes.push(botaoEmAcoes(lista.length ? "Ligar outro servidor" : "Ligar um servidor",
+                             lista.length > 0, ligarUmServidor).acoes);
+  }
+  corpo.replaceChildren(...partes);
+}
+
+/* O clique: pede a linha ao DERVS (uma leitura, que não cria nada) e mostra. */
+async function ligarUmServidor() {
+  if (LIGAR_SERVIDOR.fase === "buscando") return;
+  const lista = ESTADO && Array.isArray(ESTADO.servidores_ligados) ? ESTADO.servidores_ligados : [];
+  LIGAR_SERVIDOR.antes = lista.length;
+  LIGAR_SERVIDOR.fase = "buscando";
+  LIGAR_SERVIDOR.bloco = null;
+  cartaoDosServidores();
+  let r = null;
+  try { r = await fetch("/api/ajudante/linha"); } catch (_) { r = null; }
+  let d = null;
+  if (r && r.ok) {
+    try { d = await r.json(); } catch (_) { d = null; }
+  }
+  if (r && r.status === 403) {
+    /* Sessão ou página velha: a faixa do alto explica, e o cartão volta ao começo. */
+    abrirFaixaPaginaVelha();
+    LIGAR_SERVIDOR.fase = "";
+  } else if (d && typeof d.linha === "string" && typeof d.sha256 === "string") {
+    LIGAR_SERVIDOR.bloco = blocoDaLinhaDoAjudante(d);
+    LIGAR_SERVIDOR.fase = "ligando";
+  } else {
+    LIGAR_SERVIDOR.fase = r && r.status === 503 ? "indisponivel" : "erro";
+  }
+  cartaoDosServidores();
+}
+
+/* "No ar em vps-ovh: versão de 29/09/2026 — 3 mudanças atrás do GitHub". Veredito
+   desconhecido, ou servidor sem dados, é "não sei": nunca um "igual" por falta
+   de resposta. */
+function linhaDoNoAr(n) {
+  let veredito = "não sei qual versão está no ar";
+  if (n.estado === "medido") {
+    if (n.veredito === "igual") veredito = "igual ao GitHub";
+    else if (n.veredito === "diferente") veredito = "diferente do GitHub";
+    else if (n.veredito === "atras") {
+      veredito = typeof n.atras === "number" && n.atras > 0
+        ? n.atras + (n.atras === 1 ? " mudança" : " mudanças") + " atrás do GitHub"
+        : "atrás do GitHub";
+    }
+  }
+  const t = Date.parse(n.publicado_em);
+  const versao = isNaN(t) ? "" : "versão de " + new Date(t).toLocaleDateString("pt-BR") + " — ";
+  const p = criar("p", "no-ar");
+  p.textContent = "No ar em " + (n.servidor || "um servidor") + ": " + versao + veredito;
+  return p;
+}
+
+/* As linhas "No ar" de um projeto. Lista vazia ou ausente: nenhuma linha — um
+   projeto sem servidor ligado não ganha "não sei" no cartão. */
+function linhasDoNoAr(p) {
+  return Array.isArray(p.no_ar) ? p.no_ar.map(linhaDoNoAr) : [];
+}
+
+/* O fluxo ao vivo dos servidores: o DERVS avisa quando um servidor mede, e a
+   tela recarrega na hora em vez de esperar o minuto. Só existe com servidor
+   ligado e nas telas que mostram servidor; o relógio de um minuto continua por
+   baixo, então a tela nunca fica muda. É um fluxo POR ABA: gasta uma das vagas
+   da sessão, por isso não abre à toa. */
+function fecharFluxoDosServidores() {
+  if (FLUXO_SERVIDORES) { FLUXO_SERVIDORES.close(); FLUXO_SERVIDORES = null; }
+}
+
+function ligarFluxoDosServidores(tela) {
+  const lista = ESTADO && Array.isArray(ESTADO.servidores_ligados) ? ESTADO.servidores_ligados : [];
+  if (!lista.length || !TELAS_DO_FLUXO_DOS_SERVIDORES.includes(tela)) {
+    fecharFluxoDosServidores();
+    return;
+  }
+  if (FLUXO_SERVIDORES) return;                 /* repintar não reabre */
+  if (!("EventSource" in window)) return;
+  const f = new EventSource("/api/eventos");
+  FLUXO_SERVIDORES = f;
+  f.addEventListener("servidor", async () => { if (await carregar()) navegar(); });
+  f.addEventListener("fim", () => {
+    /* O servidor encerra a conexão de tempos em tempos de propósito. */
+    if (FLUXO_SERVIDORES !== f) return;
+    fecharFluxoDosServidores();
+    setTimeout(() => ligarFluxoDosServidores(rota().tela), 500);
+  });
+  f.onerror = () => {
+    /* Caiu de vez (recusa, vagas esgotadas): solta, e a próxima repintura tenta
+       de novo. Se ele só está religando sozinho, deixa. */
+    if (f.readyState === 2 && FLUXO_SERVIDORES === f) FLUXO_SERVIDORES = null;
+  };
 }
 
 /* === CONECTAR: fim === */

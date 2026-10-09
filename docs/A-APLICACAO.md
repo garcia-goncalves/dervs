@@ -164,6 +164,17 @@ Dois caminhos, lado a lado e **como iguais**:
   painel não pode saber onde o repositório está na sua máquina, e inventar seria ele
   mentindo.
 
+- **Ligar um servidor** (entrega B do "Conectar simples") — na terceira porta, o botao
+  **Ligar um servidor** mostra uma linha para colar no servidor (um VPS com Docker e
+  systemd). Ela baixa o programa do DERVS, confere a impressao digital (SHA-256) e roda com
+  `sudo`; o servidor aparece em **Seus servidores** depois do seu clique em **Autorizar**.
+  O programa **so olha**: a cada 30 segundos conta quais sistemas rodam, desde quando e qual
+  versao foi publicada por ultimo; nao recebe ordem nem muda nada la. Cada projeto ganha a
+  linha **No ar em ...**: igual ao GitHub, atras (quantas mudancas) ou "nao sei". A
+  impressao digital prova que o arquivo e o que o DERVS entrega, **nao** de onde ele veio.
+  Passados 3 minutos sem medir, o servidor mostra **Sem dados**; `remover` no servidor
+  desfaz tudo, mas nao tira o servidor da tela.
+
 Cada projeto que o computador achou aparece numa lista com a chave **Mostrar no painel**.
 Desligá-la **esconde o projeto do painel desta conta** (e a escolha sobrevive a uma
 medição nova), mas não apaga nada: a linha continua na lista, em cinza, para você poder

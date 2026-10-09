@@ -857,6 +857,14 @@ class Hub(SimpleHTTPRequestHandler):
         # `_desenvolver_pedir` leem os criterios crus do estado da conta.
         for p in estado["projetos"]:
             p.pop("documentacao", None)
+        # OS SERVIDORES LIGADOS entram DEPOIS do motor e da poda, como o
+        # `consertavel`: o selo nao os le nesta entrega, e `montar_estado` nao
+        # muda. Uma leitura so, por conta da sessao.
+        medicoes = banco.medicoes_de_servidor(usuario_id)
+        estado["servidores_ligados"] = [self._servidor_ligado(m)
+                                        for m in medicoes]
+        for p in estado["projetos"]:
+            p["no_ar"] = self._no_ar_do_projeto(p, medicoes)
         return self._json(200, estado)
 
     def _estatico(self):
@@ -1624,6 +1632,8 @@ class Hub(SimpleHTTPRequestHandler):
     NOME_DE_COMPUTADOR_OK = frozenset(
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._-")
     NOME_DE_COMPUTADOR_MAX = 40
+    # `in` numa tupla de textos: `["servidor"]` (lista) nao casa e nao levanta.
+    TIPOS_DE_MAQUINA = ("computador", "servidor")
 
     @staticmethod
     def _chave_do_balcao_de_pedido(origem: str) -> str:
@@ -1669,6 +1679,11 @@ class Hub(SimpleHTTPRequestHandler):
                 or not set(nome) <= self.NOME_DE_COMPUTADOR_OK):
             return self._json(400, {"erro": "pedido invalido"})
         nome = nome.strip()
+        # Sem `tipo` e computador (o `.cmd` da entrega A nao o manda). Fora da
+        # lista fechada e a mesma recusa do nome torto.
+        tipo = corpo.get("tipo", "computador")
+        if tipo not in self.TIPOS_DE_MAQUINA:
+            return self._json(400, {"erro": "pedido invalido"})
         try:
             banco.limpar_pedidos_vencidos()
         except sqlite3.Error:
@@ -1676,8 +1691,8 @@ class Hub(SimpleHTTPRequestHandler):
         for _ in range(5):
             try:
                 pedido, codigo = banco.abrir_pedido_de_computador(
-                    nome or "computador", self.MINUTOS_DO_CODIGO,
-                    origem=origem)
+                    nome or tipo, self.MINUTOS_DO_CODIGO,
+                    origem=origem, tipo=tipo)
             except sqlite3.IntegrityError:
                 continue              # colisao do codigo: sorteia outro
             return self._json(200, {"pedido": pedido, "codigo": codigo,
@@ -1780,6 +1795,8 @@ class Hub(SimpleHTTPRequestHandler):
         maquina = getattr(self, "_maquina", None)
         if maquina is None:            # cinto, alem do guarda do despacho
             return self._json(401, {"erro": "token de maquina invalido"})
+        if self._servidor_so_olha(maquina):
+            return
         if not cortina.registrar_tentativa(
                 "maquina:%d" % maquina["id"], time.time(), balcao="pacote",
                 teto=self.TETO_DE_PACOTES):
@@ -1858,6 +1875,300 @@ class Hub(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(corpo)))
         self.end_headers()
         self.wfile.write(corpo)
+
+    # --------------------------------------- o servidor ligado (entrega B)
+    #
+    # Um SERVIDOR pareado (`maquina.tipo = 'servidor'`) so olha: manda a
+    # medicao dele em `/agente/servidor` e mais nada. Nas rotas de computador
+    # (relatorio, resultado, pacote, voz) leva 403 ANTES do balcao, para nao
+    # gastar a vaga de ninguem e para a resposta nao depender de quanto ele
+    # ja pediu.
+    SO_OLHA = {"erro": "este servidor so olha"}
+
+    def _servidor_so_olha(self, maquina) -> bool:
+        """True com o 403 JA respondido se a maquina e um servidor."""
+        if (maquina or {}).get("tipo") == "servidor":
+            self._json(403, dict(self.SO_OLHA))
+            return True
+        return False
+
+    # O ajudante que o servidor baixa. LIDO do disco e servido como texto,
+    # nunca importado; o endereco do painel entra no lugar de `ALVO` pela
+    # MESMA `_injetar` do conectador.
+    AJUDANTE = AQUI / "ajudante_servidor.py"
+    TETO_DE_AJUDANTES = 30        # `/ajudante/servidor.py`, por origem
+
+    def _bytes_do_ajudante(self):
+        """O arquivo exato que sai em `/ajudante/servidor.py`, ou None.
+
+        As duas rotas usam ESTA funcao: o sha256 da linha e o do arquivo
+        baixado sao a mesma conta sobre os mesmos bytes. Falha fechada: sem a
+        marca (ou com duas), o servidor pareava com o endereco errado."""
+        try:
+            fonte = self.AJUDANTE.read_text(encoding="utf-8")
+            if sum(1 for l in fonte.splitlines()
+                   if l.endswith("# DERVS:ALVO")) != 1:
+                raise ValueError("marca do alvo")
+            return self._injetar(fonte, self._endereco_publico()).encode(
+                "ascii")
+        except (OSError, UnicodeError, ValueError):
+            return None
+
+    def _ajudante_do_servidor(self):
+        """O arquivo do ajudante. Aberto: quem baixa e o servidor, sem sessao.
+        Nao cria estado nenhum (o pareamento nasce quando ele pede)."""
+        if not cortina.registrar_tentativa(
+                self._origem_do_pedido(), time.time(), balcao="ajudante",
+                teto=self.TETO_DE_AJUDANTES):
+            return self._json(429, self.RECUSA)
+        corpo = self._bytes_do_ajudante()
+        if corpo is None:
+            return self._json(503, {"erro": "o ajudante nao esta nesta copia"})
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Disposition",
+                         'attachment; filename="dervs-ajudante.py"')
+        self.send_header("Content-Length", str(len(corpo)))
+        self.end_headers()
+        self.wfile.write(corpo)
+
+    def _ajudante_linha(self):
+        """A linha que o dono cola no servidor, com o sha256 do arquivo."""
+        sessao = self._sessao()
+        if sessao is None:            # venceu entre o despacho e esta linha
+            return self._json(403, {"erro": "entre de novo"})
+        corpo = self._bytes_do_ajudante()
+        if corpo is None:
+            return self._json(503, {"erro": "o ajudante nao esta nesta copia"})
+        resumo = hashlib.sha256(corpo).hexdigest()
+        endereco = self._endereco_publico() + "/ajudante/servidor.py"
+        # Pasta nova e privada (`mktemp -d`): na pasta em que a pessoa estava,
+        # outro usuario poderia deixar um arquivo com o mesmo nome. E `-I`
+        # faz o Python ignorar PYTHONPATH e nao importar nada da pasta atual.
+        linha = ('d="$(mktemp -d)" && cd "$d" && curl -fsSL %s -o dervs-ajudante.py && '
+                 'echo "%s  dervs-ajudante.py" | sha256sum -c - && sudo python3 '
+                 '-I dervs-ajudante.py' % (endereco, resumo))
+        return self._json(200, {"linha": linha, "sha256": resumo,
+                                "endereco": endereco})
+
+    # A medicao. Um envio a cada 30 s = 30 por janela de 15 min; 60 e o
+    # dobro, para reinicio e relogio torto. Balcao proprio, por maquina.
+    TETO_DE_RELATOS_DE_SERVIDOR = 60
+    TETO_DO_CORPO_DO_SERVIDOR = 512 * 1024
+    MAX_ITENS_DA_MEDICAO = 200
+    ESTADOS_DE_SISTEMA = ("created", "running", "paused", "restarting",
+                          "removing", "exited", "dead")
+    SAUDES_DE_SISTEMA = ("", "starting", "healthy", "unhealthy")
+    NUMEROS_DO_SERVIDOR = ("ligado_s", "carga_1m", "carga_5m", "carga_15m",
+                           "memoria_total_kb", "memoria_disponivel_kb",
+                           "disco_total_b", "disco_livre_b")
+    CHAVES_DO_TOPO = ("versao", "docker_mudo", "servidor", "sistemas",
+                      "publicacoes")
+    CHAVES_DE_SISTEMA = ("nome", "projeto", "estado", "saude", "desde",
+                         "reinicios", "imagem", "sha")
+    CHAVES_DE_PUBLICACAO = ("projeto", "quando", "sha", "resultado")
+    LETRAS_DO_RESULTADO = frozenset(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789()_-")
+
+    def _maquina_do_servidor(self):
+        """A maquina autenticada SE for servidor; senao None com 401/403."""
+        maquina = getattr(self, "_maquina", None)
+        if maquina is None:            # cinto, alem do guarda do despacho
+            self._json(401, {"erro": "token de maquina invalido"})
+            return None
+        if maquina.get("tipo") != "servidor":
+            self._json(403, {"erro": "so servidor"})
+            return None
+        return maquina
+
+    @classmethod
+    def _texto_da_medicao(cls, valor, teto: int) -> str:
+        """Texto gravavel, sem controle e ate `teto`; senao "" (= torto)."""
+        if (not cls._texto_gravavel(valor) or len(valor) > teto
+                or not valor.isprintable()):
+            return ""
+        return valor
+
+    @staticmethod
+    def _carimbo_utc(valor) -> str:
+        """Exatamente `AAAA-MM-DDTHH:MM:SS+00:00`, senao "". Sem regex: nada
+        de `re.compile` alcancavel por rota (`test_rotas.EXECUTA`)."""
+        if not isinstance(valor, str) or len(valor) != 25:
+            return ""
+        if not valor.endswith("+00:00") or any(
+                valor[i] != c for i, c in ((4, "-"), (7, "-"), (10, "T"),
+                                           (13, ":"), (16, ":"))):
+            return ""
+        if not all(valor[i].isdigit() and valor[i].isascii()
+                   for i in (0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18)):
+            return ""
+        try:
+            datetime.fromisoformat(valor)
+        except ValueError:
+            return ""
+        return valor
+
+    @staticmethod
+    def _sha_hex(valor) -> str:
+        """Hex minusculo de 7 a 40, senao ""."""
+        if (isinstance(valor, str) and 7 <= len(valor) <= 40
+                and all(c in "0123456789abcdef" for c in valor)):
+            return valor
+        return ""
+
+    @staticmethod
+    def _inteiro_da_medicao(valor):
+        """Inteiro >= 0 que cabe em 64 bits, nunca booleano; senao None."""
+        if (isinstance(valor, int) and not isinstance(valor, bool)
+                and 0 <= valor < 2 ** 63):
+            return valor
+        return None
+
+    def _medicao_limpa(self, corpo: dict):
+        """(dados limpos, invalidos). Lista fechada em todo nivel (C3).
+
+        Chave desconhecida some e conta 1; item com campo obrigatorio torto
+        some inteiro e conta 1; campo opcional torto vira vazio sem contar.
+        E isto que impede, por exemplo, o ambiente de um sistema (`Env`) de
+        chegar ao banco se um dia o ajudante o mandasse."""
+        invalidos = sum(1 for k in corpo if k not in self.CHAVES_DO_TOPO)
+        mudo = corpo.get("docker_mudo")
+        servidor = corpo.get("servidor")
+        limpo_srv = None
+        if isinstance(servidor, dict):
+            invalidos += sum(1 for k in servidor
+                             if k not in self.NUMEROS_DO_SERVIDOR)
+            limpo_srv = {}
+            for k in self.NUMEROS_DO_SERVIDOR:
+                v = servidor.get(k)
+                ok = self._numero_finito(v) and (
+                    not isinstance(v, int) or v < 2 ** 63)
+                limpo_srv[k] = v if ok else None
+        elif servidor is not None:
+            invalidos += 1
+        sistemas, publicacoes = [], []
+        for chave, destino, limpar in (
+                ("sistemas", sistemas, self._sistema_limpo),
+                ("publicacoes", publicacoes, self._publicacao_limpa)):
+            itens = corpo.get(chave)
+            if itens is None:
+                continue
+            if not isinstance(itens, list):
+                invalidos += 1
+                continue
+            invalidos += max(0, len(itens) - self.MAX_ITENS_DA_MEDICAO)
+            for item in itens[:self.MAX_ITENS_DA_MEDICAO]:
+                limpo, tortos = limpar(item)
+                invalidos += tortos
+                if limpo is not None:
+                    destino.append(limpo)
+        versao = corpo.get("versao")
+        return ({"versao": versao if self._inteiro_da_medicao(versao) else None,
+                 "docker_mudo": mudo if isinstance(mudo, bool) else None,
+                 "servidor": limpo_srv, "sistemas": sistemas,
+                 "publicacoes": publicacoes}, invalidos)
+
+    def _sistema_limpo(self, item):
+        """(sistema, invalidos) — sistema None se o item cai inteiro."""
+        if not isinstance(item, dict):
+            return None, 1
+        tortos = sum(1 for k in item if k not in self.CHAVES_DE_SISTEMA)
+        nome = self._texto_da_medicao(item.get("nome"), 128)
+        estado = item.get("estado")
+        if not nome or estado not in self.ESTADOS_DE_SISTEMA:
+            return None, tortos + 1
+        saude = item.get("saude")
+        return {"nome": nome,
+                "projeto": self._texto_da_medicao(item.get("projeto"), 128),
+                "estado": estado,
+                "saude": saude if saude in self.SAUDES_DE_SISTEMA else "",
+                "desde": self._carimbo_utc(item.get("desde")),
+                "reinicios": self._inteiro_da_medicao(item.get("reinicios")),
+                "imagem": self._texto_da_medicao(item.get("imagem"), 200),
+                "sha": self._sha_hex(item.get("sha"))}, tortos
+
+    def _publicacao_limpa(self, item):
+        """(publicacao, invalidos) — None se o item cai inteiro."""
+        if not isinstance(item, dict):
+            return None, 1
+        tortos = sum(1 for k in item if k not in self.CHAVES_DE_PUBLICACAO)
+        projeto = self._texto_da_medicao(item.get("projeto"), 128)
+        if not projeto:
+            return None, tortos + 1
+        resultado = item.get("resultado")
+        if not (isinstance(resultado, str) and len(resultado) <= 40
+                and set(resultado) <= self.LETRAS_DO_RESULTADO):
+            resultado = ""
+        return {"projeto": projeto,
+                "quando": self._carimbo_utc(item.get("quando")),
+                "sha": self._sha_hex(item.get("sha")),
+                "resultado": resultado}, tortos
+
+    def _agente_servidor(self):
+        """A medicao de um servidor ligado. A resposta NUNCA leva `tarefa`:
+        quem so olha nao recebe trabalho."""
+        maquina = self._maquina_do_servidor()
+        if maquina is None:
+            return
+        if not cortina.registrar_tentativa(
+                "maquina:%d" % maquina["id"], time.time(),
+                balcao="servidor_relato",
+                teto=self.TETO_DE_RELATOS_DE_SERVIDOR):
+            return self._json(429, self.RECUSA)
+        if not self._veio_como_json():
+            return
+        corpo = self._corpo_json(teto=self.TETO_DO_CORPO_DO_SERVIDOR)
+        if corpo is None:
+            return self._json(400, {"erro": "corpo invalido"})
+        dados, invalidos = self._medicao_limpa(corpo)
+        dados["invalidos"] = invalidos
+        try:
+            banco.gravar_medicao_de_servidor(maquina["id"],
+                                             maquina["usuario_id"], dados)
+        except ValueError:
+            return self._json(400, {"erro": "medicao grande demais"})
+        return self._json(200, {"ok": True, "invalidos": invalidos})
+
+    @staticmethod
+    def _servidor_ligado(m: dict) -> dict:
+        """Um item de `servidores_ligados` (C5): sem `imagem` nem `sha`."""
+        dados = m.get("dados")
+        medido = isinstance(dados, dict)
+        sistemas = [
+            {k: s.get(k) for k in ("nome", "projeto", "estado", "saude",
+                                   "desde", "reinicios")}
+            for s in ((dados or {}).get("sistemas") or [])
+            if isinstance(s, dict)] if medido else []
+        mudo = (dados or {}).get("docker_mudo")
+        return {"maquina_id": m["maquina_id"], "nome": m["nome"],
+                "estado": regras.estado_do_servidor(m.get("medido_em")),
+                "medido_em": m.get("medido_em"),
+                "docker_mudo": mudo if medido and isinstance(mudo, bool)
+                else None,
+                "sistemas": sorted(sistemas,
+                                   key=lambda s: str(s.get("nome")))}
+
+    @staticmethod
+    def _no_ar_do_projeto(p: dict, medicoes: list) -> list:
+        """`no_ar` de um projeto (C5): um item por servidor que o roda."""
+        itens = []
+        for m in medicoes:
+            achado = regras.no_ar_do_projeto(p.get("nome") or "",
+                                             m.get("dados"))
+            if achado is None:
+                continue
+            estado = regras.estado_do_servidor(m.get("medido_em"))
+            veredito = (regras.comparar_no_ar(achado["sha"], p.get("github"))
+                        if estado == "medido"
+                        else {"veredito": "nao_sei", "atras": None})
+            itens.append({"maquina_id": m["maquina_id"],
+                          "servidor": m["nome"], "estado": estado,
+                          "medido_em": m.get("medido_em"),
+                          "sha": achado["sha"] or None,
+                          "publicado_em": achado["publicado_em"] or None,
+                          "veredito": veredito["veredito"],
+                          "atras": veredito["atras"]})
+        return itens
 
     # ------------------------------------------- o endereco do servidor (B2)
     #
@@ -2523,6 +2834,8 @@ class Hub(SimpleHTTPRequestHandler):
         maquina = getattr(self, "_maquina", None)
         if maquina is None:            # cinto, alem do guarda do despacho
             return self._json(401, {"erro": "token de maquina invalido"})
+        if self._servidor_so_olha(maquina):
+            return
         # TETO NA INGESTAO. O teto de 300 e POR RELATORIO; nada limitava quantos
         # relatorios. Com um token vazado, um laco de POST enchia o disco e
         # deixava `montar_estado` carregando lixo a cada `/api/dados` de todo
@@ -2763,6 +3076,8 @@ class Hub(SimpleHTTPRequestHandler):
         maquina = getattr(self, "_maquina", None)
         if maquina is None:            # cinto, alem do guarda do despacho
             return self._json(401, {"erro": "token de maquina invalido"})
+        if self._servidor_so_olha(maquina):
+            return
         if not cortina.registrar_tentativa(
                 "maquina:%d" % maquina["id"], time.time(),
                 balcao="resultado", teto=self.TETO_DE_RESULTADOS):
@@ -3050,7 +3365,21 @@ class Hub(SimpleHTTPRequestHandler):
         # carregando ou se nao havia nada — e "nao sei" e "vazio" sao estados
         # diferentes.
         ultimo_estado = object()
+        # Sem `alvo`: a primeira leitura e a BASE (nao emite); cada mudanca
+        # depois dela vira `event: servidor`, sem `id`. Com `alvo` nada muda.
+        primeira, ultima_medicao = True, None
         while time.time() < fim:
+            if not alvo:
+                try:
+                    medicao = banco.ultima_medicao_de_servidor(usuario_id)
+                except sqlite3.Error:
+                    # Banco ocupado nao derruba o fluxo: "nao mudou", e a
+                    # proxima volta pergunta de novo.
+                    medicao = ultima_medicao
+                if not primeira and medicao != ultima_medicao:
+                    self._evento("servidor", {"medido_em": medicao})
+                    ultimo_ping = time.time()
+                primeira, ultima_medicao = False, medicao
             if alvo:
                 atual = banco.tarefa(alvo, usuario_id=usuario_id)
                 if atual is not None:
@@ -3744,6 +4073,10 @@ class Hub(SimpleHTTPRequestHandler):
         if maquina is None:            # cinto, alem do guarda do despacho
             self._json(401, {"erro": "token de maquina invalido"})
             return None
+        # Servidor ANTES de `so_mede`: ele tambem e `so_mede`, e a frase dele
+        # e outra.
+        if self._servidor_so_olha(maquina):
+            return None
         # Computador pareado so para medir (pelo arquivo) nao fala com o VOZ:
         # o VOZ pode pedir conserto, e quem so mede nao tem esse poder.
         if banco.maquina_so_mede(maquina["id"], maquina["usuario_id"]):
@@ -4186,6 +4519,17 @@ ROTAS = {
     "/agente/voz/pedido":       Rota("POST", Hub._voz_pedido,       "maquina"),
     "/api/voz":                 Rota("GET",  Hub._voz,              "dado"),
     "/api/voz/recado":          Rota("POST", Hub._voz_recado,       "dado"),
+
+    # O servidor ligado (Conectar simples, B). `/agente/servidor` e `maquina`
+    # e so aceita maquina `tipo='servidor'`: a medicao entra, nada desce.
+    # `/ajudante/servidor.py` e "aberta" porque quem baixa e o servidor, que
+    # ainda nao tem token (balcao por origem DENTRO dela; nao cria estado).
+    # `/api/ajudante/linha` e `dado`: a linha so e mostrada ao dono. Nomes
+    # conferidos contra `test_rotas.PROIBIDO` ("instalacao" casaria `acao`).
+    "/agente/servidor":         Rota("POST", Hub._agente_servidor,  "maquina"),
+    "/ajudante/servidor.py":    Rota("GET",  Hub._ajudante_do_servidor,
+                                     "aberta"),
+    "/api/ajudante/linha":      Rota("GET",  Hub._ajudante_linha,   "dado"),
 }
 # A capa e servida a qualquer visitante, entao a folha de estilo e o teclado da
 # cortina precisam ser abertos. Estes dois nao: quem os carrega e o
