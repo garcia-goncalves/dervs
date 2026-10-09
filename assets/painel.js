@@ -1411,7 +1411,10 @@ async function desarquivar(id) {
 const ESTADO_DA_PORTA = {
   conectado:   { cor: "verde",    glifo: "[OK]",  rotulo: "conectado" },
   desconectado:{ cor: "vermelho", glifo: "[X]",   rotulo: "não conectado" },
-  sem_dados:   { cor: "neutro",   glifo: "[···]", rotulo: "não deu para conferir" }
+  sem_dados:   { cor: "neutro",   glifo: "[···]", rotulo: "não deu para conferir" },
+  /* Só os pedidos ao servidor (entrega C) usam este: "o servidor não pegou o
+     pedido" não é erro nem sucesso, é "olhe isto". Borda em traço-e-ponto. */
+  atencao:     { cor: "atencao",  glifo: "[!]",   rotulo: "atenção" }
 };
 
 /* QUATRO SINAIS, como o selo dos projetos: cor (o fundo), forma (a borda),
@@ -3260,7 +3263,7 @@ async function gerarNumero() {
      é "não olhei"), nem "de pé" com medição velha: passada a validade o
      servidor é "sem dados" e a lista de sistemas some junto;
    - "igual ao GitHub" sem ter medido: veredito desconhecido é "não sei". */
-const LIGAR_SERVIDOR = { fase: "", antes: 0, bloco: null };
+const LIGAR_SERVIDOR = { fase: "", antes: 0, bloco: null, pedido: { maquina: 0, tipo: "", alvo: "", fase: "", frase: "", aviso: "", em: 0 } };
 const TELAS_DO_FLUXO_DOS_SERVIDORES = ["painel", "projeto", "conectar"];
 let FLUXO_SERVIDORES = null;   // o EventSource dos servidores, quando ligado
 
@@ -3274,7 +3277,7 @@ function desdeQuando(iso) {
 
 /* Um sistema do servidor. Só o que roda de verdade é "de pé"; a saúde ruim de
    quem está parado não vira "com problema" (ele só está parado). */
-function linhaDeSistema(x) {
+function linhaDeSistema(x, s) {
   const li = criar("li", "sistema-do-servidor");
   let rotulo = "parado", cor = "desconectado";
   if (x.estado === "running") {
@@ -3291,7 +3294,331 @@ function linhaDeSistema(x) {
     partes.push("reiniciou " + x.reinicios + (x.reinicios === 1 ? " vez" : " vezes"));
   }
   if (partes.length) li.append(criar("span", "carimbo", partes.join(" · ")));
+  /* Entrega C: só num servidor que aceita pedidos. O botão exige `reiniciavel
+     === true` (nunca "não é falso") e uma chave de acesso viva; o bloqueado
+     diz por que não tem botão, em vez de só sumir com ele. */
+  const o = s && s.ordens ? s.ordens : null;
+  if (o) {
+    const feito = ultimoPedido(s, "reiniciar", x.nome);
+    if (feito) li.append(estadoDoPedido(feito));
+    if (x.bloqueado === true) {
+      li.append(criar("span", "carimbo", "fica de fora: guarda dado de saúde"));
+    } else if (x.reiniciavel === true && o.chaves_ok !== false) {
+      li.append(botaoDePedido(s, "reiniciar", x.nome, "Reiniciar"));
+    }
+  }
   return li;
+}
+
+/* ------------------------------------------------ pedidos ao servidor (C) ===
+   O dono pede, o servidor faz, e cada pedido só anda com a digital ou o PIN.
+   Nada aqui diz "feito" sem o servidor ter contado: o estado vem pronto do
+   DERVS (`ordens.pedidos[].estado`) e esta tela só o traduz em palavras. */
+
+/* A frase do pedido, letra por letra igual à de `Hub._frase_do_pedido`: é ela
+   que o dono lê antes de tocar, e o servidor refaz a mesma para conferir. */
+function fraseDoPedido(tipo, alvo, servidor) {
+  if (tipo === "voltar") {
+    return "Voltar “" + alvo + "” para a versão anterior no servidor “" + servidor + "”";
+  }
+  return "Reiniciar o sistema “" + alvo + "” no servidor “" + servidor + "”";
+}
+
+/* Por que o servidor recusou (lista fechada do ajudante). */
+function fraseDoMotivo(motivo) {
+  const frases = {
+    teto: "já foram 6 pedidos na última hora, o máximo. Tente de novo mais tarde.",
+    vencida: "o pedido chegou depois dos 5 minutos. Peça de novo.",
+    repetida: "este pedido já tinha sido usado.",
+    bloqueado: "este sistema guarda dado de saúde e fica de fora sempre.",
+    desconhecido: "o servidor não encontrou esse sistema ou projeto agora.",
+    outro_servidor: "o pedido era para outra ligação deste servidor. Recarregue a página e peça de novo.",
+    cheio: "o servidor está com pedidos demais guardados. Tente daqui a 5 minutos."
+  };
+  const naoReconheceu = "o servidor não reconheceu a sua digital neste pedido. "
+    + "Se a lista de aparelhos mudou, cole a linha de novo.";
+  for (const m of ["assinatura", "desafio", "origem", "aparelho", "forma"]) frases[m] = naoReconheceu;
+  return Object.prototype.hasOwnProperty.call(frases, motivo) ? frases[motivo] : "";
+}
+
+/* O que o DERVS respondeu ao preparar ou assinar, em frase nossa. `status` 0 é
+   "nem chegou" (rede). */
+function fraseDoErroDePedido(status, motivo) {
+  if (status === 409) {
+    const frases = {
+      so_olha: "Este servidor só olha. Para ele aceitar pedidos, cole a linha com pedidos.",
+      sem_dados: "O servidor não conta nada há mais de 3 minutos. Espere ele voltar a medir.",
+      ocupado: "Já há um pedido em andamento neste servidor. Espere ele terminar.",
+      sem_chave: "Nenhum aparelho seu é conhecido por este servidor. Cole a linha com pedidos de novo."
+    };
+    if (Object.prototype.hasOwnProperty.call(frases, motivo)) return frases[motivo];
+  }
+  if (status === 403 && motivo === "bloqueado") {
+    return "Este sistema guarda dado de saúde e fica de fora sempre.";
+  }
+  if (status === 404) return "Não achei este servidor na sua conta. Recarregue a página.";
+  if (status === 400) return "Esse sistema não está mais na medição. Recarregue a página.";
+  if (status === 401) return "Não deu para conferir a sua digital. Nada foi pedido. Tente de novo.";
+  if (status === 429) return "Muitos pedidos em pouco tempo. Tente daqui a alguns minutos.";
+  return "Não consegui falar com o DERVS. Nada foi pedido. Tente de novo.";
+}
+
+/* O último pedido DAQUELE alvo (a lista vem do mais novo para o mais velho). */
+function ultimoPedido(s, tipo, alvo) {
+  const lista = s && s.ordens && Array.isArray(s.ordens.pedidos) ? s.ordens.pedidos : [];
+  return lista.find(p => p.tipo === tipo && p.alvo === alvo) || null;
+}
+
+/* Há pedido andando neste servidor? Um de cada vez: o DERVS também recusa o
+   segundo ("ocupado"), mas o botão já avisa antes de a pessoa gastar a digital. */
+function pedidoEmAndamento(s) {
+  const c = LIGAR_SERVIDOR.pedido;
+  if (c.maquina === s.maquina_id && (c.fase === "preparando" || c.fase === "esperando")) return true;
+  const lista = s.ordens && Array.isArray(s.ordens.pedidos) ? s.ordens.pedidos : [];
+  return lista.some(p => p.estado === "enviado" || p.estado === "fazendo");
+}
+
+/* O estado de um pedido: marca (cor nunca sozinha) e a frase. `feito` só vem
+   com o servidor tendo contado; `nao_pegou`, `sem_resposta` e `nao_sei` nunca
+   viram "feito" nem "falhou". */
+function estadoDoPedido(p) {
+  const div = criar("div", "pedido");
+  div.dataset.numero = String(p.numero);
+  div.dataset.tipo = String(p.tipo);
+  div.dataset.alvo = String(p.alvo);
+  const quando = haQuanto(p.quando);
+  let cor = "sem_dados", rotulo = "não sei", frase = "o servidor não contou o que aconteceu com o pedido.";
+  if (p.estado === "enviado") {
+    cor = "sem_dados"; rotulo = "enviado"; frase = "pedido enviado " + quando;
+  } else if (p.estado === "fazendo") {
+    cor = "sem_dados"; rotulo = "fazendo"; frase = "o servidor está fazendo, " + quando;
+  } else if (p.estado === "nao_pegou") {
+    cor = "atencao"; rotulo = "não pegou";
+    frase = "o servidor não pegou o pedido. Nada foi feito. Confira se ele está medindo "
+      + "(o carimbo acima) e peça de novo.";
+  } else if (p.estado === "feito") {
+    cor = "conectado"; rotulo = "feito"; frase = "feito " + quando;
+  } else if (p.estado === "nao_deu") {
+    cor = "desconectado"; rotulo = "não deu certo";
+    frase = "não deu certo" + (typeof p.codigo === "number" ? " (código " + p.codigo + ")" : "")
+      + ". Confira o sistema na lista acima: se ele estiver parado, peça de novo.";
+  } else if (p.estado === "recusado") {
+    cor = "desconectado"; rotulo = "recusado";
+    const porque = fraseDoMotivo(p.motivo);
+    frase = "o servidor recusou o pedido" + (porque ? ": " + porque : ".");
+  } else if (p.estado === "sem_resposta") {
+    frase = "o servidor pegou o pedido " + quando + " e não contou como terminou. Não sei se foi feito.";
+  } else if (p.estado === "nao_sei") {
+    frase = "o servidor não conseguiu saber se terminou. Confira o sistema na lista acima.";
+  }
+  div.append(marcaDaPorta(cor, rotulo), criar("span", "pedido__frase", frase));
+  return div;
+}
+
+/* O botão de um pedido. Com pedido andando no servidor ele fica desabilitado
+   por `aria-disabled` (continua focável e diz o porquê no título). */
+function botaoDePedido(s, tipo, alvo, rotulo) {
+  const acoes = criar("div", "acoes");
+  const b = criar("button", "botao botao--secundario", rotulo);
+  b.type = "button";
+  const c = LIGAR_SERVIDOR.pedido;
+  if (c.maquina === s.maquina_id && c.tipo === tipo && c.alvo === alvo) {
+    if (c.fase === "preparando") b.textContent = "Preparando o pedido…";
+    if (c.fase === "esperando") b.textContent = "Esperando a sua digital…";
+  }
+  if (pedidoEmAndamento(s)) {
+    b.setAttribute("aria-disabled", "true");
+    b.title = "Espere o pedido anterior terminar.";
+  }
+  b.addEventListener("click", () => {
+    if (b.getAttribute("aria-disabled") === "true") return;
+    pedirAoServidor(s, tipo, alvo);
+  });
+  acoes.append(b);
+  return acoes;
+}
+
+/* A faixa do topo do servidor: o que se espera da digital (com a frase que o
+   DERVS devolveu, para conferir), ou por que o pedido não andou. As de recusa e
+   cancelamento vencem em um minuto; "esperando" some quando acaba. */
+function faixaDoPedido(s) {
+  const c = LIGAR_SERVIDOR.pedido;
+  if (c.maquina !== s.maquina_id) return null;
+  if (c.fase === "esperando") {
+    const f = criar("p", "faixa-do-pedido", "Confira: " + c.frase + ". O pedido vence em 5 minutos.");
+    f.setAttribute("role", "status");
+    return f;
+  }
+  if ((c.fase === "cancelado" || c.fase === "erro") && Date.now() - c.em < 60000) {
+    const f = criar("p", "faixa-do-pedido" + (c.fase === "erro" ? " faixa-do-pedido--atencao" : ""), c.aviso);
+    f.setAttribute("role", "status");
+    return f;
+  }
+  return null;
+}
+
+function linkParaConta(rotulo) {
+  const a = criar("a", "", rotulo);
+  a.href = "#/conta";
+  return a;
+}
+
+/* Tudo o que um servidor com pedidos ganha além da lista de sistemas. */
+function blocoDosPedidos(s) {
+  const o = s.ordens;
+  const bloco = criar("div", "pedidos");
+  if (o.chaves_ok === false) {
+    bloco.append(criar("p", "faixa-do-pedido faixa-do-pedido--atencao",
+      "Você não tem mais nenhuma chave de acesso, então este servidor não aceita pedidos seus. "
+      + "Cadastre uma em Conta e cole a linha de novo."),
+      linkParaConta("Ir para Conta"));
+    return bloco;
+  }
+  if (o.linha_velha === true) {
+    bloco.append(criar("p", "faixa-do-pedido faixa-do-pedido--atencao",
+      "A lista de aparelhos que podem mandar pedidos mudou desde que você ligou este servidor. "
+      + "Os aparelhos antigos continuam valendo; para os novos, cole a linha de novo."),
+      botaoEmAcoes("Ver a linha nova", true, ligarUmServidor).acoes);
+  }
+  const secao = criar("div", "pedidos__voltar");
+  secao.append(criar("h3", "", "Voltar a versão anterior"));
+  const voltaveis = Array.isArray(o.voltaveis) ? o.voltaveis : [];
+  if (!voltaveis.length) {
+    secao.append(criar("p", "mole", "Nenhum projeto deste servidor pode voltar de versão ainda."));
+  } else {
+    const ul = criar("ul", "lista");
+    for (const nome of voltaveis) {
+      const li = criar("li", "voltavel");
+      li.append(criar("strong", "nome", nome));
+      const feito = ultimoPedido(s, "voltar", nome);
+      if (feito) li.append(estadoDoPedido(feito));
+      li.append(botaoDePedido(s, "voltar", nome, "Voltar"));
+      ul.append(li);
+    }
+    secao.append(ul);
+  }
+  /* O resultado nunca some calado: pedido de um alvo que saiu da medição fica
+     numa linha à parte (só o mais novo). */
+  const sistemas = Array.isArray(s.sistemas) ? s.sistemas : [];
+  const lista = Array.isArray(o.pedidos) ? o.pedidos : [];
+  const solto = lista.find(p => p.tipo === "voltar"
+    ? !voltaveis.includes(p.alvo)
+    : !sistemas.some(x => x.nome === p.alvo));
+  if (solto) {
+    const li = criar("p", "pedido-solto");
+    li.append(criar("strong", "", "Último pedido: "), (solto.tipo === "voltar" ? "voltar " : "reiniciar ") + solto.alvo);
+    secao.append(li, estadoDoPedido(solto));
+  }
+  bloco.append(secao);
+  return bloco;
+}
+
+/* base64url (a conversão que o navegador pede no `get` e que o servidor lê). */
+function base64urlParaBytes(texto) {
+  const limpo = String(texto).replace(/-/g, "+").replace(/_/g, "/");
+  const cru = atob(limpo + "===".slice((limpo.length + 3) % 4));
+  const saida = new Uint8Array(cru.length);
+  for (let i = 0; i < cru.length; i++) saida[i] = cru.charCodeAt(i);
+  return saida;
+}
+
+function bytesParaBase64url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let t = "";
+  for (let i = 0; i < bytes.length; i++) t += String.fromCharCode(bytes[i]);
+  return btoa(t).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/* O clique: a frase exata num diálogo ANTES de qualquer coisa sair daqui. */
+function pedirAoServidor(s, tipo, alvo) {
+  const texto = tipo === "voltar"
+    ? "O servidor põe no ar de novo a versão que estava antes da última publicação. Pode levar "
+      + "alguns minutos, e o sistema fica fora do ar por alguns segundos no fim. Depois do clique, "
+      + "o seu aparelho pede a digital ou o PIN."
+    : "O sistema para e volta sozinho, em alguns segundos. Quem estiver usando pode ver a página "
+      + "fora do ar nesse tempo. Depois do clique, o seu aparelho pede a digital ou o PIN.";
+  confirmar({ titulo: fraseDoPedido(tipo, alvo, s.nome || ""), texto, sim: "Pode fazer", nao: "Agora não" },
+            () => fazerOPedido(s, tipo, alvo));
+}
+
+/* Depois do "Pode fazer": preparar no DERVS, pedir a digital, entregar. Cada
+   saída que não é sucesso vira uma frase na faixa do servidor, e nenhuma delas
+   diz que algo foi pedido quando não foi. */
+async function fazerOPedido(s, tipo, alvo) {
+  const c = LIGAR_SERVIDOR.pedido;
+  if (c.fase === "preparando" || c.fase === "esperando") return;
+  Object.assign(c, { maquina: s.maquina_id, tipo, alvo, fase: "preparando", frase: "", aviso: "", em: Date.now() });
+  const termina = (fase, aviso) => {
+    Object.assign(c, { fase, aviso, em: Date.now() });
+    cartaoDosServidores();
+  };
+  if (!(typeof navigator !== "undefined" && navigator.credentials && navigator.credentials.get)) {
+    termina("erro", "Este navegador não sabe pedir a digital. Use o Chrome, o Edge ou o Safari atualizados.");
+    return;
+  }
+  cartaoDosServidores();
+  const falhou = async (r) => {
+    let corpo = null;
+    if (r) { try { corpo = await r.json(); } catch (_) { corpo = null; } }
+    if (r && r.status === 403 && corpo && corpo.motivo === "pagina_velha") {
+      c.fase = "";                      /* a faixa central já explicou */
+      cartaoDosServidores();
+      return;
+    }
+    termina("erro", fraseDoErroDePedido(r ? r.status : 0, corpo && corpo.motivo));
+  };
+  let r = null;
+  try {
+    r = await escrever("/api/maquinas/ordem/preparar", { maquina_id: +s.maquina_id, tipo, alvo });
+  } catch (_) { r = null; }
+  if (!r || !r.ok) { await falhou(r); return; }
+  let d = null;
+  try { d = await r.json(); } catch (_) { d = null; }
+  if (!d || typeof d.numero !== "string" || typeof d.desafio !== "string" || typeof d.rp_id !== "string"
+      || !Array.isArray(d.chaves) || !d.chaves.length) {
+    termina("erro", fraseDoErroDePedido(0, null));
+    return;
+  }
+  c.fase = "esperando";
+  c.frase = typeof d.frase === "string" && d.frase ? d.frase : fraseDoPedido(tipo, alvo, s.nome || "");
+  cartaoDosServidores();
+  let cred = null;
+  try {
+    cred = await navigator.credentials.get({ publicKey: {
+      challenge: base64urlParaBytes(d.desafio),
+      rpId: d.rp_id,
+      allowCredentials: d.chaves.map(id => ({ type: "public-key", id: base64urlParaBytes(id) })),
+      userVerification: "required",
+      timeout: (+d.segundos || 300) * 1000
+    } });
+  } catch (e) {
+    if (e && (e.name === "NotAllowedError" || e.name === "AbortError")) {
+      termina("cancelado", "Você cancelou. Nada foi pedido ao servidor.");
+    } else {
+      termina("erro", fraseDoErroDePedido(401, null));
+    }
+    return;
+  }
+  if (!cred || !cred.response) {
+    termina("cancelado", "Você cancelou. Nada foi pedido ao servidor.");
+    return;
+  }
+  const resp = cred.response;
+  let r2 = null;
+  try {
+    r2 = await escrever("/api/maquinas/ordem/assinar", {
+      numero: d.numero,
+      cred_id: cred.id,
+      cliente: bytesParaBase64url(resp.clientDataJSON),
+      autenticador: bytesParaBase64url(resp.authenticatorData),
+      assinatura: bytesParaBase64url(resp.signature)
+    });
+  } catch (_) { r2 = null; }
+  if (!r2 || !r2.ok) { await falhou(r2); return; }
+  c.fase = "";
+  recado("pedido enviado. O resultado aparece neste cartão.");
+  await carregar();
+  cartaoDosServidores();
 }
 
 /* Um servidor ligado: nome, a marca de estado (cor nunca sozinha), o carimbo e
@@ -3304,6 +3631,8 @@ function linhaDeServidorLigado(s) {
   topo.append(criar("strong", "nome", s.nome || "sem nome"),
               medido ? marcaDaPorta("conectado", "ligado") : marcaDaPorta("sem_dados"));
   li.append(topo);
+  const faixa = medido ? faixaDoPedido(s) : null;
+  if (faixa) li.append(faixa);
 
   if (!medido) {
     li.append(criar("p", "carimbo", s.medido_em
@@ -3318,8 +3647,16 @@ function linhaDeServidorLigado(s) {
       li.append(criar("p", "", "Nenhum sistema rodando neste servidor agora."));
     } else if (sistemas.length) {
       const ul = criar("ul", "lista");
-      for (const x of sistemas) ul.append(linhaDeSistema(x));
+      for (const x of sistemas) ul.append(linhaDeSistema(x, s));
       li.append(criar("p", "carimbo", "Sistemas rodando neste servidor"), ul);
+    }
+    /* Pedidos: só com o bloco `ordens`. `null` é "este servidor só olha" (o
+       convite); a chave ausente é servidor antigo, e aí nada de novo aparece. */
+    if (s.ordens) {
+      li.append(blocoDosPedidos(s));
+    } else if (s.ordens === null) {
+      li.append(criar("p", "mole", "Este servidor só olha."),
+                botaoEmAcoes("Quero poder pedir coisas", true, ligarUmServidor).acoes);
     }
   }
 
@@ -3359,23 +3696,55 @@ function listaDeServidoresLigados(lista) {
 
 /* O bloco da linha para colar. `d.linha` e `d.sha256` vêm do servidor DERVS,
    mas entram só como texto. */
-function blocoDaLinhaDoAjudante(d) {
-  const bloco = criar("div", "ajudante");
+function linhaParaColar(linha, comPedidos) {
   const aviso = criar("p", "carimbo");
   aviso.setAttribute("aria-live", "polite");
   const { acoes, botao } = botaoEmAcoes("Copiar", false, async () => {
     try {
-      await navigator.clipboard.writeText(d.linha);
+      await navigator.clipboard.writeText(linha);
       aviso.textContent = "Copiado. Agora cole no servidor.";
     } catch (_) {
       aviso.textContent = "Não deu para copiar. Selecione a linha e copie à mão.";
     }
   });
-  botao.setAttribute("aria-label", "Copiar a linha para colar no servidor");
-  const pre = criar("pre", "receita", d.linha);
+  const qual = comPedidos ? "a linha com pedidos" : "a linha";
+  botao.setAttribute("aria-label", "Copiar " + qual + " para colar no servidor");
+  const pre = criar("pre", "receita", linha);
   pre.setAttribute("tabindex", "0");
-  pre.setAttribute("aria-label", "A linha para colar no servidor");
-  bloco.append(acoes, aviso, pre);
+  pre.setAttribute("aria-label", (comPedidos ? "A linha com pedidos" : "A linha") + " para colar no servidor");
+  return [acoes, aviso, pre];
+}
+
+function blocoDaLinhaDoAjudante(d) {
+  const bloco = criar("div", "ajudante");
+  /* Duas escolhas, uma embaixo da outra. A segunda só existe com chave de
+     acesso viva (`linha_com_ordens`): sem ela, a tela explica como cadastrar. */
+  const comPedidos = typeof d.linha_com_ordens === "string" && d.linha_com_ordens !== "";
+  if (comPedidos) {
+    bloco.append(criar("h3", "", "Só olhar"),
+      criar("p", "mole", "O servidor conta o que está rodando nele. O DERVS não consegue pedir nada a ele."));
+  }
+  bloco.append(...linhaParaColar(d.linha, false));
+  if (d.linha_com_ordens === null) {
+    bloco.append(criar("p", "mole",
+      "Para o servidor aceitar pedidos, você precisa de uma chave de acesso (a digital do celular "
+      + "ou o PIN do computador). Cadastre uma e volte aqui."),
+      linkParaConta("Cadastrar uma chave de acesso"));
+  }
+  if (comPedidos) {
+    const aparelhos = Array.isArray(d.chaves_na_linha) ? d.chaves_na_linha : [];
+    bloco.append(criar("h3", "", "Olhar e aceitar pedidos"),
+      criar("p", "mole", "Além de contar, o servidor aceita dois pedidos seus: reiniciar um sistema e "
+        + "voltar um projeto para a versão anterior. Cada pedido só anda com a sua digital ou o seu PIN."));
+    if (aparelhos.length) {
+      bloco.append(criar("p", "mole", "Poderão mandar pedidos: " + aparelhos.join(", ") + "."));
+    }
+    bloco.append(...linhaParaColar(d.linha_com_ordens, true),
+      criar("p", "mole", "Cole a linha acima e aperte Enter. Ela pode pedir a sua senha do servidor. "
+        + "Se o servidor já estava ligado, ela troca o jeito dele sem perder o que ele já contou."),
+      criar("p", "mole", "Para voltar a só olhar, cole no servidor a linha Só olhar. "
+        + "Os pedidos são desligados na hora."));
+  }
 
   const passos = criar("ol", "porta__lista");
   for (const t of [
@@ -3427,6 +3796,30 @@ function blocoDaLinhaDoAjudante(d) {
   faz.append(criar("p", "carimbo", "Código de conferência do arquivo (SHA-256): " + d.sha256
     + ". A linha já compara o arquivo com este código. Ele prova que chegou inteiro, não de quem veio."));
   bloco.append(faz);
+  if (comPedidos) {
+    const fazPedidos = detalhes("servidor-o-que-faz-pedidos", "O que isso faz? (olhar e aceitar pedidos)");
+    fazPedidos.append(
+      criar("p", "mole", "A linha faz tudo o que a de só olhar faz e mais uma coisa: deixa o servidor "
+        + "aceitar dois pedidos seus — reiniciar um sistema que ele está vendo e voltar um projeto para "
+        + "a versão que estava no ar antes da última. Nenhum outro: ele não apaga, não para, não lê dados "
+        + "nem senhas e não aceita nenhuma ordem escrita. Um pedido novo só existe numa versão nova deste "
+        + "programa, que você colaria de novo."),
+      criar("p", "mole", "Cada pedido sai com a sua digital ou o seu PIN, e é o próprio servidor quem "
+        + "confere que foi o seu aparelho, que o pedido é recente e que ainda não foi usado. O Ajudei e "
+        + "qualquer sistema com dado de saúde ficam de fora sempre, nas duas pontas."));
+    const limite = criar("p", "mole");
+    limite.append(criar("strong", "", "O limite, com todas as letras: "),
+      "o seu aparelho não mostra qual pedido você está aprovando — ele mostra só “dervs.com.br”. Se "
+      + "alguém tomasse o dervs.com.br, poderia trocar o pedido na hora do seu toque. Sem um toque seu, "
+      + "nada acontece. Com o site tomado, cada toque vira no máximo um pedido desta lista — reiniciar "
+      + "um sistema ou voltar um projeto liberado —, nunca no Ajudei, nunca um comando, e no máximo 6 por "
+      + "hora em cada servidor. Se o seu aparelho pedir a digital sem você ter clicado em “Pode fazer”, recuse.");
+    fazPedidos.append(limite,
+      criar("p", "mole", "Para isso, a linha dá ao programa do servidor a permissão de voltar a versão só "
+        + "dos que ela lista, um por um, e de reiniciar os sistemas que ele vê. Para tirar tudo: cole a "
+        + "linha Só olhar (desliga os pedidos) ou a linha de remover, que já está acima."));
+    bloco.append(fazPedidos);
+  }
   return bloco;
 }
 
