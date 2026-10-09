@@ -36,6 +36,11 @@ Total servido: **76 KB**, apenas o subconjunto latino.
 | `favicon.svg` | A marca com fundo, para a aba do navegador | Feito aqui |
 | `favicon-180.png` | A mesma marca em 180×180, para o iOS, que não lê SVG em `apple-touch-icon` | Feito aqui |
 | `selos.svg` | As quatro formas do selo, como sprite | Feito aqui |
+| *(inline em `index.html`)* | Desenhos de ajuda da tela Conectar: três esquemas SVG (aviso do Chrome, aviso do Windows, janela de escolher pasta) | Feito aqui — gerados no repositório, sem licença de terceiro |
+
+Os três esquemas são ilustrativos, não capturas de tela: não reproduzem marca nem
+interface de terceiros e usam só as cores do sistema (tokens). Ficam dentro do HTML
+de propósito — `assets/` só serve os arquivos que existiam quando o servidor subiu.
 
 Nenhum é derivado de biblioteca de ícones de terceiro. Todos são retângulos e
 polígonos escritos à mão — não há caminho copiado de lugar nenhum.

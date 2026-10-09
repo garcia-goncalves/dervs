@@ -149,25 +149,41 @@ projeto pendente".
 
 Dois caminhos, lado a lado e **como iguais**:
 
-- **O conectador** — um arquivo que você baixa pela tela e abre com dois cliques. Ele
-  pergunta a pasta, conecta sozinho e registra a tarefa que mantém o relato ligado. Não
-  pede terminal nenhum, e é o caminho para o seu computador de trabalho.
-- **A linha de comando** — para um servidor sem tela, e para quem prefere terminal. Ela
-  roda **de qualquer pasta**; o único pedaço a trocar é `<CAMINHO DO DERVS>`, porque o
+- **O arquivo `conectar-dervs.cmd`** (entrega A do "Conectar simples") — o botão
+  **Conectar este computador** baixa um arquivo pequeno para o Windows, que você abre com
+  dois cliques. Ele baixa o Python oficial (conferido por impressão digital), pede a pasta
+  dos seus projetos, abre o navegador numa página que mostra o **nome do computador e um
+  código** para você conferir com a janela preta, e só liga depois do seu clique em
+  **Autorizar este computador**. Baixa do DERVS o programa que mede, agenda a tarefa que
+  mantém o relato ligado e faz a primeira medição. Não pede terminal, administrador nem o
+  repositório clonado. Esse computador **só mede**: não recebe o direito de consertar. O
+  passo a passo, com os avisos do Chrome e do Windows e o que clicar em cada um, está na
+  própria tela (`O que vai aparecer?`, aberto na primeira visita).
+- **A linha de comando** — para um servidor sem tela, e para quem prefere terminal;
+  fica escondida em **Prefiro colar um comando**. Ela roda **de qualquer pasta**; o único pedaço a trocar é `<CAMINHO DO DERVS>`, porque o
   painel não pode saber onde o repositório está na sua máquina, e inventar seria ele
   mentindo.
+
+Cada projeto que o computador achou aparece numa lista com a chave **Mostrar no painel**.
+Desligá-la **esconde o projeto do painel desta conta** (e a escolha sobrevive a uma
+medição nova), mas não apaga nada: a linha continua na lista, em cinza, para você poder
+voltar. O painel diz quantos estão escondidos.
 
 **b) A sua conta do GitHub.** Aplicativo do GitHub com token de vida curta (uma hora). O
 que fica guardado no banco é o número da instalação, que **não é segredo**. O botão leva à
 instalação e volta com a conta ligada — sem você ver, copiar ou colar segredo nenhum. O
 número que volta na URL **não é aceito por ter vindo na URL**: o DERVS pergunta ao GitHub
-se aquela instalação existe e se ela é sua, e só então grava. Desconectar acontece em
-github.com, e a tela diz isso.
+se aquela instalação existe e se ela é sua, e só então grava. As contas aparecem
+**sozinhas** (não há botão de procurar), cada uma com os repositórios que mede e a mesma
+chave **Mostrar no painel**. Desconectar acontece em github.com, e a tela diz isso.
 
-**c) Os seus servidores.** **Sem chave SSH, agora e sempre.** Você cadastra os seus
-servidores (nome + endereço público — "OVH", "TineHost", quantos tiver), e dentro de cada
-um informa o endereço de cada projeto; o DERVS bate neles e conta o que respondeu. O mesmo
-projeto pode responder em mais de um servidor ao mesmo tempo, e o card diz em quais.
+**c) Os seus sites.** **Sem chave SSH, agora e sempre.** Você cola o endereço de um site
+num campo só; o DERVS **confere na hora se ele responde, sem gravar**, e só então você
+escolhe de qual projeto é e guarda. "Não respondeu" e "não deu para conferir" são coisas
+diferentes, e a tela não as confunde. Os servidores ("OVH", "TineHost", quantos tiver)
+ficam nas **opções avançadas**; sem nenhum cadastrado, o DERVS cria um chamado "Meus
+sites". O mesmo projeto pode responder em mais de um servidor ao mesmo tempo, e o card
+diz em quais.
 Quando um servidor tem um padrão de subdomínio (ex. `*.tinehost.com.br`), o DERVS **propõe**
 o endereço de um projeto que combine com o padrão — você confirma com um clique, ele nunca
 grava sozinho. Endereço de rede interna é recusado de propósito — o painel roda num
@@ -647,10 +663,11 @@ sendo no GitHub (revogar acesso mora do lado de quem dá o acesso). Briefing:
   sem provar seria deixar qualquer conta amarrar a instalação alheia.
 - **Com várias contas, o coletor não sabe de quem é a instalação nem o endereço.** Ele
   roda num processo só e lê os da conta local. Com duas pessoas não dói; com dez, dói.
-- **A máquina sem o repositório clonado continua sem reportar.** O conectador é um
-  arquivo de biblioteca padrão pura, e uma medição precisa de ~4.600 linhas do repositório
-  na máquina. Ele pareia assim mesmo e **diz** isso — falha honesta, e não uma tarefa
-  agendada que morre calada.
+- ~~**A máquina sem o repositório clonado continua sem reportar.**~~ **Resolvido na entrega
+  A do "Conectar simples":** o arquivo `conectar-dervs.cmd` baixa do servidor o pacote que
+  mede (`GET /agente/pacote`), então a máquina não precisa do repositório. O que ficou: o
+  pacote entrega código-fonte do servidor a toda máquina pareada, e o computador ligado por
+  esse caminho **só mede** — quem quiser que ele conserte usa a linha de comando.
 
 - **Pendência #10** — peneirar o nome do repositório na entrada, e não na hora de montar a
   consulta. Defeito que já existia.

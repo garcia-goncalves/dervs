@@ -1638,5 +1638,102 @@ class OHtmlDosSitesEstaCerto(unittest.TestCase):
         self.assertRegex(funcao("guardarSite"), r"medir:\s*false")
 
 
+# ===================== E3-6: a tela nao fala a lingua de quem a construiu
+JARGAO = (r"\bagente\b", r"\btoken\b", r"\bgit\b", r"linha de comando",
+          r"instala[cç][aã]o", r"\bdashboard\b", r"\bloading\b", r"\bdeploy\b",
+          r"\blogin\b")
+
+
+def jargao_em(texto: str) -> list[str]:
+    return [p for p in JARGAO if re.search(p, texto, re.I)]
+
+
+def texto_visivel_do_html() -> str:
+    """O texto das telas Conectar e Computadores (que abre junto), SEM o
+    `<details>` 'Prefiro colar um comando' e SEM os recados do VOZ -- os dois
+    lugares onde a palavra tecnica e permitida."""
+    ini = HTML.index('<section id="tela-conectar"')
+    fim = HTML.index("</section>", HTML.index('<section id="tela-computadores"'))
+    trecho = HTML[ini:fim]
+    trecho = re.sub(r"<!--.*?-->", " ", trecho, flags=re.S)
+    trecho = re.sub(r'<details class="ajuda" id="prefiro-comando">.*?</details>', " ", trecho, flags=re.S)
+    trecho = re.sub(r'<details class="ajuda" id="recados-do-voz">.*', " ", trecho, flags=re.S)
+    atributos = " ".join(re.findall(r'(?:aria-label|placeholder|title|alt)="([^"]*)"', trecho))
+    return re.sub(r"<[^>]+>", " ", trecho) + " " + atributos
+
+
+def literais_da_tela_em_js() -> str:
+    ini = JS.index("/* === CONECTAR: início === */")
+    fim = JS.index("/* === CONECTAR: fim === */")
+    codigo = sem_comentarios(JS[ini:fim])
+    literais = re.findall(r'"(?:[^"\\\n]|\\.)*"', codigo)
+    # A linha do comando (`gerarNumero`) so aparece dentro de "Prefiro colar um
+    # comando", onde o nome do arquivo (`agente/enviar.py`) e o proprio comando.
+    return "\n".join(l for l in literais if "CAMINHO DO DERVS" not in l)
+
+
+class AColoridaNaoFalaJargao(unittest.TestCase):
+    def test_a_extracao_acha_texto_de_verdade(self):
+        self.assertGreater(len(texto_visivel_do_html()), 3000)
+        self.assertGreater(len(literais_da_tela_em_js()), 8000)
+        self.assertIn("Autorizar este computador", literais_da_tela_em_js())
+        self.assertIn("Conectar este computador", texto_visivel_do_html() + literais_da_tela_em_js())
+
+    def test_nenhuma_palavra_de_jargao_no_html_da_tela(self):
+        self.assertEqual(jargao_em(texto_visivel_do_html()), [])
+
+    def test_nenhuma_palavra_de_jargao_nos_textos_do_script(self):
+        self.assertEqual(jargao_em(literais_da_tela_em_js()), [])
+
+    def test_o_detector_reprovaria_de_verdade(self):
+        """A guarda da guarda: texto com a palavra tem de acusar."""
+        for ruim in ("o agente roda", "um token novo", "histórico do Git", "a linha de comando",
+                     "a instalação do app", "veja o dashboard", "login", "Deploy"):
+            with self.subTest(ruim=ruim):
+                self.assertNotEqual(jargao_em(ruim), [])
+        self.assertEqual(jargao_em("Conectar conta do GitHub. Gitano não conta."), [])
+
+    def test_o_jargao_inserido_num_textcontent_do_script_seria_pego(self):
+        sabotado = JS.replace('"Procurando suas contas no GitHub…"',
+                              '"Procurando o agente no GitHub…"', 1)
+        self.assertNotEqual(sabotado, JS)
+        ini = sabotado.index("/* === CONECTAR: início === */")
+        fim = sabotado.index("/* === CONECTAR: fim === */")
+        literais = "\n".join(re.findall(r'"(?:[^"\\\n]|\\.)*"', sem_comentarios(sabotado[ini:fim])))
+        self.assertEqual(jargao_em(literais), [r"\bagente\b"])
+
+    def test_o_comando_e_a_pasta_do_dervs_so_vivem_no_details_do_comando(self):
+        fora = re.sub(r"\s+", " ", texto_visivel_do_html()).lower()
+        self.assertNotIn("CAMINHO DO DERVS", fora.upper())
+        self.assertNotIn("comando", fora.replace("prefiro colar um comando", ""))
+        self.assertIn("CAMINHO DO DERVS", HTML)
+
+    def test_o_paragrafo_antigo_do_agente_saiu(self):
+        self.assertNotIn("programinha que roda no seu computador", HTML)
+
+
+class OVozFicaForaDaTelaCheia(unittest.TestCase):
+    def test_voz_dentro_de_details_fechado_com_o_resumo(self):
+        m = re.search(r'<details class="ajuda" id="recados-do-voz">\s*<summary>([^<]*)</summary>', HTML)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "Recados do DERVS-VOZ")
+
+    def test_o_titulo_computadores_segue_existindo_para_o_roteiro_de_operacao(self):
+        self.assertIn(">Computadores<", HTML)
+
+    def test_nenhum_arquivo_novo_entrou_em_assets(self):
+        base = {"cortina.css", "cortina.js", "dervs.css", "favicon-180.png", "favicon.svg",
+                "fontes", "logo.svg", "painel.css", "painel.js", "portas.js", "selos.svg",
+                "CREDITOS.md"}
+        achados = {p.name for p in (AQUI / "assets").iterdir()}
+        self.assertEqual(achados - base, set(),
+                         "arquivo novo em assets/: a lista de caminhos exatos so le a pasta na subida")
+
+    def test_os_creditos_registram_os_desenhos(self):
+        cr = (AQUI / "assets" / "CREDITOS.md").read_text(encoding="utf-8")
+        self.assertIn("Desenhos de ajuda da tela Conectar", cr)
+        self.assertIn("sem licença de terceiro", cr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

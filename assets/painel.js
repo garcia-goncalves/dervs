@@ -1389,6 +1389,7 @@ async function desarquivar(id) {
 }
 
 /* ================================================== 4. Conectar ========== */
+/* === CONECTAR: início === */
 
 /* AS TRES PORTAS (etapa A5).
 
@@ -3149,6 +3150,8 @@ async function gerarNumero() {
     $("#numero-prazo").textContent = "Este código venceu. Gere outro.";
   }, Math.max(1, d.minutos) * 60000);
 }
+
+/* === CONECTAR: fim === */
 
 /* ============================================ Vigília e cérebros ========= */
 /* A ponte com o DERVS-VOZ. Regras desta seção, todas de propósito:
