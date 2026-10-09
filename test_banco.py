@@ -4257,6 +4257,16 @@ class AsOrdensDeServidor(unittest.TestCase):
                          (l["cred_id"], l["cliente"], l["autenticador"],
                           l["assinatura"], l["assinada_em"][:11]))
 
+    def test_ordem_para_assinar_so_da_conta_nao_vencida_e_nao_assinada(self):
+        self.criar(1)
+        ver = lambda uid, quando=self.AGORA: banco.ordem_para_assinar(
+            uid, self.numero(1), quando, con=self.con)
+        self.assertEqual(self.ma, ver(self.a)["maquina_id"])
+        self.assertIsNone(ver(self.b))                    # de outra conta
+        self.assertIsNone(ver(self.a, self.AGORA + 301))  # vencida
+        self.assinar(1)
+        self.assertIsNone(ver(self.a))                    # ja assinada
+
     def test_entregar_uma_vez_so_e_so_ate_120_segundos(self):
         self.criar(1)
         self.assinar(1)
@@ -4273,6 +4283,12 @@ class AsOrdensDeServidor(unittest.TestCase):
         self.assertEqual("7f3a9c2e5b8d41f6a0c3e9b2d4f6a8c1", o["servidor"])
         self.assertIsNone(banco.entregar_ordem_de_servidor(
             self.ma, self.a, self.AGORA + 121, con=self.con))     # ja entregue
+        self.criar(2, quando=self.AGORA + 2000)    # outra, dentro do prazo
+        self.assinar(2, quando=self.AGORA + 2000)
+        self.assertIsNotNone(banco.entregar_ordem_de_servidor(
+            self.ma, self.a, self.AGORA + 2005, con=self.con))
+        self.assertIsNone(banco.entregar_ordem_de_servidor(    # so uma vez
+            self.ma, self.a, self.AGORA + 2006, con=self.con))
 
     def test_assinada_ha_121_segundos_nunca_mais_sai(self):
         self.criar(1)
