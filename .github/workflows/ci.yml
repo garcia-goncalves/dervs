@@ -15,6 +15,10 @@ on:
   pull_request:
     paths-ignore: ['vivo/**']
 
+# A CI so le o codigo: o token que o GitHub entrega a ela nao escreve nada.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
