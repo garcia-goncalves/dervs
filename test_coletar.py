@@ -19,6 +19,7 @@ import ssl
 import tempfile
 import time
 import unittest
+import unittest.mock
 import urllib.error
 from pathlib import Path
 
@@ -745,6 +746,133 @@ class AtrasDe(unittest.TestCase):
     def test_resposta_estranha_vira_nao_sei(self):
         for r in (None, {}, {"ahead_by": "sete"}, "erro", []):
             self.assertIsNone(coletar_github.atras_de(r), repr(r))
+
+
+HEAD_DE_TESTE = "a" * 40
+
+
+class HeadShaNaTraducao(unittest.TestCase):
+    def _no(self, oid):
+        return {"nameWithOwner": "dono/repo", "url": "https://github.com/dono/repo",
+                "defaultBranchRef": {"name": "main", "target": {"oid": oid}},
+                "pullRequests": {"nodes": []}}
+
+    def test_oid_valido_vira_head_sha(self):
+        self.assertEqual(coletar_github.traduz(self._no(HEAD_DE_TESTE), False)["head_sha"],
+                         HEAD_DE_TESTE)
+
+    def test_oid_torto_ou_ausente_vira_vazio(self):
+        for oid in ("ZZ" * 20, "A" * 40, "abc", None, 7):
+            self.assertEqual(coletar_github.traduz(self._no(oid), False)["head_sha"], "",
+                             repr(oid))
+        sem = self._no("x")
+        sem["defaultBranchRef"] = None
+        self.assertEqual(coletar_github.traduz(sem, False)["head_sha"], "")
+
+    def test_a_consulta_pede_o_oid(self):
+        self.assertIn("oid", coletar_github.PEDACO)
+
+
+class MedeNoAr(unittest.TestCase):
+    def _buscar(self, respostas=None):
+        chamadas = []
+
+        def buscar(caminho):
+            chamadas.append(caminho)
+            return (respostas or {}).get(caminho, {"ahead_by": 3})
+        return buscar, chamadas
+
+    def test_sha_igual_a_ponta_nao_chama_nada(self):
+        buscar, chamadas = self._buscar()
+        r = coletar_github.mede_no_ar("dono/repo", "main", HEAD_DE_TESTE,
+                                      ["aaaaaaa", HEAD_DE_TESTE], buscar=buscar)
+        self.assertEqual((r, chamadas), ([], []))
+
+    def test_diferente_chama_compare_e_devolve_atras(self):
+        buscar, chamadas = self._buscar()
+        r = coletar_github.mede_no_ar("dono/repo", "main", HEAD_DE_TESTE,
+                                      ["96eb3fc"], buscar=buscar)
+        self.assertEqual(r, [{"sha": "96eb3fc", "atras": 3}])
+        self.assertEqual(chamadas, ["repos/dono/repo/compare/96eb3fc...main"])
+
+    def test_compare_que_falhou_deixa_o_item_de_fora(self):
+        buscar, _ = self._buscar({"repos/dono/repo/compare/96eb3fc...main": None})
+        r = coletar_github.mede_no_ar("dono/repo", "main", HEAD_DE_TESTE,
+                                      ["96eb3fc", "1234567"], buscar=buscar)
+        self.assertEqual(r, [{"sha": "1234567", "atras": 3}])
+
+    def test_quatro_shas_fazem_no_maximo_tres_chamadas(self):
+        buscar, chamadas = self._buscar()
+        coletar_github.mede_no_ar("dono/repo", "main", HEAD_DE_TESTE,
+                                  ["1111111", "2222222", "3333333", "4444444"],
+                                  buscar=buscar)
+        self.assertEqual(len(chamadas), coletar_github.MAX_SHAS_NO_AR)
+        self.assertEqual(coletar_github.MAX_SHAS_NO_AR, 3)
+
+    def test_sha_repetido_so_uma_vez(self):
+        buscar, chamadas = self._buscar()
+        coletar_github.mede_no_ar("dono/repo", "main", HEAD_DE_TESTE,
+                                  ["1111111", "1111111"], buscar=buscar)
+        self.assertEqual(len(chamadas), 1)
+
+    def test_sha_torto_nunca_vai_para_a_url(self):
+        buscar, chamadas = self._buscar()
+        r = coletar_github.mede_no_ar(
+            "dono/repo", "main", HEAD_DE_TESTE,
+            ["../x", "abc", "ABCDEFG", "1111111/../..", "", None, 5, "g" * 7],
+            buscar=buscar)
+        self.assertEqual((r, chamadas), ([], []))
+
+
+class AMedicaoGravaOQueEstaNoAr(unittest.TestCase):
+    NO = {"nameWithOwner": "dono/repo", "url": "https://github.com/dono/repo",
+          "defaultBranchRef": {"name": "main", "target": {"oid": HEAD_DE_TESTE}},
+          "pullRequests": {"nodes": []}}
+
+    def _gravar(self, medicoes):
+        import banco
+        gravado = {}
+        for alvo, nome, valor in (
+                (banco, "enderecos_por_servidor", lambda uid, con=None: {}),
+                (banco, "gravar", lambda n, c, d, con, usuario_id=None:
+                 gravado.update({n: d})),
+                (coletar_github, "mede_deploy", lambda *a, **k: {})):
+            self.addCleanup(setattr, alvo, nome, getattr(alvo, nome))
+            setattr(alvo, nome, valor)
+        if isinstance(medicoes, Exception):
+            def lista(uid, con=None):
+                raise medicoes
+        else:
+            def lista(uid, con=None):
+                return medicoes
+        with unittest.mock.patch.object(banco, "medicoes_de_servidor", create=True,
+                                        side_effect=lista):
+            coletar_github._gravar_medicao(
+                None, 1, {}, {"r0": "meu-proj"}, {"r0": self.NO}, True,
+                lambda caminho: {"ahead_by": 4})
+        return gravado["meu-proj"]
+
+    @staticmethod
+    def _medicao(sha):
+        return [{"maquina_id": 1, "nome": "S", "medido_em": "2026-10-09T00:00:00Z",
+                 "dados": {"sistemas": [{"projeto": "meu-proj", "estado": "running",
+                                         "sha": sha}]}}]
+
+    def test_grava_head_sha_e_no_ar(self):
+        novo = self._gravar(self._medicao("96eb3fc"))
+        self.assertEqual(novo["head_sha"], HEAD_DE_TESTE)
+        self.assertEqual(novo["no_ar"], [{"sha": "96eb3fc", "atras": 4}])
+
+    def test_no_ar_igual_a_ponta_fica_vazio(self):
+        self.assertEqual(self._gravar(self._medicao("aaaaaaa"))["no_ar"], [])
+
+    def test_sem_servidor_fica_vazio(self):
+        self.assertEqual(self._gravar([])["no_ar"], [])
+
+    def test_banco_que_levanta_nao_derruba_a_coleta(self):
+        novo = self._gravar(RuntimeError("sem tabela"))
+        self.assertEqual(novo["no_ar"], [])
+        self.assertEqual(novo["head_sha"], HEAD_DE_TESTE)
 
 
 class MedeSite(unittest.TestCase):
