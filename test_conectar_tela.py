@@ -1159,5 +1159,484 @@ console.log(JSON.stringify({ oculto: l.hidden, texto: l.textContent,
         self.assertRegex(HTML, r'<p class="mole" id="painel-ocultos" hidden>')
 
 
+# ===================================== E3-5: o cartao "Seus sites"
+FUNCOES_DOS_SITES = (
+    "criar", "haQuanto", "marcaDaPorta", "sitesDoProjeto", "nomesDosProjetos",
+    "medidaDoSite", "projetoMaisParecido", "sugestoesDoSite", "linhaDeSugestao",
+    "motivoDoSite", "segundosEmPalavras", "campoDeEscolha", "razaoDeNaoGuardar",
+    "blocoDeGuardar", "pintarResultadoDaMedicao", "limparResultadoDoSite",
+    "conferirSite", "guardarSite", "linhaDeSite", "pintarSites")
+
+PRELUDIO_DOS_SITES = PRELUDIO_DA_REDE + PRELUDIO_DE_TEMPO + r"""
+let ESTADO = { projetos: [{ nome: "loja-da-ana", camadas: {}, github: null },
+                          { nome: "clinica-agenda", camadas: {}, github: null }] };
+let ENDERECOS = [], ENDERECOS_LIDO_EM = ha(1);
+let SERVIDORES = [{ id: 7, nome: "Meus sites" }], SERVIDORES_LIDO_EM = ha(1);
+let MEDIDAS = {};
+let SUGESTOES = {};
+const SUGESTOES_IGNORADAS = new Set();
+let PAGINA_VELHA = false;
+function chaveDaMedida(s, p) { return s + "|" + p; }
+const escritas = [], lidos = [];
+globalThis.escrever = async (url, corpo) => {
+  escritas.push([url, corpo]);
+  const r = FILA.shift();
+  if (r instanceof Error) throw r;
+  return r;
+};
+let FILA = [];
+async function olharOsServidores() { lidos.push("servidores"); }
+async function olharOsEnderecos() { lidos.push("enderecos"); }
+async function guardarEndereco(s, p, u) { escritas.push(["tirar", s, p, u]); }
+function formularioDeServidorNovo() { return document.createElement("form"); }
+function blocoDeServidor(i) { return document.createElement("div"); }
+function pintarConectar() {}
+const resultado = () => $("#site-resultado");
+const botoes = () => achaTodos(resultado(), n => n.tag === "button").map(b => [b.textContent, b.disabled]);
+"""
+
+
+class OCartaoSeusSites(unittest.TestCase):
+    def rode(self, script, fila="[]"):
+        fontes_ = [PRELUDIO_DOS_SITES, constante("SITE")] + [funcao(n) for n in FUNCOES_DOS_SITES] \
+            + [constante("ESTADO_DA_PORTA")]
+        return roda(self, fontes_, "FILA = " + fila + ";\n" + script)
+
+    # ---- os quatro desfechos
+    def test_respondeu_mostra_codigo_tempo_e_o_botao_de_guardar_este_site(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://loja-da-ana.com.br", ok: true, codigo: 200, ms: 400 });
+console.log(JSON.stringify({ texto: resultado().textContent, botoes: botoes() }));
+""")
+        self.assertIn("respondeu", r["texto"])
+        self.assertIn("O site respondeu (código 200) em 0,4 segundo.", r["texto"])
+        self.assertEqual(r["botoes"][0][0], "Guardar este site")
+
+    def test_dois_segundos_ou_mais_ficam_no_plural(self):
+        r = self.rode(r"""
+console.log(JSON.stringify([segundosEmPalavras(400), segundosEmPalavras(1000), segundosEmPalavras(2300), segundosEmPalavras(undefined)]));
+""")
+        self.assertEqual(r, [" em 0,4 segundo", " em 1,0 segundo", " em 2,3 segundos", ""])
+
+    def test_nao_respondeu_diz_o_motivo_e_guarda_mesmo_assim(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://x.com", ok: false, codigo: 0, erro: "TimeoutError" });
+console.log(JSON.stringify({ texto: resultado().textContent, botoes: botoes() }));
+""")
+        self.assertIn("não respondeu", r["texto"])
+        self.assertIn("O site não respondeu em 10 segundos. (TimeoutError)", r["texto"])
+        self.assertEqual(r["botoes"][0][0], "Guardar mesmo assim")
+
+    def test_nao_deu_para_conferir_nao_diz_fora_do_ar_e_oferece_tentar_de_novo(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://x.com", ok: null });
+console.log(JSON.stringify({ texto: resultado().textContent, botoes: botoes() }));
+""")
+        self.assertIn("não deu para conferir", r["texto"])
+        self.assertIn("Isso não quer dizer que ele esteja fora do ar — quer dizer que não olhei.", r["texto"])
+        self.assertNotIn("não respondeu", r["texto"])
+        self.assertEqual([b[0] for b in r["botoes"]], ["Guardar mesmo assim", "Tentar de novo"])
+
+    def test_rede_interna_nao_tem_botao_de_guardar(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "http://10.0.0.1", motivo: "nao_publico" });
+console.log(JSON.stringify({ texto: resultado().textContent, botoes: botoes() }));
+""")
+        self.assertIn("Este endereço é de uma rede interna. O painel só confere sites públicos.", r["texto"])
+        self.assertEqual(r["botoes"], [])
+
+    def test_endereco_mal_escrito_liga_aria_invalid_e_mostra_a_mensagem(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "loja", motivo: "forma" });
+console.log(JSON.stringify({ invalido: $("#site-endereco").attrs["aria-invalid"],
+  erro: $("#site-erro").textContent, oculto: $("#site-erro").hidden, botoes: botoes() }));
+""")
+        self.assertEqual(r["invalido"], "true")
+        self.assertIn("Escreva o endereço completo, começando por https://, por exemplo https://loja-da-ana.com.br.", r["erro"])
+        self.assertFalse(r["oculto"])
+        self.assertEqual(r["botoes"], [])
+
+    def test_o_proximo_resultado_limpa_o_aria_invalid(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "loja", motivo: "forma" });
+pintarResultadoDaMedicao({ url: "https://x.com", ok: true, codigo: 200, ms: 10 });
+console.log(JSON.stringify({ invalido: $("#site-endereco").attrs["aria-invalid"] || null, oculto: $("#site-erro").hidden }));
+""")
+        self.assertEqual(r, {"invalido": None, "oculto": True})
+
+    # ---- o dicionario de motivos
+    def test_traducao_do_erro(self):
+        casos = [
+            ({"erro": "TimeoutError"}, "O site não respondeu em 10 segundos."),
+            ({"erro": "timeout"}, "O site não respondeu em 10 segundos."),
+            ({"erro": "SSLCertVerificationError"}, "O certificado de segurança do site não é válido."),
+            ({"erro": "CertificateError"}, "O certificado de segurança do site não é válido."),
+            ({"erro": "", "codigo": 502}, "O site respondeu com erro do lado dele (código 502)."),
+            ({"erro": "ConnectionRefusedError"}, "O site recusou a conexão."),
+            ({"erro": "nao_resolveu"}, "Não achei esse endereço. Confira se você digitou certo."),
+            ({"erro": "OSError"}, "Não consegui falar com o site."),
+            ({"erro": ""}, "Não consegui falar com o site."),
+        ]
+        r = self.rode("console.log(JSON.stringify(%s.map(motivoDoSite)));" % json.dumps([c for c, _ in casos]))
+        for (entrada, esperado), saida in zip(casos, r):
+            with self.subTest(entrada=entrada):
+                self.assertTrue(saida.startswith(esperado), saida)
+
+    def test_o_erro_do_servidor_remoto_entra_como_texto(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://x.com", ok: false, codigo: 0, erro: "<img src=x onerror=1>" });
+console.log(JSON.stringify({ texto: resultado().textContent, imgs: achaTodos(resultado(), n => n.tag === "img").length }));
+""")
+        self.assertIn("<img src=x onerror=1>", r["texto"])
+        self.assertEqual(r["imgs"], 0)
+
+    # ---- projeto, servidor, guardar
+    def test_o_projeto_mais_parecido_vem_escolhido_e_sem_parecido_fica_vazio(self):
+        r = self.rode(r"""
+const nomes = ["loja-da-ana", "clinica-agenda", "api"];
+console.log(JSON.stringify([
+  projetoMaisParecido("https://loja-da-ana.com.br", nomes),
+  projetoMaisParecido("https://www.clinica-agenda.com.br/x", nomes),
+  projetoMaisParecido("https://outra-coisa.com", nomes),
+  projetoMaisParecido("isto nao e url", nomes)]));
+""")
+        self.assertEqual(r, ["loja-da-ana", "clinica-agenda", "", ""])
+
+    def test_o_select_ja_vem_no_projeto_parecido(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://loja-da-ana.com.br", ok: true, codigo: 200, ms: 10 });
+console.log(JSON.stringify({ projeto: $("#site-projeto") === undefined ? null : acha(resultado(), n => n.id === "site-projeto").value,
+  botoes: botoes() }));
+""")
+        self.assertEqual(r["projeto"], "loja-da-ana")
+        self.assertEqual(r["botoes"][0], ["Guardar este site", False])
+
+    def test_sem_projeto_parecido_o_botao_espera_a_escolha_e_nao_adivinha(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://outra-coisa.com", ok: true, codigo: 200, ms: 10 });
+const sel = acha(resultado(), n => n.id === "site-projeto");
+const antes = botoes()[0];
+sel.value = "clinica-agenda"; await sel.disparar("change");
+console.log(JSON.stringify({ vazio: sel.filhos[0].textContent, antes, depois: botoes()[0] }));
+""")
+        self.assertEqual(r["vazio"], "Escolha o projeto")
+        self.assertEqual(r["antes"], ["Guardar este site", True])
+        self.assertEqual(r["depois"], ["Guardar este site", False])
+
+    def test_sem_nenhum_projeto_diz_para_conectar_um_computador(self):
+        r = self.rode(r"""
+ESTADO.projetos = [];
+pintarResultadoDaMedicao({ url: "https://x.com", ok: true, codigo: 200, ms: 10 });
+console.log(JSON.stringify({ texto: resultado().textContent, botoes: botoes(),
+  select: !!acha(resultado(), n => n.id === "site-projeto") }));
+""")
+        self.assertIn("Ainda não há projetos no painel para ligar a este site. Conecte um computador primeiro.", r["texto"])
+        self.assertEqual(r["botoes"][0], ["Guardar este site", True])
+        self.assertFalse(r["select"])
+
+    def test_dois_servidores_ou_mais_exigem_escolha_visivel(self):
+        r = self.rode(r"""
+SERVIDORES = [{ id: 7, nome: "OVH" }, { id: 8, nome: "TineHost" }];
+pintarResultadoDaMedicao({ url: "https://loja-da-ana.com.br", ok: true, codigo: 200, ms: 10 });
+const sel = acha(resultado(), n => n.id === "site-servidor");
+const antes = botoes()[0][1];
+sel.value = "8"; await sel.disparar("change");
+console.log(JSON.stringify({ rotulo: acha(resultado(), n => n.tag === "label" && n.attrs["for"] === "site-servidor").textContent,
+  convite: sel.filhos[0].textContent, antes, depois: botoes()[0][1] }));
+""")
+        self.assertEqual(r["rotulo"], "Em qual servidor?")
+        self.assertEqual(r["convite"], "Escolha o servidor")
+        self.assertTrue(r["antes"])
+        self.assertFalse(r["depois"])
+
+    def test_guardar_manda_medir_falso_e_o_servidor_unico(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://loja-da-ana.com.br", ok: true, codigo: 200, ms: 10, medido_em: ha(1) });
+$("#site-endereco").value = "https://loja-da-ana.com.br";
+await acha(resultado(), n => n.tag === "button").clicar();
+console.log(JSON.stringify({ escritas, campo: $("#site-endereco").value, aviso: $("#sites-guardado").textContent,
+  medida: MEDIDAS["7|loja-da-ana"] && MEDIDAS["7|loja-da-ana"].codigo, lidos,
+  foco: FOCO.atual === $("#site-endereco") }));
+""", "[{ok: true, status: 200}]")
+        self.assertEqual(r["escritas"], [["/api/enderecos/guardar",
+            {"servidor_id": 7, "projeto": "loja-da-ana", "url": "https://loja-da-ana.com.br", "medir": False}]])
+        self.assertEqual(r["campo"], "")
+        self.assertEqual(r["aviso"], "Guardei https://loja-da-ana.com.br para o projeto loja-da-ana.")
+        self.assertEqual(r["medida"], 200)
+        self.assertIn("enderecos", r["lidos"])
+        self.assertTrue(r["foco"])
+
+    def test_sem_servidor_cadastrado_cria_meus_sites_antes_de_guardar(self):
+        r = self.rode(r"""
+SERVIDORES = [];
+pintarResultadoDaMedicao({ url: "https://loja-da-ana.com.br", ok: false, codigo: 0, erro: "TimeoutError" });
+globalThis.olharOsServidores = async () => { SERVIDORES = [{ id: 11, nome: "Meus sites" }]; };
+await acha(resultado(), n => n.tag === "button").clicar();
+console.log(JSON.stringify({ escritas, medida: Object.keys(MEDIDAS) }));
+""", "[{ok: true, status: 200}, {ok: true, status: 200}]")
+        self.assertEqual(r["escritas"][0], ["/api/servidores/guardar", {"nome": "Meus sites", "padrao_subdominio": ""}])
+        self.assertEqual(r["escritas"][1][1]["servidor_id"], 11)
+        self.assertFalse(r["escritas"][1][1]["medir"])
+        self.assertEqual(r["medida"], ["11|loja-da-ana"])    # mediu e respondeu falso: fica o que a pessoa viu
+
+    def test_guardar_que_falha_mantem_o_campo_e_diz_isso(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://loja-da-ana.com.br", ok: true, codigo: 200, ms: 10 });
+$("#site-endereco").value = "https://loja-da-ana.com.br";
+await acha(resultado(), n => n.tag === "button").clicar();
+console.log(JSON.stringify({ campo: $("#site-endereco").value, aviso: $("#sites-guardado").textContent,
+  guardado: Object.keys(MEDIDAS) }));
+""", "[{ok: false, status: 500}]")
+        self.assertEqual(r["campo"], "https://loja-da-ana.com.br")
+        self.assertEqual(r["aviso"], "Não consegui guardar agora. O que você digitou continua no campo.")
+        self.assertEqual(r["guardado"], [])
+
+    def test_guardar_sem_medicao_nao_inventa_carimbo(self):
+        r = self.rode(r"""
+pintarResultadoDaMedicao({ url: "https://x.com", ok: null });
+await acha(resultado(), n => n.tag === "button").clicar();
+console.log(JSON.stringify({ medidas: Object.keys(MEDIDAS) }));
+""", "[{ok: true, status: 200}]")
+        self.assertEqual(r["medidas"], [])
+
+    # ---- conferir
+    def test_conferir_chama_a_rota_de_medir_e_pinta_o_que_voltou(self):
+        r = self.rode(r"""
+$("#site-endereco").value = "  https://loja-da-ana.com.br ";
+const p = conferirSite();
+const durante = { texto: $("#site-conferir").textContent, desativado: $("#site-conferir").disabled,
+                  ocupado: resultado().attrs["aria-busy"] };
+await p;
+console.log(JSON.stringify({ durante, depois: { texto: $("#site-conferir").textContent, desativado: $("#site-conferir").disabled },
+  escritas, resultado: resultado().textContent }));
+""", '[resposta(200, {url: "https://loja-da-ana.com.br", ok: true, codigo: 200, ms: 300, medido_em: "x"})]')
+        self.assertEqual(r["durante"], {"texto": "Conferindo…", "desativado": True, "ocupado": "true"})
+        self.assertEqual(r["depois"], {"texto": "Conferir o site", "desativado": False})
+        self.assertEqual(r["escritas"], [["/api/enderecos/medir", {"url": "https://loja-da-ana.com.br"}]])
+        self.assertIn("O site respondeu (código 200) em 0,3 segundo.", r["resultado"])
+
+    def test_400_forma_e_400_nao_publico_vem_do_servidor(self):
+        for motivo in ("forma", "nao_publico"):
+            with self.subTest(motivo=motivo):
+                r = self.rode(r"""
+$("#site-endereco").value = "x";
+await conferirSite();
+console.log(JSON.stringify({ texto: resultado().textContent, invalido: $("#site-endereco").attrs["aria-invalid"] || null }));
+""", '[resposta(400, {erro: "x", motivo: "%s"})]' % motivo)
+                if motivo == "forma":
+                    self.assertEqual(r["invalido"], "true")
+                else:
+                    self.assertIn("rede interna", r["texto"])
+
+    def test_teto_429_ou_rede_caida_viram_nao_deu_para_conferir_nunca_fora_do_ar(self):
+        for fila in ('[resposta(429, {erro: "nao deu"})]', '[new Error("rede")]', '[resposta(500, {})]'):
+            with self.subTest(fila=fila):
+                r = self.rode(r"""
+$("#site-endereco").value = "https://x.com";
+await conferirSite();
+console.log(JSON.stringify({ texto: resultado().textContent }));
+""", fila)
+                self.assertIn("não deu para conferir", r["texto"])
+                self.assertNotIn("não respondeu", r["texto"])
+
+    def test_campo_vazio_nao_vai_a_rede(self):
+        r = self.rode(r"""
+$("#site-endereco").value = "   ";
+await conferirSite();
+console.log(JSON.stringify({ escritas, invalido: $("#site-endereco").attrs["aria-invalid"] }));
+""")
+        self.assertEqual(r, {"escritas": [], "invalido": "true"})
+
+    def test_pagina_velha_na_conferencia_nao_pinta_resultado(self):
+        r = self.rode(r"""
+PAGINA_VELHA = true;
+$("#site-endereco").value = "https://x.com";
+await conferirSite();
+console.log(JSON.stringify({ filhos: resultado().filhos.length }));
+""", '[resposta(403, {motivo: "pagina_velha"})]')
+        self.assertEqual(r["filhos"], 0)
+
+    def test_resposta_atrasada_de_outro_endereco_nunca_pinta(self):
+        r = self.rode(r"""
+let solta;
+globalThis.escrever = (u, c) => new Promise((res) => { solta = () => res(resposta(200, { url: c.url, ok: true, codigo: 200, ms: 1 })); });
+$("#site-endereco").value = "https://antigo.com";
+const p = conferirSite();
+limparResultadoDoSite();            // a pessoa digitou outra coisa
+solta(); await p;
+console.log(JSON.stringify({ filhos: resultado().filhos.length, botao: $("#site-conferir").textContent }));
+""")
+        self.assertEqual(r, {"filhos": 0, "botao": "Conferir o site"})
+
+    def test_depois_de_8_segundos_a_tela_diz_que_e_normal(self):
+        r = self.rode(r"""
+let tique;
+globalThis.setTimeout = (f, ms) => { tique = [f, ms]; return 1; };
+let solta;
+globalThis.escrever = () => new Promise((res) => { solta = () => res(resposta(200, { ok: true, codigo: 200, ms: 1 })); });
+$("#site-endereco").value = "https://x.com";
+const p = conferirSite();
+tique[0]();
+const texto = resultado().textContent;
+solta(); await p;
+console.log(JSON.stringify({ ms: tique[1], texto }));
+""")
+        self.assertEqual(r["ms"], 8000)
+        self.assertEqual(r["texto"], "Ainda conferindo… alguns sites demoram.")
+
+    # ---- sugestoes
+    def test_sugestoes_vem_do_que_o_projeto_declara_e_do_padrao_e_nao_repetem_o_guardado(self):
+        r = self.rode(r"""
+ESTADO.projetos[0].camadas = { github: "x" };
+ESTADO.projetos[0].github = { sites: [{ servidor_id: 0, url: "https://loja-da-ana.com.br" },
+                                      { servidor_id: 7, url: "https://ja-medido.com" }] };
+SUGESTOES = { 7: [{ projeto: "clinica-agenda", url: "https://clinica-agenda.com.br" },
+                  { projeto: "loja-da-ana", url: "https://loja-da-ana.com.br" }] };
+ENDERECOS = [{ servidor_id: 7, projeto: "clinica-agenda", url: "https://clinica-agenda.com.br" }];
+console.log(JSON.stringify(sugestoesDoSite()));
+""")
+        self.assertEqual(r, [{"projeto": "loja-da-ana", "url": "https://loja-da-ana.com.br"}])
+
+    def test_ignorar_some_e_nunca_grava(self):
+        r = self.rode(r"""
+SUGESTOES = { 7: [{ projeto: "loja-da-ana", url: "https://loja-da-ana.com.br" }] };
+pintarSites();
+const antes = $("#sites-sugestoes").textContent;
+await acha($("#sites-sugestoes"), n => n.tag === "button" && n.textContent === "Ignorar").clicar();
+console.log(JSON.stringify({ antes, depois: $("#sites-sugestoes").textContent, escritas }));
+""")
+        self.assertIn("Sugestão: loja-da-ana parece estar em https://loja-da-ana.com.br", r["antes"])
+        self.assertEqual(r["depois"], "")
+        self.assertEqual(r["escritas"], [])
+
+    def test_usar_este_preenche_o_campo_e_confere_sem_gravar(self):
+        r = self.rode(r"""
+SUGESTOES = { 7: [{ projeto: "clinica-agenda", url: "https://clinica-agenda.com.br" }] };
+pintarSites();
+await acha($("#sites-sugestoes"), n => n.tag === "button" && n.textContent === "Usar este").clicar();
+const sel = acha(resultado(), n => n.id === "site-projeto");
+console.log(JSON.stringify({ campo: $("#site-endereco").value, escritas: escritas.map(e => e[0]), projeto: sel.value }));
+""", "[resposta(200, {url: 'https://clinica-agenda.com.br', ok: true, codigo: 200, ms: 5})]")
+        self.assertEqual(r["campo"], "https://clinica-agenda.com.br")
+        self.assertEqual(r["escritas"], ["/api/enderecos/medir"])
+        self.assertEqual(r["projeto"], "clinica-agenda")
+
+    def test_sem_proposta_a_area_nao_aparece_nem_diz_nenhuma_sugestao(self):
+        r = self.rode("pintarSites();\nconsole.log(JSON.stringify({ t: $('#sites-sugestoes').textContent }));")
+        self.assertEqual(r["t"], "")
+
+    # ---- a lista e o carimbo
+    def test_nada_pinta_antes_da_leitura_e_nao_diz_nenhum_site(self):
+        r = self.rode(r"""
+ENDERECOS_LIDO_EM = "";
+pintarSites();
+console.log(JSON.stringify({ resumo: $("#sites-resumo").textContent, oculto: $("#sites-resumo").hidden,
+  lista: $("#sites-lista").filhos.length, marca: $("#sites-marca").textContent }));
+""")
+        self.assertIn("Isso não quer dizer que não há — quer dizer que não olhei.", r["resumo"])
+        self.assertNotIn("Nenhum site cadastrado", r["resumo"])
+        self.assertEqual(r["lista"], 0)
+        self.assertIn("não deu para conferir", r["marca"])
+
+    def test_leu_e_nao_ha_nenhum(self):
+        r = self.rode(r"""
+pintarSites();
+console.log(JSON.stringify({ resumo: $("#sites-resumo").textContent, marca: $("#sites-marca").textContent }));
+""")
+        self.assertIn("Nenhum site cadastrado ainda. Cole o endereço acima", r["resumo"])
+        self.assertIn("não conectado", r["marca"])
+
+    def test_a_lista_mostra_os_tres_estados_e_o_botao_tirar(self):
+        r = self.rode(r"""
+ENDERECOS = [{ servidor_id: 7, projeto: "clinica-agenda", url: "https://clinica-agenda.com.br" },
+             { servidor_id: 7, projeto: "loja-da-ana", url: "https://loja-da-ana.com.br" },
+             { servidor_id: 7, projeto: "padaria", url: "https://padaria-central.com.br" }];
+MEDIDAS["7|clinica-agenda"] = { ok: true, codigo: 200, medido_em: ha(180) };
+MEDIDAS["7|loja-da-ana"] = { ok: false, codigo: 0, erro: "TimeoutError", medido_em: ha(180) };
+pintarSites();
+const lis = achaTodos($("#sites-lista"), n => n.tag === "li").map(l => l.textContent);
+await acha($("#sites-lista"), n => n.tag === "button" && n.textContent === "Tirar").clicar();
+console.log(JSON.stringify({ lis, escritas }));
+""")
+        junto = " | ".join(r["lis"])
+        self.assertIn("respondeu 200 · medido há 3 minutos", junto)
+        self.assertIn("não respondeu · medido há 3 minutos", junto)
+        self.assertIn("ainda não medi", junto)
+        self.assertIn("não medi", junto)
+        self.assertNotIn("servidor:", junto)           # um servidor só: nome nao aparece
+        self.assertEqual(r["escritas"], [["tirar", 7, "clinica-agenda", ""]])
+
+    def test_o_nome_do_servidor_so_aparece_com_mais_de_um(self):
+        r = self.rode(r"""
+SERVIDORES = [{ id: 7, nome: "OVH" }, { id: 8, nome: "TineHost" }];
+ENDERECOS = [{ servidor_id: 8, projeto: "loja-da-ana", url: "https://loja-da-ana.com.br" }];
+pintarSites();
+console.log(JSON.stringify({ t: $("#sites-lista").textContent }));
+""")
+        self.assertIn("servidor: TineHost", r["t"])
+
+    def test_a_medicao_do_coletor_vale_quando_a_tela_nao_mediu(self):
+        r = self.rode(r"""
+ESTADO.projetos[1].camadas = { github: "x" };
+ESTADO.projetos[1].github = { sites: [{ servidor_id: 7, url: "https://clinica-agenda.com.br", ok: true, codigo: 200, medido_em: ha(60) }] };
+ENDERECOS = [{ servidor_id: 7, projeto: "clinica-agenda", url: "https://clinica-agenda.com.br" }];
+pintarSites();
+console.log(JSON.stringify({ t: $("#sites-lista").textContent }));
+""")
+        self.assertIn("respondeu 200 · medido há 1 minutos", r["t"].replace("há 60 segundos", "há 1 minutos"))
+
+    def test_url_e_projeto_de_fora_entram_como_texto(self):
+        r = self.rode(r"""
+ENDERECOS = [{ servidor_id: 7, projeto: "<b>x</b>", url: "<script>1</script>" }];
+pintarSites();
+console.log(JSON.stringify({ t: $("#sites-lista").textContent, perigosos: achaTodos($("#sites-lista"), n => n.tag === "b" || n.tag === "script").length }));
+""")
+        self.assertIn("<b>x</b>", r["t"])
+        self.assertEqual(r["perigosos"], 0)
+
+    def test_as_opcoes_avancadas_so_aparecem_com_servidores_lidos(self):
+        r = self.rode(r"""
+SERVIDORES_LIDO_EM = "";
+pintarSites();
+const sem = $("#sites-servidores").filhos.length;
+SERVIDORES_LIDO_EM = ha(1);
+pintarSites();
+console.log(JSON.stringify({ sem, com: $("#sites-servidores").filhos.length }));
+""")
+        self.assertEqual(r, {"sem": 0, "com": 2})     # o formulario + 1 servidor
+
+
+class OHtmlDosSitesEstaCerto(unittest.TestCase):
+    def test_o_campo_e_fixo_no_html_com_label_ligada_e_sem_estilo_embutido(self):
+        i = HTML.index('id="cartao-sites"')
+        cartao = HTML[i:HTML.index("</div>\n    </div>\n  </section>", i)]
+        self.assertRegex(cartao, r'<label for="site-endereco">Endereço do site</label>')
+        campo = re.search(r'<input id="site-endereco"[^>]*>', cartao, re.S).group(0)
+        for atributo in ('inputmode="url"', 'autocomplete="off"', 'spellcheck="false"',
+                         'placeholder="https://clinica-agenda.com.br"', 'aria-describedby="site-erro"'):
+            self.assertIn(atributo, campo)
+        self.assertNotIn("style=", cartao)
+        self.assertIn(">Conferir o site<", cartao)
+        self.assertRegex(cartao, r'id="site-resultado" aria-live="polite"')
+        self.assertIn("<summary>Opções avançadas</summary>", cartao)
+
+    def test_cada_id_que_o_script_pede_do_cartao_existe(self):
+        usados = set(re.findall(r'\$\("#(sites?-[a-z]+)"\)', JS))
+        self.assertGreaterEqual(len(usados), 8)
+        for ident in usados:
+            with self.subTest(id=ident):
+                self.assertIn('id="%s"' % ident, HTML)
+
+    def test_o_script_chama_as_rotas_certas_por_escrever(self):
+        for rota_ in ('escrever("/api/enderecos/medir"', 'escrever("/api/enderecos/guardar"',
+                      'escrever("/api/servidores/guardar"'):
+            with self.subTest(rota=rota_):
+                self.assertIn(rota_, JS)
+        self.assertNotRegex(JS, r'fetch\("/api/enderecos/(medir|guardar)')
+
+    def test_guardar_manda_medir_falso(self):
+        self.assertRegex(funcao("guardarSite"), r"medir:\s*false")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
