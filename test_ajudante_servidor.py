@@ -918,17 +918,17 @@ class OSudoersExato(DosPedidos):
         def rodar(argv, prazo):
             if argv[0] == "visudo":
                 visto.append((list(argv), self.sudoers().exists(),
-                              Path(argv[2]).read_text()))
+                              Path(argv[-1]).read_text()))
             return antigo(argv, prazo)
         d.rodar = rodar
         self.ligar(d)
         self.assertEqual(1, len(visto))
         argv, final_existia, conteudo = visto[0]
         self.assertEqual(["visudo", "-cf"], argv[:2])
-        self.assertTrue(argv[2].endswith(".dervs-ajudante.novo"))
+        self.assertTrue(argv[-1].endswith(".dervs-ajudante.novo"))
         self.assertFalse(final_existia)
         self.assertEqual(self.linhas_esperadas("grimoire", "dervs"), conteudo)
-        self.assertFalse(Path(argv[2]).exists())
+        self.assertFalse(Path(argv[-1]).exists())
         self.assertTrue(self.sudoers().exists())
 
     def test_visudo_que_reprova_nao_deixa_regra_e_a_medicao_segue(self):
