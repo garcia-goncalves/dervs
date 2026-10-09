@@ -502,6 +502,34 @@ main { padding-bottom: var(--e12); }
   .freio__ponto { animation: none; }
 }
 
+/* ------------------------------------------ a faixa de página desatualizada
+   Fixa no topo, ACIMA do freio (z-index 50): sem recarregar nada funciona, então
+   ela vence. O contêiner é quem gruda, porque `sticky` só vale dentro do pai —
+   a faixa sozinha, filha de um `div` do tamanho dela, nunca grudaria. Não usa
+   `--estado-*`: é aviso sobre a própria página, não o selo de um projeto. O
+   filete de baixo é `--acao`: a cor de ação é a que manda "faça isto agora". */
+#faixa-pagina-velha {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+}
+
+.faixa--pagina-velha {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--e3);
+  max-height: 7rem;
+  overflow-y: auto;
+  border-bottom: var(--traco-forte) solid var(--acao);
+}
+
+.faixa--pagina-velha .botao { min-height: 44px; }
+
+@media (max-width: 30rem) {
+  .faixa--pagina-velha { flex-direction: column; align-items: stretch; }
+  .faixa--pagina-velha .botao { justify-content: center; width: 100%; }
+}
+
 .freio__texto {
   margin: 0;
   flex: 1 1 14rem;

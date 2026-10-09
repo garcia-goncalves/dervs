@@ -68,9 +68,16 @@ function hora(iso) {
     : new Date(t).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 }
 
+/* Verdadeiro depois que `escrever` viu um 403 de página velha. Enquanto a
+   faixa do alto estiver aberta, o recado de ERRO de quem clicou ("Tente de
+   novo") mentiria: tentar de novo falharia de novo. */
+let PAGINA_VELHA = false;
+
 function recado(texto, ruim) {
   const el = $("#recado");
-  el.textContent = texto;
+  el.textContent = ruim && PAGINA_VELHA
+    ? "Não foi feito. Veja o aviso no alto da página."
+    : texto;
   el.classList.add("ver");
   clearTimeout(recado.t);
   recado.t = setTimeout(() => el.classList.remove("ver"), ruim ? 9000 : 4000);
@@ -1260,12 +1267,52 @@ function pintarAlerta(id) {
 
 /* ================================================== as escritas ========== */
 
-function escrever(url, corpo) {
-  return fetch(url, {
+/* A faixa "Esta página ficou desatualizada". O token anti-falsificação vence
+   (outra aba, o DERVS atualizado) e TODA escrita passa a ser recusada com 403 e
+   `motivo: "pagina_velha"`. Sem a faixa, cada botão diria o seu "tente de novo"
+   e nenhum deles adiantaria. Uma instância só: a segunda recusa não empilha. */
+function abrirFaixaPaginaVelha() {
+  if (PAGINA_VELHA) return;
+  PAGINA_VELHA = true;
+  const faixa = document.createElement("div");
+  faixa.className = "faixa faixa--pagina-velha";
+  faixa.setAttribute("role", "alert");
+  const dizeres = document.createElement("div");
+  const forte = document.createElement("strong");
+  forte.textContent = "Esta página ficou desatualizada.";
+  const resto = document.createElement("span");
+  resto.textContent = "O que você acabou de clicar não foi feito. Recarregue "
+                    + "a página para continuar. O que você estava digitando "
+                    + "pode se perder.";
+  dizeres.append(forte, " ", resto);
+  const botao = document.createElement("button");
+  botao.type = "button";
+  botao.className = "botao";
+  botao.textContent = "Recarregar";
+  botao.addEventListener("click", () => location.reload());
+  faixa.append(dizeres, botao);
+  $("#faixa-pagina-velha").append(faixa);
+  /* A página inteira deixou de funcionar até recarregar: aqui mover o foco
+     ajuda em vez de atrapalhar. */
+  botao.focus();
+}
+
+async function escrever(url, corpo) {
+  const r = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Token": TOKEN },
     body: JSON.stringify(corpo || {})
   });
+  if (r.status === 403) {
+    /* `clone()`: quem chamou ainda lê o corpo. Só o motivo exato abre a
+       faixa; os outros 403 ("entre de novo", "origem nao permitida") seguem
+       com o recado de cada chamador. */
+    try {
+      const j = await r.clone().json();
+      if (j && j.motivo === "pagina_velha") abrirFaixaPaginaVelha();
+    } catch (_) { /* corpo que não é JSON: não é página velha */ }
+  }
+  return r;
 }
 
 async function silenciar(id, horas) {

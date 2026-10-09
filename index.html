@@ -136,6 +136,12 @@ __FAIXA__
 
 <main id="conteudo" class="limite">
 
+  <!-- A faixa "Esta página ficou desatualizada" (tela D do design). Nasce
+       vazia: o painel.js põe nela o aviso, com `role="alert"`, só quando um
+       pedido de escrita volta 403 com `motivo: "pagina_velha"`. O contêiner é
+       quem fica fixo no topo (ver painel.css). -->
+  <div id="faixa-pagina-velha"></div>
+
   <!-- ================================================== 2. Painel ======= -->
   <section id="tela-painel">
     <!-- A faixa do servidor mudo. A lista anterior CONTINUA na tela,
