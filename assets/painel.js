@@ -1549,7 +1549,8 @@ function pintarAutorizar(p) {
     const corpo = criar("p");
     if (servidor) {
       corpo.append("Um servidor chamado ", criar("strong", "", p.maquina || "sem nome"),
-                   " quer se ligar à sua conta. Ele só vai olhar.");
+                   " quer se ligar à sua conta. Ele só vai olhar, mas precisa de poder de "
+                   + "administrador no servidor.");
       if (deFora) corpo.append(" Só autorize se foi você quem acabou de colar a linha nele.");
     } else if (deFora) {
       corpo.append("O computador ", criar("strong", "", p.maquina || "sem nome"),
@@ -3308,22 +3309,45 @@ function linhaDeServidorLigado(s) {
     li.append(criar("p", "carimbo", s.medido_em
       ? "Sem dados " + haQuanto(s.medido_em) + " — o servidor parou de contar."
       : "Sem dados — o servidor ainda não contou nada."));
-    return li;
+  } else {
+    li.append(criar("p", "carimbo", "medido " + haQuanto(s.medido_em)));
+    const sistemas = Array.isArray(s.sistemas) ? s.sistemas : [];
+    if (s.docker_mudo === true) {
+      li.append(criar("p", "", "Não consegui ver os sistemas deste servidor."));
+    } else if (s.docker_mudo === false && !sistemas.length) {
+      li.append(criar("p", "", "Nenhum sistema rodando neste servidor agora."));
+    } else if (sistemas.length) {
+      const ul = criar("ul", "lista");
+      for (const x of sistemas) ul.append(linhaDeSistema(x));
+      li.append(criar("p", "carimbo", "Sistemas rodando neste servidor"), ul);
+    }
   }
-  li.append(criar("p", "carimbo", "medido " + haQuanto(s.medido_em)));
-  if (s.docker_mudo === true) {
-    li.append(criar("p", "", "Não consegui ver os sistemas deste servidor."));
-    return li;
-  }
-  const sistemas = Array.isArray(s.sistemas) ? s.sistemas : [];
-  if (s.docker_mudo === false && !sistemas.length) {
-    li.append(criar("p", "", "Nenhum sistema rodando neste servidor agora."));
-  } else if (sistemas.length) {
-    const ul = criar("ul", "lista");
-    for (const x of sistemas) ul.append(linhaDeSistema(x));
-    li.append(criar("p", "carimbo", "Sistemas rodando neste servidor"), ul);
-  }
+
+  /* Todo servidor, medido ou não, tem como ser desligado: sem isto o acesso
+     dele só morria se alguém mexesse no banco. `botao--remover`: ver painel.css. */
+  const acoes = criar("div", "acoes");
+  const b = criar("button", "botao botao--secundario botao--remover", "Desligar este servidor");
+  b.type = "button";
+  b.addEventListener("click", () => confirmar({
+    titulo: "Desligar “" + (s.nome || "este servidor") + "”?",
+    texto: "O painel para de aceitar o que ele conta, na hora, e ele sai desta lista. "
+         + "Para tirar o ajudante de dentro do servidor também, rode lá a linha de "
+         + "remover (está em “O que isso faz?”). Para ligar de novo, cole a linha outra vez.",
+    sim: "Desligar", nao: "Manter ligado"
+  }, () => desligarServidor(s.maquina_id)));
+  acoes.append(b);
+  li.append(acoes);
   return li;
+}
+
+/* Desliga pela MESMA rota de tirar computador: o servidor confere o dono. */
+async function desligarServidor(id) {
+  const r = await escrever("/api/maquinas/remover", { id });
+  if (!r.ok) { recado("não conseguimos desligar o servidor. Tente de novo.", true); return; }
+  recado("desligado. O painel não aceita mais o que ele conta.");
+  await carregar();
+  cartaoDosServidores();
+  ligarFluxoDosServidores("conectar");
 }
 
 /* A lista dos servidores: cada linha carimba o próprio "medido há". */
@@ -3339,7 +3363,7 @@ function blocoDaLinhaDoAjudante(d) {
   const bloco = criar("div", "ajudante");
   const aviso = criar("p", "carimbo");
   aviso.setAttribute("aria-live", "polite");
-  const { acoes } = botaoEmAcoes("Copiar", false, async () => {
+  const { acoes, botao } = botaoEmAcoes("Copiar", false, async () => {
     try {
       await navigator.clipboard.writeText(d.linha);
       aviso.textContent = "Copiado. Agora cole no servidor.";
@@ -3347,6 +3371,7 @@ function blocoDaLinhaDoAjudante(d) {
       aviso.textContent = "Não deu para copiar. Selecione a linha e copie à mão.";
     }
   });
+  botao.setAttribute("aria-label", "Copiar a linha para colar no servidor");
   const pre = criar("pre", "receita", d.linha);
   pre.setAttribute("tabindex", "0");
   pre.setAttribute("aria-label", "A linha para colar no servidor");
@@ -3355,9 +3380,10 @@ function blocoDaLinhaDoAjudante(d) {
   const passos = criar("ol", "porta__lista");
   for (const t of [
     "Abra o terminal do servidor (o PuTTY ou o terminal do DERVS-VOZ) e entre como de costume.",
-    "Cole a linha abaixo e aperte Enter. Ela pode pedir a sua senha do servidor.",
-    "Vai aparecer um código de 8 letras. Abra esta mesma tela no seu computador, clique em "
-      + "Autorizar e digite o código.",
+    "Cole a linha de cima e aperte Enter. Ela pode pedir a sua senha do servidor.",
+    "Vai aparecer um código de 8 letras e números, como K7M4-2QXP (mais um endereço). Abra "
+      + "esta mesma tela no seu computador e clique em Autorizar (digite o código só se a tela "
+      + "pedir).",
     "Pronto: em até um minuto o servidor aparece aqui."]) {
     passos.append(criar("li", "", t));
   }
@@ -3372,7 +3398,19 @@ function blocoDaLinhaDoAjudante(d) {
   soma.append("Apareceu ", criar("code", "", "FAILED"), " ou ", criar("code", "", "soma de verificação"),
               "? O arquivo chegou diferente do esperado. Não rode nada: recarregue esta página e "
               + "copie a linha de novo.");
-  bloco.append(python, soma);
+  /* As frases entre aspas são as que o ajudante escreve no terminal, letra a
+     letra (sem acento, como ele escreve): o teste confere no fonte dele. */
+  const sudo = criar("p", "mole");
+  sudo.append("Apareceu ", criar("code", "", "Preciso de poder de administrador"),
+              "? Rode de novo com sudo na frente.");
+  const naoServe = criar("p", "mole");
+  naoServe.append("Apareceu ", criar("code", "", "Nao achei o Docker"), " ou ",
+                  criar("code", "", "Este servidor nao usa o gerenciador de servicos"),
+                  "? Esta máquina não serve para o ajudante; nada foi alterado.");
+  const venceu = criar("p", "mole");
+  venceu.append("Apareceu ", criar("code", "", "O painel nao liberou este servidor"),
+                "? O pedido venceu. Rode a linha de novo e autorize em poucos minutos.");
+  bloco.append(python, soma, sudo, naoServe, venceu);
 
   const faz = detalhes("servidor-o-que-faz", "O que isso faz?");
   faz.append(criar("p", "mole",
@@ -3383,9 +3421,11 @@ function blocoDaLinhaDoAjudante(d) {
     + "ver o Docker ele precisa de poder de administrador no servidor: por isso roda separado, "
     + "num usuário só dele, e só com leitura."));
   const tirar = criar("p", "mole");
-  tirar.append("Para tirar: cole ", criar("code", "", "sudo python3 /opt/dervs-ajudante/dervs-ajudante.py remover"), ".");
+  tirar.append("Para tirar: cole ", criar("code", "", "sudo python3 /opt/dervs-ajudante/dervs-ajudante.py remover"),
+               " no servidor e clique em Desligar este servidor, aqui no painel.");
   faz.append(tirar);
-  faz.append(criar("p", "carimbo", "A impressão digital do arquivo, para você conferir: " + d.sha256));
+  faz.append(criar("p", "carimbo", "Código de conferência do arquivo (SHA-256): " + d.sha256
+    + ". A linha já compara o arquivo com este código. Ele prova que chegou inteiro, não de quem veio."));
   bloco.append(faz);
   return bloco;
 }
@@ -3412,7 +3452,8 @@ function cartaoDosServidores() {
   } else if (LIGAR_SERVIDOR.fase === "") {
     partes.push(criar("p", "",
       "Ligue um servidor para ver, por dentro, o que está rodando nele e qual versão de cada "
-      + "projeto está no ar. O DERVS só olha: não muda nada lá."));
+      + "projeto está no ar. O ajudante só olha o que roda no servidor. Para ficar de pé, a "
+      + "linha cria um usuário e um temporizador nele; você tira quando quiser."));
   }
   if (LIGAR_SERVIDOR.fase === "buscando") {
     partes.push(criar("p", "mole", "Preparando a linha…"));

@@ -558,6 +558,29 @@ class OsDadosDoPainel(_Base):
         self.assertIsNone(banco.ultima_medicao_de_servidor(self.uid))
 
 
+class DesligarUmServidorPelaTela(_Base):
+    """S1: o dono revoga o servidor pela MESMA rota de tirar computador."""
+
+    def test_o_dono_desliga_o_proprio_servidor_e_o_token_morre(self):
+        segredo, m = self.ligar_servidor()
+        self.assertEqual(200, self.medir(segredo).status)
+        r = self.dono("/api/maquinas/remover", {"id": m["id"]})
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual([], self.dados()["servidores_ligados"])
+        self.assertEqual(401, self.medir(segredo).status)
+
+    def test_outra_conta_nao_desliga(self):
+        outro = banco.criar_usuario("outro-%s@teste.local"
+                                    % banco.novo_token()[:6])
+        sessao_dele = self.sessao_de(outro)
+        segredo, m = self.ligar_servidor("vps-dele", sessao=sessao_dele)
+        r = self.dono("/api/maquinas/remover", {"id": m["id"]})
+        self.assertEqual(404, r.status, r.corpo)
+        self.assertEqual(["vps-dele"], [s["nome"] for s in self.dados(
+            sessao=sessao_dele)["servidores_ligados"]])
+        self.assertEqual(200, self.medir(segredo).status)
+
+
 class ALinhaDoAjudante(_Base):
     """C4: o arquivo e a linha saem da MESMA funcao, e o sha bate."""
 
@@ -605,9 +628,10 @@ class ALinhaDoAjudante(_Base):
         self.assertEqual(hashlib.sha256(bruto).hexdigest(), d["sha256"])
         self.assertEqual(alvo + "/ajudante/servidor.py", d["endereco"])
         self.assertEqual(
-            'curl -fsSL %s/ajudante/servidor.py -o dervs-ajudante.py && echo '
-            '"%s  dervs-ajudante.py" | sha256sum -c - && sudo python3 '
-            'dervs-ajudante.py' % (alvo, d["sha256"]), d["linha"])
+            'cd "$(mktemp -d)" && curl -fsSL %s/ajudante/servidor.py -o '
+            'dervs-ajudante.py && echo "%s  dervs-ajudante.py" | sha256sum -c'
+            ' - && sudo python3 -I dervs-ajudante.py' % (alvo, d["sha256"]),
+            d["linha"])
         self.assertEqual(antes, self.pedidos())
 
     def test_sem_marca_ou_com_acento_e_503_nas_duas(self):
@@ -692,6 +716,21 @@ class OFluxoAvisaQueOServidorMediu(_Base):
         banco.gravar_medicao_de_servidor(m["id"], self.uid, {"sistemas": []})
         r = self.abrir("/api/eventos")
         self.assertNotIn("event: servidor", self.ler_ate(r, "nunca", 3))
+
+    def test_banco_ocupado_ao_ler_a_medicao_nao_derruba_o_fluxo(self):
+        """`sqlite3.Error` na leitura e "nao mudou": o fluxo segue vivo."""
+        _segredo, _m = self.ligar_servidor()
+        chamadas = []
+
+        def ocupado(uid, con=None):
+            chamadas.append(uid)
+            raise sqlite3.OperationalError("database is locked")
+        with mock.patch.object(banco, "ultima_medicao_de_servidor", ocupado):
+            r = self.abrir("/api/eventos")
+            lido = self.ler_ate(r, "nunca", 3)
+        self.assertGreaterEqual(len(chamadas), 2)
+        self.assertGreaterEqual(lido.count(":\n\n"), 2)    # a sonda segue viva
+        self.assertNotIn("event: servidor", lido)
 
     def test_com_id_nao_chega_nada_do_servidor(self):
         _segredo, m = self.ligar_servidor()

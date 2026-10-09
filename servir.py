@@ -1942,9 +1942,12 @@ class Hub(SimpleHTTPRequestHandler):
             return self._json(503, {"erro": "o ajudante nao esta nesta copia"})
         resumo = hashlib.sha256(corpo).hexdigest()
         endereco = self._endereco_publico() + "/ajudante/servidor.py"
-        linha = ('curl -fsSL %s -o dervs-ajudante.py && echo "%s  '
-                 'dervs-ajudante.py" | sha256sum -c - && sudo python3 '
-                 'dervs-ajudante.py' % (endereco, resumo))
+        # Pasta nova e privada (`mktemp -d`): na pasta em que a pessoa estava,
+        # outro usuario poderia deixar um arquivo com o mesmo nome. E `-I`
+        # faz o Python ignorar PYTHONPATH e nao importar nada da pasta atual.
+        linha = ('cd "$(mktemp -d)" && curl -fsSL %s -o dervs-ajudante.py && '
+                 'echo "%s  dervs-ajudante.py" | sha256sum -c - && sudo python3 '
+                 '-I dervs-ajudante.py' % (endereco, resumo))
         return self._json(200, {"linha": linha, "sha256": resumo,
                                 "endereco": endereco})
 
@@ -3367,7 +3370,12 @@ class Hub(SimpleHTTPRequestHandler):
         primeira, ultima_medicao = True, None
         while time.time() < fim:
             if not alvo:
-                medicao = banco.ultima_medicao_de_servidor(usuario_id)
+                try:
+                    medicao = banco.ultima_medicao_de_servidor(usuario_id)
+                except sqlite3.Error:
+                    # Banco ocupado nao derruba o fluxo: "nao mudou", e a
+                    # proxima volta pergunta de novo.
+                    medicao = ultima_medicao
                 if not primeira and medicao != ultima_medicao:
                     self._evento("servidor", {"medido_em": medicao})
                     ultimo_ping = time.time()

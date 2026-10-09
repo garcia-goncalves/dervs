@@ -37,7 +37,7 @@ FUNCOES = ("criar", "haQuanto", "hora", "marcaDaPorta", "botaoEmAcoes", "detalhe
            "desdeQuando", "linhaDeSistema", "linhaDeServidorLigado",
            "listaDeServidoresLigados", "blocoDaLinhaDoAjudante", "cartaoDosServidores", "ligarUmServidor",
            "linhaDoNoAr", "linhasDoNoAr", "fecharFluxoDosServidores",
-           "ligarFluxoDosServidores")
+           "ligarFluxoDosServidores", "desligarServidor")
 
 ESTADO_INICIAL = r"""
 let ESTADO = null;
@@ -58,10 +58,14 @@ globalThis.EventSource = class {
 const abertos = [];
 const timers = [];
 globalThis.setTimeout = (f, ms) => { timers.push([f, ms]); return 1; };
-const LINHA = { linha: "curl -fsSL https://dervs.com.br/ajudante/servidor.py -o dervs-ajudante.py && "
-                + "echo \"" + "a".repeat(64) + "  dervs-ajudante.py\" | sha256sum -c - && sudo python3 dervs-ajudante.py",
+const LINHA = { linha: "cd \"$(mktemp -d)\" && curl -fsSL https://dervs.com.br/ajudante/servidor.py -o dervs-ajudante.py && "
+                + "echo \"" + "a".repeat(64) + "  dervs-ajudante.py\" | sha256sum -c - && sudo python3 -I dervs-ajudante.py",
                 sha256: "a".repeat(64), endereco: "https://dervs.com.br/ajudante/servidor.py" };
 const buscas = [];
+const confirmacoes = [], escritas = [], recados = [];
+function confirmar(o, f) { confirmacoes.push(o); globalThis.aoSim = f; }
+const escrever = async (u, c) => { escritas.push([u, c]); return RESPOSTAS.shift(); };
+function recado(texto, ruim) { recados.push([texto, !!ruim]); }
 """
 
 
@@ -89,7 +93,10 @@ class OCartaoDizOEstadoDeCadaServidor(unittest.TestCase):
     def test_vazio_diz_o_que_o_servidor_traria_e_o_botao_e_o_primeiro_passo(self):
         r = self.cartao("ESTADO = { servidores_ligados: [] };")
         self.assertIn("Ligue um servidor para ver, por dentro, o que está rodando nele e qual versão de "
-                      "cada projeto está no ar. O DERVS só olha: não muda nada lá.", r["texto"])
+                      "cada projeto está no ar. O ajudante só olha o que roda no servidor. Para ficar de "
+                      "pé, a linha cria um usuário e um temporizador nele; você tira quando quiser.",
+                      r["texto"])
+        self.assertNotIn("não muda nada lá", r["texto"])
         self.assertEqual(r["botoes"], ["Ligar um servidor"])
 
     def test_sem_a_chave_e_nao_olhei_nunca_nenhum_servidor(self):
@@ -138,12 +145,54 @@ class OCartaoDizOEstadoDeCadaServidor(unittest.TestCase):
 
     def test_com_servidor_o_botao_vira_ligar_outro(self):
         r = self.cartao("ESTADO = { servidores_ligados: [%s] };" % VPS)
-        self.assertEqual(r["botoes"], ["Ligar outro servidor"])
+        self.assertEqual(r["botoes"], ["Desligar este servidor", "Ligar outro servidor"])
 
     def test_o_nome_vem_de_fora_e_entra_como_texto(self):
         r = self.cartao("ESTADO = { servidores_ligados: [%s] };"
                         % VPS.replace('"vps-ovh"', '"<img src=x onerror=1>"'))
         self.assertIn("<img src=x onerror=1>", r["texto"])
+
+
+class DesligarUmServidor(unittest.TestCase):
+    """S1: sem este botao, o token de um servidor ligado nao tinha como morrer."""
+
+    def botoes(self, servidor):
+        r = rode(self, "ESTADO = { servidores_ligados: [%s] };\ncartaoDosServidores();\n"
+                 "console.log(JSON.stringify({ b: achaTodos($('#servidores-corpo'), n => n.tag === 'button')"
+                 ".map(b => b.textContent) }));" % servidor)
+        return r["b"]
+
+    def test_todo_servidor_tem_o_botao_medido_sem_dados_e_mudo(self):
+        velho = VPS.replace('estado: "medido"', 'estado: "sem_dados"')
+        nunca = '{ maquina_id: 8, nome: "vps-2", estado: "sem_dados", medido_em: null, docker_mudo: null, sistemas: [] }'
+        mudo = VPS.replace("docker_mudo: false", "docker_mudo: true")
+        for s in (VPS, velho, nunca, mudo):
+            with self.subTest(s=s[:60]):
+                self.assertEqual(1, self.botoes(s).count("Desligar este servidor"))
+
+    def clicar(self, respostas):
+        return rode(self, "ESTADO = { servidores_ligados: [%s] };\ncartaoDosServidores();\n"
+                    "acha($('#servidores-corpo'), n => n.tag === 'button' && "
+                    "n.textContent === 'Desligar este servidor').clicar();\n"
+                    "const antes = escritas.length;\nawait aoSim();\n"
+                    "console.log(JSON.stringify({ antes, escritas, recados, recarregou, "
+                    "titulo: confirmacoes[0].titulo, texto: confirmacoes[0].texto, "
+                    "sim: confirmacoes[0].sim, nao: confirmacoes[0].nao }));" % VPS, respostas)
+
+    def test_pergunta_antes_e_so_entao_tira_pela_rota_de_maquina(self):
+        r = self.clicar("[resposta(200, {ok: true})]")
+        self.assertEqual(r["antes"], 0)                     # nada sai sem a confirmacao
+        self.assertEqual(r["titulo"], "Desligar “vps-ovh”?")
+        self.assertEqual((r["sim"], r["nao"]), ("Desligar", "Manter ligado"))
+        self.assertIn("Para tirar o ajudante de dentro do servidor", r["texto"])
+        self.assertEqual(r["escritas"], [["/api/maquinas/remover", {"id": 7}]])
+        self.assertEqual(r["recarregou"], ["carregar"])
+        self.assertFalse(r["recados"][0][1])
+
+    def test_falha_diz_que_nao_desligou(self):
+        r = self.clicar("[resposta(404, {erro: 'nao existe'})]")
+        self.assertEqual(r["recados"], [["não conseguimos desligar o servidor. Tente de novo.", True]])
+        self.assertEqual(r["recarregou"], [])
 
 
 class UmSistemaDizOQueEstaFazendo(unittest.TestCase):
@@ -207,19 +256,42 @@ class OFluxoDaLinhaParaColar(unittest.TestCase):
 
     def test_mostra_a_linha_com_copiar_acima_e_o_roteiro_de_quatro_passos(self):
         r = self.ligando()
-        self.assertTrue(r["pre"].startswith("curl -fsSL https://dervs.com.br/ajudante/servidor.py"))
+        self.assertTrue(r["pre"].startswith('cd "$(mktemp -d)" && curl -fsSL https://dervs.com.br/ajudante/servidor.py'))
         self.assertEqual(r["ordem"][0], "Copiar")                       # acima do bloco
         self.assertEqual(r["ordem"][1], "pre")
         self.assertEqual(r["passos"], [
             "Abra o terminal do servidor (o PuTTY ou o terminal do DERVS-VOZ) e entre como de costume.",
-            "Cole a linha abaixo e aperte Enter. Ela pode pedir a sua senha do servidor.",
-            "Vai aparecer um código de 8 letras. Abra esta mesma tela no seu computador, clique em "
-            "Autorizar e digite o código.",
+            "Cole a linha de cima e aperte Enter. Ela pode pedir a sua senha do servidor.",
+            "Vai aparecer um código de 8 letras e números, como K7M4-2QXP (mais um endereço). Abra "
+            "esta mesma tela no seu computador e clique em Autorizar (digite o código só se a tela "
+            "pedir).",
             "Pronto: em até um minuto o servidor aparece aqui."])
         self.assertIn("Se der errado", r["texto"])
         self.assertIn("O servidor não tem Python. Cole sudo apt install -y python3 e rode a linha de novo.",
                       r["texto"])
         self.assertIn("Não rode nada: recarregue esta página e copie a linha de novo.", r["texto"])
+        for frase in ("Apareceu Preciso de poder de administrador? Rode de novo com sudo na frente.",
+                      "Apareceu Nao achei o Docker ou Este servidor nao usa o gerenciador de servicos? "
+                      "Esta máquina não serve para o ajudante; nada foi alterado.",
+                      "Apareceu O painel nao liberou este servidor? O pedido venceu. Rode a linha de "
+                      "novo e autorize em poucos minutos."):
+            self.assertIn(frase, r["texto"])
+
+    def test_as_frases_de_erro_sao_as_que_o_ajudante_imprime(self):
+        """A tela cita o terminal: cada frase citada tem de existir no ajudante."""
+        ajudante = (RAIZ / "ajudante_servidor.py").read_text(encoding="ascii")
+        codigos = re.findall(r'criar\("code", "", "([^"]+)"\)', funcao("blocoDaLinhaDoAjudante"))
+        citadas = [c for c in codigos if c[0].isupper() and " " in c]
+        self.assertEqual(4, len(citadas), codigos)
+        for frase in citadas:
+            with self.subTest(frase=frase):
+                self.assertIn(frase, ajudante)
+
+    def test_o_passo_do_codigo_bate_com_o_que_o_ajudante_mostra(self):
+        ajudante = (RAIZ / "ajudante_servidor.py").read_text(encoding="ascii")
+        self.assertIn('saida("Codigo: "', ajudante)
+        self.assertIn('/#/conectar?autorizar=', ajudante)
+        self.assertIn("digitando o codigo se o painel pedir", ajudante)
 
     def test_o_que_isso_faz_vem_fechado_e_diz_como_tirar(self):
         r = self.ligando()
@@ -227,7 +299,11 @@ class OFluxoDaLinhaParaColar(unittest.TestCase):
         self.assertIn("Ele nunca lê senhas, arquivos de configuração nem os dados dos sistemas, não recebe "
                       "ordens e não se atualiza sozinho.", r["texto"])
         self.assertIn("sudo python3 /opt/dervs-ajudante/dervs-ajudante.py remover", r["texto"])
-        self.assertIn("a" * 64, r["texto"])      # a impressao digital que o leitor pode conferir
+        self.assertIn("e clique em Desligar este servidor", r["texto"])
+        self.assertIn("Código de conferência do arquivo (SHA-256): " + "a" * 64 + ". A linha já compara "
+                      "o arquivo com este código. Ele prova que chegou inteiro, não de quem veio.",
+                      r["texto"])
+        self.assertNotIn("impressão digital", r["texto"])
 
     def test_repintar_nao_recria_o_bloco_da_linha(self):
         r = self.ligando("const antes = acha(c, n => n.tag === 'pre');\ncartaoDosServidores();\n"
@@ -235,12 +311,14 @@ class OFluxoDaLinhaParaColar(unittest.TestCase):
         self.assertTrue(r["extra"])
 
     def test_copiar_usa_a_area_de_transferencia_e_avisa(self):
-        r = self.ligando("const copiados = [];\n"
+        r = self.ligando("var extra0 = acha(c, n => n.tag === 'button' && n.textContent === 'Copiar')"
+                         ".getAttribute('aria-label');\nconst copiados = [];\n"
                          "Object.defineProperty(globalThis, 'navigator', { configurable: true, "
                          "value: { clipboard: { writeText: async (t) => { copiados.push(t); } } } });\n"
                          "await acha(c, n => n.tag === 'button' && n.textContent === 'Copiar').clicar();\n"
-                         "var extra = [copiados.length, copiados[0] === LINHA.linha, c.textContent];")
+                         "var extra = [copiados.length, copiados[0] === LINHA.linha, c.textContent, extra0];")
         self.assertEqual(r["extra"][:2], [1, True])
+        self.assertEqual(r["extra"][3], "Copiar a linha para colar no servidor")
         self.assertIn("Copiado", r["extra"][2])
 
     def test_copiar_que_falha_manda_copiar_a_mao(self):
@@ -365,7 +443,8 @@ const escrever = async (url, corpo) => { escritas.push([url, corpo]); return RES
                       "console.log(JSON.stringify({ texto: b.textContent, "
                       "botoes: achaTodos(b, n => n.tag === 'button').map(x => x.textContent) }));" % self.PEDIDO)
         self.assertIn("Autorizar este servidor?", r["texto"])
-        self.assertIn("Um servidor chamado vps-ovh quer se ligar à sua conta. Ele só vai olhar.", r["texto"])
+        self.assertIn("Um servidor chamado vps-ovh quer se ligar à sua conta. Ele só vai olhar, mas "
+                      "precisa de poder de administrador no servidor.", r["texto"])
         self.assertEqual(r["botoes"], ["Autorizar este servidor"])
         self.assertNotIn("computador", r["texto"])
 
@@ -519,7 +598,12 @@ class OHtmlDoCartao(unittest.TestCase):
         trecho = HTML[cartao - 60:cartao + 700]
         self.assertIn('aria-labelledby="servidores-titulo"', trecho)
         self.assertIn('<h2 id="servidores-titulo">Seus servidores</h2>', trecho)
-        self.assertRegex(trecho, r'id="servidores-corpo"[^>]*aria-live="polite"|aria-live="polite"[^>]*id="servidores-corpo"')
+        # `aria-labelledby` so vale num elemento com papel: `div` puro nao tem.
+        self.assertRegex(trecho, r'<div [^>]*id="cartao-servidores"[^>]*role="group"')
+        # O corpo inteiro repinta de minuto em minuto: anunciado, falaria tudo
+        # de novo. Quem fala e so o aviso de copia.
+        corpo = re.search(r'<div [^>]*id="servidores-corpo"[^>]*>', trecho).group(0)
+        self.assertNotIn("aria-live", corpo)
         self.assertNotIn("style=", trecho)
 
     def test_o_corpo_nao_traz_o_bloco_da_linha_no_html(self):

@@ -795,6 +795,14 @@ class MedeNoAr(unittest.TestCase):
         self.assertEqual(r, [{"sha": "96eb3fc", "atras": 3}])
         self.assertEqual(chamadas, ["repos/dono/repo/compare/96eb3fc...main"])
 
+    def test_o_branch_vai_escapado_na_url(self):
+        """O branch e texto de fora: `?`, `#` ou `/` nao podem virar outra URL."""
+        buscar, chamadas = self._buscar()
+        coletar_github.mede_no_ar("dono/repo", "x?per_page=1#y/../z",
+                                  HEAD_DE_TESTE, ["96eb3fc"], buscar=buscar)
+        self.assertEqual(chamadas, [
+            "repos/dono/repo/compare/96eb3fc...x%3Fper_page%3D1%23y%2F..%2Fz"])
+
     def test_compare_que_falhou_deixa_o_item_de_fora(self):
         buscar, _ = self._buscar({"repos/dono/repo/compare/96eb3fc...main": None})
         r = coletar_github.mede_no_ar("dono/repo", "main", HEAD_DE_TESTE,
