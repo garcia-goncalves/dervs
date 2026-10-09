@@ -1109,3 +1109,20 @@ main { padding-bottom: var(--e12); }
 .conta-gh .nome { font-size: var(--fs-destaque); overflow-wrap: anywhere; }
 .conta-gh p { margin: 0; }
 .conta-gh .lista { margin-top: var(--e2); }
+
+/* ------------------------------------------------------------ seus sites
+   O campo e o botão ficam em coluna (em 360px, lado a lado dariam menos de 140px
+   ao campo). O resultado da conferência é uma linha com a marca e a frase,
+   seguida de "De qual projeto?" e dos botões. O endereço quebra em qualquer
+   ponto: ele vem de fora e pode ser longo. */
+.sites__form { display: flex; flex-direction: column; gap: var(--e2); margin-top: var(--e3); }
+.sites__form .campo > input { min-height: 44px; width: 100%; box-sizing: border-box; }
+.sites__form .acoes { margin-top: 0; }
+#site-resultado:empty { display: none; }
+#site-resultado { margin-top: var(--e3); }
+.site-guardar { display: flex; flex-direction: column; gap: var(--e3); margin-top: var(--e3); }
+.site-guardar select { min-height: 44px; width: 100%; }
+.site { flex-wrap: wrap; align-items: flex-start; }
+.site .endereco__dizeres { flex: 1; min-width: min(100%, 14rem); }
+.site .endereco__url { overflow-wrap: anywhere; word-break: normal; }
+.site .carimbo, .site-guardar p { margin: 0; }

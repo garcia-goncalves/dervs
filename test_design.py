@@ -1055,8 +1055,9 @@ class OCardEODetalheMostramServidoresSeparados(unittest.TestCase):
 class OCartaoDeConectarListaOsServidores(unittest.TestCase):
     """Etapa 7 do plano 'servidores multiplos'.
 
-    O cartao "O seu servidor" virou "Seus servidores": cadastra, lista,
-    apaga servidor, e o formulario de endereco vive DENTRO de cada bloco. Os
+    O cartao "O seu servidor" virou "Seus servidores" e, no Conectar
+    simples, "Seus sites": cadastrar e apagar servidor ficam nas opcoes
+    avancadas, e o endereco e um campo so, no cartao. Os
     textos abaixo sao os de `design.md`, secao `textos`, palavra por
     palavra -- divergir um caractere e' o mesmo defeito que "Máquinas" no
     roteiro velho (`ORoteiroChamaAsTelasPeloNomeDelas`).
@@ -1104,13 +1105,19 @@ class OCartaoDeConectarListaOsServidores(unittest.TestCase):
             "nenhuma frase longa foi remontada -- a extracao quebrou")
 
     def test_o_cabecalho_e_os_campos_de_cadastro_existem_palavra_por_palavra(self):
+        """O cartao virou "Seus sites" (Conectar simples): o cadastro de
+        servidor mora nas OPCOES AVANCADAS, e o titulo mora no HTML."""
         j = self.script()
-        for texto in ("Seus servidores", "Cadastrar servidor",
-                      "Nome do servidor",
+        for texto in ("Cadastrar servidor", "Nome do servidor",
                       "Padrão de subdomínio (opcional)",
                       "*.tinehost.com.br"):
             with self.subTest(texto=texto):
                 self.assertIn(texto, j, "sumiu do painel.js: %r" % texto)
+        h = (PAINEL_JS.parent.parent / "index.html").read_text(encoding="utf-8")
+        self.assertIn(">Seus sites<", h)
+        self.assertLess(h.index('id="sites-avancado"'), h.index('id="sites-servidores"'),
+                        "o cadastro de servidor saiu das opcoes avancadas")
+        self.assertIn("<summary>Opções avançadas</summary>", h)
 
     def test_o_texto_de_ajuda_do_padrao_e_o_do_design(self):
         self.assertIn(
@@ -1119,18 +1126,14 @@ class OCartaoDeConectarListaOsServidores(unittest.TestCase):
             "confirma antes de qualquer coisa ser gravada.",
             self.frases_concatenadas())
 
-    def test_os_tres_resumos_do_selo_geral_existem(self):
+    def test_os_resumos_do_cartao_de_sites_existem(self):
         junto = self.frases_concatenadas()
         self.assertIn(
-            "Não consegui ler os servidores desta conta. Isso não quer "
-            "dizer que nenhum está cadastrado — quer dizer que não olhei.",
-            junto)
-        self.assertIn("Há 1 servidor cadastrado.", self.script())
+            "Não consegui ler os sites desta conta. Isso não quer dizer "
+            "que não há — quer dizer que não olhei.", junto)
         self.assertIn(
-            "Nenhum servidor cadastrado ainda. Cadastre o nome de um "
-            "provedor (por exemplo OVH ou TineHost) para começar a gravar "
-            "endereços nele.",
-            junto)
+            "Nenhum site cadastrado ainda. Cole o endereço acima para o "
+            "DERVS conferir se ele responde.", junto)
 
     def test_a_confirmacao_de_apagar_nomeia_o_que_morre(self):
         self.assertIn(
@@ -1173,29 +1176,17 @@ class OCartaoDeConectarListaOsServidores(unittest.TestCase):
         self.assertIn("servidor_id: servidorId", corpo)
 
     def test_o_cartao_nao_pinta_lista_nem_formulario_antes_de_ler(self):
-        """A armadilha do plano: 'pintar Nenhum servidor cadastrado enquanto
-        a leitura ainda nao voltou' e' a lei 2 quebrada na cara do dono. O
-        formulario e a lista so entram no cartao DENTRO do `if (leuServ)`."""
+        """A armadilha do plano: 'pintar Nenhum site cadastrado enquanto a
+        leitura ainda nao voltou' e' a lei 2 quebrada na cara do dono. A
+        lista, as propostas e o cadastro de servidor so entram com a leitura."""
         j = self.script()
-        i = j.index('titulo: "Seus servidores"')
-        fim = j.index("\nfunction formularioDeServidorNovo", i)
-        corpo = j[i:fim]
-        self.assertIn("if (leuServ) {", corpo,
-                      "a lista/formulario de servidor nao esta guardada "
-                      "pela leitura -- pintaria antes de /api/servidores "
-                      "responder")
-
-
-class ASugestaoNaTelaPropoeEPara(unittest.TestCase):
-    """Etapa 9 do plano 'servidores multiplos'.
-
-    A sugestao de autodeteccao aparece DENTRO do bloco do servidor, acima do
-    formulario manual, com contorno `--borda-forte` -- nunca uma cor de
-    estado, porque e' proposta, nao veredito. Nada e' gravado sem o clique em
-    "Usar este endereço", e ela custa rede so UMA VEZ por servidor com
-    padrao, por sessao (`SERVIDORES_JA_SUGERIDOS`) -- sem isso cada repintura
-    de `pintarConectar()` dispararia ate 68s de medicao no servidor.
-    """
+        i = j.index("function pintarSites()")
+        corpo = j[i:j.index("\n}\n", i)]
+        self.assertIn("guardados = leu ? ENDERECOS : []", corpo)
+        self.assertIn("propostas = leu ? sugestoesDoSite() : []", corpo)
+        self.assertIn("if (SERVIDORES_LIDO_EM) {", corpo,
+                      "o cadastro de servidor nao espera a leitura de "
+                      "/api/servidores")
 
     def script(self):
         return PAINEL_JS.read_text(encoding="utf-8")
@@ -1206,10 +1197,9 @@ class ASugestaoNaTelaPropoeEPara(unittest.TestCase):
     def test_o_texto_da_sugestao_e_os_dois_rotulos_existem_no_fonte(self):
         j = self.script()
         for texto in (
-            "O endereço ",
-            " respondeu e parece ser deste projeto. Quer usar este endereço "
-            "para o ",
-            "Usar este endereço",
+            "Sugestão: ",
+            " parece estar em ",
+            "Usar este",
             "Ignorar",
         ):
             with self.subTest(texto=texto):
@@ -1255,13 +1245,18 @@ class ASugestaoNaTelaPropoeEPara(unittest.TestCase):
         existe de verdade; este caso prova so que a TELA a busca."""
         self.assertIn('"/api/servidores/sugerir"', self.script())
 
-    def test_usar_este_endereco_chama_guardarendereco(self):
+    def test_usar_este_so_preenche_e_confere_nunca_grava(self):
         j = self.script()
         i = j.index("function linhaDeSugestao")
         fim = j.index("\nfunction ", i + 10)
         corpo = j[i:fim]
-        self.assertIn("guardarEndereco(servidorId, projeto, url)", corpo,
-                      "o botao 'Usar este endereço' parou de gravar")
+        i1 = corpo.index('"Usar este"')
+        clique = corpo[i1:corpo.index("});", i1)]
+        self.assertIn("conferirSite(url", clique,
+                      "'Usar este' parou de conferir o endereco")
+        for proibido in ("guardarEndereco", "guardarSite", "escrever("):
+            self.assertNotIn(proibido, clique,
+                             "'Usar este' grava: a sugestao propoe e para")
 
     def test_ignorar_nunca_grava_e_so_some_nesta_sessao(self):
         """'Nada e gravado sem o clique' -- o botao Ignorar nunca pode

@@ -428,8 +428,60 @@ __FAIXA__
         </details>
       </div>
 
-      <!-- Os cartões GitHub e Seus sites. O painel.js preenche este contêiner. -->
+      <!-- O cartão GitHub. O painel.js o monta de novo a cada repintura. -->
       <div class="pilha" id="conectar-corpo"></div>
+
+      <!-- CARTÃO "SEUS SITES" (tela E). O campo é FIXO aqui no HTML, e não
+           montado pelo script: a tela se repinta sozinha a cada minuto, e um
+           campo recriado apagaria o que a pessoa está digitando e roubaria o
+           foco. O painel.js preenche só o que está em volta dele. -->
+      <div class="cartao porta" id="cartao-sites" aria-labelledby="sites-titulo">
+        <div class="porta__cabeca">
+          <h2 id="sites-titulo">Seus sites</h2>
+          <span id="sites-marca"></span>
+        </div>
+        <p>
+          Cole o endereço de um site. O DERVS confere na hora se ele responde,
+          antes de guardar.
+        </p>
+        <p id="sites-resumo"></p>
+        <div id="sites-sugestoes"></div>
+
+        <form id="sites-form" class="sites__form" novalidate>
+          <div class="campo">
+            <label for="site-endereco">Endereço do site</label>
+            <input id="site-endereco" type="text" inputmode="url" autocomplete="off"
+                   spellcheck="false" placeholder="https://clinica-agenda.com.br"
+                   aria-describedby="site-erro">
+            <span class="ajuda" id="site-erro" hidden></span>
+          </div>
+          <div class="acoes">
+            <button class="botao" type="submit" id="site-conferir">Conferir o site</button>
+          </div>
+        </form>
+
+        <!-- O resultado da conferência. `aria-live` desde o nascimento: o foco
+             NÃO é roubado pelo resultado, ele fica no botão que foi apertado. -->
+        <div id="site-resultado" aria-live="polite" aria-busy="false"></div>
+        <p class="carimbo" id="sites-guardado" aria-live="polite"></p>
+
+        <ul class="lista" id="sites-lista"></ul>
+
+        <details class="ajuda" id="sites-avancado">
+          <summary>Opções avançadas</summary>
+          <p class="mole">
+            Servidor: onde o site roda. Se você não tem nenhum cadastrado, o
+            DERVS cria um chamado “Meus sites”.
+          </p>
+          <div id="sites-servidores"></div>
+        </details>
+
+        <p class="mole">
+          O DERVS nunca pede chave de acesso ao servidor. O endereço público
+          basta para conferir se ele responde. Endereço de rede interna é
+          recusado de propósito.
+        </p>
+      </div>
     </div>
   </section>
 

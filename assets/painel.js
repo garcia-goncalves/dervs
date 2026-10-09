@@ -1432,101 +1432,6 @@ function marcaDaPorta(estado, rotulo) {
   return span;
 }
 
-/* Um cartão de porta, montado por uma função só. Duas montagens divergem, e a
-   que divergir é sempre a que esquece o rótulo escrito. */
-function porta({ titulo, estado, resumo, carimbo, caminhos = [], nota = "",
-                depois = "", lista = [] }) {
-  const cartao = document.createElement("div");
-  cartao.className = "cartao porta";
-
-  const cabeca = document.createElement("div");
-  cabeca.className = "porta__cabeca";
-  const h = document.createElement("h2");
-  h.textContent = titulo;
-  cabeca.append(h, marcaDaPorta(estado));
-
-  const p = document.createElement("p");
-  p.textContent = resumo;
-  cartao.append(cabeca, p);
-
-  if (carimbo) {
-    const c = document.createElement("p");
-    c.className = "carimbo";
-    c.textContent = carimbo;
-    cartao.append(c);
-  }
-
-  /* Itens opcionais (por exemplo, as contas do GitHub conectadas): cada um é
-     { texto, detalhe, link: { rotulo, url } }. Tudo entra por textContent, e o
-     link só é montado quando o endereço é https do github.com. */
-  if (lista.length) {
-    const ul = document.createElement("ul");
-    ul.className = "porta__lista";
-    for (const item of lista) {
-      const li = document.createElement("li");
-      const nome = document.createElement("strong");
-      nome.textContent = item.texto;
-      li.append(nome);
-      if (item.detalhe) {
-        const d = document.createElement("span");
-        d.className = "carimbo";
-        d.textContent = " — " + item.detalhe;
-        li.append(d);
-      }
-      if (item.link && /^https:\/\/github\.com\//.test(item.link.url)) {
-        const a = document.createElement("a");
-        a.href = item.link.url;
-        a.target = "_blank";
-        a.rel = "noopener noreferrer";
-        a.textContent = item.link.rotulo;
-        li.append(" ", a);
-      }
-      ul.append(li);
-    }
-    cartao.append(ul);
-  }
-
-  /* Os botões vão dentro de `.acoes` — é lá que mora o `min-height: 44px`.
-     Soltos no cartão eles ficam com ~36px, abaixo do alvo de toque que este
-     projeto adotou, e isso já foi corrigido uma vez aqui. */
-  if (caminhos.length) {
-    const acoes = document.createElement("div");
-    acoes.className = "acoes";
-    for (const c of caminhos) {
-      const b = document.createElement("button");
-      b.className = "botao" + (c.secundario ? " botao--secundario" : "");
-      b.type = "button";
-      b.textContent = c.rotulo;
-      if (c.desligado) {
-        b.disabled = true;
-        b.title = c.porque || "";
-      } else {
-        b.addEventListener("click", c.aoClicar);
-      }
-      acoes.append(b);
-    }
-    cartao.append(acoes);
-  }
-
-  /* O lugar onde a confirmação da etapa A6 é pintada. Nasce vazio: cartão que
-     abre com uma caixa de espera vazia parece que já está esperando alguma
-     coisa. */
-  if (depois) {
-    const caixa = document.createElement("div");
-    caixa.className = "espera";
-    caixa.id = depois;
-    cartao.append(caixa);
-  }
-
-  if (nota) {
-    const n = document.createElement("p");
-    n.className = "mole";
-    n.textContent = nota;
-    cartao.append(n);
-  }
-  return cartao;
-}
-
 /* ---------------------------------------------------------- pequenos ajudantes
    Um jeito só de montar um elemento com texto. O texto entra SEMPRE por
    `textContent`: nome de computador, de pasta e de projeto vêm de fora. */
@@ -2150,49 +2055,6 @@ async function pedirSugestao(servidorId) {
   if (rota().tela === "conectar") pintarConectar();
 }
 
-/* A linha de sugestao, dentro do bloco do servidor, acima do formulario
-   manual. Contorno `--borda-forte` — NUNCA `--estado-saudavel`/
-   `--estado-quebrado`: e' uma proposta, nao um veredito, e as duas cores de
-   estado sao reservadas para o que foi MEDIDO como certo ou errado. */
-function linhaDeSugestao(servidorId, projeto, url) {
-  const linha = document.createElement("div");
-  linha.className = "sugestao";
-
-  const texto = document.createElement("p");
-  texto.textContent = "O endereço " + url
-    + " respondeu e parece ser deste projeto. Quer usar este endereço para o "
-    + projeto + "?";
-  linha.append(texto);
-
-  const acoes = document.createElement("div");
-  acoes.className = "acoes";
-
-  const usar = document.createElement("button");
-  usar.className = "botao";
-  usar.type = "button";
-  usar.textContent = "Usar este endereço";
-  usar.addEventListener("click", () => {
-    /* Nada e gravado sem este clique — a sugestao so vira endereco aqui. */
-    SUGESTOES[servidorId] = (SUGESTOES[servidorId] || [])
-      .filter(s => s.projeto !== projeto);
-    guardarEndereco(servidorId, projeto, url);
-  });
-
-  const ignorar = document.createElement("button");
-  ignorar.className = "botao botao--secundario";
-  ignorar.type = "button";
-  ignorar.textContent = "Ignorar";
-  ignorar.addEventListener("click", () => {
-    /* So some da tela nesta sessao — nunca volta a perguntar sozinho. */
-    SUGESTOES_IGNORADAS.add(servidorId + ":" + projeto);
-    pintarConectar();
-  });
-
-  acoes.append(usar, ignorar);
-  linha.append(acoes);
-  return linha;
-}
-
 async function apagarServidor(id) {
   const r = await escrever("/api/servidores/remover", { id });
   if (!r.ok) { recado("não conseguimos apagar esse servidor.", true); return; }
@@ -2718,43 +2580,387 @@ function pintarConectar() {
   /* PORTA 2 — a conta do GitHub. */
   onde.append(cartaoDoGithub());
 
-  /* PORTA 3 — os SEUS SERVIDORES (servidores multiplos, etapa 7). "O seu
-     servidor" virou uma lista: o mesmo projeto pode responder em mais de um
-     servidor ao mesmo tempo, e o card diz em quais. */
-  const leuServ = !!SERVIDORES_LIDO_EM;
-  const nServ = leuServ ? SERVIDORES.length : 0;
-  const resumoServ = !leuServ
-    ? "Não consegui ler os servidores desta conta. Isso não quer dizer que "
-      + "nenhum está cadastrado — quer dizer que não olhei."
-    : (nServ
-       ? (nServ === 1 ? "Há 1 servidor cadastrado."
-                      : "Há " + nServ + " servidores cadastrados.")
-       : "Nenhum servidor cadastrado ainda. Cadastre o nome de um provedor "
-         + "(por exemplo OVH ou TineHost) para começar a gravar endereços "
-         + "nele.");
-  const cartao3 = porta({
-    titulo: "Seus servidores",
-    estado: !leuServ ? "sem_dados" : (nServ ? "conectado" : "desconectado"),
-    resumo: resumoServ,
-    carimbo: leuServ ? "servidores lidos " + haQuanto(SERVIDORES_LIDO_EM) : "",
-    /* Nota fixa REAPROVEITADA sem reescrever — o texto e as travas que ela
-       descreve não mudaram: nunca pedimos senha, sempre recusamos rede
-       interna. */
-    nota: "Nunca pedimos chave de acesso ao servidor, e não vamos pedir: o "
-        + "endereço público basta para conferir se ele responde. Endereço de "
-        + "rede interna é recusado de propósito — o painel roda num servidor, "
-        + "e um endereço interno faria dele uma ferramenta de varredura."
-  });
-  /* NUNCA pinta lista nem formulário antes da leitura responder — é a lei 2:
-     "nenhum servidor cadastrado" tem de significar "olhei, e não há", nunca
-     "ainda não perguntei". */
-  if (leuServ) {
-    cartao3.append(formularioDeServidorNovo());
-    for (const item of SERVIDORES) cartao3.append(blocoDeServidor(item));
-  }
-  onde.append(cartao3);
+  /* PORTA 3 — os seus sites: o campo é fixo no HTML, o resto é daqui. */
+  pintarSites();
 
   reencontrarEspera();
+}
+
+/* ================================================= Seus sites (tela E) ======
+   Um campo só: cole o endereço, o DERVS CONFERE se ele responde (sem gravar) e
+   só então a pessoa guarda. O campo é fixo no index.html — o painel.js só
+   monta o que vem em volta. Cinco mentiras possíveis aqui, todas evitadas:
+
+   - "fora do ar" onde a medição simplesmente não aconteceu: `ok: null` é o
+     quarto estado, "não deu para conferir", e guarda sem afirmar nada;
+   - o resultado do endereço ANTIGO ficar na tela com o endereço NOVO: digitar
+     apaga o resultado, e uma resposta atrasada de outra conferência é jogada fora;
+   - adivinhar o projeto ou o servidor errado: sem parecido, a escolha fica
+     vazia e o botão espera;
+   - gravar sem o clique: sugestão propõe e para;
+   - texto de fora (erro do servidor remoto, nome do projeto) como HTML. */
+const SITE = { seq: 0, timer: null, sugerido: "" };
+
+/* O que a última medição sabe deste site: a feita agora por esta tela, ou a do
+   coletor (a camada do projeto). `null` = ainda não medi. */
+function medidaDoSite(e) {
+  const m = MEDIDAS[chaveDaMedida(e.servidor_id, e.projeto)];
+  if (m) return m;
+  const p = ((ESTADO && ESTADO.projetos) || []).find(x => x.nome === e.projeto);
+  const sites = p && (p.camadas || {}).github ? sitesDoProjeto(p.github) : null;
+  const s = (sites || []).find(x => x.url === e.url);
+  return s ? { ok: s.ok, codigo: s.codigo, erro: s.erro, medido_em: s.medido_em } : null;
+}
+
+/* O projeto cujo nome mais aparece no endereço (loja-da-ana.com.br -> loja-da-ana).
+   Sem parecido, "" — nunca um palpite. Função pura. */
+function projetoMaisParecido(url, nomes) {
+  let host = "";
+  try { host = new URL(url).hostname.toLowerCase().replace(/^www\./, ""); } catch (_) { return ""; }
+  const limpo = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const alvo = limpo(host);
+  let melhor = "", tamanho = 0;
+  for (const nome of nomes) {
+    const n = limpo(nome);
+    if (n && alvo.includes(n) && n.length > tamanho) { melhor = nome; tamanho = n.length; }
+  }
+  return melhor;
+}
+
+/* As propostas: endereços que o projeto já declara (a camada do coletor, sem
+   servidor) e as da autodetecção por padrão de subdomínio. Só PROPÕEM. */
+function sugestoesDoSite() {
+  const guardados = new Set((ENDERECOS || []).map(e => e.projeto + "|" + e.url));
+  const vistas = new Set();
+  const saida = [];
+  const poe = (projeto, url) => {
+    const chave = projeto + "|" + url;
+    if (!projeto || !url || guardados.has(chave) || vistas.has(chave)) return;
+    if (SUGESTOES_IGNORADAS.has(chave)) return;
+    vistas.add(chave);
+    saida.push({ projeto, url });
+  };
+  for (const p of ((ESTADO && ESTADO.projetos) || [])) {
+    const sites = (p.camadas || {}).github ? sitesDoProjeto(p.github) : [];
+    for (const s of (sites || [])) if (s.servidor_id === 0) poe(p.nome, s.url);
+  }
+  for (const id of Object.keys(SUGESTOES)) {
+    for (const s of SUGESTOES[id]) poe(s.projeto, s.url);
+  }
+  return saida;
+}
+
+/* A sugestão propõe e PARA: "Usar este" só preenche o campo e confere; nada é
+   gravado. Contorno `--borda-forte` — nunca cor de estado: é proposta, não
+   veredito. */
+function linhaDeSugestao(projeto, url) {
+  const linha = criar("div", "sugestao");
+  linha.append(criar("p", "", "Sugestão: " + projeto + " parece estar em " + url));
+  const acoes = criar("div", "acoes");
+  const usar = criar("button", "botao", "Usar este");
+  usar.type = "button";
+  usar.addEventListener("click", () => {
+    $("#site-endereco").value = url;
+    SITE.sugerido = projeto;
+    conferirSite(url, false);
+  });
+  const ignorar = criar("button", "botao botao--secundario", "Ignorar");
+  ignorar.type = "button";
+  ignorar.addEventListener("click", () => {
+    /* Só some desta sessão — nunca grava, nunca volta a perguntar sozinho. */
+    SUGESTOES_IGNORADAS.add(projeto + "|" + url);
+    pintarSites();
+  });
+  acoes.append(usar, ignorar);
+  linha.append(acoes);
+  return linha;
+}
+
+/* Por que o site não respondeu, em português. O texto exato do servidor remoto
+   entra entre parênteses, por textContent. */
+function motivoDoSite(r) {
+  const erro = String(r.erro || "");
+  let frase = "Não consegui falar com o site.";
+  if (r.codigo >= 500) frase = "O site respondeu com erro do lado dele (código " + r.codigo + ").";
+  else if (erro === "nao_resolveu") return "Não achei esse endereço. Confira se você digitou certo.";
+  else if (/timeout/i.test(erro)) frase = "O site não respondeu em 10 segundos.";
+  else if (/ssl|certificate/i.test(erro)) frase = "O certificado de segurança do site não é válido.";
+  else if (/ConnectionRefused/i.test(erro)) frase = "O site recusou a conexão.";
+  return erro ? frase + " (" + erro + ")" : frase;
+}
+
+/* "0,4 segundo", "2,3 segundos": abaixo de dois, singular. */
+function segundosEmPalavras(ms) {
+  if (typeof ms !== "number") return "";
+  const s = ms / 1000;
+  return " em " + s.toFixed(1).replace(".", ",") + (s < 2 ? " segundo" : " segundos");
+}
+
+/* Um campo com `<select>`. Sem escolha prévia: o primeiro item é o convite. */
+function campoDeEscolha(id, rotulo, itens, escolhido, convite) {
+  const campo = criar("div", "campo");
+  const l = criar("label", "", rotulo);
+  l.setAttribute("for", id);
+  const sel = criar("select");
+  sel.id = id;
+  const vazio = criar("option", "", convite);
+  vazio.value = "";
+  sel.append(vazio);
+  for (const [valor, nome] of itens) {
+    const o = criar("option", "", nome);
+    o.value = valor;
+    sel.append(o);
+  }
+  sel.value = escolhido || "";
+  campo.append(l, sel);
+  return { campo, sel };
+}
+
+/* Por que ainda não dá para guardar (ou "" se dá). Texto à parte, sem montagem. */
+function razaoDeNaoGuardar(nomes, servidores) {
+  if (!nomes.length) {
+    return "Ainda não há projetos no painel para ligar a este site. Conecte um computador primeiro.";
+  }
+  if (!servidores) {
+    return "Não consegui ler os servidores agora. Isso não quer dizer que não há — quer dizer que não olhei.";
+  }
+  return "";
+}
+
+/* "De qual projeto é este site?" e os botões. Nunca adivinha: sem parecido, ou
+   com dois servidores ou mais, a escolha começa vazia e o botão espera. */
+function blocoDeGuardar(r) {
+  const bloco = criar("div", "site-guardar");
+  const nomes = nomesDosProjetos();
+  const servidores = SERVIDORES_LIDO_EM ? SERVIDORES : null;
+  const razao = razaoDeNaoGuardar(nomes, servidores);
+
+  let projeto = null, servidor = null;
+  if (nomes.length) {
+    const sugerido = nomes.includes(SITE.sugerido) ? SITE.sugerido : projetoMaisParecido(r.url, nomes);
+    projeto = campoDeEscolha("site-projeto", "De qual projeto é este site?",
+                             nomes.map(n => [n, n]), sugerido, "Escolha o projeto");
+    bloco.append(projeto.campo);
+  }
+  if (servidores && servidores.length > 1) {
+    servidor = campoDeEscolha("site-servidor", "Em qual servidor?",
+                              servidores.map(s => [String(s.id), s.nome]), "", "Escolha o servidor");
+    bloco.append(servidor.campo);
+  }
+  if (razao) bloco.append(criar("p", "mole", razao));
+
+  const acoes = criar("div", "acoes");
+  const guardar = criar("button", "botao", r.ok === true ? "Guardar este site" : "Guardar mesmo assim");
+  guardar.type = "button";
+  const pronto = () => !razao && projeto.sel.value !== "" && (!servidor || servidor.sel.value !== "");
+  const confere = () => { guardar.disabled = !pronto(); };
+  confere();
+  if (projeto) projeto.sel.addEventListener("change", confere);
+  if (servidor) servidor.sel.addEventListener("change", confere);
+  guardar.addEventListener("click", () =>
+    guardarSite(r, projeto.sel.value, servidor ? +servidor.sel.value : null));
+  acoes.append(guardar);
+  if (r.ok !== true && r.ok !== false) {
+    const de = criar("button", "botao botao--secundario", "Tentar de novo");
+    de.type = "button";
+    de.addEventListener("click", () => conferirSite(r.url, false));
+    acoes.append(de);
+  }
+  bloco.append(acoes);
+  return bloco;
+}
+
+/* O resultado de uma conferência: os quatro desfechos (respondeu, não
+   respondeu, não deu para conferir, rede interna) e o endereço mal escrito. */
+function pintarResultadoDaMedicao(r) {
+  const campo = $("#site-endereco");
+  const erro = $("#site-erro");
+  const onde = $("#site-resultado");
+  campo.removeAttribute("aria-invalid");
+  erro.hidden = true;
+  onde.setAttribute("aria-busy", "false");
+
+  if (r.motivo === "forma") {
+    campo.setAttribute("aria-invalid", "true");
+    erro.textContent = "Escreva o endereço completo, começando por https://, "
+                     + "por exemplo https://loja-da-ana.com.br.";
+    erro.hidden = false;
+    onde.replaceChildren();
+    return;
+  }
+  if (r.motivo === "nao_publico") {
+    onde.replaceChildren(criar("p", "",
+      "Este endereço é de uma rede interna. O painel só confere sites públicos. "
+      + "Use o endereço que o público acessa."));
+    return;
+  }
+
+  const linha = criar("p", "espera__linha");
+  if (r.ok === true) {
+    linha.append(marcaDaPorta("conectado", "respondeu"),
+                 criar("span", "", "O site respondeu (código " + r.codigo + ")"
+                                   + segundosEmPalavras(r.ms) + "."));
+  } else if (r.ok === false) {
+    linha.append(marcaDaPorta("desconectado", "não respondeu"),
+                 criar("span", "", motivoDoSite(r)));
+  } else {
+    linha.append(marcaDaPorta("sem_dados"),
+                 criar("span", "", "Não consegui conferir este site agora. Isso "
+                                   + "não quer dizer que ele esteja fora do ar — "
+                                   + "quer dizer que não olhei."));
+  }
+  onde.replaceChildren(linha, blocoDeGuardar(r));
+}
+
+function limparResultadoDoSite() {
+  SITE.seq++;                    /* uma resposta atrasada não pinta mais nada */
+  clearTimeout(SITE.timer);
+  SITE.sugerido = "";
+  const b = $("#site-conferir");
+  b.disabled = false;
+  b.textContent = "Conferir o site";
+  $("#site-endereco").removeAttribute("aria-invalid");
+  $("#site-erro").hidden = true;
+  $("#site-resultado").replaceChildren();
+  $("#site-resultado").setAttribute("aria-busy", "false");
+}
+
+async function conferirSite(urlDada, doBotao) {
+  const campo = $("#site-endereco");
+  const url = (urlDada !== undefined ? urlDada : campo.value).trim();
+  limparResultadoDoSite();
+  const minha = SITE.seq;
+  if (!url) { pintarResultadoDaMedicao({ motivo: "forma", url }); return; }
+
+  const b = $("#site-conferir");
+  b.disabled = true;
+  b.textContent = "Conferindo…";
+  $("#site-resultado").setAttribute("aria-busy", "true");
+  /* A medição leva até uns 23 segundos; depois de 8 a tela diz que é normal. */
+  SITE.timer = setTimeout(() => {
+    if (minha === SITE.seq) {
+      $("#site-resultado").replaceChildren(criar("p", "mole", "Ainda conferindo… alguns sites demoram."));
+    }
+  }, 8000);
+
+  let r = null, d = null;
+  try {
+    r = await escrever("/api/enderecos/medir", { url });
+    d = await r.json();
+  } catch (_) { d = null; }
+  if (minha !== SITE.seq) return;           /* outra conferência assumiu */
+  clearTimeout(SITE.timer);
+  b.disabled = false;
+  b.textContent = "Conferir o site";
+  if (doBotao !== false) b.focus();
+
+  if (r && r.status === 403 && PAGINA_VELHA) {
+    $("#site-resultado").replaceChildren();   /* a faixa do alto explica */
+    return;
+  }
+  if (r && r.status === 400 && d && (d.motivo === "forma" || d.motivo === "nao_publico")) {
+    pintarResultadoDaMedicao({ motivo: d.motivo, url });
+    return;
+  }
+  /* Recusa por teto (429), rede ou corpo torto: "não deu para conferir". */
+  if (!r || !r.ok || !d) { pintarResultadoDaMedicao({ ok: null, url }); return; }
+  pintarResultadoDaMedicao(Object.assign({ url }, d));
+}
+
+/* Guarda SEM medir de novo (`medir: false`): a medição que a pessoa acabou de
+   ver é a que fica no carimbo. Sem servidor cadastrado, cria "Meus sites"; com
+   um só, usa ele; com dois ou mais, a escolha já veio da tela. */
+async function guardarSite(r, projeto, servidorEscolhido) {
+  const aviso = $("#sites-guardado");
+  aviso.textContent = "";
+  let servidorId = servidorEscolhido;
+  if (servidorId === null) {
+    if (!SERVIDORES.length) {
+      let c = null;
+      try { c = await escrever("/api/servidores/guardar", { nome: "Meus sites", padrao_subdominio: "" }); }
+      catch (_) { c = null; }
+      if (!c || !c.ok) {
+        aviso.textContent = "Não consegui guardar agora. O que você digitou continua no campo.";
+        return;
+      }
+      await olharOsServidores();
+    }
+    servidorId = (SERVIDORES[0] || {}).id;
+  }
+  let g = null;
+  try {
+    g = await escrever("/api/enderecos/guardar",
+                       { servidor_id: servidorId, projeto, url: r.url, medir: false });
+  } catch (_) { g = null; }
+  if (!g || !g.ok) {
+    aviso.textContent = "Não consegui guardar agora. O que você digitou continua no campo.";
+    return;
+  }
+  /* O que a pessoa viu agora fica como a medição deste endereço. */
+  if (r.ok === true || r.ok === false) {
+    MEDIDAS[chaveDaMedida(servidorId, projeto)] = {
+      ok: r.ok, codigo: r.codigo, erro: r.erro, medido_em: r.medido_em };
+  }
+  $("#site-endereco").value = "";
+  limparResultadoDoSite();
+  aviso.textContent = "Guardei " + r.url + " para o projeto " + projeto + ".";
+  await olharOsEnderecos();
+  $("#site-endereco").focus();
+}
+
+/* Uma linha da lista de sites já guardados. */
+function linhaDeSite(e) {
+  const li = criar("li", "site");
+  const dizeres = criar("div", "endereco__dizeres");
+  dizeres.append(criar("strong", "", e.projeto), criar("span", "endereco__url", e.url));
+  const varios = (SERVIDORES || []).length > 1;
+  const dele = varios ? (SERVIDORES || []).find(s => s.id === e.servidor_id) : null;
+  if (dele) dizeres.append(criar("span", "carimbo", "servidor: " + dele.nome));
+
+  const m = medidaDoSite(e);
+  const ok = m ? m.ok : null;
+  dizeres.append(marcaDaPorta(ok === true ? "conectado" : ok === false ? "desconectado" : "sem_dados",
+                              ok === true ? "respondeu" : ok === false ? "não respondeu" : "não medi"));
+  const carimbo = criar("p", "carimbo");
+  carimbo.textContent = ok === true ? "respondeu " + m.codigo + " · medido " + haQuanto(m.medido_em)
+    : ok === false ? "não respondeu · medido " + haQuanto(m.medido_em)
+    : "ainda não medi";
+  dizeres.append(carimbo);
+
+  const tirar = criar("button", "botao botao--secundario", "Tirar");
+  tirar.type = "button";
+  tirar.addEventListener("click", () => guardarEndereco(e.servidor_id, e.projeto, ""));
+  const acoes = criar("div", "acoes");
+  acoes.append(tirar);
+  li.append(dizeres, acoes);
+  return li;
+}
+
+/* Preenche o que cerca o campo. NUNCA pinta lista nem "nenhum site" antes da
+   leitura responder — é a lei 2: "nenhum site cadastrado" tem de significar
+   "olhei, e não há", nunca "ainda não perguntei". */
+function pintarSites() {
+  const leu = !!ENDERECOS_LIDO_EM;
+  const guardados = leu ? ENDERECOS : [];
+  const nenhum = leu && !guardados.length;
+  const estado = !leu ? "sem_dados" : (nenhum ? "desconectado" : "conectado");
+  $("#sites-marca").replaceChildren(marcaDaPorta(estado));
+  $("#sites-resumo").hidden = leu && !nenhum;
+  $("#sites-resumo").textContent = !leu
+    ? "Não consegui ler os sites desta conta. Isso não quer dizer que não há — quer dizer que não olhei."
+    : "Nenhum site cadastrado ainda. Cole o endereço acima para o DERVS conferir se ele responde.";
+
+  const propostas = leu ? sugestoesDoSite() : [];
+  $("#sites-sugestoes").replaceChildren(...propostas.map(s => linhaDeSugestao(s.projeto, s.url)));
+  $("#sites-lista").replaceChildren(...guardados.map(linhaDeSite));
+
+  /* Opções avançadas: cadastrar e apagar servidor, e o padrão de subdomínio. */
+  const avancado = [];
+  if (SERVIDORES_LIDO_EM) {
+    avancado.push(formularioDeServidorNovo());
+    for (const item of SERVIDORES) avancado.push(blocoDeServidor(item));
+  }
+  $("#sites-servidores").replaceChildren(...avancado);
 }
 
 /* O texto de ajuda do campo "padrão de subdomínio", palavra por palavra do
@@ -2813,8 +3019,8 @@ function formularioDeServidorNovo() {
   return form;
 }
 
-/* Um bloco por servidor cadastrado: nome, padrão (se houver), botão Apagar e
-   os endereços gravados NAQUELE servidor. */
+/* Um bloco por servidor cadastrado: nome, padrão (se houver) e o botão Apagar.
+   Os endereços não moram mais aqui — a lista de sites é uma só, no cartão. */
 function blocoDeServidor(item) {
   const bloco = document.createElement("div");
   bloco.className = "servidor";
@@ -2849,104 +3055,13 @@ function blocoDeServidor(item) {
   bloco.append(acoes);
 
   /* SO servidor COM PADRAO, e SO UMA VEZ por sessao — o `Set` decide, nunca
-     o repinte. Sem padrao, `/api/servidores/sugerir` devolveria lista vazia
+     o repinte. As propostas aparecem no cartão (`sugestoesDoSite`); aqui só se
+     pede. Sem padrao, `/api/servidores/sugerir` devolveria lista vazia
      mesmo assim, e pedir seria rede gasta a toa. */
   if (item.padrao_subdominio && !SERVIDORES_JA_SUGERIDOS.has(item.id)) {
     pedirSugestao(item.id);
   }
-  for (const s of (SUGESTOES[item.id] || [])) {
-    if (SUGESTOES_IGNORADAS.has(item.id + ":" + s.projeto)) continue;
-    bloco.append(linhaDeSugestao(item.id, s.projeto, s.url));
-  }
-
-  bloco.append(formularioDeEndereco(item.id));
   return bloco;
-}
-
-/* O campo de endereço daquele SERVIDOR, mais a lista do que já está gravado
-   nele. Um formulário de verdade: quem digita e aperta Enter espera que
-   funcione, e um `<div>` com botão não dá isso ao teclado nem ao leitor de
-   tela.
-
-   `servidorId` filtra `ENDERECOS` — a lista chata que `/api/enderecos`
-   devolve agora, um item por (servidor, projeto) — e não entra num campo do
-   formulário: o servidor já está implícito no bloco em que o formulário
-   vive, como o design manda. */
-function formularioDeEndereco(servidorId) {
-  const caixa = document.createElement("div");
-  caixa.className = "enderecos";
-
-  const doServidor = (ENDERECOS || []).filter(e => e.servidor_id === servidorId);
-  for (const { projeto, url } of doServidor) {
-    const li = document.createElement("div");
-    li.className = "endereco";
-
-    const dizeres = document.createElement("div");
-    dizeres.className = "endereco__dizeres";
-    const nome = document.createElement("strong");
-    nome.textContent = projeto;
-    const link = document.createElement("span");
-    link.className = "endereco__url";
-    link.textContent = url;
-    dizeres.append(nome, link);
-
-    /* OS TRÊS ESTADOS, e o terceiro é de primeira classe: no ar · fora do ar ·
-       NÃO DEU PARA CONFERIR. `ok` como `null` é o quarto estado do selo, e
-       pintá-lo de "fora do ar" apagaria a diferença entre um site caído e uma
-       medição que não aconteceu. */
-    const m = MEDIDAS[chaveDaMedida(servidorId, projeto)];
-    if (m) {
-      dizeres.append(marcaDaPorta(m.ok === true ? "conectado"
-                                : m.ok === false ? "desconectado" : "sem_dados"));
-      const c = document.createElement("p");
-      c.className = "carimbo";
-      c.textContent = m.ok === null || m.ok === undefined
-        ? "não deu para medir (" + (m.erro || "sem motivo") + ") · "
-          + haQuanto(m.medido_em)
-        : "respondeu " + m.codigo + " · medido " + haQuanto(m.medido_em);
-      dizeres.append(c);
-    }
-
-    const tirar = document.createElement("button");
-    tirar.className = "botao botao--secundario";
-    tirar.type = "button";
-    tirar.textContent = "Apagar";
-    tirar.addEventListener("click", () => guardarEndereco(servidorId, projeto, ""));
-    const acoes = document.createElement("div");
-    acoes.className = "acoes";
-    acoes.append(tirar);
-
-    li.append(dizeres, acoes);
-    caixa.append(li);
-  }
-
-  const form = document.createElement("form");
-  form.className = "endereco endereco--novo";
-  const projeto = document.createElement("input");
-  projeto.type = "text";
-  projeto.required = true;
-  projeto.placeholder = "nome do projeto";
-  projeto.setAttribute("aria-label", "Nome do projeto");
-  const url = document.createElement("input");
-  url.type = "url";
-  url.required = true;
-  url.placeholder = "https://o-seu-site.com.br";
-  url.setAttribute("aria-label", "Endereço público do site");
-  const salvar = document.createElement("button");
-  salvar.className = "botao";
-  salvar.type = "submit";
-  salvar.textContent = "Guardar o endereço";
-  form.addEventListener("submit", ev => {
-    ev.preventDefault();
-    guardarEndereco(servidorId, projeto.value.trim(), url.value.trim());
-    projeto.value = url.value = "";
-  });
-  const acoes = document.createElement("div");
-  acoes.className = "acoes";
-  acoes.append(salvar);
-  form.append(projeto, url, acoes);
-  caixa.append(form);
-  return caixa;
 }
 
 /* ================================================== 5. Computadores ====== */
@@ -4182,6 +4297,9 @@ $("#btn-sair").addEventListener("click", async () => {
 });
 
 $("#btn-gerar-numero").addEventListener("click", gerarNumero);
+
+$("#sites-form").addEventListener("submit", (ev) => { ev.preventDefault(); conferirSite(); });
+$("#site-endereco").addEventListener("input", limparResultadoDoSite);
 
 $("#freio-parar").addEventListener("click", () => {
   const viva = tarefaViva();
