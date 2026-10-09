@@ -148,9 +148,10 @@ class Esquema(unittest.TestCase):
             "chave_de_acesso", "codigo_recuperacao", "cor_da_regra",
             "credencial", "endereco_producao", "fila", "gasto",
             "historico", "instalacao", "instalacao_github",
-            "maquina", "medida", "pareamento", "pendencia_arquivada",
+            "maquina", "medida", "pareamento", "pedido_de_computador",
+            "pendencia_arquivada",
             "pendencia_estado", "pendencia_vida", "projeto_conectado",
-            "prova_rodada", "servidor", "sessao", "tarefa_linha", "usuario",
+            "projeto_oculto", "prova_rodada", "servidor", "sessao", "tarefa_linha", "usuario",
             "voz_aviso", "voz_estado", "voz_recado"])
 
     def test_as_seis_tabelas_antigas_nao_perderam_coluna(self):
@@ -3949,6 +3950,147 @@ class OGithubDaConta(unittest.TestCase):
         self.assertEqual(r["invalidos"], 1)
         self.assertIsNone(banco.montar_estado(self.con, usuario_id=self.b)
                           ["github_da_conta"])
+
+
+class ConectarSimplesNoBanco(unittest.TestCase):
+    """Conectar simples (entrega A): colunas novas da maquina, pedido de
+    computador e codigo curto."""
+
+    def setUp(self):
+        self.pasta = tempfile.mkdtemp()
+        self.caminho = Path(self.pasta) / "antigo.db"
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.pasta, ignore_errors=True)
+
+    def test_banco_antigo_ganha_as_colunas_e_so_relata_quem_tem_projeto(self):
+        # `maquina` e `usuario` do formato ANTERIOR: sem so_mede nem relatado_em.
+        antigo = sqlite3.connect(self.caminho)
+        antigo.executescript("""
+            CREATE TABLE usuario (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL UNIQUE, criado_em TEXT NOT NULL);
+            CREATE TABLE maquina (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario_id INTEGER NOT NULL REFERENCES usuario(id),
+                nome TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE,
+                criado_em TEXT NOT NULL, visto_em TEXT, revogada_em TEXT,
+                executa INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE projeto_conectado (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                maquina_id INTEGER NOT NULL REFERENCES maquina(id),
+                projeto TEXT NOT NULL, caminho TEXT NOT NULL DEFAULT '',
+                visto_em TEXT NOT NULL, arquivado_em TEXT,
+                UNIQUE (maquina_id, projeto));
+            INSERT INTO usuario (id, email, criado_em) VALUES (1, 'a@b.c', 'x');
+            INSERT INTO maquina (id, usuario_id, nome, token_hash, criado_em,
+                visto_em) VALUES (1, 1, 'com', 'h1', 'x', '2026-08-01T00:00:00+00:00');
+            INSERT INTO maquina (id, usuario_id, nome, token_hash, criado_em,
+                visto_em) VALUES (2, 1, 'sem', 'h2', 'x', '2026-08-01T00:00:00+00:00');
+            INSERT INTO projeto_conectado (maquina_id, projeto, visto_em)
+                VALUES (1, 'p', 'x');
+        """)
+        antigo.commit()
+        antigo.close()
+        con = banco.conectar(self.caminho)
+        try:
+            colunas = {l[1] for l in con.execute("PRAGMA table_info(maquina)")}
+            self.assertLessEqual({"so_mede", "relatado_em"}, colunas)
+            m = {l["id"]: l for l in con.execute("SELECT * FROM maquina")}
+            self.assertEqual("2026-08-01T00:00:00+00:00", m[1]["relatado_em"])
+            self.assertIsNone(m[2]["relatado_em"])
+            self.assertEqual(0, m[1]["so_mede"])
+        finally:
+            con.close()
+        banco.conectar(self.caminho).close()        # segunda subida: inofensiva
+
+    def test_as_filhas_de_usuario_incluem_as_tabelas_novas(self):
+        self.assertIn("pedido_de_computador", banco.FILHAS_DE_USUARIO)
+        self.assertIn("projeto_oculto", banco.FILHAS_DE_USUARIO)
+
+    def test_normalizar_codigo_de_pedido(self):
+        self.assertEqual("K7M4-2QXP", banco.normalizar_codigo_de_pedido("k7m4 2qxp"))
+        self.assertEqual("K7M4-2QXP", banco.normalizar_codigo_de_pedido("K7M42QXP"))
+        self.assertEqual("", banco.normalizar_codigo_de_pedido("K7M0-2QXP"))
+        self.assertEqual("", banco.normalizar_codigo_de_pedido("K7M4-2QX"))
+        self.assertEqual("", banco.normalizar_codigo_de_pedido(None))
+        self.assertEqual("", banco.normalizar_codigo_de_pedido(12345678))
+
+    def test_o_codigo_novo_so_usa_o_alfabeto_sem_ambiguos(self):
+        for _ in range(50):
+            c = banco.novo_codigo_de_pedido()
+            self.assertEqual(c, banco.normalizar_codigo_de_pedido(c))
+
+    def test_o_ciclo_do_pedido_e_de_uso_unico(self):
+        con = banco.conectar(":memory:")
+        try:
+            uid = banco.criar_usuario("dono@teste.local", "teste1234", con=con)
+            pedido, codigo = banco.abrir_pedido_de_computador("PC", 10, con=con)
+            self.assertEqual(("esperando", None),
+                             banco.resgatar_pedido_de_computador(pedido, con=con))
+            self.assertEqual("ok", banco.autorizar_pedido_de_computador(
+                codigo, uid, con=con))
+            self.assertEqual("ja_estava", banco.autorizar_pedido_de_computador(
+                codigo, uid, con=con))
+            estado, token = banco.resgatar_pedido_de_computador(pedido, con=con)
+            self.assertEqual("token", estado)
+            m = banco.maquina_por_token(token, con=con)
+            self.assertEqual((uid, 1, 0), (m["usuario_id"], m["so_mede"], m["executa"]))
+            self.assertEqual(("nao_existe", None),
+                             banco.resgatar_pedido_de_computador(pedido, con=con))
+        finally:
+            con.close()
+
+    def test_pedido_vencido_nao_existe_para_ninguem(self):
+        con = banco.conectar(":memory:")
+        try:
+            uid = banco.criar_usuario("dono@teste.local", "teste1234", con=con)
+            pedido, codigo = banco.abrir_pedido_de_computador("PC", 10, con=con)
+            depois = banco.prazo(3 * 86400)
+            self.assertEqual("nao_existe", banco.autorizar_pedido_de_computador(
+                codigo, uid, agora_iso=depois, con=con))
+            self.assertIsNone(banco.ver_pedido_de_computador(
+                codigo, uid, agora_iso=depois, con=con))
+            self.assertEqual(("nao_existe", None), banco.resgatar_pedido_de_computador(
+                pedido, agora_iso=depois, con=con))
+            con.execute("UPDATE pedido_de_computador SET expira_em = ?",
+                        (daqui(days=-1),))
+            self.assertEqual(1, banco.limpar_pedidos_vencidos(con=con))
+        finally:
+            con.close()
+
+    def test_outra_conta_nao_ve_nem_autoriza_pedido_ja_autorizado(self):
+        con = banco.conectar(":memory:")
+        try:
+            a = banco.criar_usuario("a@teste.local", "teste1234", con=con)
+            b = banco.criar_usuario("b@teste.local", "teste1234", con=con)
+            _pedido, codigo = banco.abrir_pedido_de_computador("PC", 10, con=con)
+            self.assertEqual("ok", banco.autorizar_pedido_de_computador(
+                codigo, a, con=con))
+            self.assertIsNone(banco.ver_pedido_de_computador(codigo, b, con=con))
+            self.assertEqual("nao_existe", banco.autorizar_pedido_de_computador(
+                codigo, b, con=con))
+            self.assertEqual("autorizado", banco.ver_pedido_de_computador(
+                codigo, a, con=con)["estado"])
+        finally:
+            con.close()
+
+    def test_so_mede_nao_liga_a_execucao(self):
+        con = banco.conectar(":memory:")
+        try:
+            uid = banco.criar_usuario("dono@teste.local", "teste1234", con=con)
+            pedido, codigo = banco.abrir_pedido_de_computador("PC", 10, con=con)
+            banco.autorizar_pedido_de_computador(codigo, uid, con=con)
+            _e, token = banco.resgatar_pedido_de_computador(pedido, con=con)
+            mid = banco.maquina_por_token(token, con=con)["id"]
+            self.assertTrue(banco.maquina_so_mede(mid, uid, con=con))
+            self.assertFalse(banco.ligar_execucao(mid, uid, True, con=con))
+            self.assertTrue(banco.ligar_execucao(mid, uid, False, con=con))
+            self.assertEqual(0, con.execute(
+                "SELECT executa FROM maquina WHERE id = ?", (mid,)
+            ).fetchone()["executa"])
+        finally:
+            con.close()
 
 
 if __name__ == "__main__":

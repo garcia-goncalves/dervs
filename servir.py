@@ -1555,83 +1555,221 @@ class Hub(SimpleHTTPRequestHandler):
             return codigo
         return ""
 
-    # O conectador que a tela entrega, com o codigo ja dentro (etapa A3).
+    # ------------------------------ conectar simples: o pedido do computador (A)
     #
-    # POR QUE `POST`, E NAO UM `GET` QUE SERIA MAIS FACIL DE BAIXAR: este
-    # pedido CRIA ESTADO — o codigo de pareamento nasce aqui, como em
-    # `_maquina_parear`. Um `GET` que cria estado e acionavel de outro site com
-    # o cookie da sessao junto: o atacante nao le a resposta, mas queima os
-    # codigos do dono um a um. Com `POST` valem as mesmas duas guardas de toda
-    # escrita (`Origin` na lista mais o `X-Token` da sessao), e a tela
-    # transforma a resposta em arquivo por `Blob` mais `<a download>`.
+    # O computador PEDE (`/agente/pedir`, aberta), o dono AUTORIZA no navegador
+    # conferindo nome e codigo (`/api/pedido*`), e o computador RESGATA o token
+    # (`/agente/esperar`, aberta). O codigo de seis digitos antigo e o
+    # `/api/conectador` (que CRIAVA estado num POST) deixaram de existir no
+    # caminho do arquivo; o caminho do comando colado continua em
+    # `/api/maquinas/parear`.
     #
-    # O ARQUIVO NAO MORA EM `assets/`, e nao pode morar: `ESTATICOS_OK` nasce de
-    # um rglob filtrado por extensao onde `.py` esta de fora justamente para que
-    # nenhum codigo-fonte vire estatico publico, e tudo em `assets/` menos
-    # `painel.js` e `painel.css` e servido ANTES da cortina.
-    #
-    # E `servir.py` NAO IMPORTA `conectador`: ele e LIDO do disco. Importar
-    # arrastaria `tkinter` para dentro do servidor e para dentro de
-    # `test_imagem.modulos_de_runtime()`. Por isso mesmo o `Dockerfile` copia o
-    # arquivo por nome, e `test_imagem.py` cobra esse nome na lista — a rota
-    # responderia 200 aqui e 500 em producao, que e o modo de falha da etapa 16.
-    CONECTADOR = AQUI / "conectador.py"
+    # Cada rota paga o PROPRIO balcao, por origem: misturar balcoes tranca a
+    # maquina legitima, e isso ja aconteceu duas vezes nesta casa. As duas
+    # rotas do computador sao "aberta" por necessidade -- quem chega ainda nao
+    # tem token. O nome do campo e `pedido`, nunca `token`
+    # (`test_servir.PALAVRAS_PROIBIDAS`).
+    TETO_DE_PEDIDOS = 10          # `/agente/pedir`, por origem e janela (900 s)
+    TETO_DE_ESPERAS = 300         # `/agente/esperar`: um a cada 3 s
+    TETO_DE_CODIGOS_CURTOS = 20   # chute no codigo curto: GET e autorizar juntos
+    TETO_DE_PACOTES = 10          # `/agente/pacote`, por maquina
+    INTERVALO_DE_ESPERA = 5       # segundos entre uma pergunta e outra
 
-    def _conectador(self):
-        """Entrega o `conectador.py` com o codigo de pareamento injetado."""
-        sessao = self._sessao()
-        if sessao is None:
-            return self._json(403, {"erro": "entre de novo"})
-        if (self.headers.get("Origin") or "") not in ORIGENS_OK:
-            return self._json(403, {"erro": "origem nao permitida"})
-        if not self._csrf_ok(sessao):
-            return self._recusa_pagina_velha()
+    def _agente_pedir(self):
+        """O computador abre um pedido e recebe o segredo dele e o codigo curto."""
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="pedir",
+                                           teto=self.TETO_DE_PEDIDOS):
+            return self._json(429, self.RECUSA)
+        corpo = self._corpo_json(teto=4096)
+        if corpo is None:
+            return self._json(400, {"erro": "pedido invalido"})
+        nome = self._limpo(corpo.get("maquina"), 120) \
+            if isinstance(corpo.get("maquina"), str) else ""
         try:
-            fonte = self.CONECTADOR.read_text(encoding="utf-8")
-        except OSError:
-            # Falha fechada: sem o arquivo nao ha meio codigo nem meio download.
-            return self._json(503, {"erro": "o conectador nao esta nesta copia"})
-        codigo = self._novo_pareamento(sessao["usuario_id"])
+            banco.limpar_pedidos_vencidos()
+        except sqlite3.Error:
+            pass                      # limpar e higiene, nao pre-requisito
+        for _ in range(5):
+            try:
+                pedido, codigo = banco.abrir_pedido_de_computador(
+                    nome or "computador", self.MINUTOS_DO_CODIGO)
+            except sqlite3.IntegrityError:
+                continue              # colisao do codigo: sorteia outro
+            return self._json(200, {"pedido": pedido, "codigo": codigo,
+                                    "minutos": self.MINUTOS_DO_CODIGO,
+                                    "intervalo": self.INTERVALO_DE_ESPERA})
+        return self._json(503, {"erro": "tente de novo em um minuto"})
+
+    def _agente_esperar(self):
+        """O computador pergunta se o dono ja autorizou. O token sai UMA vez."""
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="esperar",
+                                           teto=self.TETO_DE_ESPERAS):
+            return self._json(429, self.RECUSA)
+        corpo = self._corpo_json(teto=4096)
+        pedido = self._texto_do_corpo(corpo, "pedido", teto=128)
+        if corpo is None or len(pedido) < 16:
+            return self._json(400, {"erro": "pedido invalido"})
+        estado, token = banco.resgatar_pedido_de_computador(pedido)
+        if estado == "esperando":
+            return self._json(202, {"estado": "esperando",
+                                    "intervalo": self.INTERVALO_DE_ESPERA})
+        if estado == "token":
+            # A UNICA vez que este token existe fora da maquina que o pediu.
+            return self._json(200, {"token": token})
+        # A MESMA resposta para desconhecido, vencido e ja resgatado.
+        return self._json(404, {"erro": "nao existe"})
+
+    def _codigo_curto_da_consulta(self, bruto):
+        """O codigo normalizado, ou "" com a recusa JA respondida (400 antes do
+        balcao e sem tocar o banco; 429 se o balcao estourou)."""
+        codigo = banco.normalizar_codigo_de_pedido(bruto)
         if not codigo:
-            return self._json(503, {"erro": "tente de novo em um minuto"})
-        corpo = self._injetar(fonte, codigo, self._endereco_do_painel()).encode("utf-8")
-        self.send_response(200)
-        # NAO e `text/html`: o navegador nao pode renderizar isto, e o
-        # `Content-Disposition` e a segunda tranca para o caso de alguem abrir
-        # a rota fora da tela.
-        self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Content-Disposition",
-                         'attachment; filename="conectar-dervs.py"')
-        self.send_header("Content-Length", str(len(corpo)))
-        self.end_headers()
-        self.wfile.write(corpo)
+            self._json(400, {"erro": "codigo invalido"})
+            return ""
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="codigo_curto",
+                                           teto=self.TETO_DE_CODIGOS_CURTOS):
+            self._json(429, self.RECUSA)
+            return ""
+        return codigo
 
-    def _endereco_do_painel(self) -> str:
-        """O endereco que o conectador vai chamar de volta.
+    def _pedido_ver(self):
+        """O dono confere nome e codigo do computador que pediu."""
+        sessao = self._sessao()
+        if sessao is None:            # venceu entre o despacho e esta linha
+            return self._json(403, {"erro": "entre de novo"})
+        consulta = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        codigo = self._codigo_curto_da_consulta(
+            (consulta.get("codigo") or [""])[0])
+        if not codigo:
+            return
+        # "nao existe", vencido e "autorizado por outra conta": a mesma resposta.
+        visto = banco.ver_pedido_de_computador(codigo, sessao["usuario_id"])
+        if visto is None:
+            return self._json(404, {"erro": "nao existe"})
+        return self._json(200, visto)
 
-        Sai do `Origin`, que ja foi conferido contra `ORIGENS_OK` uma linha
-        acima. Montar da mao a partir do `Host` deixaria o cabecalho do pedido
-        escolher para onde o token e mandado.
-        """
-        return (self.headers.get("Origin") or "").rstrip("/")
+    def _pedido_autorizar(self):
+        """O dono diz sim ao computador do codigo. O computador resgata depois."""
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        codigo = self._codigo_curto_da_consulta(corpo.get("codigo"))
+        if not codigo:
+            return
+        usuario = sessao["usuario_id"]
+        efeito = banco.autorizar_pedido_de_computador(codigo, usuario)
+        visto = (banco.ver_pedido_de_computador(codigo, usuario)
+                 if efeito != "nao_existe" else None)
+        if visto is None:
+            return self._json(404, {"erro": "nao existe"})
+        return self._json(200, {"ok": True, "maquina": visto["maquina"],
+                                "ja_estava": efeito == "ja_estava"})
+
+    # O programa que o computador baixa, e o ajudante do arquivo. Sao LIDOS do
+    # disco e entregues como texto, nunca importados: o servidor nao pode
+    # arrastar `execucao.py` nem `tkinter`. `Dockerfile` e `test_imagem` cobram
+    # os nomes. A ORDEM da tupla e a do `versao`.
+    PACOTE = ("agente/__init__.py", "agente/enviar.py", "coletar.py",
+              "banco.py", "documentos.py", "tarefas.py")
+
+    def _ler_pacote(self):
+        """[{"caminho","conteudo"}] na ordem de `PACOTE`, ou `None` se faltar
+        QUALQUER arquivo: nunca se entrega pacote parcial."""
+        arquivos = []
+        for caminho in self.PACOTE:
+            try:
+                texto = (AQUI / caminho).read_bytes().decode("utf-8")
+            except (OSError, UnicodeDecodeError):
+                return None
+            arquivos.append({"caminho": caminho, "conteudo": texto})
+        return arquivos
+
+    def _agente_pacote(self):
+        """O programa que mede, para o computador que ja tem token."""
+        maquina = getattr(self, "_maquina", None)
+        if maquina is None:            # cinto, alem do guarda do despacho
+            return self._json(401, {"erro": "token de maquina invalido"})
+        if not cortina.registrar_tentativa(
+                "maquina:%d" % maquina["id"], time.time(), balcao="pacote",
+                teto=self.TETO_DE_PACOTES):
+            return self._json(429, self.RECUSA)
+        arquivos = self._ler_pacote()
+        if arquivos is None:
+            return self._json(503, {"erro": "o pacote nao esta nesta copia"})
+        resumo = hashlib.sha256("".join(
+            a["caminho"] + "\n" + a["conteudo"] + "\n" for a in arquivos
+        ).encode("utf-8")).hexdigest()
+        return self._json(200, {
+            "versao": resumo,
+            "so_mede": banco.maquina_so_mede(maquina["id"],
+                                             maquina["usuario_id"]),
+            "arquivos": arquivos})
+
+    # O arquivo que a tela entrega: o molde do lote do Windows, uma linha
+    # marcadora e o `conectador.py` com o endereco do painel no lugar de
+    # `ALVO`. E `GET` e NAO CRIA NADA (o pareamento nasce depois, quando o
+    # computador pede), entao nao ha estado para outro site queimar.
+    #
+    # NENHUM DOS DOIS MORA EM `assets/`: `ESTATICOS_OK` e servido ANTES da
+    # cortina. Sao lidos do disco por nome; o `Dockerfile` os copia por nome e
+    # `test_imagem.py` cobra a lista -- a rota responderia 200 aqui e 500 em
+    # producao, que e o modo de falha da etapa 16.
+    CONECTADOR = AQUI / "conectador.py"
+    CONECTADOR_CMD = AQUI / "conectador.cmd"
+    MARCA_DO_PYTHON = "#:DERVS-PYTHON"
+
+    def _endereco_publico(self) -> str:
+        """O endereco que o computador vai chamar de volta.
+
+        No servidor sai do dominio configurado (`https`); local, do `Host`, que
+        o despacho JA conferiu contra `HOSTS_OK`. Nunca do `Origin` (um GET nao
+        o manda) nem de cabecalho nao conferido."""
+        if DOMINIO:
+            return "https://" + DOMINIO
+        return "http://" + (self.headers.get("Host") or "")
 
     @staticmethod
-    def _injetar(fonte: str, codigo: str, alvo: str) -> str:
-        """Troca as duas linhas marcadas no fonte do conectador.
+    def _injetar(fonte: str, alvo: str) -> str:
+        """Troca a linha marcada `# DERVS:ALVO` no fonte do conectador.
 
-        As marcas (`# DERVS:CODIGO` e `# DERVS:ALVO`) sao conferidas por
-        `test_conectador.py`. `json.dumps` monta o literal Python: os dois
-        valores sao nossos, mas escapa-los aqui e o que impede que um dia um
-        deles carregue uma aspa e quebre o arquivo na maquina do dono.
-        """
+        `json.dumps` monta o literal Python: o valor e nosso, mas escapa-lo e o
+        que impede que um dia ele carregue uma aspa e quebre o arquivo na
+        maquina do dono. A marca e conferida por `test_conectador.py`."""
         linhas = []
         for linha in fonte.splitlines():
-            if linha.endswith("# DERVS:CODIGO"):
-                linha = "CODIGO = %s   # DERVS:CODIGO" % json.dumps(codigo)
-            elif linha.endswith("# DERVS:ALVO"):
+            if linha.endswith("# DERVS:ALVO"):
                 linha = "ALVO = %s   # DERVS:ALVO" % json.dumps(alvo)
             linhas.append(linha)
         return "\n".join(linhas) + "\n"
+
+    def _arquivo_de_conectar(self):
+        """Entrega o `.cmd` que baixa o Python, pede a pasta e pareia."""
+        try:
+            molde = self.CONECTADOR_CMD.read_text(encoding="utf-8")
+            fonte = self.CONECTADOR.read_text(encoding="utf-8")
+            # Falha fechada: sem a marca o arquivo pareia com o endereco errado.
+            if sum(1 for l in fonte.splitlines()
+                   if l.endswith("# DERVS:ALVO")) != 1:
+                raise ValueError("marca do alvo")
+            junto = (molde.splitlines() + [self.MARCA_DO_PYTHON]
+                     + self._injetar(fonte, self._endereco_publico()).splitlines())
+            # Lote do Windows com LF quebra rotulos, e o repositorio forca LF.
+            corpo = ("\r\n".join(junto) + "\r\n").encode("ascii")
+        except (OSError, ValueError):
+            # `UnicodeError` e `ValueError`: arquivo que nao e ASCII nao sai.
+            return self._json(503, {"erro":
+                                    "o arquivo de conectar nao esta nesta copia"})
+        self.send_response(200)
+        # NAO e `text/html`: o navegador nao pode renderizar isto.
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Disposition",
+                         'attachment; filename="conectar-dervs.cmd"')
+        self.send_header("Content-Length", str(len(corpo)))
+        self.end_headers()
+        self.wfile.write(corpo)
 
     # ------------------------------------------- o endereco do servidor (B2)
     #
@@ -3362,6 +3500,10 @@ class Hub(SimpleHTTPRequestHandler):
         except (TypeError, ValueError):
             return self._json(400, {"erro": "id invalido"})
         ligado = bool(corpo.get("ligado"))
+        if ligado and banco.maquina_so_mede(id_, sessao["usuario_id"]):
+            # Parear pelo arquivo nao da direito de rodar nada. O banco recusa
+            # tambem (`ligar_execucao`); aqui a recusa ganha a frase certa.
+            return self._json(409, {"erro": "este computador so mede"})
         # `usuario_id` vai para dentro do UPDATE: o id vem do navegador, e um
         # numero vizinho nao pode ligar a execucao na maquina do outro.
         if not banco.ligar_execucao(id_, sessao["usuario_id"], ligado):
@@ -3787,11 +3929,17 @@ ROTAS = {
     "/agente/parear":           Rota("POST", Hub._parear,          "aberta"),
     "/agente/relatorio":        Rota("POST", Hub._relatorio,       "maquina"),
     "/api/maquinas/autorizar":  Rota("POST", Hub._maquina_autorizar, "dado"),
-    # O conectador baixado pela tela. `dado`, e a decisao e explicita: o
-    # arquivo sai com um codigo de pareamento dentro, entao servi-lo sem sessao
-    # seria distribuir credencial. `POST` porque ele CRIA esse codigo — ver o
-    # comentario em cima de `_conectador`.
-    "/api/conectador":          Rota("POST", Hub._conectador,       "dado"),
+    # Conectar simples (A). Os nomes foram conferidos contra
+    # `test_rotas.PROIBIDO` ("autorizar" passa; "autorizacao" casaria `acao`).
+    # `/agente/pedir` e `/agente/esperar` sao "aberta": quem chega ainda nao
+    # tem token, e por isso o teto por origem mora DENTRO delas. O arquivo
+    # `.cmd` e `dado` e `GET`: nao cria pareamento nenhum.
+    "/agente/pedir":            Rota("POST", Hub._agente_pedir,     "aberta"),
+    "/agente/esperar":          Rota("POST", Hub._agente_esperar,   "aberta"),
+    "/agente/pacote":           Rota("GET",  Hub._agente_pacote,    "maquina"),
+    "/api/pedido":              Rota("GET",  Hub._pedido_ver,       "dado"),
+    "/api/pedido/autorizar":    Rota("POST", Hub._pedido_autorizar, "dado"),
+    "/api/conectar.cmd":        Rota("GET",  Hub._arquivo_de_conectar, "dado"),
 
     # A porta 3 (fatia B). As cinco sao `dado`: servidor e endereco de producao
     # sao dado da conta que gravou, e cada rota le SO o da sessao — o IDOR ja
