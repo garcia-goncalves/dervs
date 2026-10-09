@@ -486,6 +486,43 @@ que quebram em silêncio:
   "já rodou" = coluna `conta_login`). O banco de produção tem a linha antiga: o teste
   `InstalacaoDoGithubComUniqueAntigo` cobra que ela sobrevive.
 
+## Conectar simples (09/10/2026)
+
+O botão **Conectar este computador** baixa `GET /api/conectar.cmd` (molde
+`conectador.cmd` + `#:DERVS-PYTHON` + `conectador.py` com o endereço injetado);
+o computador pede (`/agente/pedir`), o navegador abre em `#/conectar?autorizar=`,
+o dono clica em Autorizar e o computador resgata o token (`/agente/esperar`) e
+baixa o programa (`/agente/pacote`). O que a próxima sessão erraria:
+
+- **`GET /api/pedido` é UMA leitura por página** (`olharOPedido`); sondar gasta o
+  balcão do próprio dono. Quem sonda é `/api/maquinas`. O segredo do computador
+  se chama `pedido`, nunca `token`, e o código curto (`XXXX-XXXX`) tem balcão
+  `codigo_curto`.
+- **Cada rota nova paga o próprio balcão** (`pedir`, `esperar`, `codigo_curto`,
+  `pacote`, `medir`, `mostrar`); nenhuma empresta o teto de outra.
+  `PAGINA_VELHA` é central e `escrever()` só abre a faixa com o `motivo` exato
+  (`test_conectar_fio` compara as duas palavras).
+- **`so_mede` tem duas trancas:** o pacote não leva `agente/executor.py`
+  (`Hub.PACOTE` == `test_imagem.PACOTE_DO_COMPUTADOR`) e o servidor recusa ligar
+  execução em máquina `so_mede`. Quem tira uma tira só metade.
+- **`projeto_oculto` é por NOME e por CONTA, e a poda é em `_dados`**, nunca em
+  `banco.montar_estado`: o motor de regras e a vigilia do VOZ leem o estado
+  inteiro (esconder do painel não é deixar de olhar).
+- **O `.cmd` sai com CRLF montado pelo servidor** (`
+`.join, `ascii`); no
+  repositório `conectador.cmd` é LF. `conectador.py` tem de ser **ASCII puro**:
+  um acento e o servidor responde 503. A marca `# DERVS:ALVO` é única.
+- **`conectador.cmd` e `agente/enviar.py` têm de estar no `Dockerfile`**
+  (`test_imagem`): a rota responde 200 aqui e 500 na imagem se faltar.
+- **`/api/conectador` foi removida** (criava estado num POST); `test_rotas` e
+  `test_conectar_servidor` cobram a ausência. Nome de rota/função com
+  `autorizacao` ou `comando` reprova `test_rotas.PROIBIDO`.
+- **Repositórios do GitHub vêm do relatório** (`remoto_slug` do `git`), não de
+  uma lista do GitHub. O pacote instalado vira projeto `casa`/`programa` no
+  painel, porque `coletar.AVULSOS = [AQUI]` mede a pasta do próprio programa.
+- **`test_conectar_fio` roda o primeiro relato como processo novo** (~8 s por
+  classe, uma vez). `test_github_tela` importa helpers de `test_conectar_tela`.
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em
