@@ -132,3 +132,18 @@ serve; portão 3 não abre (direção visual aprovada); portão 4 abre só na in
 | 7 Cronista | eu | — | 0 |
 
 **Total previsto: ~10 despachos.**
+
+## decisoes_do_portao_2 (09/10/2026, depois da descoberta)
+
+Aprovação delegada, como no portão 1. Estas decisões **vencem** as do portão 1 onde divergem.
+
+- **"Publicar a versão do GitHub" sai desta entrega.** O `deploy` do kit `deploy-padrao`
+  só publica o pacote `.tar.gz` que o VS Code envia; sem ele, sai 1. Ficam duas ações:
+  reiniciar e voltar. Publicar pelo painel vira entrega própria (o servidor baixa o commit do
+  GitHub com permissão de leitura guardada na VPS pela mão do dono).
+- **A promessa fica honesta.** WebAuthn não mostra no aparelho o que está sendo assinado: quem
+  tomasse o dervs.com.br poderia trocar a ordem na hora do toque. O que vale: **sem um toque
+  do dono, nada acontece**; com o site tomado, cada toque vira no máximo UMA ordem da lista
+  fechada (reiniciar ou voltar um projeto liberado), teto de 6 por hora no ajudante, nunca
+  projeto bloqueado, nunca comando. A tela diz isso em "O que isso faz?". Fechar o buraco de
+  vez (aprovar também no DERVS-VOZ) é outra entrega.
