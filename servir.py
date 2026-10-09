@@ -1217,6 +1217,16 @@ class Hub(SimpleHTTPRequestHandler):
         return passkey.de_b64url(self._texto_do_corpo(corpo, campo,
                                                       teto=passkey.TETO_DO_B64))
 
+    # O 403 do anti-CSRF vencido tem UM lugar so. O `motivo` e o que deixa a tela
+    # distinguir "esta pagina ficou velha" de qualquer outro 403 (origem, host,
+    # sessao): ela abre a faixa so com `motivo === "pagina_velha"`. A frase
+    # continua igual porque `test_servir` a cobra.
+    PAGINA_VELHA = {"erro": "recarregue a pagina (token vencido)",
+                    "motivo": "pagina_velha"}
+
+    def _recusa_pagina_velha(self):
+        return self._json(403, dict(self.PAGINA_VELHA))
+
     def _csrf_ok(self, sessao) -> bool:
         return secrets.compare_digest(self.headers.get("X-Token") or "",
                                       self._csrf_da_sessao(sessao))
@@ -1369,7 +1379,7 @@ class Hub(SimpleHTTPRequestHandler):
             # Mesmo achado que ja estava anotado em `_silenciar`.
             return self._json(403, {"erro": "entre de novo"})
         if not self._csrf_ok(sessao):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return self._recusa_pagina_velha()
         bilhete, desafio = DESAFIOS.abrir(time.time())
         self._por_cookie("desafio", bilhete, passkey.PRAZO_DO_DESAFIO)
         con = banco.conectar()
@@ -1398,7 +1408,7 @@ class Hub(SimpleHTTPRequestHandler):
             # Mesmo achado que ja estava anotado em `_silenciar`.
             return self._json(403, {"erro": "entre de novo"})
         if not self._csrf_ok(sessao):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return self._recusa_pagina_velha()
         corpo = self._corpo_json(teto=passkey.TETO_DO_CORPO * 4)
         desafio = DESAFIOS.resgatar(self._ler_cookie("desafio"), time.time())
         self._apagar_cookie("desafio")
@@ -1434,7 +1444,7 @@ class Hub(SimpleHTTPRequestHandler):
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return self._recusa_pagina_velha()
         corpo = self._corpo_json(teto=4096)
         if corpo is None:
             return self._json(400, {"erro": "pedido invalido"})
@@ -1460,7 +1470,7 @@ class Hub(SimpleHTTPRequestHandler):
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return self._recusa_pagina_velha()
         # A UNICA vez que estes codigos existem em claro fora do papel do dono.
         # Nao vao para log, nao voltam numa segunda chamada, nao ficam no banco.
         return self._json(200, {
@@ -1497,7 +1507,7 @@ class Hub(SimpleHTTPRequestHandler):
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return self._recusa_pagina_velha()
         codigo = self._novo_pareamento(sessao["usuario_id"])
         if not codigo:
             return self._json(503, {"erro": "tente de novo em um minuto"})
@@ -1575,7 +1585,7 @@ class Hub(SimpleHTTPRequestHandler):
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return self._recusa_pagina_velha()
         try:
             fonte = self.CONECTADOR.read_text(encoding="utf-8")
         except OSError:
@@ -1663,7 +1673,7 @@ class Hub(SimpleHTTPRequestHandler):
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return self._recusa_pagina_velha()
         corpo = self._corpo_json(teto=4096) or {}
         nome = self._texto_do_corpo(corpo, "nome", teto=60).strip()
         padrao = self._texto_do_corpo(corpo, "padrao_subdominio", teto=200).strip()
@@ -1692,7 +1702,7 @@ class Hub(SimpleHTTPRequestHandler):
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return self._recusa_pagina_velha()
         corpo = self._corpo_json(teto=4096) or {}
         ok, id_ = self._numero_do_corpo(corpo, "id", int)
         if not ok or id_ is None:
@@ -1723,7 +1733,7 @@ class Hub(SimpleHTTPRequestHandler):
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return self._recusa_pagina_velha()
         corpo = self._corpo_json(teto=4096) or {}
         projeto = self._texto_do_corpo(corpo, "projeto", teto=120).strip()
         url = self._texto_do_corpo(corpo, "url", teto=2048).strip()
@@ -1821,7 +1831,7 @@ class Hub(SimpleHTTPRequestHandler):
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return self._recusa_pagina_velha()
         corpo = self._corpo_json(teto=4096) or {}
         ok, servidor_id = self._numero_do_corpo(corpo, "servidor_id", int)
         if not ok or servidor_id is None:
@@ -2036,7 +2046,7 @@ class Hub(SimpleHTTPRequestHandler):
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return self._recusa_pagina_velha()
         if not APP_DO_GITHUB:
             # Falha FECHADA: sem aplicativo registrado, a porta diz que nao
             # existe em vez de mandar o dono para um endereco que nao abre.
@@ -2171,7 +2181,7 @@ class Hub(SimpleHTTPRequestHandler):
         if (self.headers.get("Origin") or "") not in ORIGENS_OK:
             return self._json(403, {"erro": "origem nao permitida"})
         if not self._csrf_ok(sessao):
-            return self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            return self._recusa_pagina_velha()
         corpo = self._corpo_json(teto=4096) or {}
         try:
             id_ = int(corpo.get("id"))
@@ -3578,7 +3588,7 @@ class Hub(SimpleHTTPRequestHandler):
             return None, None
         if not secrets.compare_digest(self.headers.get("X-Token") or "",
                                       self._csrf_da_sessao(sessao)):
-            self._json(403, {"erro": "recarregue a pagina (token vencido)"})
+            self._recusa_pagina_velha()
             return None, None
         try:
             n = int(self.headers.get("Content-Length") or 0)
