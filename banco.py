@@ -92,6 +92,9 @@ MAX_PROJETOS_POR_CONTA = 1000
 # de tudo aquilo, num processo unico compartilhado por todos os inquilinos: o
 # painel do dono legitimo derrubava o servidor. Achado da revisao da correcao.
 MAX_BYTES_POR_PROJETO = 64 * 1024
+# O teto da medicao de UM servidor (Conectar simples, B): 64 KiB nao cabem 200
+# sistemas mais 200 publicacoes. O CHECK da tabela repete o numero.
+MAX_BYTES_DA_MEDICAO = 128 * 1024
 
 ESQUEMA = """
 -- `usuario_id` NA CHAVE. Sem ele a medicao era um balcao unico: duas contas
@@ -347,7 +350,12 @@ CREATE TABLE IF NOT EXISTS maquina (
     so_mede     INTEGER NOT NULL DEFAULT 0,
     -- O primeiro (e o ultimo) relatorio de medicao. `visto_em` nao serve para
     -- separar "pareou" de "mandou a primeira medicao": o pareamento ja o grava.
-    relatado_em TEXT
+    relatado_em TEXT,
+    -- Conectar simples (B): um SERVIDOR pareado so olha. Ele nunca manda
+    -- relatorio de projeto, nunca recebe tarefa, e nao aparece entre os
+    -- computadores (`maquinas_do_usuario`, `maquinas_que_calaram`).
+    tipo        TEXT NOT NULL DEFAULT 'computador'
+                CHECK (tipo IN ('computador','servidor'))
 );
 CREATE INDEX IF NOT EXISTS ix_maquina_dono ON maquina (usuario_id);
 
@@ -393,7 +401,19 @@ CREATE TABLE IF NOT EXISTS pedido_de_computador (
     autorizado_em TEXT,
     usado_em      TEXT,
     maquina_id    INTEGER REFERENCES maquina(id) ON DELETE SET NULL,
-    origem        TEXT NOT NULL DEFAULT ''
+    origem        TEXT NOT NULL DEFAULT '',
+    tipo          TEXT NOT NULL DEFAULT 'computador'
+                  CHECK (tipo IN ('computador','servidor'))
+);
+
+-- A ultima medicao de cada servidor ligado (Conectar simples, B). Uma linha
+-- por maquina: o painel mostra o AGORA, nao um historico. `medido_em` e o
+-- relogio do DERVS, nunca o do servidor; `dados` e o corpo ja limpo pela rota.
+CREATE TABLE IF NOT EXISTS medicao_de_servidor (
+    maquina_id INTEGER PRIMARY KEY REFERENCES maquina(id) ON DELETE CASCADE,
+    usuario_id INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+    medido_em  TEXT NOT NULL CHECK (medido_em LIKE '____-__-__T__:__:__+00:00'),
+    dados      TEXT NOT NULL CHECK (length(dados) <= 131072)
 );
 
 -- Esconder do painel e por NOME de projeto e por conta. `arquivado_em` nao
@@ -749,6 +769,7 @@ def migrar(con: sqlite3.Connection) -> None:
     _migrar_achado_dono(con)
     _migrar_maquina_conectar_simples(con)
     _migrar_pedido_origem(con)
+    _migrar_tipo_de_maquina(con)
 
 
 # As tabelas que apontam para `usuario`. A migracao confere so estas: varrer o
@@ -757,7 +778,8 @@ FILHAS_DE_USUARIO = ("credencial", "sessao", "maquina", "pareamento",
                      "chave_de_acesso", "codigo_recuperacao",
                      "servidor", "endereco_producao", "instalacao_github",
                      "auditoria", "achado", "prova_rodada",
-                     "pedido_de_computador", "projeto_oculto")
+                     "pedido_de_computador", "projeto_oculto",
+                     "medicao_de_servidor")
 
 
 # Fatia 2. Nome da coluna -> o pedaco de DDL do `ALTER TABLE`. A ordem e a do
@@ -882,6 +904,39 @@ def _migrar_pedido_origem(con: sqlite3.Connection) -> None:
         if "origem" not in tem:
             con.execute("ALTER TABLE pedido_de_computador ADD COLUMN"
                         " origem TEXT NOT NULL DEFAULT ''")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        _religar_fk(con)
+
+
+def _migrar_tipo_de_maquina(con: sqlite3.Connection) -> None:
+    """`maquina` e `pedido_de_computador` ganham `tipo` (Conectar simples, B).
+
+    Um `ALTER` por tabela, cada um com a propria checagem de "ja rodou",
+    relida dentro do `BEGIN IMMEDIATE`. Linha antiga vira `'computador'`, que
+    e o que ela era. Tabela ausente: banco novo, o ESQUEMA faz certo.
+
+    Nunca `executescript` aqui (COMMIT implicito; licao de 26/08/2026).
+    """
+    tabelas = ("maquina", "pedido_de_computador")
+
+    def falta(tabela):
+        tem = {l[1] for l in con.execute("PRAGMA table_info(%s)" % tabela)}
+        return bool(tem) and "tipo" not in tem
+
+    if not any(falta(t) for t in tabelas):
+        return
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        for tabela in tabelas:
+            if falta(tabela):
+                con.execute(
+                    "ALTER TABLE %s ADD COLUMN tipo TEXT NOT NULL"
+                    " DEFAULT 'computador'"
+                    " CHECK (tipo IN ('computador','servidor'))" % tabela)
         con.commit()
     except Exception:
         con.rollback()
@@ -3315,7 +3370,7 @@ def limpar_pedidos_vencidos(con=None) -> int:
 
 
 def abrir_pedido_de_computador(nome_maquina: str, minutos: int, con=None,
-                               origem: str = ""):
+                               origem: str = "", tipo: str = "computador"):
     """(pedido, codigo). INSERT puro: colisao do codigo levanta `IntegrityError`
     e quem chamou sorteia outro (mesma regra de `abrir_pareamento`)."""
     fechar = con is None
@@ -3325,9 +3380,9 @@ def abrir_pedido_de_computador(nome_maquina: str, minutos: int, con=None,
         con.execute(
             "INSERT INTO pedido_de_computador"
             " (pedido_hash, codigo_hash, maquina_nome, criado_em, expira_em,"
-            " origem) VALUES (?,?,?,?,?,?)",
+            " origem, tipo) VALUES (?,?,?,?,?,?,?)",
             (hash_token(pedido), hash_codigo(codigo), nome_maquina or "",
-             agora(), prazo(int(minutos) * 60), origem or ""))
+             agora(), prazo(int(minutos) * 60), origem or "", tipo))
         con.commit()
         return pedido, codigo
     finally:
@@ -3350,8 +3405,8 @@ def ver_pedido_de_computador(codigo: str, usuario_id: int, agora_iso: str = "",
     con = con or conectar()
     try:
         l = con.execute(
-            "SELECT maquina_nome, expira_em, usuario_id, usado_em, origem"
-            "  FROM pedido_de_computador WHERE codigo_hash = ?",
+            "SELECT maquina_nome, expira_em, usuario_id, usado_em, origem,"
+            "       tipo FROM pedido_de_computador WHERE codigo_hash = ?",
             (hash_codigo(codigo),)).fetchone()
         if l is None:
             return None
@@ -3373,7 +3428,8 @@ def ver_pedido_de_computador(codigo: str, usuario_id: int, agora_iso: str = "",
         return {"codigo": codigo, "maquina": l["maquina_nome"],
                 "minutos": max(0, -(-int(falta) // 60)),
                 "expira_em": l["expira_em"], "estado": estado,
-                "mesma_rede": bool(origem) and l["origem"] == origem}
+                "mesma_rede": bool(origem) and l["origem"] == origem,
+                "tipo": l["tipo"]}
     finally:
         if fechar:
             con.close()
@@ -3424,7 +3480,7 @@ def resgatar_pedido_de_computador(pedido: str, agora_iso: str = "", con=None):
     try:
         h = hash_token(pedido)
         l = con.execute(
-            "SELECT usuario_id, maquina_nome FROM pedido_de_computador"
+            "SELECT usuario_id, maquina_nome, tipo FROM pedido_de_computador"
             " WHERE pedido_hash = ? AND usado_em IS NULL AND expira_em > ?",
             (h, corte)).fetchone()
         if l is None:
@@ -3442,13 +3498,89 @@ def resgatar_pedido_de_computador(pedido: str, agora_iso: str = "", con=None):
         token = novo_token()
         maq = con.execute(
             "INSERT INTO maquina (usuario_id, nome, token_hash, criado_em,"
-            " visto_em, so_mede) VALUES (?,?,?,?,?,1)",
+            " visto_em, so_mede, tipo) VALUES (?,?,?,?,?,1,?)",
             (l["usuario_id"], l["maquina_nome"] or "", hash_token(token),
-             agora(), corte))
+             agora(), corte, l["tipo"]))
         con.execute("UPDATE pedido_de_computador SET maquina_id = ?"
                     " WHERE pedido_hash = ?", (maq.lastrowid, h))
         con.commit()
         return ("token", token)
+    finally:
+        if fechar:
+            con.close()
+
+
+def gravar_medicao_de_servidor(maquina_id: int, usuario_id: int, dados: dict,
+                               con=None) -> str:
+    """Grava a medicao de um servidor e devolve o `medido_em` (relogio do
+    DERVS). O carimbo de vida (`maquina.visto_em`) anda na MESMA transacao: o
+    envio de dado E o sinal de vida, como em `receber_relatorio`.
+
+    `ValueError` se o JSON passar de `MAX_BYTES_DA_MEDICAO`: quem chama
+    responde 400, e nada e gravado."""
+    texto = json.dumps(dados, ensure_ascii=False)
+    if len(texto.encode("utf-8")) > MAX_BYTES_DA_MEDICAO:
+        raise ValueError("medicao grande demais")
+    quando = agora()
+    fechar = con is None
+    con = con or conectar()
+    try:
+        con.execute(
+            "INSERT INTO medicao_de_servidor (maquina_id, usuario_id,"
+            " medido_em, dados) VALUES (?,?,?,?)"
+            " ON CONFLICT(maquina_id) DO UPDATE SET"
+            " medido_em = excluded.medido_em, dados = excluded.dados",
+            (maquina_id, usuario_id, quando, texto))
+        con.execute("UPDATE maquina SET visto_em = ? WHERE id = ?"
+                    " AND usuario_id = ?", (quando, maquina_id, usuario_id))
+        if fechar:                 # so commita quem abriu (molde de `gravar`)
+            con.commit()
+        return quando
+    finally:
+        if fechar:
+            con.close()
+
+
+def medicoes_de_servidor(usuario_id: int, con=None) -> list:
+    """Todo servidor vivo da conta, medido ou nao:
+    `[{maquina_id, nome, medido_em, dados}]`, por nome e id. Pareado sem
+    medicao (ou com `dados` ilegivel) vem com `None`: "nao sei" nao e vazio."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        lista = []
+        for l in con.execute(
+                "SELECT m.id, m.nome, s.medido_em, s.dados FROM maquina m"
+                "  LEFT JOIN medicao_de_servidor s ON s.maquina_id = m.id"
+                "   AND s.usuario_id = m.usuario_id"
+                " WHERE m.usuario_id = ? AND m.revogada_em IS NULL"
+                "   AND m.tipo = 'servidor' ORDER BY m.nome, m.id",
+                (usuario_id,)):
+            try:
+                dados = json.loads(l["dados"]) if l["dados"] else None
+            except ValueError:
+                dados = None
+            lista.append({"maquina_id": l["id"], "nome": l["nome"],
+                          "medido_em": l["medido_em"],
+                          "dados": dados if isinstance(dados, dict) else None})
+        return lista
+    finally:
+        if fechar:
+            con.close()
+
+
+def ultima_medicao_de_servidor(usuario_id: int, con=None):
+    """O `medido_em` mais novo dos servidores vivos da conta, ou `None`. E o
+    que o fluxo ao vivo compara para avisar a tela."""
+    fechar = con is None
+    con = con or conectar()
+    try:
+        return con.execute(
+            "SELECT MAX(s.medido_em) FROM medicao_de_servidor s"
+            "  JOIN maquina m ON m.id = s.maquina_id"
+            " WHERE m.usuario_id = ? AND s.usuario_id = m.usuario_id"
+            "   AND m.revogada_em IS NULL AND m.tipo = 'servidor'",
+            (usuario_id,)).fetchone()[0]
     finally:
         if fechar:
             con.close()
@@ -3529,6 +3661,7 @@ def maquinas_do_usuario(usuario_id: int, con=None) -> list:
                 "       AS projetos"
                 "  FROM maquina m"
                 " WHERE m.usuario_id = ? AND m.revogada_em IS NULL"
+                "   AND m.tipo = 'computador'"
                 " ORDER BY m.criado_em", (usuario_id,)).fetchall():
             m = dict(l)
             m["so_mede"] = bool(m["so_mede"])
@@ -3788,6 +3921,7 @@ def maquinas_que_calaram(usuario_id: int, agora_iso: str, con=None) -> list:
         for m in con.execute(
                 "SELECT id, nome, visto_em FROM maquina"
                 " WHERE usuario_id = ? AND revogada_em IS NULL"
+                "   AND tipo = 'computador'"
                 "   AND visto_em IS NOT NULL ORDER BY id", (usuario_id,)):
             atraso = _segundos_desde(m["visto_em"], agora_iso)
             if atraso is not None and atraso > VIGILIA_LIMITE_S:
