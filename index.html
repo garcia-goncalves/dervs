@@ -226,7 +226,7 @@ __FAIXA__
     <!-- O bloco "Autorizar este computador" (tela B). Só aparece quando a
          página abre com `?autorizar=<código>`, que é para onde o arquivo
          baixado leva o navegador. Nasce vazio: o painel.js o monta. -->
-    <div class="cartao" id="conectar-autorizar" aria-labelledby="autorizar-titulo" hidden></div>
+    <div class="cartao" id="conectar-autorizar" aria-labelledby="autorizar-titulo" aria-live="polite" hidden></div>
 
     <h1>Conectar</h1>
     <p>
@@ -270,7 +270,7 @@ __FAIXA__
             Você vai ver alguns avisos do computador. São normais e todos têm
             um botão certo. Veja o que clicar em cada um.
           </p>
-          <ol class="passos">
+          <ol class="passos" role="list">
             <li>
               <div class="passos__texto">
                 <p><strong>O Chrome pode perguntar se você quer manter o arquivo.</strong>

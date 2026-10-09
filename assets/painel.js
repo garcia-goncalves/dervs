@@ -1306,12 +1306,14 @@ function abrirFaixaPaginaVelha() {
   faixa.setAttribute("role", "alert");
   const dizeres = document.createElement("div");
   const forte = document.createElement("strong");
+  forte.className = "faixa__titulo";
   forte.textContent = "Esta página ficou desatualizada.";
   const resto = document.createElement("span");
+  resto.className = "faixa__texto";
   resto.textContent = "O que você acabou de clicar não foi feito. Recarregue "
                     + "a página para continuar. O que você estava digitando "
                     + "pode se perder.";
-  dizeres.append(forte, " ", resto);
+  dizeres.append(forte, resto);
   const botao = document.createElement("button");
   botao.type = "button";
   botao.className = "botao";
@@ -1481,7 +1483,7 @@ function linkDeBaixar(rotulo, secundario) {
    e nunca é lido como HTML. Aqui o dono confere o nome e o código com a janela
    preta do computador e autoriza — sem o clique, nada é ligado. */
 const AUTORIZAR = { codigo: "", dados: null, fase: "", prazo: null,
-                    fim: 0, botao: null, focou: false };
+                    fim: 0, botao: null, focou: false, digitado: "" };
 
 /* O formato exato do código curto: oito símbolos de um alfabeto sem 0/O/1/I/L,
    mostrado como XXXX-XXXX. Devolve "" para qualquer outra coisa. */
@@ -1494,6 +1496,14 @@ function codigoDeAutorizar(texto) {
 function pintarAutorizar(p) {
   const bloco = $("#conectar-autorizar");
   bloco.hidden = false;
+  /* "Enviando" muda só o botão que já está na tela: recriar o bloco jogaria
+     fora o foco e o que a pessoa digitou. */
+  if (p.estado === "enviando" && AUTORIZAR.botao && AUTORIZAR.fase !== "enviando") {
+    AUTORIZAR.fase = p.estado;
+    AUTORIZAR.botao.disabled = true;
+    AUTORIZAR.botao.setAttribute("aria-busy", "true");
+    return;
+  }
   AUTORIZAR.fase = p.estado;
   AUTORIZAR.prazo = null;
   AUTORIZAR.botao = null;
@@ -1521,18 +1531,46 @@ function pintarAutorizar(p) {
     /* "esperando", "enviando" e "erro_autorizar": o pedido existe e ainda não
        foi autorizado. O botão só existe COM os dados na tela — ninguém
        autoriza às cegas. */
+    /* Outra rede: quem mandou o link pode ser um estranho com o código dele.
+       Aí o código NÃO é a prova (ele está na tela): a pessoa tem de DIGITAR o
+       que lê na janela preta. A defesa é só de tela; o servidor não muda. */
+    const deFora = p.mesma_rede === false;
     const corpo = criar("p");
-    corpo.append("O computador ", criar("strong", "", p.maquina || "sem nome"),
-                 " pediu para se ligar ao seu painel. Confira se o nome e o "
-                 + "código abaixo são os mesmos da janela preta no computador.");
+    if (deFora) {
+      corpo.append("O computador ", criar("strong", "", p.maquina || "sem nome"),
+                   " pediu para se ligar ao seu painel. Este pedido veio de "
+                   + "outra rede. Só autorize se você acabou de abrir o arquivo "
+                   + "neste computador.");
+    } else {
+      corpo.append("O computador ", criar("strong", "", p.maquina || "sem nome"),
+                   " pediu para se ligar ao seu painel. Confira se o nome e o "
+                   + "código abaixo são os mesmos da janela preta no computador.");
+    }
     const codigo = String(p.codigo || "");
-    const numero = criar("p", "numerao", codigo);
+    const numero = criar("p", "numerao");
     /* O código é lido letra a letra: "K7M4" falado como palavra não confere
-       com nada. */
-    numero.setAttribute("aria-label", "Código: " + codigo.replace("-", "").split("").join(", "));
+       com nada. Uma cópia visível (escondida do leitor) e uma falada. */
+    const visivel = criar("span", "", codigo);
+    visivel.setAttribute("aria-hidden", "true");
+    numero.append(visivel, criar("span", "so-leitor",
+      "Código: " + codigo.replace("-", "").split("").join(", ")));
     const prazo = criar("p", "carimbo", "Vale por " + prazoEmPalavras(p.minutos) + ".");
     AUTORIZAR.prazo = prazo;
-    partes.push(corpo, criar("p", "carimbo", "Código"), numero, prazo);
+    partes.push(corpo);
+    if (!deFora) partes.push(criar("p", "carimbo", "Código"), numero);
+    partes.push(prazo);
+    let entrada = null;
+    if (deFora) {
+      const rotulo = criar("label", "", "Digite o código que aparece na janela preta do computador");
+      entrada = document.createElement("input");
+      entrada.type = "text";
+      entrada.id = "autorizar-digitado";
+      entrada.setAttribute("autocomplete", "off");
+      entrada.setAttribute("spellcheck", "false");
+      entrada.value = AUTORIZAR.digitado || "";
+      rotulo.setAttribute("for", entrada.id);
+      partes.push(rotulo, entrada);
+    }
     if (p.estado === "erro_autorizar") {
       partes.push(criar("p", "", "Não consegui falar com o DERVS agora. Isso não quer dizer que o pedido venceu — quer dizer que não olhei."));
     }
@@ -1540,6 +1578,17 @@ function pintarAutorizar(p) {
     if (p.estado === "enviando") {
       botao.disabled = true;
       botao.setAttribute("aria-busy", "true");
+    }
+    if (entrada) {
+      /* Comparação normalizada (caixa, espaço, hífen) pela mesma função que
+         lê o código do endereço. */
+      const confere = () => {
+        AUTORIZAR.digitado = entrada.value;
+        const lido = codigoDeAutorizar(entrada.value);
+        botao.disabled = !(lido && lido === codigoDeAutorizar(codigo));
+      };
+      entrada.addEventListener("input", confere);
+      if (p.estado !== "enviando") confere();
     }
     AUTORIZAR.botao = botao;
     partes.push(acoes);
@@ -1549,7 +1598,10 @@ function pintarAutorizar(p) {
   bloco.replaceChildren(...partes);
   /* Ao abrir a página o foco vai para o título (lido: "Autorizar este
      computador?"); depois disso o foco é da pessoa. */
-  if (!AUTORIZAR.focou) { AUTORIZAR.focou = true; titulo.focus(); }
+  if (!AUTORIZAR.focou && p.estado !== "carregando") {
+    AUTORIZAR.focou = true;
+    titulo.focus();
+  }
   if (p.estado === "erro_autorizar" && AUTORIZAR.botao) AUTORIZAR.botao.focus();
 }
 
@@ -1618,6 +1670,7 @@ function fecharAutorizar() {
   AUTORIZAR.dados = null;
   AUTORIZAR.fase = "";
   AUTORIZAR.focou = false;
+  AUTORIZAR.digitado = "";
   $("#conectar-autorizar").hidden = true;
   /* `replaceState` não dispara `hashchange`: a tela não se repinta. */
   history.replaceState(null, "", "#/conectar");
@@ -1634,6 +1687,7 @@ function abrirOuFecharAutorizar(bruto) {
     AUTORIZAR.dados = null;
     AUTORIZAR.fase = "";
     AUTORIZAR.focou = false;
+  AUTORIZAR.digitado = "";
     return;
   }
   const codigo = codigoDeAutorizar(bruto);
@@ -1646,6 +1700,7 @@ function abrirOuFecharAutorizar(bruto) {
     AUTORIZAR.codigo = codigo;
     AUTORIZAR.dados = null;
     AUTORIZAR.focou = false;
+  AUTORIZAR.digitado = "";
     olharOPedido(codigo);
     return;
   }
@@ -2118,6 +2173,7 @@ function estadoDosComputadores(lista, agoraMs) {
      vazio         olhou e não há nenhum computador;
      mudo          há, mas nenhum deu notícia há mais de duas horas — "não deu
                    para conferir", e nada é apagado;
+     aguardando    autorizado, sem NENHUM carimbo ainda (nunca "mudo");
      pendente      apareceu e AINDA NÃO mandou a primeira medição — nunca "0";
      zero          mediu, olhou a pasta e não achou nenhum projeto;
      com_projetos  mediu e achou.
@@ -2128,6 +2184,12 @@ function situacaoDoComputador(lista, agoraMs) {
   let recente = lista[0];
   for (const m of lista) {
     if (Date.parse(m.visto_em) > Date.parse(recente.visto_em) || !recente.visto_em) recente = m;
+  }
+  /* Nenhum carimbo de notícia ainda: o computador foi autorizado e não deu a
+     primeira. Não é "mudo" (mudo é carimbo ANTIGO) nem "0 projetos". */
+  if (lista.every(m => !m.visto_em && !m.relatado_em)) {
+    return { tipo: "aguardando", estado: "sem_dados", nome: recente.nome,
+             vistoEm: "" };
   }
   if (vida.calado) {
     return { tipo: "mudo", estado: "sem_dados", nome: recente.nome,
@@ -2163,6 +2225,9 @@ function pintarEsteComputador() {
     estado = "desconectado";
     resumo = "Nenhum computador está ligado ao DERVS ainda. Sem um, o painel só "
            + "enxerga o que está no GitHub.";
+  } else if (s.tipo === "aguardando") {
+    resumo = "O computador foi autorizado e ainda não deu a primeira notícia. "
+           + "Isso leva menos de um minuto.";
   } else if (s.tipo === "mudo") {
     const quando = haQuanto(s.vistoEm);
     resumo = "O " + (s.nome || "computador") + " não dá notícia "
