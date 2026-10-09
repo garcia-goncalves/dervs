@@ -17,6 +17,32 @@ Esteira aberta em 09/10/2026. Fase 1, aguardando o portão 1 (aprovação do don
 Mais o conserto pedido na mensagem anterior: a frase "não consegui procurar agora" esconde o
 motivo real quando a página está velha (403 "token vencido").
 
+## decisoes_do_portao_1 (09/10/2026, conversa com o dono)
+
+Estas decisões **vencem** o resto deste briefing onde houver conflito.
+
+1. **Três entregas.** A = tela nova + página desatualizada + computador + GitHub com contas
+   e repositórios à escolha. B = ajudante (agente) no SERVIDOR, modo "só olhar", tempo real,
+   ligado aos projetos e ao GitHub (commit no ar por projeto). C = ações no servidor por
+   lista fechada (reiniciar, publicar, voltar versão), sempre com "Pode fazer", "só olhar"
+   como padrão por servidor. Esta esteira cobre a **A**; B e C abrem briefing próprio.
+2. **Servidor: ajudante, nunca chave guardada no site.** O dono perguntou se ajudante + chave
+   SSH seria mais preciso: não é (a chave vê o mesmo que o ajudante) e transforma o site em
+   chave mestra de todos os servidores (a VPS tem o Ajudei, dado de paciente). A chave fica
+   só no PC do dono, pelo DERVS-VOZ (terminal de emergência). Revenda (TineHost) fica só
+   com medição por endereço.
+3. **Computador: ARQUIVO BAIXADO é o caminho principal** (dono preferiu a colar comando).
+   Dois cliques, sem exigir Python (o ajudante traz o que precisa), janela do Windows para
+   escolher a pasta, "Autorizar" no navegador (sem código de 6 dígitos dentro do arquivo),
+   e a tela acompanha ao vivo ("instalado → pasta escolhida → N projetos"). Linha de comando
+   fica escondida em "Prefiro colar um comando". Nada pode assustar: imagem por passo,
+   português claro, "o que isso faz?" aberto a quem quiser conferir.
+4. **Aviso do Windows (SmartScreen) é medido antes de construir**, no PC do dono, com arquivo
+   marcado como baixado (ZoneId=3). Se aparecer a tela azul, a tela do DERVS avisa antes com
+   imagem, e o certificado de assinatura (R$ 1-2 mil/ano) vira decisão de custo do dono.
+5. **GitHub:** quantas contas quiser (pessoal e organização) e, em cada uma, "Escolher
+   repositórios" abre a página certa do GitHub; chave "acompanhar" por repositório no DERVS.
+
 ## entendimento
 
 A tela Conectar vira três cartões, um por ligação (Este computador, GitHub, Seus sites), cada
