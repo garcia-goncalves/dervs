@@ -657,5 +657,112 @@ class OGithubComRepositorios(_Base):
         self.assertEqual([], self.repos())
 
 
+class OMedirSemGravar(_Base):
+    """C12: medir um site antes de guardar. A rota NUNCA grava."""
+
+    MEDIDA = {"url": "https://loja-da-ana.com.br", "ok": True, "codigo": 200,
+              "erro": "", "ms": 42, "tentativas": 1}
+
+    def setUp(self):
+        super().setUp()
+        for alvo, retorno in (("mede_site", dict(self.MEDIDA)),
+                              ("host_publico", True)):
+            p = mock.patch.object(servir.coletar_github, alvo,
+                                  return_value=retorno)
+            setattr(self, alvo, p.start())
+            self.addCleanup(p.stop)
+
+    def enderecos(self):
+        con = banco.conectar()
+        try:
+            return con.execute(
+                "SELECT COUNT(*) FROM endereco_producao").fetchone()[0]
+        finally:
+            con.close()
+
+    def medir(self, url, sessao=None):
+        return self.dono("/api/enderecos/medir", {"url": url}, sessao=sessao)
+
+    def test_mede_devolve_os_campos_e_nao_grava(self):
+        antes = self.enderecos()
+        r = self.medir("https://loja-da-ana.com.br")
+        self.assertEqual(200, r.status, r.corpo)
+        corpo = self.json(r)
+        self.assertEqual(
+            {"url": "https://loja-da-ana.com.br", "ok": True, "codigo": 200,
+             "erro": "", "ms": 42},
+            {k: corpo[k] for k in ("url", "ok", "codigo", "erro", "ms")})
+        self.assertIn("medido_em", corpo)
+        self.mede_site.assert_called_once_with("https://loja-da-ana.com.br")
+        self.assertEqual(antes, self.enderecos())
+
+    def test_forma_torta_e_400_forma(self):
+        for torto in ("loja", "", "ftp://loja.com.br", "http://", "https:///x",
+                      "https://" + "a" * 2050):
+            r = self.medir(torto)
+            self.assertEqual(400, r.status, torto)
+            self.assertEqual(
+                {"erro": "escreva o endereco completo, comecando por https://",
+                 "motivo": "forma"}, self.json(r))
+        self.mede_site.assert_not_called()
+
+    def test_endereco_interno_e_400_nao_publico(self):
+        r = self.medir("http://10.0.0.1")
+        self.assertEqual((400, "nao_publico"),
+                         (r.status, self.json(r)["motivo"]))
+        self.assertEqual(servir.Hub.ENDERECO_RECUSADO, self.json(r)["erro"])
+        self.mede_site.assert_not_called()
+
+    def test_nome_que_resolve_para_dentro_nao_e_medido(self):
+        self.host_publico.return_value = False
+        r = self.medir("https://parece-publico.exemplo.br")
+        self.assertEqual((400, "nao_publico"),
+                         (r.status, self.json(r)["motivo"]))
+        self.mede_site.assert_not_called()
+
+    def test_balcao_proprio_e_separado_do_guardar(self):
+        sessao = self.sessao_e_token()
+        for _ in range(servir.Hub.TETO_DE_MEDICOES):
+            self.assertEqual(200, self.medir("https://a.com.br",
+                                             sessao=sessao).status)
+        self.assertEqual(429, self.medir("https://a.com.br",
+                                         sessao=sessao).status)
+        # O guardar tem balcao proprio e segue respondendo.
+        r = self.dono("/api/enderecos/guardar",
+                      {"projeto": "x", "url": "https://a.com.br",
+                       "servidor_id": 999999}, sessao=sessao)
+        self.assertNotEqual(429, r.status)
+
+    def test_sem_sessao_e_401_e_token_errado_e_pagina_velha(self):
+        self.assertEqual(401, self.pedir("/api/enderecos/medir", "POST",
+                                         {"url": "https://a.com.br"}).status)
+        cookies, _ = self.sessao_e_token()
+        r = self.pedir("/api/enderecos/medir", "POST", {"url": "https://a.com.br"},
+                       cookies=cookies, cabecalhos={"X-Token": "errado"})
+        self.assertEqual("pagina_velha", self.json(r)["motivo"])
+
+    def test_guardar_sem_medir_nao_chama_mede_site(self):
+        sessao = self.sessao_e_token()
+        s = self.json(self.dono("/api/servidores/guardar", {"nome": "Meus sites"},
+                                sessao=sessao))
+        servidor_id = s.get("id") or s["servidor"]["id"]
+        r = self.dono("/api/enderecos/guardar",
+                      {"projeto": "x", "url": "https://a.com.br",
+                       "servidor_id": servidor_id, "medir": False},
+                      sessao=sessao)
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual(
+            {"projeto": "x", "url": "https://a.com.br", "guardado": True,
+             "ok": None, "codigo": None, "erro": "", "medido_em": None},
+            self.json(r))
+        self.mede_site.assert_not_called()
+        # Sem o campo, nada muda: mede como sempre.
+        r = self.dono("/api/enderecos/guardar",
+                      {"projeto": "x", "url": "https://a.com.br",
+                       "servidor_id": servidor_id}, sessao=sessao)
+        self.assertEqual(True, self.json(r)["ok"])
+        self.mede_site.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

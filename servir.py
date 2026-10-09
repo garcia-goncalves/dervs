@@ -1945,6 +1945,12 @@ class Hub(SimpleHTTPRequestHandler):
         if not banco.guardar_endereco_de_producao(sessao["usuario_id"],
                                                    servidor_id, projeto, url):
             return self._json(404, {"erro": "nao existe"})
+        # `"medir": false` e a tela que ja mediu (`/api/enderecos/medir`) e so
+        # quer guardar: sem segunda ida a rede. Sem o campo nada muda.
+        if corpo.get("medir") is False:
+            return self._json(200, {"projeto": projeto, "url": url,
+                                    "guardado": True, "ok": None, "codigo": None,
+                                    "erro": "", "medido_em": None})
         # `mede_site` devolve `ok` como None para NAO DEU PARA MEDIR, e isso nao
         # e fora do ar — a invariante esta escrita no docstring dela. Os tres
         # estados viajam separados para a tela nao poder confundi-los.
@@ -1963,6 +1969,51 @@ class Hub(SimpleHTTPRequestHandler):
     ENDERECO_RECUSADO = ("esse endereco aponta para dentro de uma rede privada, "
                          "ou nao e um endereco http(s) publico. O DERVS so mede "
                          "endereco que qualquer um alcanca pela internet.")
+
+    # Medir um site SEM gravar (conectar simples, A): balcao PROPRIO, nunca o
+    # `TETO_DE_ENDERECOS` do guardar. Cada medicao bloqueia uma thread por ate
+    # ~23 s, e misturar balcoes tranca a maquina legitima.
+    TETO_DE_MEDICOES = 20
+    FORMA_DO_ENDERECO = {
+        "erro": "escreva o endereco completo, comecando por https://",
+        "motivo": "forma"}
+
+    def _endereco_medir(self):
+        """Confere se o site responde ANTES de guardar. Nunca grava.
+
+        A peneira anti-SSRF e a de sempre, chamada de fora (`coletar_github.x`,
+        nunca `from ... import`): o IP e fixado dentro de `mede_site`. Os dois
+        400 tem `motivo` para a tela dizer a frase certa -- `nao_publico`
+        junta "o nome nao existe" e "aponta para dentro", porque a peneira nao
+        os distingue de proposito (falha fechada por conjunto)."""
+        corpo, _sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        url = self._texto_do_corpo(corpo, "url", teto=2048).strip()
+        try:
+            partes = urllib.parse.urlsplit(url)
+            lido = partes.scheme in ("http", "https") and bool(partes.hostname)
+        except ValueError:
+            lido = False
+        if not url or not lido:
+            return self._json(400, dict(self.FORMA_DO_ENDERECO))
+        nao_publico = {"erro": self.ENDERECO_RECUSADO, "motivo": "nao_publico"}
+        if not coletar_github.url_segura(url):
+            return self._json(400, nao_publico)
+        # O teto vem ANTES de qualquer coisa que toque a rede (`host_publico`
+        # resolve nome sem prazo).
+        if not cortina.registrar_tentativa(self._origem_do_pedido(), time.time(),
+                                           balcao="medir",
+                                           teto=self.TETO_DE_MEDICOES):
+            return self._json(429, self.RECUSA)
+        if not coletar_github.host_publico(partes.hostname):
+            return self._json(400, nao_publico)
+        medida = coletar_github.mede_site(url)
+        return self._json(200, {"url": url, "ok": medida.get("ok"),
+                                "codigo": medida.get("codigo"),
+                                "erro": medida.get("erro"),
+                                "ms": medida.get("ms"),
+                                "medido_em": banco.agora()})
 
     # O balcao da SUGESTAO e PROPRIO — nunca `TETO_DE_ENDERECOS` nem
     # `TETO_DE_SERVIDORES`. Misturar balcoes tranca a maquina legitima
@@ -3987,6 +4038,7 @@ ROTAS = {
     "/api/pedido/autorizar":    Rota("POST", Hub._pedido_autorizar, "dado"),
     "/api/conectar.cmd":        Rota("GET",  Hub._arquivo_de_conectar, "dado"),
     "/api/projetos/mostrar":    Rota("POST", Hub._projeto_mostrar,  "dado"),
+    "/api/enderecos/medir":     Rota("POST", Hub._endereco_medir,   "dado"),
 
     # A porta 3 (fatia B). As cinco sao `dado`: servidor e endereco de producao
     # sao dado da conta que gravou, e cada rota le SO o da sessao — o IDOR ja

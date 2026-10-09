@@ -447,6 +447,8 @@ class AsRotasDoConectarSimples(unittest.TestCase):
         "/api/pedido":           ("GET",  "_pedido_ver",         "dado"),
         "/api/pedido/autorizar": ("POST", "_pedido_autorizar",   "dado"),
         "/api/conectar.cmd":     ("GET",  "_arquivo_de_conectar", "dado"),
+        "/api/projetos/mostrar": ("POST", "_projeto_mostrar",    "dado"),
+        "/api/enderecos/medir":  ("POST", "_endereco_medir",     "dado"),
     }
 
     def test_acesso_metodo_e_funcao_de_cada_uma(self):
