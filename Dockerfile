@@ -126,6 +126,13 @@ COPY painel-projetos.ico   /app/
 COPY conectador.py         /app/
 COPY conectador.cmd        /app/
 
+# O AJUDANTE DO SERVIDOR (`/ajudante/servidor.py` e `/api/ajudante/linha`).
+# Mesmo caso do conectador: `servir.py` o LE do disco e injeta o endereco do
+# painel, nunca o importa -- ele roda no servidor de quem o baixa, so com a
+# biblioteca padrao. Sem esta linha a rota responde 503 so em producao.
+# `test_imagem.test_o_ajudante_do_servidor_entra_LIDO_e_nunca_importado` cobra.
+COPY ajudante_servidor.py  /app/
+
 # O PACOTE DO COMPUTADOR (`/agente/pacote`). O servidor LE e entrega estes
 # arquivos a quem pareou; nenhum e importado por ele. `banco.py`, `coletar.py`,
 # `documentos.py` e `tarefas.py` ja entram acima por outros motivos. Os dois de

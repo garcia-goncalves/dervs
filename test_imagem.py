@@ -140,7 +140,7 @@ class OQueAImagemPrecisa(unittest.TestCase):
         copia = copiados()
         for arquivo in ("index.html", "index-cortina.html", "portas.html",
                         "casos.json", "robots.txt", "assets", "conectador.py",
-                        "conectador.cmd"):
+                        "conectador.cmd", "ajudante_servidor.py"):
             self.assertIn(arquivo, copia,
                           "%s e servido em producao e nao esta na imagem"
                           % arquivo)
@@ -168,6 +168,19 @@ class OQueAImagemPrecisa(unittest.TestCase):
             elif isinstance(no, ast.ImportFrom):
                 self.assertNotEqual("conectador", no.module)
 
+
+    def test_o_ajudante_do_servidor_entra_LIDO_e_nunca_importado(self):
+        """Mesmo caso do conectador: `servir.py` LE `ajudante_servidor.py` e
+        injeta o endereco; nao o importa. Invisivel para o teste dos modulos
+        importados, a rota daria 200 aqui e 503 na imagem se faltasse a copia."""
+        self.assertIn("ajudante_servidor.py", copiados())
+        self.assertNotIn("ajudante_servidor", modulos_de_runtime())
+        arvore = ast.parse((AQUI / "servir.py").read_text(encoding="utf-8"))
+        for no in ast.walk(arvore):
+            if isinstance(no, ast.Import):
+                self.assertNotIn("ajudante_servidor", [a.name for a in no.names])
+            elif isinstance(no, ast.ImportFrom):
+                self.assertNotEqual("ajudante_servidor", no.module)
 
     def test_o_pacote_do_computador_inteiro_entra_na_imagem(self):
         """O servidor LE estes seis arquivos e os entrega por `/agente/pacote`.

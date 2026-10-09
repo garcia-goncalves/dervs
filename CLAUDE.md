@@ -535,6 +535,55 @@ baixa o programa (`/agente/pacote`). O que a próxima sessão erraria:
 - **`test_conectar_fio` roda o primeiro relato como processo novo** (~8 s por
   classe, uma vez). `test_github_tela` importa helpers de `test_conectar_tela`.
 
+## O ajudante no servidor (entrega B, 09/10/2026)
+
+O botao **Ligar um servidor** mostra uma linha para colar no servidor do dono; ela baixa
+`GET /ajudante/servidor.py`, confere o SHA-256 e roda `sudo python3`. O ajudante pareia
+(`tipo: "servidor"`), instala um temporizador de 30 s e manda `POST /agente/servidor`.
+Contratos C0-C10 em `docs/superpowers/plans/dervs-conectar-servidor-b.md`. O que a proxima
+sessao erraria:
+
+- **So olha, e isso e do CODIGO, nao do sistema.** O grupo `docker` equivale a root. So
+  existem `ARGV_DO_PS` e `ARGV_DO_INSPECT` (formato campo a campo), e
+  `test_ajudante_servidor` le o fonte com `ast` e reprova outro jeito de chamar o Docker,
+  import de fora e sintaxe acima do Python 3.8. Maquina `tipo='servidor'` leva **403
+  `Hub.SO_OLHA`** em `/agente/relatorio|resultado|pacote` e `/agente/voz/*`, conferido
+  ANTES do balcao; `/agente/servidor` leva 403 `so servidor` se for computador. O servidor
+  nunca devolve `tarefa` ao ajudante.
+- **Arquivo e linha saem da MESMA `_bytes_do_ajudante()`**, senao o resumo nao casa.
+  `ajudante_servidor.py` e ASCII puro com UMA marca `# DERVS:ALVO`; e **lido, nunca
+  importado** (como o conectador): entra no `Dockerfile` e em `test_imagem` por nome. Sem
+  `re.compile` em rota; nome de rota/funcao sem `acao`/`exec`.
+- **A linha da tela traz o resumo SHA-256, que prova integridade e NAO origem.** Quem
+  tomar `dervs.com.br` serve outro arquivo com outro resumo. A tela hoje so mostra a impressao digital, sem dizer isso.
+- **A primeira medicao roda como root dentro do `instalar`** (antes de o temporizador
+  passar a rodar como `dervs-ajudante`): o que a medicao le (`/proc`, Docker, historico)
+  e lido com poder de root nessa primeira volta.
+- **Nada secreto sobe.** O 4o campo do `historico.log` (quem publicou) e descartado na
+  leitura; o corpo e lista fechada, chave desconhecida e descartada e contada em
+  `invalidos`. `dados` cabe em 128 KiB (`MAX_BYTES_DA_MEDICAO`). O token sai UMA vez do
+  painel e nunca e impresso (`test_servidor_fio` cobra).
+- **`sem_dados` vale 180 s** (`regras.VALIDADE_DO_SERVIDOR`, FORA de `VALIDADE`: o selo do
+  projeto nao muda). Servidor sem medicao ainda aparece, com `sistemas: []`. "Nao vi" nunca
+  vira "zero sistemas": `docker_mudo` e verdade quando nao deu para ver.
+- **"No ar" por projeto** vem de `regras.no_ar_do_projeto` (casa o nome sem `-` e caixa) e
+  `comparar_no_ar`; a camada `github` guarda `head_sha` e `no_ar` (ate 3 shas). Sha vazio ou
+  historico que falhou ao voltar e **"nao sei"**, nunca "igual". `banco.montar_estado` nao
+  muda: `servidores_ligados` e `no_ar` entram em `_dados`, depois da poda.
+- **O servidor nao e computador:** `maquinas_do_usuario` e `maquinas_que_calaram` filtram
+  `tipo = 'computador'` (o VOZ nao recebe aviso de servidor, nem o selo de "calou").
+- **O fluxo `/api/eventos` sem `id`** emite `event: servidor` quando o servidor mede; a tela
+  abre um segundo fluxo por aba so com servidor ligado (gasta 1 das 4 vagas).
+- **`test_servidor_fio` e quem impede o fio morto.** Baixa o arquivo, confere o resumo,
+  instala numa raiz temporaria com Docker falso e confere que cada campo que o `painel.js`
+  le existe na resposta (subconjunto, nao igualdade). Sabotar `veredito` so no JS, ou
+  `sha256` so no servidor, o deixa vermelho.
+- **Dividas nomeadas:** `remover` nao revoga a maquina no DERVS (fica "Sem dados", sem botao
+  de tirar); o `historico.log` e hora local, e fuso diferente no processo erra a hora (nao o
+  commit); Docker e systemd de verdade so a conferencia manual F-2 prova (rotulo ausente no
+  `--format`, `ProtectSystem=strict` com o soquete); revisao de seguranca obrigatoria antes de
+  ligar na VPS que hospeda outros sistemas.
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em
