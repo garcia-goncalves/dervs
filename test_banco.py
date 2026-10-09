@@ -148,7 +148,7 @@ class Esquema(unittest.TestCase):
             "chave_de_acesso", "codigo_recuperacao", "cor_da_regra",
             "credencial", "endereco_producao", "fila", "gasto",
             "historico", "instalacao", "instalacao_github",
-            "maquina", "medida", "pareamento", "pedido_de_computador",
+            "maquina", "medicao_de_servidor", "medida", "pareamento", "pedido_de_computador",
             "pendencia_arquivada",
             "pendencia_estado", "pendencia_vida", "projeto_conectado",
             "projeto_oculto", "prova_rodada", "servidor", "sessao", "tarefa_linha", "usuario",
