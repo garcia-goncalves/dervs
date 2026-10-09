@@ -89,7 +89,8 @@ painel” (código de saída 5).
 
 ## A linha de comando, passo a passo
 
-1. No painel, clique em **Computadores** e depois em **Gerar o número**.
+1. No painel, clique em **Conectar**, abra **Prefiro colar um comando** e
+   clique em **Gerar o número**.
    Aparece um número de seis dígitos e a linha pronta para copiar.
 2. Na outra máquina, abra o terminal **em qualquer pasta** e cole a linha,
    trocando `<CAMINHO DO DERVS>` pela pasta onde o DERVS está:

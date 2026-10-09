@@ -508,8 +508,8 @@ baixa o programa (`/agente/pacote`). O que a próxima sessão erraria:
 - **`projeto_oculto` é por NOME e por CONTA, e a poda é em `_dados`**, nunca em
   `banco.montar_estado`: o motor de regras e a vigilia do VOZ leem o estado
   inteiro (esconder do painel não é deixar de olhar).
-- **O `.cmd` sai com CRLF montado pelo servidor** (`
-`.join, `ascii`); no
+- **O `.cmd` sai com CRLF montado pelo servidor** (`"
+".join`, `ascii`); no
   repositório `conectador.cmd` é LF. `conectador.py` tem de ser **ASCII puro**:
   um acento e o servidor responde 503. A marca `# DERVS:ALVO` é única.
 - **`conectador.cmd` e `agente/enviar.py` têm de estar no `Dockerfile`**
@@ -518,8 +518,20 @@ baixa o programa (`/agente/pacote`). O que a próxima sessão erraria:
   `test_conectar_servidor` cobram a ausência. Nome de rota/função com
   `autorizacao` ou `comando` reprova `test_rotas.PROIBIDO`.
 - **Repositórios do GitHub vêm do relatório** (`remoto_slug` do `git`), não de
-  uma lista do GitHub. O pacote instalado vira projeto `casa`/`programa` no
-  painel, porque `coletar.AVULSOS = [AQUI]` mede a pasta do próprio programa.
+  uma lista do GitHub. `coletar.AVULSOS` fica VAZIO quando `AQUI` é a pasta do
+  programa instalado (`DERVS_CASA`): senão ela vira um projeto falso no painel.
+- **Máquina `so_mede` leva 403 em `/agente/voz/*` e nunca é destino de aviso**
+  (revisão de segurança): um link de phishing autorizado ligaria uma máquina
+  estranha que leria os avisos da vigília e roubaria os recados do VOZ. VOZ
+  num PC pareado pelo `.cmd` exige uma chave explícita nova, nunca afrouxar.
+- **`GET /api/pedido` devolve `mesma_rede` (booleano, nunca o IP).** Falso:
+  a tela esconde o código e exige que o dono o DIGITE. Nome da máquina só
+  `[A-Za-z0-9 ._-]{1,40}`; `/agente/pedir` e `/agente/esperar` dão 415 sem
+  JSON, antes do balcão; `pedir` agrupa IPv6 por /64; `/api/enderecos/medir`
+  só na porta padrão. O token é gravado no PC LOGO depois do resgate.
+- **Dívida nomeada:** máquina `so_mede` ainda sobrescreve a camada `local` de
+  projeto de mesmo nome e o `_infra` da conta, e enche `MAX_PROJETOS_POR_CONTA`.
+  `fechadas_24h`/`resolvidas_7d` não descontam projeto escondido.
 - **`test_conectar_fio` roda o primeiro relato como processo novo** (~8 s por
   classe, uma vez). `test_github_tela` importa helpers de `test_conectar_tela`.
 
