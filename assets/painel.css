@@ -611,7 +611,69 @@ main { padding-bottom: var(--e12); }
    falta é o botão não encolher abaixo do alvo de toque. */
 @media (max-width: 30rem) {
   .porta .acoes { flex-direction: column; align-items: stretch; }
+  .porta .acoes .botao { justify-content: center; }
 }
+
+/* ------------------------------------------------- ajuda que abre e fecha
+   `<details>` nativo: abre com Enter e Espaço, sem script. Dentro dos cartões
+   da tela Conectar ela guarda o que só interessa a quem quer conferir. */
+.ajuda { margin-top: var(--e4); padding-top: var(--e3); border-top: var(--traco) solid var(--borda); }
+.ajuda > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  font-weight: var(--peso-medio);
+}
+.ajuda > summary:focus-visible {
+  outline: var(--foco-largura) solid var(--acao);
+  outline-offset: var(--foco-afastamento);
+}
+.ajuda h3 { margin: var(--e3) 0; font-size: var(--fs-corpo); }
+
+/* O passo a passo do que vai aparecer. O número vem do contador, em mono; o
+   desenho fica ACIMA do texto em tela estreita e ao lado a partir de 40rem. */
+.passos {
+  list-style: none;
+  counter-reset: passo;
+  margin: var(--e3) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e4);
+}
+.passos > li {
+  counter-increment: passo;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e2);
+}
+.passos__texto p { margin: 0; }
+.passos__texto > p:first-child::before {
+  content: counter(passo) ". ";
+  font-family: var(--fonte-mono);
+  font-weight: var(--peso-forte);
+}
+.passos__desenho { order: -1; margin: 0; }
+.passos__desenho figcaption { font-size: var(--fs-metadado); }
+@media (min-width: 40rem) {
+  .passos > li { flex-direction: row; align-items: flex-start; gap: var(--e6); }
+  .passos__texto { flex: 1; min-width: 0; }
+  .passos__desenho { order: 1; flex: none; width: 15rem; }
+}
+
+/* Os esquemas ilustrativos (SVG inline no index.html). Só tokens: valem nos
+   dois temas, e a CSP não aceita `style=` nem `fill="var(...)"`. */
+.desenho { display: block; width: 100%; max-width: 15rem; height: auto; max-height: 9rem; }
+.desenho__fundo { fill: var(--fundo-elevado); stroke: var(--borda-forte); stroke-width: 1; }
+.desenho__linha { fill: var(--borda); }
+.desenho__destaque { fill: var(--acao); }
+.desenho__texto { fill: var(--texto); font-family: var(--fonte-sans); font-size: 10px; }
+.desenho__texto-claro { fill: var(--acao-texto); font-family: var(--fonte-sans); font-size: 10px; }
+.desenho__glifo { fill: var(--texto); font-family: var(--fonte-mono); font-size: 16px; font-weight: var(--peso-forte); }
+
+/* A lista de computadores e o que vem dentro dela */
+#pc-lista h3 { margin: var(--e4) 0 var(--e2); font-size: var(--fs-corpo); }
 
 /* -------------------------------------------------- a espera da máquina nova
    Ela vive dentro do cartão da porta e dentro do bloco de pareamento, e não

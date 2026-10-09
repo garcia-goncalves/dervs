@@ -1,5 +1,26 @@
 (function () {
   "use strict";
+
+  // O PEDIDO DE AUTORIZAR SOBREVIVE A ENTRADA. O arquivo baixado abre o
+  // navegador em `#/conectar?autorizar=<codigo>`; quem ainda nao entrou cai
+  // aqui, na capa. Chave e codigo recarregam a pagina (o endereco fica), mas
+  // entrar pelo GitHub ou pela porta local devolve 302 para `/` e perde o
+  // fragmento -- o dono entraria, veria o painel e nao acharia o pedido que
+  // estava esperando. Entao o codigo e guardado AQUI (so o formato exato,
+  // nada de texto livre) e o painel o devolve para a tela de autorizar.
+  try {
+    var h = location.hash || "";
+    var corte = h.indexOf("?");
+    if (corte > 0 && h.slice(0, corte) === "#/conectar") {
+      var pedido = new URLSearchParams(h.slice(corte + 1)).get("autorizar") || "";
+      var limpo = pedido.toUpperCase().replace(/[\s-]/g, "");
+      if (/^[2-9A-HJKMNP-Z]{8}$/.test(limpo)) {
+        sessionStorage.setItem("dervs-autorizar",
+                               limpo.slice(0, 4) + "-" + limpo.slice(4));
+      }
+    }
+  } catch (err) {}
+
   var porta = document.getElementById("porta");
   var campo = document.getElementById("combinacao");
   var slots = Array.prototype.slice.call(document.querySelectorAll(".slot"));
