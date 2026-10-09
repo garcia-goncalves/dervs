@@ -878,7 +878,7 @@ def coleta_documentacao(repo: Path):
     mostra "sem dados", que e outra coisa que "sem documentacao" (que e a
     resposta `{"documentos": []}`). Zerar uma leitura que falhou apagaria o
     problema real — a Lei 2 do painel. O formato, os tetos (o JSON da chave
-    nunca passa de 32 KiB, porque o servidor descarta o projeto INTEIRO acima
+    nunca passa de 40 KiB, porque o servidor descarta o projeto INTEIRO acima
     de 64 KiB) e a lista de provas moram em `documentos.py`.
     """
     try:

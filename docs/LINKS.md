@@ -112,9 +112,11 @@ A tela **Conectar projeto** deixou de mandar você para outra tela. Cada porta
 mostra o estado dela — conectado, não conectado, ou **não deu para conferir** —
 e nenhuma promete o que ainda não faz.
 
-- **O seu computador.** Dois caminhos, lado a lado: **Baixar o conectador** (um
-  arquivo, dois cliques, sem terminal) e **Usar a linha de comando**. Os dois
-  valem o mesmo; o roteiro está em
+- **O seu computador.** Um botão, **Conectar este computador** (09/10/2026):
+  baixa um arquivo, você abre, escolhe a pasta dos projetos e o navegador volta
+  ao painel com o computador pedindo licença; um clique em **Autorizar** e ele
+  aparece, com os projetos que achou e uma chave para esconder cada um. A linha
+  de comando fica dentro de **opções avançadas**; o roteiro está em
   [`operacao/conectar-uma-maquina.md`](operacao/conectar-uma-maquina.md).
 - **A sua conta do GitHub.** Um botão leva à instalação do aplicativo e volta
   com a conta ligada. **Exige `DERVS_GITHUB_APP_SLUG`** no ambiente do

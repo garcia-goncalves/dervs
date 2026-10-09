@@ -822,7 +822,7 @@ class Hub(SimpleHTTPRequestHandler):
             estado["briefing"] = memoria.briefing(estado["pendencias"],
                                                   estado["tendencia"])
         estado["ocultos"] = sorted(ocultos)
-        # A chave crua `documentacao` (todos os criterios, ate 32 KiB por
+        # A chave crua `documentacao` (todos os criterios, ate 40 KiB por
         # projeto) NAO vai no poll de 60 s de toda aba: a tela recebe a CONTA
         # (`progresso`) e busca os criterios em `/api/progresso` quando abre o
         # projeto. A poda e aqui, e nao em `_estado`: `_progresso` e

@@ -21,23 +21,23 @@ motivo real quando a página está velha (403 "token vencido").
 
 Estas decisões **vencem** o resto deste briefing onde houver conflito.
 
-1. **Três entregas.** A = tela nova + página desatualizada + computador + GitHub com contas
+- [ ] **Três entregas.** A = tela nova + página desatualizada + computador + GitHub com contas
    e repositórios à escolha. B = ajudante (agente) no SERVIDOR, modo "só olhar", tempo real,
    ligado aos projetos e ao GitHub (commit no ar por projeto). C = ações no servidor por
    lista fechada (reiniciar, publicar, voltar versão), sempre com "Pode fazer", "só olhar"
    como padrão por servidor. Esta esteira cobre a **A**; B e C abrem briefing próprio.
-2. **Servidor: ajudante, nunca chave guardada no site.** O dono perguntou se ajudante + chave
+- [ ] **Servidor: ajudante, nunca chave guardada no site.** O dono perguntou se ajudante + chave
    SSH seria mais preciso: não é (a chave vê o mesmo que o ajudante) e transforma o site em
    chave mestra de todos os servidores (a VPS tem o Ajudei, dado de paciente). A chave fica
    só no PC do dono, pelo DERVS-VOZ (terminal de emergência). Revenda (TineHost) fica só
    com medição por endereço.
-3. **Computador: ARQUIVO BAIXADO é o caminho principal** (dono preferiu a colar comando).
+- [ ] **Computador: ARQUIVO BAIXADO é o caminho principal** (dono preferiu a colar comando).
    Dois cliques, sem exigir Python (o ajudante traz o que precisa), janela do Windows para
    escolher a pasta, "Autorizar" no navegador (sem código de 6 dígitos dentro do arquivo),
    e a tela acompanha ao vivo ("instalado → pasta escolhida → N projetos"). Linha de comando
    fica escondida em "Prefiro colar um comando". Nada pode assustar: imagem por passo,
    português claro, "o que isso faz?" aberto a quem quiser conferir.
-4. **Aviso do Windows (SmartScreen) é medido antes de construir**, no PC do dono, com arquivo
+- [ ] **Aviso do Windows (SmartScreen) é medido antes de construir**, no PC do dono, com arquivo
    marcado como baixado (ZoneId=3). Se aparecer a tela azul, a tela do DERVS avisa antes com
    imagem, e o certificado de assinatura (R$ 1-2 mil/ano) vira decisão de custo do dono.
    **MEDIDO em 09/10/2026 no PC do dono** (Windows 11 Pro, Smart App Control desligado,
@@ -50,7 +50,7 @@ Estas decisões **vencem** o resto deste briefing onde houver conflito.
    ("o Windows vai perguntar; clique em Executar"). **Não medido ainda:** o aviso do
    PRÓPRIO Chrome no download de `.cmd` (só com arquivo servido pelo dervs.com.br de
    verdade) — conferir na entrega A antes de dizer pronto.
-5. **GitHub:** quantas contas quiser (pessoal e organização) e, em cada uma, "Escolher
+- [ ] **GitHub:** quantas contas quiser (pessoal e organização) e, em cada uma, "Escolher
    repositórios" abre a página certa do GitHub; chave "acompanhar" por repositório no DERVS.
 
 ## entendimento
@@ -71,35 +71,35 @@ do Analista vale para o conectador, não para a tela.
 
 ## criterio_de_aceitacao
 
-1. **Computador em um botão.** A tela tem um único botão "Conectar este computador". Ele baixa
+- [ ] **Computador em um botão.** A tela tem um único botão "Conectar este computador". Ele baixa
    um arquivo que já traz o endereço, o código de pareamento **e o programa que mede** (sem
    exigir o repositório do DERVS clonado nem a linha com `<CAMINHO DO DERVS>`). Prova:
    `test_conectador.py` roda o arquivo baixado numa pasta vazia, sem o repositório, e ele
    pareia e agenda a medição.
-2. **A tela percebe sozinha.** Com a tela Conectar aberta, depois do pareamento o cartão muda
+- [ ] **A tela percebe sozinha.** Com a tela Conectar aberta, depois do pareamento o cartão muda
    para "Conectado — achei N projetos" em até 15 segundos, sem recarregar, e lista os projetos
    achados (nome e pasta). Prova: clicando, no localhost, com um computador pareado de teste.
-3. **Escolher o que aparece.** Cada projeto achado tem uma chave "mostrar no painel"; desligar
+- [ ] **Escolher o que aparece.** Cada projeto achado tem uma chave "mostrar no painel"; desligar
    esconde o projeto do painel daquela conta e sobrevive a uma nova medição. Prova: teste de
    rota + clique.
-4. **GitHub em um botão.** Um botão "Conectar conta do GitHub" serve para conta pessoal e para
+- [ ] **GitHub em um botão.** Um botão "Conectar conta do GitHub" serve para conta pessoal e para
    organização; ao voltar do GitHub (ou ao abrir a tela) a procura de contas roda sozinha, e
    o botão "Procurar minhas contas" deixa de existir. Cada conta aparece com o nome, se é
    pessoal ou organização, quantos repositórios mede e quando mediu. Prova: teste da rota de
    volta + clique.
-5. **Servidor em um campo.** "Adicionar site": cola-se o endereço, o DERVS mede na hora e diz
+- [ ] **Servidor em um campo.** "Adicionar site": cola-se o endereço, o DERVS mede na hora e diz
    "respondeu" ou o motivo de não responder, antes de gravar. Endereços que os projetos já
    declaram aparecem como sugestão de um clique. O padrão de subdomínio sai da frente e fica
    num "opções avançadas" fechado. Prova: teste de rota + clique.
-6. **Página velha diz o que fazer.** Toda recusa 403 por token vencido, em **qualquer** botão
+- [ ] **Página velha diz o que fazer.** Toda recusa 403 por token vencido, em **qualquer** botão
    do painel, mostra "Esta página ficou desatualizada" com um botão "Recarregar". Prova:
    `test_*_tela` executando a função em node com resposta 403 falsa.
-7. **Sem duplicata e sem jargão.** A tela Conectar não repete "Conectar um computador" em dois
+- [ ] **Sem duplicata e sem jargão.** A tela Conectar não repete "Conectar um computador" em dois
    lugares, não mostra "agente", "Git", "token", "linha de comando" nem "instalação" ao dono
    (o caminho da linha de comando fica dentro de "opções avançadas"), e o histórico de recados
    do DERVS-VOZ não ocupa a tela Conectar. Prova: teste que lê o texto da tela + revisor de
    conteúdo.
-8. **Nada do que funciona hoje quebra.** As 26+ suítes verdes na CI, o computador já pareado
+- [ ] **Nada do que funciona hoje quebra.** As 26+ suítes verdes na CI, o computador já pareado
    continua medindo, as duas contas do GitHub continuam ligadas, o servidor cadastrado
    continua medido. Prova: CI verde + conferência no ar depois de publicar.
 
