@@ -120,7 +120,20 @@ COPY painel-projetos.ico   /app/
 # este nome.
 #
 # Importar o conectador aqui dentro continua PROIBIDO: ele carrega `tkinter`.
+#
+# `conectador.cmd` e o molde do arquivo que a tela baixa (`/api/conectar.cmd`):
+# o servidor o LE, cola o `conectador.py` no fim e entrega em CRLF.
 COPY conectador.py         /app/
+COPY conectador.cmd        /app/
+
+# O PACOTE DO COMPUTADOR (`/agente/pacote`). O servidor LE e entrega estes
+# arquivos a quem pareou; nenhum e importado por ele. `banco.py`, `coletar.py`,
+# `documentos.py` e `tarefas.py` ja entram acima por outros motivos. Os dois de
+# `agente/` entram um a um, NUNCA a pasta: `agente/executor.py` (o braco que
+# roda Claude Code) e justamente o que o servidor nao pode ter
+# (`test_imagem.PROIBIDOS`). Sem o `__init__.py`, `agente/enviar.py` nao e pacote.
+COPY agente/__init__.py    /app/agente/
+COPY agente/enviar.py      /app/agente/
 
 # A pasta de assets da etapa 13: folha de estilo, marca, glifos dos selos e as
 # duas famílias tipográficas. `servir.py` monta a lista de estáticos permitidos

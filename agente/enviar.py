@@ -21,6 +21,7 @@ NADA AQUI ESCUTA PORTA. Ver o docstring do pacote para o porque.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import platform
@@ -304,15 +305,25 @@ def fazer_a_tarefa(alvo: str, token: str, tarefa: dict, medicao=None,
     mais os 5 s que `execucao.parar()` espera pela confirmacao. A tela tem de
     dizer isso — nao ha etapa que torne o botao instantaneo.
     """
-    from agente import executor as _executor
-
-    braco = _executor.executor_de(tarefa.get("executor") or "claude")
+    # O pacote que o painel entrega a um computador NAO leva `agente/executor.py`:
+    # la o agente so mede. `import_module` consulta `sys.modules` (e o teste
+    # sabota por la); `from agente import executor` olharia antes o atributo do
+    # pacote e passaria por cima da ausencia.
+    try:
+        _executor = importlib.import_module("agente.executor")
+    except ImportError:
+        _executor = None
+    erro = "este computador so mede: o braco executor nao esta instalado aqui"
+    braco = None
+    if _executor is not None:
+        braco = _executor.executor_de(tarefa.get("executor") or "claude")
+        erro = ("esta maquina nao tem o braco %r instalado"
+                % (tarefa.get("executor") or "claude"))
     if braco is None or not braco.disponivel():
         desfecho = {"tipo": "desfecho", "id": tarefa.get("id") or "",
                     "estado": "falha", "ramo": "", "resumo": "", "diff": "",
                     "pr_url": "", "rodadas": 0, "custo_usd": 0.0,
-                    "erro": "esta maquina nao tem o braco %r instalado"
-                            % (tarefa.get("executor") or "claude")}
+                    "erro": erro}
         _falar(alvo, "/agente/resultado", desfecho, token=token)
         return desfecho
 

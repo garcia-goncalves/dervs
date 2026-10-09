@@ -1,8 +1,9 @@
 # Conectar uma máquina ao DERVS
 
 *Escrito em 27/08/2026, na etapa 11 da fatia 1. Reescrito em 29/08/2026,
-na etapa A4 de “Conectar em três portas”: o conectador entrou, e a linha
-de comando deixou de exigir que o terminal estivesse na pasta do DERVS.*
+na etapa A4 de “Conectar em três portas”. Reescrito em 09/10/2026, na entrega A
+do “Conectar simples”: o caminho principal passou a ser o arquivo `.cmd` que
+autoriza pelo navegador, sem número para digitar e sem o DERVS clonado.*
 
 O DERVS mostra o estado dos seus projetos. Até aqui ele só sabia dos projetos da
 máquina **onde ele mesmo roda**. O agente muda isso: qualquer computador seu pode
@@ -21,47 +22,70 @@ variável em `.env`), monta um relatório e **manda** para o endereço do DERVS.
   Foi exatamente isso que a etapa 7 amputou do servidor, e não volta.
 - **Não manda o valor de segredo nenhum.** Do `.env` sai só o *nome* da
   variável — a leitura para no sinal de igual.
+- **Não executa tarefa nenhuma quando conectado pelo arquivo `.cmd`.** O
+  programa que o painel entrega **só mede**: ele não leva o braço executor.
 
 ## Dois caminhos, e eles valem o mesmo
 
-Desde 29/08/2026 a tela **Conectar projeto** oferece dois jeitos de conectar
-uma máquina, lado a lado. Nenhum dos dois é o plano B do outro:
+A tela **Conectar projeto** oferece dois jeitos de conectar uma máquina, lado a
+lado. Nenhum dos dois é o plano B do outro:
 
-- **O conectador** — um arquivo que você baixa e abre com dois cliques. Ele
-  abre a janela do sistema para você escolher a pasta dos projetos, conecta
-  sozinho e deixa a máquina reportando a cada login. **Não pede terminal
-  nenhum**, e é o caminho recomendado para o seu computador de trabalho.
+- **O arquivo `conectar-dervs.cmd`** — você baixa e abre com dois cliques. Ele
+  instala o Python oficial **dentro da sua pasta de usuário** (sem
+  administrador), abre a janela do Windows para você escolher a pasta dos
+  projetos, abre o navegador para você clicar em **Autorizar** e deixa a máquina
+  reportando a cada login. **Não pede terminal nenhum**, e é o caminho
+  recomendado para o seu computador de trabalho. Funciona **sem o DERVS clonado**
+  na máquina: o programa vem do painel.
 - **A linha de comando** — uma linha para colar no terminal. É o caminho para
-  um servidor sem tela, e para quem prefere terminal.
+  um servidor sem tela, para quem prefere terminal e para quem quer que a máquina
+  também **execute** tarefas. Esta precisa do DERVS clonado na máquina.
 
-O conectador é um arquivo `.py`, e isso é escolha: a tela azul de proteção do
-Windows (o SmartScreen) vigia por extensão, e `.py` não está na lista dela.
-O que **pode** aparecer é o aviso de "arquivo baixado da internet", e o Windows
-vai abri-lo com o programa que estiver associado a `.py` na sua máquina.
+## O arquivo `.cmd`, passo a passo
 
-## O conectador, passo a passo
+1. No painel, vá em **Conectar projeto** e clique para baixar o arquivo.
+2. Abra o arquivo baixado (dois cliques). O Windows pode mostrar um aviso de
+   “arquivo baixado da internet” ou de editor desconhecido: o arquivo é texto
+   puro, e você pode abri-lo no Bloco de Notas antes para conferir o que ele faz.
+3. Na primeira vez ele baixa o Python oficial (cerca de 12 MB, de
+   `python.org`), **confere a impressão digital SHA-256** e só então o usa. Se a
+   conferência não bater, apaga o que baixou e para: nada é instalado.
+4. Escolha a pasta onde ficam os seus projetos na janela que abrir.
+5. O navegador abre no painel com um código curto (por exemplo `K7M4-2QXP`).
+   **Confira que o nome do computador e o código na tela são os mesmos que
+   estão na janela preta** e clique em **Autorizar**. Se você não reconhece o
+   pedido, feche a janela e não clique: quem consegue fazer você clicar num
+   pedido dele liga o computador dele à sua conta.
+6. Pronto. Ele baixa o programa do painel, agenda a tarefa, manda a primeira
+   medição e diz “Pronto. Esta janela fecha em 10 segundos.”
 
-1. No painel, vá em **Conectar projeto** e clique em **Baixar o conectador**.
-   O arquivo já vem com o seu número de seis dígitos dentro — ele vale dez
-   minutos.
-2. Abra o arquivo baixado (dois cliques).
-3. Escolha a pasta onde ficam os seus projetos na janela que abrir.
-4. Pronto. Ele mostra na tela o que fez, e a máquina aparece no painel.
+O pedido vale 10 minutos. Passou disso, rode o arquivo de novo.
 
-**Se a janela de escolher pasta não abrir**, ele pergunta o caminho pelo
-teclado e segue — alguns Pythons do Windows vêm sem a peça que desenha janelas,
-e ela não é instalável. Digite o caminho e aperte Enter.
+**Onde as coisas ficam:** o Python em `%LOCALAPPDATA%\DERVS\python`, o programa
+do painel em `%LOCALAPPDATA%\DERVS\programa`, o token e as pastas em
+`C:\Users\<você>\.dervs\agente.json`. Para desinstalar: apague a pasta
+`%LOCALAPPDATA%\DERVS`, remova a tarefa **DERVS - reportar** no Agendador de
+Tarefas e remova o computador no painel.
+
+**Rodar o arquivo de novo** (para acrescentar outra pasta, por exemplo) **não
+pede autorização outra vez**: ele reaproveita o token que já está no
+`agente.json`. Se o painel recusar esse token (computador removido), ele pede
+autorização de novo. Se o computador **executa tarefas** (foi ligado pela linha
+de comando com o braço executor), o arquivo **só acrescenta a pasta** e não troca
+a tarefa agendada, para não desligar o braço.
+
+**Se a janela de escolher pasta não abrir** (algumas máquinas de empresa
+bloqueiam o PowerShell), ele pergunta o caminho pelo teclado e segue. Digite o
+caminho e aperte Enter.
 
 **Se você fechar sem escolher pasta**, nada acontece na sua máquina: nenhum
 token gravado, nenhuma tarefa criada. Ele diz isso e sai.
 
-**Se ele disser que não achou o DERVS nesta máquina**, o pareamento valeu, mas
-o relato contínuo não foi agendado — ele precisa dos arquivos do DERVS ali.
-Clone o repositório e rode o conectador de novo.
+**Se o programa do painel vier fora do formato esperado**, ele recusa o pacote
+inteiro, não grava nada e sai dizendo “Nao consegui receber o programa do
+painel” (código de saída 5).
 
-**Fora do Windows** ele conecta e grava a pasta, mas **não agenda nada** — o
-agendador que ele usa é o do Windows. Ele diz isso e mostra a linha para você
-deixar rodando.
+**Fora do Windows** use a linha de comando: o `.cmd` é do Windows.
 
 ## A linha de comando, passo a passo
 
@@ -76,7 +100,7 @@ deixar rodando.
 
    **`<CAMINHO DO DERVS>` é o único pedaço que você troca.** O painel não tem
    como saber onde o repositório está na sua máquina, e inventar um caminho
-   seria ele mentindo. Quem não quer trocar nada usa o conectador.
+   seria ele mentindo. Quem não quer trocar nada usa o arquivo `.cmd`.
 
    **Não importa mais de que pasta você roda.** Até 29/08/2026 a linha só
    funcionava de dentro da pasta do DERVS, e de qualquer outra o Python
@@ -119,10 +143,11 @@ deixar rodando.
 
 ## Deixar reportando sozinho
 
-O conectador já faz isso: ele registra uma tarefa que roda a cada login do
-Windows. Sem permissão de administrador o Windows nega essa tarefa; então ele
-cai no plano B, uma tarefa que acorda de 10 em 10 minutos e reporta uma vez.
-Se você conectou pela linha de comando, ou quer outro intervalo:
+O arquivo `.cmd` já faz isso: ele registra uma tarefa que roda a cada login do
+Windows (com `pythonw.exe`, sem abrir janela). Sem permissão de administrador o
+Windows nega essa tarefa; então ele cai no plano B, uma tarefa que acorda de 10
+em 10 minutos e reporta uma vez. Se você conectou pela linha de comando, ou quer
+outro intervalo:
 
 ```
 python "<CAMINHO DO DERVS>\agente\enviar.py" --alvo https://SEU-DERVS --intervalo 600
@@ -145,13 +170,15 @@ Duas contagens voltam no fim de cada envio, e as duas viram aviso na tela:
 | `o alvo cortou N projeto(s)` | você tem mais de 300 projetos, ou mais de mil na conta — o excedente não entrou |
 | `o alvo RECUSOU N entrada(s)` | nome vazio, nome reservado (`_infra`, `_quota`) ou formato errado |
 
-Elas aparecem separadas de propósito. "Cortado" é limite seu; "recusado" é
+Elas aparecem separadas de propósito. “Cortado” é limite seu; “recusado” é
 formato errado, e provavelmente um defeito a investigar.
 
 ## Onde mora o token, e por que ali
 
-O número de seis dígitos vale uma vez e vence em dez minutos. Trocado, ele vira
-um **token** que não vence — e é ele que autoriza os envios seguintes.
+Pelo arquivo `.cmd`, o computador recebe o token direto do painel, no momento em
+que você clica em **Autorizar** (o número de seis dígitos só existe na linha de
+comando). Pela linha de comando, o número vale uma vez e vence em dez minutos, e
+trocado vira um **token** que não vence — é ele que autoriza os envios seguintes.
 
 O token fica em `~/.dervs/agente.json` (no Windows,
 `C:\Users\<você>\.dervs\agente.json`), com permissão de leitura só para a sua
@@ -160,34 +187,38 @@ token commitado no dia em que alguém rodar `git add -A` com pressa.
 
 Ele também **nunca entra na linha de comando**. Argumento de processo aparece na
 lista de processos da máquina inteira. Por isso não existe `--token`: o código de
-pareamento entra por ali porque é descartável; o token, não.
+pareamento entra por ali porque é descartável; o token, não. O arquivo `.cmd`
+nunca imprime o token, nem o pedido que o originou.
 
 Para apontar o arquivo para outro lugar: `DERVS_AGENTE_ARQUIVO=/caminho/x.json`.
+Para mudar onde o programa do painel é gravado: `DERVS_CASA=/caminho`.
 
 ## Desconectar uma máquina
 
 No painel, **Computadores → Remover**. O token daquela máquina deixa de valer no
-mesmo instante, e ela só volta com um número novo. Os projetos que ela reportava
-continuam no painel com o último dado medido — some a fonte, não o histórico.
+mesmo instante, e ela só volta com uma nova autorização. Os projetos que ela
+reportava continuam no painel com o último dado medido — some a fonte, não o
+histórico.
 
-## O que segura seis dígitos
+## O que segura o código curto e o número de seis dígitos
 
-Um milhão de possibilidades é pouco se o chute for de graça. São três travas:
+Um espaço pequeno de possibilidades é pouco se o chute for de graça. São três
+travas, iguais nos dois caminhos:
 
 1. **dez minutos** de validade;
-2. **uso único** — código gasto não pareia uma segunda máquina;
-3. **cinco tentativas por origem** a cada quinze minutos, contadas na rota
-   (no seu computador são vinte — ali o dado é de mentira e apertar só atrapalha
-   quem trabalha).
+2. **uso único** — código gasto não liga uma segunda máquina;
+3. **teto de tentativas por origem** a cada quinze minutos, contado na rota
+   (no seu computador o teto é maior — ali o dado é de mentira e apertar só
+   atrapalha quem trabalha).
 
 A terceira tem uma sutileza que já custou caro aqui: a conta é **por origem**, e
-não um contador global. Contador global deixaria um estranho trancar o
-pareamento de todo mundo com cinco chutes. E a fila é própria: gastar o teto
-tentando parear **não** tranca a sua entrada pela capa.
+não um contador global. Contador global deixaria um estranho trancar a conexão
+de todo mundo com poucos chutes. E a fila é própria: gastar o teto tentando
+conectar **não** tranca a sua entrada pela capa.
 
 ## O sinal de vida é o dado
 
-Não existe rota de "estou vivo" separada, e isso é decisão, não esquecimento.
+Não existe rota de “estou vivo” separada, e isso é decisão, não esquecimento.
 Com um sinal próprio, uma máquina com a coleta travada continuaria dizendo que
 está viva — e o painel ficaria verde exatamente quando parou de olhar. Aqui o
 carimbo de `visto_em` só anda quando medição de verdade chega.
