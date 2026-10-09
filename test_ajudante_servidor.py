@@ -59,28 +59,43 @@ def problemas_do_fonte(fonte):
         achados += ["import fora da padrao: %s" % n for n in nomes
                     if n not in padrao]
 
-    # "docker" so nos dois comandos de leitura.
-    liberados = set()
+    # "docker" so nos dois comandos de leitura e no do reinicio; "sudo" e o
+    # programa de publicar so em `ARGV_DA_VOLTA` (o `sudoers` sai dela).
+    liberados, liberados_da_volta = set(), set()
     for no in ast.walk(arvore):
         if isinstance(no, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id in ("ARGV_DO_PS", "ARGV_DO_INSPECT")
+                isinstance(t, ast.Name) and t.id in (
+                    "ARGV_DO_PS", "ARGV_DO_INSPECT", "ARGV_DO_REINICIO")
                 for t in no.targets):
             liberados |= {id(n) for n in ast.walk(no.value)}
+        if isinstance(no, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "ARGV_DA_VOLTA"
+                for t in no.targets):
+            liberados_da_volta |= {id(n) for n in ast.walk(no.value)}
     for no in ast.walk(arvore):
         if (isinstance(no, ast.Constant) and no.value == "docker"
                 and id(no) not in liberados):
-            achados.append("literal 'docker' fora dos dois comandos de leitura")
+            achados.append("literal 'docker' fora dos comandos de leitura e do reinicio")
+        if (isinstance(no, ast.Constant) and isinstance(no.value, str)
+                and no.value in ("sudo", "/usr/local/bin/deploy")
+                and id(no) not in liberados_da_volta):
+            achados.append("literal %r fora de ARGV_DA_VOLTA" % no.value)
 
-    # `subprocess` so dentro de `rodar`, com lista e sem shell.
+    # `subprocess` so dentro de `rodar` e `fazer`, com lista e sem shell.
     dentro = set()
     for no in ast.walk(arvore):
-        if isinstance(no, ast.FunctionDef) and no.name == "rodar":
+        if isinstance(no, ast.FunctionDef) and no.name in ("rodar", "fazer"):
             dentro |= {id(n) for n in ast.walk(no)}
     for no in ast.walk(arvore):
         if isinstance(no, ast.Name) and no.id == "subprocess" \
                 and id(no) not in dentro:
-            achados.append("subprocess fora de `rodar`")
-        if isinstance(no, ast.Attribute) and no.attr in ("system", "popen"):
+            achados.append("subprocess fora de `rodar` e `fazer`")
+        if isinstance(no, ast.Name) and no.id == "pty":
+            achados.append("pty existe")
+        if isinstance(no, ast.Attribute) and (
+                no.attr in ("system", "popen")
+                or no.attr.startswith(("exec", "spawn", "posix_spawn"))
+                and isinstance(no.value, ast.Name) and no.value.id == "os"):
             achados.append("os.%s existe" % no.attr)
         if isinstance(no, ast.keyword) and no.arg == "shell" and not (
                 isinstance(no.value, ast.Constant) and no.value.value is False):
@@ -92,6 +107,24 @@ def problemas_do_fonte(fonte):
     if not any(isinstance(n, ast.keyword) and n.arg == "shell"
                for n in ast.walk(arvore)):
         achados.append("`shell=False` deveria estar escrito")
+
+    # Nenhum argv montado fora das tuplas: o primeiro argumento de `fazer` cita
+    # uma das duas tuplas dos pedidos; o de `rodar` cita uma das de leitura ou e
+    # uma lista cujo primeiro item e texto fixo (os comandos de instalacao).
+    nomes_de_argv = {"fazer": {"ARGV_DO_REINICIO", "ARGV_DA_VOLTA"},
+                     "rodar": {"ARGV_DO_PS", "ARGV_DO_INSPECT"}}
+    for no in ast.walk(arvore):
+        if not (isinstance(no, ast.Call) and isinstance(no.func, ast.Name)
+                and no.func.id in nomes_de_argv and no.args):
+            continue
+        primeiro = no.args[0]
+        cita = {n.id for n in ast.walk(primeiro) if isinstance(n, ast.Name)}
+        fixa = (isinstance(primeiro, ast.List) and primeiro.elts
+                and isinstance(primeiro.elts[0], ast.Constant)
+                and isinstance(primeiro.elts[0].value, str))
+        if not (cita & nomes_de_argv[no.func.id]) and not (
+                no.func.id == "rodar" and fixa):
+            achados.append("argv de `%s` montado fora das tuplas" % no.func.id)
 
     # `if __name__` no fim.
     linhas = fonte.splitlines()
@@ -158,6 +191,33 @@ class OFonteObedeceAsLeis(unittest.TestCase):
     def test_acusa_ler_a_saida_dos_registros(self):
         self._acusa("Roda UM programa.", "Roda UM programa. Tambem le logs.",
                     "proibido")
+
+    # As leis dos pedidos (C5): cada uma e provada sabotando.
+    def test_acusa_o_sudo_fora_da_tupla_da_volta(self):
+        self._acusa('USUARIO = "dervs-ajudante"', 'USUARIO = "sudo"', "fora de ARGV_DA_VOLTA")
+
+    def test_acusa_o_programa_de_publicar_fora_da_tupla_da_volta(self):
+        self._acusa('USUARIO = "dervs-ajudante"',
+                    'USUARIO = "/usr/local/bin/deploy"', "fora de ARGV_DA_VOLTA")
+
+    def test_acusa_um_argv_montado_fora_das_tuplas(self):
+        self._acusa('fazer(list(ARGV_DO_REINICIO) + [ordem["alvo"]], PRAZO_DO_REINICIO)',
+                    'fazer(["rm", ordem["alvo"]], PRAZO_DO_REINICIO)',
+                    "montado fora das tuplas")
+
+    def test_acusa_subprocess_dentro_de_outra_funcao_dos_pedidos(self):
+        self._acusa("def _bloqueado(nome):",
+                    "def _bloqueado(nome):\n    subprocess.call(['x'])", "fora de `rodar`")
+
+    def test_acusa_execucao_pelo_os_e_pty(self):
+        self._acusa("def _root():", "def _root():\n    os.execv('x', ['x'])\n"
+                    "    return 0\n\n\ndef _root_velho():", "os.execv")
+        self._acusa("def _root():", "def _root():\n    pty.spawn('x')\n"
+                    "    return 0\n\n\ndef _root_velho():", "pty existe")
+
+    def test_acusa_shell_no_fazer(self):
+        self._acusa("timeout=prazo, env=dict(_AMBIENTE_DO_FAZER))",
+                    "timeout=prazo, shell=True, env=dict(_AMBIENTE_DO_FAZER))", "shell")
 
 
 class Dubles:
@@ -731,7 +791,8 @@ class OMain(unittest.TestCase):
 
     def test_o_comando_certo_vai_para_a_funcao_certa(self):
         for argv, nome in (([], "instalar"), (["instalar"], "instalar"),
-                           (["medir"], "medir"), (["remover"], "remover")):
+                           (["medir"], "medir"), (["ordens"], "ordens"),
+                           (["remover"], "remover")):
             with unittest.mock.patch.object(aj, nome, return_value=7) as f:
                 self.assertEqual(7, aj.main(argv))
                 f.assert_called_once_with()
@@ -740,6 +801,359 @@ class OMain(unittest.TestCase):
         with unittest.mock.patch.object(aj, "instalar") as f:
             self.assertEqual(1, aj.main(["apagar-tudo"]))
             f.assert_not_called()
+
+
+# ------------------------------------------------- os pedidos (entrega C)
+
+HISTORICO_DOS_PEDIDOS = "\n".join([
+    "2026-09-29 15:15:00 grimoire tiba 20260929-151500-96eb3fc OK",
+    "2026-09-29 15:20:00 dervs tiba 20260929-152000-aaaaaaa OK",
+    "2026-09-29 15:25:00 ajudei-saude tiba 20260929-152500-bbbbbbb OK",
+    "2026-09-29 15:26:00 ajudei-saude-web tiba 20260929-152600-bbbbbbb OK",
+    "2026-09-29 15:27:00 Maiuscula tiba 20260929-152700-ccccccc OK",
+    "2026-09-29 15:28:00 com.ponto tiba 20260929-152800-ccccccc OK",
+    ""])
+CHAVE_BOA = "%064x.%064x" % aj.G
+
+
+class DosPedidos(ComRaiz):
+    """Instala com `--ordens` contra dubles. O que o `sudo`, o `visudo` e o
+    systemd de verdade fazem so a conferencia manual prova."""
+
+    def ligar(self, d=None, historico=HISTORICO_DOS_PEDIDOS, deploy_ok=True,
+              chaves=None, **extra):
+        d = d or Dubles(roteiro_abrir=roteiro_feliz())
+        self.historico.write_text(historico, encoding="ascii")
+        chaves = [CHAVE_BOA] if chaves is None else chaves
+        with unittest.mock.patch.object(aj, "_comando_de_publicar_ok",
+                                        return_value=deploy_ok):
+            codigo, saidas = self.instalar(d, ordens=chaves, **extra)
+        return d, codigo, saidas
+
+    def caminho(self, *partes):
+        return Path(self.raiz).joinpath(*partes)
+
+    def config(self):
+        return json.loads(self.caminho("etc", "dervs-ajudante", "ordens.json").read_text())
+
+    def sudoers(self):
+        return self.caminho("etc", "sudoers.d", "dervs-ajudante")
+
+
+class AUnidadeDosPedidos(DosPedidos):
+
+    def test_o_servico_diretiva_por_diretiva(self):
+        self.ligar()
+        base = self.caminho("etc", "systemd", "system")
+        servico = (base / "dervs-ajudante-ordens.service").read_text().splitlines()
+        self.assertEqual([
+            "[Unit]", "Description=DERVS - busca e faz os pedidos do painel neste servidor",
+            "", "[Service]", "Type=oneshot", "User=dervs-ajudante",
+            "ExecStart=%s /opt/dervs-ajudante/dervs-ajudante.py ordens" % sys.executable,
+            "TimeoutStartSec=30min", "PrivateTmp=yes"], servico)
+
+    def test_sem_as_diretivas_que_matam_o_sudo(self):
+        self.ligar()
+        texto = (self.caminho("etc", "systemd", "system")
+                 / "dervs-ajudante-ordens.service").read_text()
+        for proibida in ("NoNewPrivileges", "CapabilityBoundingSet", "ProtectSystem",
+                         "UMask", "ReadWritePaths", "RestrictSUIDSGID"):
+            self.assertNotIn(proibida, texto)
+
+    def test_o_temporizador(self):
+        self.ligar()
+        tempo = (self.caminho("etc", "systemd", "system")
+                 / "dervs-ajudante-ordens.timer").read_text().splitlines()
+        for linha in ("OnBootSec=45s", "OnUnitActiveSec=30s", "AccuracySec=1s",
+                      "WantedBy=timers.target"):
+            self.assertIn(linha, tempo)
+
+    def test_a_unidade_de_medir_continua_byte_a_byte_igual(self):
+        antes = "\n".join([
+            "[Unit]", "Description=DERVS - conta ao painel o que roda neste servidor", "",
+            "[Service]", "Type=oneshot", "User=dervs-ajudante",
+            "ExecStart=%s /opt/dervs-ajudante/dervs-ajudante.py medir" % sys.executable,
+            "NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=yes",
+            "PrivateTmp=yes", "ReadWritePaths=/var/lib/dervs-ajudante",
+            "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6", "UMask=0077",
+            "PrivateDevices=yes", "ProtectKernelTunables=yes",
+            "ProtectKernelModules=yes", "ProtectControlGroups=yes",
+            "RestrictSUIDSGID=yes", "LockPersonality=yes", "CapabilityBoundingSet=", ""])
+        self.assertEqual(antes, aj.texto_do_servico())
+        self.assertEqual("\n".join([
+            "[Unit]", "Description=DERVS - medir este servidor a cada 30 segundos", "",
+            "[Timer]", "OnBootSec=30s", "OnUnitActiveSec=30s", "AccuracySec=1s", "",
+            "[Install]", "WantedBy=timers.target", ""]), aj.texto_do_temporizador())
+
+    def test_liga_o_temporizador_novo(self):
+        d, _, _ = self.ligar()
+        self.assertIn(["systemctl", "enable", "--now", "dervs-ajudante-ordens.timer"],
+                      d.chamadas)
+
+
+class OSudoersExato(DosPedidos):
+
+    def linhas_esperadas(self, *projetos):
+        return "".join("dervs-ajudante ALL=(root) " + "NOPASSWD" + ":" + " "
+                       + aj.ARGV_DA_VOLTA[2] + " " + p + " --voltar\n" for p in projetos)
+
+    def test_uma_linha_por_projeto_e_nada_mais(self):
+        self.ligar()
+        self.assertEqual(self.linhas_esperadas("grimoire", "dervs"),
+                         self.sudoers().read_text())
+
+    def test_nenhum_curinga_e_nenhum_bloqueado_ou_torto(self):
+        self.ligar()
+        texto = self.sudoers().read_text()
+        self.assertNotIn("*", texto)
+        for fora in ("ajudei", "Maiuscula", "com.ponto", "ALL=(ALL)"):
+            self.assertNotIn(fora, texto)
+        self.assertEqual(["grimoire", "dervs"], self.config()["voltaveis"])
+
+    def test_grava_confere_e_so_entao_troca(self):
+        d = Dubles(roteiro_abrir=roteiro_feliz())
+        visto = []
+        antigo = d.rodar
+
+        def rodar(argv, prazo):
+            if argv[0] == "visudo":
+                visto.append((list(argv), self.sudoers().exists(),
+                              Path(argv[-1]).read_text()))
+            return antigo(argv, prazo)
+        d.rodar = rodar
+        self.ligar(d)
+        self.assertEqual(1, len(visto))
+        argv, final_existia, conteudo = visto[0]
+        self.assertEqual(["visudo", "-cf"], argv[:2])
+        self.assertTrue(argv[-1].endswith(".dervs-ajudante.novo"))
+        self.assertFalse(final_existia)
+        self.assertEqual(self.linhas_esperadas("grimoire", "dervs"), conteudo)
+        self.assertFalse(Path(argv[-1]).exists())
+        self.assertTrue(self.sudoers().exists())
+
+    def test_visudo_que_reprova_nao_deixa_regra_e_a_medicao_segue(self):
+        d = Dubles(respostas_rodar={("visudo",): (False, "")},
+                   roteiro_abrir=roteiro_feliz())
+        d, codigo, saidas = self.ligar(d)
+        self.assertEqual(aj.OK, codigo)
+        self.assertFalse(self.sudoers().exists())
+        self.assertFalse(self.caminho("etc", "sudoers.d", ".dervs-ajudante.novo").exists())
+        self.assertEqual([], self.config()["voltaveis"])
+        self.assertIn("nao aceitou a regra", "\n".join(saidas))
+        self.assertTrue(d.requisicoes[-1][1].endswith("/agente/servidor"))
+
+    def test_sem_projeto_o_arquivo_nao_existe(self):
+        d, _, saidas = self.ligar(historico="")
+        self.assertFalse(self.sudoers().exists())
+        self.assertIn("reiniciar sistemas", "\n".join(saidas))
+        self.assertIn("ja foi publicado", "\n".join(saidas))
+
+    def test_regra_antiga_some_se_a_nova_instalacao_nao_tem_projeto(self):
+        self.ligar()
+        self.assertTrue(self.sudoers().exists())
+        self.ligar(historico="")
+        self.assertFalse(self.sudoers().exists())
+
+    def test_o_usuario_nunca_entra_no_grupo_do_deploy(self):
+        d = Dubles(respostas_rodar={("id",): (False, "")}, roteiro_abrir=roteiro_feliz())
+        self.ligar(d)
+        useradd = d.argvs("useradd")
+        self.assertEqual(1, len(useradd))
+        self.assertEqual("docker", useradd[0][useradd[0].index("--groups") + 1])
+        self.assertNotIn("deploy", " ".join(useradd[0]))
+        for argv in d.chamadas:
+            self.assertNotIn("usermod", argv)
+            self.assertNotIn("gpasswd", argv)
+
+    @unittest.skipIf(os.name == "nt", "modo de arquivo nao existe no Windows")
+    def test_modos(self):
+        self.ligar()
+        self.assertEqual(0o440, self.sudoers().stat().st_mode & 0o777)
+        self.assertEqual(0o644, self.caminho(
+            "etc", "dervs-ajudante", "ordens.json").stat().st_mode & 0o777)
+
+    def test_a_linha_nunca_aparece_inteira_no_fonte(self):
+        """O varredor de segredo barra `NOPASSWD:` + caminho: o fonte monta em
+        pedacos, e o `sudoers` nao pode ser escrito num literal so."""
+        self.assertNotIn("NOPASSWD" + ":", FONTE)
+
+
+class OComandoDePublicarConferido(unittest.TestCase):
+    """A funcao REAL, com `lstat` falso: o dono e o modo de arquivo de verdade
+    nao existem no Windows, e a conta (dono, modo, tres niveis) e a mesma."""
+
+    ARQ = 0o100000
+    PASTA = 0o040000
+
+    def com(self, deploy=(0, 0o755), bin=(0, 0o755), local=(0, 0o755), deploy_tipo=None):
+        tabela = {"/usr/local/bin/deploy": (deploy[0], (deploy_tipo or self.ARQ) | deploy[1]),
+                  "/usr/local/bin": (bin[0], self.PASTA | bin[1]),
+                  "/usr/local": (local[0], self.PASTA | local[1])}
+
+        def lstat(caminho):
+            chave = caminho.replace("\\", "/")
+            for nome, (uid, modo) in tabela.items():
+                if chave.endswith(nome):
+                    return type("E", (), {"st_uid": uid, "st_mode": modo})()
+            raise FileNotFoundError(caminho)
+        return unittest.mock.patch.object(aj.os, "lstat", lstat)
+
+    def test_tudo_do_root_e_sem_escrita_alheia(self):
+        with self.com():
+            self.assertTrue(aj._comando_de_publicar_ok("/"))
+
+    def test_dono_que_nao_e_root(self):
+        for onde in ("deploy", "bin", "local"):
+            with self.subTest(onde), self.com(**{onde: (1000, 0o755)}):
+                self.assertFalse(aj._comando_de_publicar_ok("/"))
+
+    def test_escrita_de_grupo_ou_outros(self):
+        for modo in (0o775, 0o757, 0o777, 0o722):
+            for onde in ("deploy", "bin", "local"):
+                with self.subTest(onde=onde, modo=oct(modo)), self.com(**{onde: (0, modo)}):
+                    self.assertFalse(aj._comando_de_publicar_ok("/"))
+
+    def test_link_simbolico_nao_vale(self):
+        with self.com(deploy_tipo=0o120000):
+            self.assertFalse(aj._comando_de_publicar_ok("/"))
+
+    def test_ausente_nao_vale(self):
+        with unittest.mock.patch.object(aj.os, "lstat", side_effect=FileNotFoundError):
+            self.assertFalse(aj._comando_de_publicar_ok("/"))
+
+
+class AsChavesDaLinha(DosPedidos):
+
+    def test_sem_o_comando_de_publicar_conferido_nenhum_projeto_volta(self):
+        _, codigo, saidas = self.ligar(deploy_ok=False)
+        self.assertEqual(aj.OK, codigo)
+        self.assertFalse(self.sudoers().exists())
+        self.assertEqual([], self.config()["voltaveis"])
+        self.assertIn("programa de publicar", "\n".join(saidas))
+        self.assertIn("reiniciar sistemas", "\n".join(saidas))
+
+    def sem_pedidos(self, codigo, saidas):
+        self.assertEqual(aj.OK, codigo)
+        self.assertFalse(self.caminho("etc", "dervs-ajudante").exists())
+        self.assertFalse(self.sudoers().exists())
+        base = self.caminho("etc", "systemd", "system")
+        self.assertFalse((base / "dervs-ajudante-ordens.timer").exists())
+        self.assertTrue((base / "dervs-ajudante.timer").exists())   # a medicao segue
+        self.assertIn("NAO foram ligados", "\n".join(saidas))
+
+    def test_chave_fora_da_curva(self):
+        d, codigo, saidas = self.ligar(chaves=["%064x.%064x" % (1, 2)])
+        self.sem_pedidos(codigo, saidas)
+        self.assertTrue(d.requisicoes[-1][1].endswith("/agente/servidor"))
+        self.assertNotIn("ordens", d.requisicoes[-1][2])
+
+    def test_chave_com_63_hex(self):
+        _, codigo, saidas = self.ligar(chaves=[CHAVE_BOA[1:]])
+        self.sem_pedidos(codigo, saidas)
+
+    def test_seis_chaves(self):
+        _, codigo, saidas = self.ligar(chaves=[CHAVE_BOA] * 6)
+        self.sem_pedidos(codigo, saidas)
+
+    def test_chave_torta_no_meio_derruba_todas(self):
+        _, codigo, saidas = self.ligar(chaves=[CHAVE_BOA, "xx.yy"])
+        self.sem_pedidos(codigo, saidas)
+
+    def test_chave_torta_desliga_o_que_estava_ligado(self):
+        self.ligar()
+        self.assertTrue(self.sudoers().exists())
+        _, codigo, saidas = self.ligar(chaves=["lixo"])
+        self.sem_pedidos(codigo, saidas)
+
+    def test_o_arquivo_de_pedidos_tem_a_forma_do_contrato(self):
+        self.ligar()
+        cfg = self.config()
+        self.assertEqual({"versao", "ident", "origem", "rp_id", "chaves", "voltaveis"},
+                         set(cfg))
+        self.assertEqual(1, cfg["versao"])
+        self.assertRegex(cfg["ident"], r"^[0-9a-f]{32}$")
+        self.assertEqual(self.ALVO, cfg["origem"])
+        self.assertEqual("painel.exemplo.test", cfg["rp_id"])
+        self.assertEqual([["%064x" % aj.G[0], "%064x" % aj.G[1]]], cfg["chaves"])
+
+    def test_origem_e_dominio_saem_do_alvo(self):
+        d = Dubles(roteiro_abrir=roteiro_feliz())
+        self.historico.write_text(HISTORICO_DOS_PEDIDOS, encoding="ascii")
+        with unittest.mock.patch.object(aj, "_comando_de_publicar_ok", return_value=True):
+            self.instalar(d, alvo="https://dervs.com.br", ordens=[CHAVE_BOA])
+        cfg = self.config()
+        self.assertEqual(("https://dervs.com.br", "dervs.com.br"),
+                         (cfg["origem"], cfg["rp_id"]))
+
+    def test_o_ident_e_novo_a_cada_instalacao(self):
+        self.ligar()
+        primeiro = self.config()["ident"]
+        self.ligar()
+        self.assertNotEqual(primeiro, self.config()["ident"])
+
+    def test_a_primeira_medicao_ja_conta_os_pedidos(self):
+        d, _, _ = self.ligar()
+        corpo = d.requisicoes[-1][2]
+        self.assertEqual({"versao": 1, "ident": self.config()["ident"],
+                          "chaves": [aj.impressao(*aj.G)],
+                          "voltaveis": ["grimoire", "dervs"]}, corpo["ordens"])
+
+    def test_diz_em_portugues_o_que_ficou_ligado(self):
+        _, _, saidas = self.ligar()
+        texto = "\n".join(saidas)
+        self.assertIn("Pedidos ligados: reiniciar sistemas; voltar a versao de: "
+                      "grimoire, dervs. O Ajudei fica de fora sempre.", texto)
+        self.assertTrue(texto.isascii())
+
+    def test_enable_que_falha_deixa_os_pedidos_desligados_e_a_medicao_ligada(self):
+        d = Dubles(respostas_rodar={
+            ("systemctl", "enable", "--now", "dervs-ajudante-ordens.timer"): (False, "")},
+            roteiro_abrir=roteiro_feliz())
+        _, codigo, saidas = self.ligar(d)
+        self.assertEqual(aj.OK, codigo)
+        self.assertFalse(self.caminho("etc", "dervs-ajudante").exists())
+        self.assertFalse(self.sudoers().exists())
+        self.assertIn("DESLIGADOS", "\n".join(saidas))
+
+
+class DesligarOsPedidos(DosPedidos):
+
+    def feito(self):
+        base = self.caminho("etc", "systemd", "system")
+        return [base / "dervs-ajudante-ordens.service", base / "dervs-ajudante-ordens.timer",
+                self.sudoers(), self.caminho("etc", "dervs-ajudante")]
+
+    def test_instalar_sem_ordens_desliga(self):
+        self.ligar()
+        for caminho in self.feito():
+            self.assertTrue(caminho.exists(), caminho)
+        d = Dubles(roteiro_abrir=roteiro_feliz())
+        codigo, saidas = self.instalar(d)
+        self.assertEqual(aj.OK, codigo)
+        for caminho in self.feito():
+            self.assertFalse(caminho.exists(), caminho)
+        self.assertIn(["systemctl", "disable", "--now", "dervs-ajudante-ordens.timer"],
+                      d.chamadas)
+        self.assertIn("DESLIGADOS", "\n".join(saidas))
+        self.assertTrue(self.caminho("etc", "systemd", "system",
+                                     "dervs-ajudante.timer").exists())
+
+    def test_remover_apaga_tudo(self):
+        self.ligar()
+        d = Dubles()
+        self.assertEqual(aj.OK, aj.remover(raiz=self.raiz, rodar=d.rodar,
+                                           eh_root=lambda: True))
+        for caminho in self.feito():
+            self.assertFalse(caminho.exists(), caminho)
+
+    def test_quem_nunca_ligou_pedidos_nao_ganha_nenhum_comando_novo(self):
+        d = Dubles(roteiro_abrir=roteiro_feliz())
+        self.instalar(d)
+        self.assertFalse([c for c in d.chamadas if "dervs-ajudante-ordens.timer" in c])
+        self.assertEqual([], d.argvs("visudo"))
+        d2 = Dubles()
+        aj.remover(raiz=self.raiz, rodar=d2.rodar, eh_root=lambda: True)
+        self.assertFalse([c for c in d2.chamadas if "dervs-ajudante-ordens.timer" in c])
 
 
 class OsPortoesDeVerdade(unittest.TestCase):
