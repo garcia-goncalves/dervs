@@ -861,8 +861,15 @@ class Hub(SimpleHTTPRequestHandler):
         # `consertavel`: o selo nao os le nesta entrega, e `montar_estado` nao
         # muda. Uma leitura so, por conta da sessao.
         medicoes = banco.medicoes_de_servidor(usuario_id)
-        estado["servidores_ligados"] = [self._servidor_ligado(m)
-                                        for m in medicoes]
+        chaves = banco.chaves_publicas_da_conta(usuario_id, limite=1000)
+        agora_s = self._segundos_agora()
+        estado["servidores_ligados"] = [
+            self._servidor_ligado(
+                m, chaves,
+                banco.ordens_do_servidor(usuario_id, m["maquina_id"],
+                                         limite=self.PEDIDOS_NO_PAINEL)
+                if self._bloco_de_ordens(m) is not None else (), agora_s)
+            for m in medicoes]
         for p in estado["projetos"]:
             p["no_ar"] = self._no_ar_do_projeto(p, medicoes)
         return self._json(200, estado)
@@ -1948,8 +1955,18 @@ class Hub(SimpleHTTPRequestHandler):
         linha = ('d="$(mktemp -d)" && cd "$d" && curl -fsSL %s -o dervs-ajudante.py && '
                  'echo "%s  dervs-ajudante.py" | sha256sum -c - && sudo python3 '
                  '-I dervs-ajudante.py' % (endereco, resumo))
+        # A linha COM pedidos e a mesma, mais as chaves de acesso vivas da
+        # conta (as 5 mais novas): o arquivo e o resumo nao mudam, e o dono ve
+        # na propria linha o que esta entregando ao servidor (C1).
+        chaves = banco.chaves_publicas_da_conta(sessao["usuario_id"])
+        com_ordens = (linha + " instalar --ordens " + ",".join(
+            "%064x.%064x" % (c["x"], c["y"]) for c in chaves)
+            if chaves else None)
         return self._json(200, {"linha": linha, "sha256": resumo,
-                                "endereco": endereco})
+                                "endereco": endereco,
+                                "linha_com_ordens": com_ordens,
+                                "chaves_na_linha": [c["apelido"]
+                                                    for c in chaves]})
 
     # A medicao. Um envio a cada 30 s = 30 por janela de 15 min; 60 e o
     # dobro, para reinicio e relogio torto. Balcao proprio, por maquina.
@@ -1963,7 +1980,9 @@ class Hub(SimpleHTTPRequestHandler):
                            "memoria_total_kb", "memoria_disponivel_kb",
                            "disco_total_b", "disco_livre_b")
     CHAVES_DO_TOPO = ("versao", "docker_mudo", "servidor", "sistemas",
-                      "publicacoes")
+                      "publicacoes", "ordens")
+    CHAVES_DE_ORDENS = ("versao", "ident", "chaves", "voltaveis")
+    MAX_CHAVES_DE_ORDENS = 5
     CHAVES_DE_SISTEMA = ("nome", "projeto", "estado", "saude", "desde",
                          "reinicios", "imagem", "sha")
     CHAVES_DE_PUBLICACAO = ("projeto", "quando", "sha", "resultado")
@@ -2063,10 +2082,57 @@ class Hub(SimpleHTTPRequestHandler):
                 if limpo is not None:
                     destino.append(limpo)
         versao = corpo.get("versao")
-        return ({"versao": versao if self._inteiro_da_medicao(versao) else None,
+        limpo = {"versao": versao if self._inteiro_da_medicao(versao) else None,
                  "docker_mudo": mudo if isinstance(mudo, bool) else None,
                  "servidor": limpo_srv, "sistemas": sistemas,
-                 "publicacoes": publicacoes}, invalidos)
+                 "publicacoes": publicacoes}
+        if "ordens" in corpo:
+            bloco, tortos = self._ordens_limpas(corpo["ordens"])
+            invalidos += tortos
+            if bloco is not None:       # sem o bloco, a chave nem existe
+                limpo["ordens"] = bloco
+        return limpo, invalidos
+
+    @staticmethod
+    def _nome_de_projeto_valido(nome) -> bool:
+        """`^[a-z0-9][a-z0-9-]{0,62}$` (o formato de `voltar`, C0), sem regex."""
+        return (isinstance(nome, str) and 1 <= len(nome) <= 63
+                and nome[0] != "-"
+                and all(c in "abcdefghijklmnopqrstuvwxyz0123456789-"
+                        for c in nome))
+
+    def _ordens_limpas(self, bloco):
+        """(bloco, invalidos) do bloco `ordens` (I2). Lista fechada: `ident`
+        que nao e 32 hex minusculos, ou versao que nao e 1, derruba o bloco
+        inteiro; o que sobra de torto e descartado e contado."""
+        if not isinstance(bloco, dict):
+            return None, 1
+        tortos = sum(1 for k in bloco if k not in self.CHAVES_DE_ORDENS)
+        versao, ident = bloco.get("versao"), bloco.get("ident")
+        if (versao != 1 or isinstance(versao, bool) or not isinstance(ident, str)
+                or len(ident) != 32
+                or not all(c in "0123456789abcdef" for c in ident)):
+            return None, tortos + 1
+        saida = {"versao": 1, "ident": ident}
+        for chave, valido, teto in (
+                ("chaves", lambda v: isinstance(v, str) and len(v) == 16
+                 and all(c in "0123456789abcdef" for c in v),
+                 self.MAX_CHAVES_DE_ORDENS),
+                ("voltaveis", lambda v: self._nome_de_projeto_valido(v)
+                 and not tarefas.projeto_bloqueado(v),
+                 self.MAX_ITENS_DA_MEDICAO)):
+            itens = bloco.get(chave)
+            if not isinstance(itens, list):
+                saida[chave] = []
+                tortos += 0 if itens is None else 1
+                continue
+            bons = [v for v in itens if valido(v)]
+            tortos += len(itens) - len(bons)
+            if len(bons) > teto:
+                tortos += len(bons) - teto
+                bons = bons[:teto]
+            saida[chave] = bons
+        return saida, tortos
 
     def _sistema_limpo(self, item):
         """(sistema, invalidos) — sistema None se o item cai inteiro."""
@@ -2129,16 +2195,312 @@ class Hub(SimpleHTTPRequestHandler):
             return self._json(400, {"erro": "medicao grande demais"})
         return self._json(200, {"ok": True, "invalidos": invalidos})
 
+    # ------------------------------------------- os pedidos ao servidor (C)
+    #
+    # O dono pede, o DERVS PREPARA a ordem e a tela a faz assinar com a digital;
+    # o ajudante busca e CONFERE sozinho. Nada daqui executa coisa nenhuma: o
+    # DERVS so guarda e entrega uma ordem de lista fechada (reiniciar, voltar).
+    # Cada rota paga o PROPRIO balcao; nenhuma empresta o de outra (nem o do
+    # login nem o da medicao). Os nomes foram conferidos contra
+    # `test_rotas.PROIBIDO`.
+    TETO_DE_ORDENS_PREPARADAS = 20    # por conta, por janela
+    TETO_DE_ORDENS_ASSINADAS = 20     # por conta, por janela
+    TETO_DE_BUSCAS_DE_ORDEM = 90      # por maquina: 1 a cada 30 s = 30
+    TETO_DE_DESFECHOS = 30            # por maquina
+    TIPOS_DE_ORDEM = ("reiniciar", "voltar")
+    # Cada ordem tem UM `numero` sorteado aqui. As duas costuras abaixo existem
+    # so para o teste de fio reproduzir a mesma ordem do vetor de fora.
+
     @staticmethod
-    def _servidor_ligado(m: dict) -> dict:
-        """Um item de `servidores_ligados` (C5): sem `imagem` nem `sha`."""
+    def _numero_da_ordem() -> str:
+        return secrets.token_hex(16)
+
+    @staticmethod
+    def _segundos_agora() -> int:
+        return int(time.time())
+
+    @staticmethod
+    def _frase_do_pedido(tipo: str, alvo: str, servidor: str) -> str:
+        """A frase que o dono confirma na tela. `painel.js` tem a mesma, letra
+        por letra (`fraseDoPedido`), e o teste de fio cobra as duas."""
+        if tipo == "voltar":
+            return ("Voltar “%s” para a versão anterior no "
+                    "servidor “%s”" % (alvo, servidor))
+        return ("Reiniciar o sistema “%s” no servidor “%s”"
+                % (alvo, servidor))
+
+    def _servidor_da_conta(self, usuario_id: int, maquina_id):
+        """A medicao do servidor VIVO desta conta com este id, ou None. "Nao
+        existe", "e de outra conta" e "e computador" sao a mesma coisa."""
+        return next((m for m in banco.medicoes_de_servidor(usuario_id)
+                     if m["maquina_id"] == maquina_id), None)
+
+    def _maquina_ordem_preparar(self):
+        """O dono pediu uma ordem: confere tudo, grava e devolve o desafio.
+
+        A ordem do desafio e a do contrato: dono (404 igual para "nao existe"
+        e "nao e seu") -> bloqueado -> so olha -> sem dados -> alvo medido ->
+        chave que o servidor conhece -> vaga da maquina."""
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        uid = sessao["usuario_id"]
+        if not cortina.registrar_tentativa(
+                "usuario:%d" % uid, time.time(), balcao="ordem_preparar",
+                teto=self.TETO_DE_ORDENS_PREPARADAS):
+            return self._json(429, self.RECUSA)
+        mid, tipo, alvo = (corpo.get("maquina_id"), corpo.get("tipo"),
+                           corpo.get("alvo"))
+        if (not isinstance(mid, int) or isinstance(mid, bool)
+                or tipo not in self.TIPOS_DE_ORDEM
+                or not isinstance(alvo, str)):
+            return self._json(400, {"erro": "pedido invalido"})
+        m = self._servidor_da_conta(uid, mid)
+        if m is None:
+            return self._json(404, {"erro": "nao achei"})
+        sistemas = [s for s in ((m.get("dados") or {}).get("sistemas") or [])
+                    if isinstance(s, dict)]
+        # O bloqueio olha o NOME e, para reiniciar, tambem o projeto do
+        # sistema (o rotulo): `ajudei-db` leva o rotulo `ajudei-saude`.
+        rotulos = [s.get("projeto") for s in sistemas
+                   if s.get("nome") == alvo] if tipo == "reiniciar" else []
+        if tarefas.projeto_bloqueado(alvo) or any(
+                tarefas.projeto_bloqueado(r) for r in rotulos):
+            return self._json(403, {"motivo": "bloqueado"})
+        dados = m.get("dados")
+        if not (isinstance(dados, dict)
+                and isinstance(dados.get("ordens"), dict)):
+            return self._json(409, {"motivo": "so_olha"})
+        bloco = self._bloco_de_ordens(m)
+        if bloco is None:
+            return self._json(409, {"motivo": "sem_dados"})
+        medido = ([s.get("nome") for s in sistemas] if tipo == "reiniciar"
+                  else bloco["voltaveis"])
+        if alvo not in medido:
+            return self._json(400, {"erro": "pedido invalido"})
+        conhecidas = set(bloco["chaves"])
+        chaves = [c["cred_id"] for c in banco.chaves_publicas_da_conta(
+                  uid, limite=1000)
+                  if banco.impressao_da_chave(c["x"], c["y"]) in conhecidas]
+        if not chaves:
+            return self._json(409, {"motivo": "sem_chave"})
+        numero, criado = self._numero_da_ordem(), self._segundos_agora()
+        texto = tarefas.texto_da_ordem({
+            "servidor": bloco.get("ident"), "tipo": tipo, "alvo": alvo,
+            "numero": numero, "criado": criado,
+            "vence": criado + banco.PRAZO_DA_ORDEM})
+        if texto is None:
+            return self._json(400, {"erro": "pedido invalido"})
+        if not banco.criar_ordem_de_servidor(uid, mid, bloco["ident"], tipo,
+                                             alvo, numero, criado):
+            return self._json(409, {"motivo": "ocupado"})
+        return self._json(200, {
+            "numero": numero,
+            "desafio": passkey.b64url(
+                hashlib.sha256(texto.encode("ascii")).digest()),
+            "rp_id": self._rp_id(), "chaves": chaves,
+            "segundos": banco.PRAZO_DA_ORDEM,
+            "frase": self._frase_do_pedido(tipo, alvo, m["nome"])})
+
+    def _maquina_ordem_assinar(self):
+        """A tela devolve a digital do dono. Qualquer falha e o MESMO 401
+        (`RECUSA`): motivo por causa diria a quem tenta o que ja acertou."""
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        uid = sessao["usuario_id"]
+        if not cortina.registrar_tentativa(
+                "usuario:%d" % uid, time.time(), balcao="ordem_assinar",
+                teto=self.TETO_DE_ORDENS_ASSINADAS):
+            return self._json(429, self.RECUSA)
+        numero = self._texto_do_corpo(corpo, "numero", teto=64)
+        cred_id = self._texto_do_corpo(corpo, "cred_id", teto=2048)
+        cliente = self._bytes_do_corpo(corpo, "cliente")
+        autenticador = self._bytes_do_corpo(corpo, "autenticador")
+        assinatura = self._bytes_do_corpo(corpo, "assinatura")
+        if (not numero or not cred_id or cliente is None
+                or autenticador is None or assinatura is None):
+            return self._json(401, self.RECUSA)
+        agora_s = self._segundos_agora()
+        ordem = banco.ordem_para_assinar(uid, numero, agora_s)
+        if ordem is None:
+            return self._json(401, self.RECUSA)
+        # A mesma regua do ajudante: bloco de 37 bytes, sem chave nova (AT) nem
+        # extensao (ED). A tela nao pode dizer "enviado" ao que o servidor
+        # vai recusar.
+        if len(autenticador) != 37 or autenticador[32] & (passkey.AT
+                                                          | passkey.ED):
+            return self._json(401, self.RECUSA)
+        guardada = banco.chave_de_acesso(cred_id)
+        if guardada is None or guardada["usuario_id"] != uid:
+            return self._json(401, self.RECUSA)
+        m = self._servidor_da_conta(uid, ordem["maquina_id"])
+        bloco = self._bloco_de_ordens(m) if m is not None else None
+        if bloco is None or banco.impressao_da_chave(
+                *guardada["chave"]) not in bloco["chaves"]:
+            return self._json(401, self.RECUSA)
+        # O texto e REMONTADO dos campos da linha, nunca lido pronto de lugar
+        # nenhum: o desafio que a digital cobriu tem de ser exatamente este.
+        texto = tarefas.texto_da_ordem({
+            "servidor": ordem["ident"], "tipo": ordem["tipo"],
+            "alvo": ordem["alvo"], "numero": ordem["numero"],
+            "criado": ordem["criado"], "vence": ordem["vence"]})
+        if texto is None:
+            return self._json(401, self.RECUSA)
+        lido = passkey.conferir_entrada(
+            cliente, autenticador, assinatura, guardada["chave"],
+            hashlib.sha256(texto.encode("ascii")).digest(), self._rp_id(),
+            ORIGENS_OK)
+        if lido is None:
+            return self._json(401, self.RECUSA)
+        # O contador so vale se for o BANCO a decidir (como no login).
+        if not banco.usar_chave_de_acesso(guardada["id"], lido["contador"]):
+            return self._json(401, self.RECUSA)
+        if not banco.assinar_ordem_de_servidor(
+                uid, numero, cred_id, passkey.b64url(cliente),
+                passkey.b64url(autenticador), passkey.b64url(assinatura),
+                agora_s):
+            return self._json(401, self.RECUSA)
+        return self._json(200, {"ok": True})
+
+    def _agente_servidor_ordens(self):
+        """O ajudante busca a proxima ordem ASSINADA. No maximo uma, e uma vez
+        so: quem nao levar `rowcount == 1` no UPDATE nao entrega."""
+        maquina = self._maquina_do_servidor()
+        if maquina is None:
+            return
+        if not cortina.registrar_tentativa(
+                "maquina:%d" % maquina["id"], time.time(),
+                balcao="servidor_ordens", teto=self.TETO_DE_BUSCAS_DE_ORDEM):
+            return self._json(429, self.RECUSA)
+        if not self._veio_como_json():
+            return
+        if self._corpo_json(teto=4096) is None:
+            return self._json(400, {"erro": "corpo invalido"})
+        ordem = banco.entregar_ordem_de_servidor(
+            maquina["id"], maquina["usuario_id"], self._segundos_agora())
+        return self._json(200, {"ordem": ordem})
+
+    def _agente_servidor_desfecho(self):
+        """O ajudante conta o que aconteceu. Lista fechada, em combinacao: so o
+        desfecho DELE diz que algo foi feito (Lei 2)."""
+        maquina = self._maquina_do_servidor()
+        if maquina is None:
+            return
+        if not cortina.registrar_tentativa(
+                "maquina:%d" % maquina["id"], time.time(),
+                balcao="servidor_desfecho", teto=self.TETO_DE_DESFECHOS):
+            return self._json(429, self.RECUSA)
+        if not self._veio_como_json():
+            return
+        corpo = self._corpo_json(teto=4096)
+        torto = {"erro": "corpo invalido"}
+        if corpo is None or set(corpo) != {"numero", "desfecho", "codigo",
+                                           "motivo"}:
+            return self._json(400, torto)
+        numero, desfecho = corpo["numero"], corpo["desfecho"]
+        codigo, motivo = corpo["codigo"], corpo["motivo"]
+        inteiro = isinstance(codigo, int) and not isinstance(codigo, bool)
+        combina = (
+            (desfecho == "feita" and codigo == 0 and inteiro
+             and motivo is None)
+            or (desfecho == "falhou" and inteiro and 1 <= codigo <= 255
+                and motivo is None)
+            or (desfecho == "recusada" and codigo is None
+                and motivo in tarefas.MOTIVOS_DA_RECUSA)
+            or (desfecho == "nao_sei" and codigo is None and motivo is None))
+        if (not combina or not isinstance(numero, str) or len(numero) != 32
+                or not all(c in "0123456789abcdef" for c in numero)):
+            return self._json(400, torto)
+        if not banco.desfecho_da_ordem_de_servidor(
+                maquina["id"], maquina["usuario_id"], numero, desfecho, codigo,
+                motivo, self._segundos_agora()):
+            return self._json(404, {"erro": "nao achei"})
+        return self._json(200, {"ok": True})
+
+    @staticmethod
+    def _bloco_de_ordens(m: dict):
+        """O bloco `ordens` da medicao, SO se a medicao ainda vale (`medido`)
+        e ele esta inteiro. Senao None: "so olha" e "nao sei" nao tem botao."""
+        dados = m.get("dados")
+        bloco = dados.get("ordens") if isinstance(dados, dict) else None
+        if (isinstance(bloco, dict) and isinstance(bloco.get("chaves"), list)
+                and isinstance(bloco.get("voltaveis"), list)
+                and regras.estado_do_servidor(m.get("medido_em")) == "medido"):
+            return bloco
+        return None
+
+    # O painel mostra as 5 ordens assinadas mais novas de cada servidor.
+    PEDIDOS_NO_PAINEL = 5
+
+    @staticmethod
+    def _pedido_do_painel(o: dict, agora_s: int) -> dict:
+        """Um item de `pedidos` (I5). O estado e calculado AQUI, com o relogio
+        do DERVS: so o `desfecho` que o ajudante contou diz que algo foi feito,
+        feito ou nao."""
+        def em(carimbo):
+            try:
+                return datetime.fromisoformat(carimbo).timestamp()
+            except (TypeError, ValueError):
+                return 0
+        codigo = motivo = None
+        desfecho = o.get("desfecho")
+        if desfecho == "feita":
+            estado, quando = "feito", o.get("terminada_em")
+        elif desfecho == "falhou":
+            estado, quando, codigo = "nao_deu", o.get("terminada_em"), \
+                o.get("codigo")
+        elif desfecho == "recusada":
+            estado, quando, motivo = "recusado", o.get("terminada_em"), \
+                o.get("motivo")
+        elif desfecho == "nao_sei":
+            estado, quando = "nao_sei", o.get("terminada_em")
+        elif o.get("entregue_em") is None:
+            quando = o.get("assinada_em")
+            estado = ("enviado" if agora_s - em(quando) <= banco.ENTREGA_ATE
+                      else "nao_pegou")
+        else:
+            quando = o.get("entregue_em")
+            estado = ("fazendo"
+                      if agora_s - em(quando) <= banco.ORDEM_FAZENDO_ATE
+                      else "sem_resposta")
+        return {"numero": o["numero"], "tipo": o["tipo"], "alvo": o["alvo"],
+                "estado": estado, "quando": quando, "codigo": codigo,
+                "motivo": motivo}
+
+    @staticmethod
+    def _servidor_ligado(m: dict, chaves=(), pedidos=None,
+                         agora_s: int = 0) -> dict:
+        """Um item de `servidores_ligados` (C5): sem `imagem` nem `sha`.
+
+        `chaves` sao as chaves vivas da conta (com a publica); `pedidos`, as
+        ordens assinadas do servidor. Sem o bloco `ordens` valido, `ordens` e
+        `None` e nada e reiniciavel (I5)."""
         dados = m.get("dados")
         medido = isinstance(dados, dict)
-        sistemas = [
-            {k: s.get(k) for k in ("nome", "projeto", "estado", "saude",
-                                   "desde", "reinicios")}
-            for s in ((dados or {}).get("sistemas") or [])
-            if isinstance(s, dict)] if medido else []
+        bloco = Hub._bloco_de_ordens(m)
+        sistemas = []
+        for s in (((dados or {}).get("sistemas") or []) if medido else []):
+            if not isinstance(s, dict):
+                continue
+            item = {k: s.get(k) for k in ("nome", "projeto", "estado", "saude",
+                                          "desde", "reinicios")}
+            bloqueado = (tarefas.projeto_bloqueado(item["nome"])
+                         or tarefas.projeto_bloqueado(item["projeto"]))
+            item["reiniciavel"] = bloco is not None and not bloqueado
+            item["bloqueado"] = bloqueado
+            sistemas.append(item)
+        ordens = None
+        if bloco is not None:
+            conhecidas = set(bloco["chaves"])
+            vivas = [banco.impressao_da_chave(c["x"], c["y"]) for c in chaves]
+            ordens = {
+                "chaves_ok": any(v in conhecidas for v in vivas),
+                "linha_velha": conhecidas != set(vivas[:5]),
+                "voltaveis": [p for p in bloco["voltaveis"]
+                              if not tarefas.projeto_bloqueado(p)],
+                "pedidos": [Hub._pedido_do_painel(o, agora_s)
+                            for o in (pedidos or [])]}
         mudo = (dados or {}).get("docker_mudo")
         return {"maquina_id": m["maquina_id"], "nome": m["nome"],
                 "estado": regras.estado_do_servidor(m.get("medido_em")),
@@ -2146,7 +2508,8 @@ class Hub(SimpleHTTPRequestHandler):
                 "docker_mudo": mudo if medido and isinstance(mudo, bool)
                 else None,
                 "sistemas": sorted(sistemas,
-                                   key=lambda s: str(s.get("nome")))}
+                                   key=lambda s: str(s.get("nome"))),
+                "ordens": ordens}
 
     @staticmethod
     def _no_ar_do_projeto(p: dict, medicoes: list) -> list:
@@ -4530,6 +4893,20 @@ ROTAS = {
     "/ajudante/servidor.py":    Rota("GET",  Hub._ajudante_do_servidor,
                                      "aberta"),
     "/api/ajudante/linha":      Rota("GET",  Hub._ajudante_linha,   "dado"),
+
+    # Os pedidos ao servidor (Conectar simples, C). As duas da tela sao `dado`
+    # e escrevem: Origin, anti-CSRF e balcao proprio por conta. As duas do
+    # ajudante sao `maquina` e so atendem `tipo='servidor'` (403 antes do
+    # balcao). Nada aqui executa: o DERVS prepara, guarda e entrega; quem
+    # confere e faz e o ajudante.
+    "/api/maquinas/ordem/preparar": Rota("POST", Hub._maquina_ordem_preparar,
+                                         "dado"),
+    "/api/maquinas/ordem/assinar":  Rota("POST", Hub._maquina_ordem_assinar,
+                                         "dado"),
+    "/agente/servidor/ordens":      Rota("POST", Hub._agente_servidor_ordens,
+                                         "maquina"),
+    "/agente/servidor/desfecho":    Rota("POST", Hub._agente_servidor_desfecho,
+                                         "maquina"),
 }
 # A capa e servida a qualquer visitante, entao a folha de estilo e o teclado da
 # cortina precisam ser abertos. Estes dois nao: quem os carrega e o
