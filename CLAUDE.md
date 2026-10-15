@@ -649,6 +649,11 @@ I0-I6: `docs/superpowers/plans/dervs-conectar-acoes-c.md`. O que quebra em silê
 - **Dívidas nomeadas:** a F-2 (VM com Docker/systemd/`visudo` de verdade, e o PIN do
   Windows de verdade) não foi feita; na VPS, só depois de publicar e de duas revisões de
   segurança, porque ela hospeda o Ajudei.
+  Menores, da revisão de 15/10/2026: cancelar a digital deixa o servidor "ocupado" por até
+  5 min (409 com frase enganosa); o desfecho não é reenviado se a rede falhar (vira "não
+  sei" em 30 min); `voltaveis` só se atualiza colando a linha de novo;
+  `_comando_de_publicar_ok` usa `lstat` (deploy como link simbólico desliga o voltar);
+  "sudo"/"Docker" aparecem na prosa da tela da entrega B.
 
 ## Testes
 
