@@ -554,15 +554,13 @@ class AsRotasDosPedidos(unittest.TestCase):
             usados[balcao] = nome
         self.assertEqual(4, len(usados))        # nenhum emprestado do outro
 
-    def test_preparar_chama_o_helper_unico_de_projeto_bloqueado(self):
-        """A forma antiga (`.lower() in PROJETOS_BLOQUEADOS`) deixou
-        `Ajudei_Saude` escapar de cinco pontos em 01/10/2026."""
+    def test_preparar_nao_bloqueia_projeto(self):
+        """Decisao do dono (15/10/2026): nenhum projeto e bloqueado nos
+        pedidos ao servidor. Nem o helper nem a lista voltam ao preparar."""
         import inspect
         fonte = inspect.getsource(servir.Hub._maquina_ordem_preparar)
-        self.assertIn("tarefas.projeto_bloqueado(", fonte)
-        self.assertNotRegex(fonte, r"\.lower\(\)\s+in\s+")
+        self.assertNotIn("projeto_bloqueado", fonte)
         self.assertNotIn("PROJETOS_BLOQUEADOS", fonte)
-        self.assertIn("tarefas.projeto_bloqueado(r)", fonte)   # o rotulo
 
 
 if __name__ == "__main__":

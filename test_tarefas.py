@@ -427,8 +427,8 @@ class OTextoDaOrdem(unittest.TestCase):
     def test_a_lista_de_motivos_e_a_do_contrato(self):
         self.assertEqual(
             ("forma", "outro_servidor", "vencida", "assinatura", "desafio",
-             "origem", "aparelho", "bloqueado", "desconhecido", "repetida",
-             "cheio", "teto"), tarefas.MOTIVOS_DA_RECUSA)
+             "origem", "aparelho", "desconhecido", "repetida", "cheio",
+             "teto"), tarefas.MOTIVOS_DA_RECUSA)
 
 
 if __name__ == "__main__":

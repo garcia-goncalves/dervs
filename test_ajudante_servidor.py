@@ -206,8 +206,8 @@ class OFonteObedeceAsLeis(unittest.TestCase):
                     "montado fora das tuplas")
 
     def test_acusa_subprocess_dentro_de_outra_funcao_dos_pedidos(self):
-        self._acusa("def _bloqueado(nome):",
-                    "def _bloqueado(nome):\n    subprocess.call(['x'])", "fora de `rodar`")
+        self._acusa("def _ponto_de(par):",
+                    "def _ponto_de(par):\n    subprocess.call(['x'])", "fora de `rodar`")
 
     def test_acusa_execucao_pelo_os_e_pty(self):
         self._acusa("def _root():", "def _root():\n    os.execv('x', ['x'])\n"
@@ -899,16 +899,18 @@ class OSudoersExato(DosPedidos):
 
     def test_uma_linha_por_projeto_e_nada_mais(self):
         self.ligar()
-        self.assertEqual(self.linhas_esperadas("grimoire", "dervs"),
+        self.assertEqual(self.linhas_esperadas("grimoire", "dervs", "ajudei-saude", "ajudei-saude-web"),
                          self.sudoers().read_text())
 
-    def test_nenhum_curinga_e_nenhum_bloqueado_ou_torto(self):
+    def test_nenhum_curinga_e_nenhum_torto(self):
+        """Nenhum projeto e bloqueado (decisao do dono, 15/10/2026): o
+        Ajudei entra como qualquer outro; so o nome torto fica de fora."""
         self.ligar()
         texto = self.sudoers().read_text()
         self.assertNotIn("*", texto)
-        for fora in ("ajudei", "Maiuscula", "com.ponto", "ALL=(ALL)"):
+        for fora in ("Maiuscula", "com.ponto", "ALL=(ALL)"):
             self.assertNotIn(fora, texto)
-        self.assertEqual(["grimoire", "dervs"], self.config()["voltaveis"])
+        self.assertEqual(["grimoire", "dervs", "ajudei-saude", "ajudei-saude-web"], self.config()["voltaveis"])
 
     def test_grava_confere_e_so_entao_troca(self):
         d = Dubles(roteiro_abrir=roteiro_feliz())
@@ -927,7 +929,7 @@ class OSudoersExato(DosPedidos):
         self.assertEqual(["visudo", "-cf"], argv[:2])
         self.assertTrue(argv[-1].endswith(".dervs-ajudante.novo"))
         self.assertFalse(final_existia)
-        self.assertEqual(self.linhas_esperadas("grimoire", "dervs"), conteudo)
+        self.assertEqual(self.linhas_esperadas("grimoire", "dervs", "ajudei-saude", "ajudei-saude-web"), conteudo)
         self.assertFalse(Path(argv[-1]).exists())
         self.assertTrue(self.sudoers().exists())
 
@@ -1096,13 +1098,14 @@ class AsChavesDaLinha(DosPedidos):
         corpo = d.requisicoes[-1][2]
         self.assertEqual({"versao": 1, "ident": self.config()["ident"],
                           "chaves": [aj.impressao(*aj.G)],
-                          "voltaveis": ["grimoire", "dervs"]}, corpo["ordens"])
+                          "voltaveis": ["grimoire", "dervs", "ajudei-saude",
+                                        "ajudei-saude-web"]}, corpo["ordens"])
 
     def test_diz_em_portugues_o_que_ficou_ligado(self):
         _, _, saidas = self.ligar()
         texto = "\n".join(saidas)
         self.assertIn("Pedidos ligados: reiniciar sistemas; voltar a versao de: "
-                      "grimoire, dervs. O Ajudei fica de fora sempre.", texto)
+                      "grimoire, dervs, ajudei-saude, ajudei-saude-web.", texto)
         self.assertTrue(texto.isascii())
 
     def test_enable_que_falha_deixa_os_pedidos_desligados_e_a_medicao_ligada(self):

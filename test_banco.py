@@ -4162,8 +4162,14 @@ class AsOrdensDeServidor(unittest.TestCase):
             tipo, alvo, self.numero(i), quando or self.AGORA, con=self.con)
 
     def assinar(self, i=1, uid=None, quando=None):
+        # A entrega so solta ordem assinada por chave VIVA da conta.
+        cred = "cred" if (uid or self.a) == self.a else "cred-%d" % uid
+        self.con.execute(
+            "INSERT OR IGNORE INTO chave_de_acesso (usuario_id, cred_id,"
+            " chave_x, chave_y, criado_em) VALUES (?, ?, '1', '2', 'x')",
+            (uid or self.a, cred))
         return banco.assinar_ordem_de_servidor(
-            uid or self.a, self.numero(i), "cred", "c", "a", "s",
+            uid or self.a, self.numero(i), cred, "c", "a", "s",
             quando or self.AGORA, con=self.con)
 
     def test_os_checks_da_tabela(self):
