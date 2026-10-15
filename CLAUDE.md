@@ -755,6 +755,11 @@ I0-I6: `docs/superpowers/plans/dervs-conectar-acoes-c.md`. O que quebra em silê
 
 ## Publicação
 
+- **A tarefa de deploy só publica com a PASTA no ramo `main`** (`scripts/deploy-vps.ps1`
+  recusa outro ramo e não envia nada). Em 15/10/2026 a pasta ficou no ramo da entrega C
+  depois do merge e o "deploy" do dono não publicou nada: as rotas novas seguiam 404.
+  Depois de mesclar, `git checkout main && git pull` ANTES de pedir o deploy; e confira
+  depois, rota nova sem sessão = 401 (inexistente = 404).
 - **Deploy pelo VS Code (desde 25/09/2026).** Commit + push para a `main`, e a
   tarefa **"Deploy para a VPS"** (`.deploy-vps`, `scripts/deploy-vps.*`). O
   servidor faz backup do volume `dervs-dados`, monta a imagem ali mesmo
