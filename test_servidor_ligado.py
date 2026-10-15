@@ -473,14 +473,19 @@ class OsDadosDoPainel(_Base):
         estado = self.dados()
         s = estado["servidores_ligados"][0]
         self.assertEqual({"maquina_id", "nome", "estado", "medido_em",
-                          "docker_mudo", "sistemas"}, set(s))
+                          "docker_mudo", "sistemas", "ordens"}, set(s))
+        # Entrega C (I5): medicao sem o bloco de pedidos -> `ordens` nulo.
+        self.assertIsNone(s["ordens"])
         self.assertEqual((m["id"], "vps-ovh", "medido", False),
                          (s["maquina_id"], s["nome"], s["estado"],
                           s["docker_mudo"]))
         self.assertEqual([{"nome": "clinica-web", "projeto": "clinicaagenda",
                            "estado": "running", "saude": "healthy",
                            "desde": "2026-10-08T12:00:00+00:00",
-                           "reinicios": 2}], s["sistemas"])
+                           "reinicios": 2,
+                           # Entrega C (I5): sem pedidos, nada e reiniciavel.
+                           "reiniciavel": False}],
+                         s["sistemas"])
         n = self.projeto(estado)["no_ar"]
         self.assertEqual(1, len(n))
         self.assertEqual({"maquina_id", "servidor", "estado", "medido_em",

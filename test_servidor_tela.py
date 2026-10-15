@@ -37,7 +37,13 @@ FUNCOES = ("criar", "haQuanto", "hora", "marcaDaPorta", "botaoEmAcoes", "detalhe
            "desdeQuando", "linhaDeSistema", "linhaDeServidorLigado",
            "listaDeServidoresLigados", "blocoDaLinhaDoAjudante", "cartaoDosServidores", "ligarUmServidor",
            "linhaDoNoAr", "linhasDoNoAr", "fecharFluxoDosServidores",
-           "ligarFluxoDosServidores", "desligarServidor")
+           "ligarFluxoDosServidores", "desligarServidor",
+           # Entrega C (pedidos ao servidor): as que as de cima passaram a chamar.
+           # Os casos delas moram em test_pedidos_tela.py.
+           "linhaParaColar", "fraseDoPedido", "fraseDoMotivo", "fraseDoErroDePedido", "ultimoPedido",
+           "pedidoEmAndamento", "estadoDoPedido", "botaoDePedido", "faixaDoPedido", "linkParaConta",
+           "blocoDosPedidos", "base64urlParaBytes", "bytesParaBase64url", "pedirAoServidor",
+           "fazerOPedido")
 
 ESTADO_INICIAL = r"""
 let ESTADO = null;

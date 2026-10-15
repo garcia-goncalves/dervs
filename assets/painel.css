@@ -579,6 +579,47 @@ main { padding-bottom: var(--e12); }
   border: 1px dashed var(--estado-quebrado);
 }
 
+/* "Olhe isto": nem erro, nem sucesso (o servidor não pegou o pedido). Borda
+   tracejada-curta, uma forma a mais; o rótulo escrito continua obrigatório. */
+.marca[data-cor="atencao"] {
+  background: var(--estado-atencao-fraco);
+  color: var(--estado-atencao);
+  border: 2px dashed var(--estado-atencao);
+}
+
+/* ------------------------------------------- pedidos ao servidor (entrega C)
+   Fica aqui, ao lado da marca, e não no fim do arquivo: o guarda de CSS da
+   seção "Progresso" lê dali até o fim e proíbe `--estado-`. Só tokens que já
+   existem. Em 360px o botão vai embaixo do nome, na largura cheia e com alvo de
+   toque de 44px (o `.acoes .botao` já garante a altura); os nomes quebram em
+   qualquer ponto e a página nunca rola de lado. */
+.pedido { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: var(--e2); }
+.pedido__frase { overflow-wrap: anywhere; min-width: 0; }
+.sistema-do-servidor .acoes, .voltavel .acoes { margin-top: 0; flex: 1 1 100%; }
+.sistema-do-servidor .acoes .botao, .voltavel .acoes .botao { justify-content: center; width: 100%; }
+@media (min-width: 40rem) {
+  .sistema-do-servidor .acoes, .voltavel .acoes { flex: 0 0 auto; margin-left: auto; }
+  .sistema-do-servidor .acoes .botao, .voltavel .acoes .botao { width: auto; }
+}
+.voltavel { display: flex; flex-wrap: wrap; align-items: center; gap: var(--e2); }
+.voltavel .nome { overflow-wrap: anywhere; }
+.pedidos { display: flex; flex-direction: column; gap: var(--e2); }
+.pedidos__voltar { border-top: 1px solid var(--borda); padding-top: var(--e3); display: flex; flex-direction: column; gap: var(--e2); }
+.pedidos__voltar h3, .pedidos__voltar p, .pedido-solto { margin: 0; }
+.faixa-do-pedido {
+  margin: 0;
+  padding: var(--e2) var(--e3);
+  background: var(--fundo-elevado);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+  overflow-wrap: anywhere;
+}
+.faixa-do-pedido--atencao {
+  background: var(--estado-atencao-fraco);
+  border-color: var(--estado-atencao);
+}
+.servidor-ligado .botao[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+
 .marca__glifo { font-family: var(--fonte-mono); }
 
 /* O TERCEIRO ESTADO, e ele é de primeira classe. "Não deu para conferir" não é

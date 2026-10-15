@@ -156,8 +156,17 @@ class BaseServidorDeVerdade(unittest.TestCase):
         cls._banco_antigo = banco.BANCO
         banco.BANCO = cls.caminho
 
+        # A combinacao local de sempre e "000000", e seis zeros aparecem por
+        # acaso em arquivo publico (o primo da P-256 no ajudante do servidor):
+        # "nenhuma resposta traz a combinacao" ficaria vermelho sem vazamento
+        # nenhum. Um numero sem padrao faz o guarda distinguir as duas coisas.
+        combinacao_de_sempre = cortina.COMBINACAO_LOCAL
+        cortina.COMBINACAO_LOCAL = "583217"
         con = banco.conectar()
-        cls.combinacao = cortina.garantir_combinacao(con) or "000000"
+        try:
+            cls.combinacao = cortina.garantir_combinacao(con) or "583217"
+        finally:
+            cortina.COMBINACAO_LOCAL = combinacao_de_sempre
         cls.uid = banco.criar_usuario("dono@teste.local", con=con)
         banco.ligar_github(cls.uid, "4242", con=con)
         con.close()

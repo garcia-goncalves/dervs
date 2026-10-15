@@ -599,6 +599,62 @@ sessao erraria:
   `--format`, `ProtectSystem=strict` com o soquete); revisao de seguranca obrigatoria antes de
   ligar na VPS que hospeda outros sistemas.
 
+## Os pedidos ao servidor (entrega C, 10/2026)
+
+O ajudante aceita **dois** pedidos assinados pela chave de acesso do dono: reiniciar
+(`ARGV_DO_REINICIO`) e voltar (`ARGV_DA_VOLTA`, `deploy <p> --voltar`). Plano e contratos
+I0-I6: `docs/superpowers/plans/dervs-conectar-acoes-c.md`. O que quebra em silêncio:
+
+- **Desligado por padrão nas DUAS pontas.** Sem `/etc/dervs-ajudante/ordens.json` o
+  subcomando `ordens` sai 0 sem tocar a rede; no DERVS, `ordens: null` na medição faz
+  `preparar` responder 409 `so_olha`. Tirar uma ponta deixa a outra sozinha segurando.
+  Colar a linha *Só olhar* apaga as duas unidades novas, o `sudoers.d` e a pasta.
+- **A ordem (C0) é REMONTADA dos campos dos dois lados**, nunca lida pronta:
+  `ajudante_servidor.texto_da_ordem` e `tarefas.texto_da_ordem` têm de dar a mesma string
+  (campo a mais também é `None`), e `test_acoes_fio.AsDuasPontasMontamAMesmaOrdem` cobra.
+  Mudar uma linha de um lado só invalida toda assinatura em silêncio.
+- **O vetor de fora é FIXO** (`test_ajudante_acoes.VETOR_DE_FORA`, OpenSSL, `rp_id`
+  `dervs.com.br`). Por isso existem duas costuras só para teste: `Hub._numero_da_ordem()` e
+  `Hub._segundos_agora()`, e `ordens(agora=...)` no ajudante. Não as remova nem as use fora
+  de teste. As chaves privadas do vetor foram apagadas; não há como re-assinar, só gerar de novo.
+- **A conta P-256 do ajudante é CÓPIA de `p256.py`** (o ajudante não importa nada do
+  repositório): `AContaP256EAMesmaDoP256` compara por `ast.dump`. Mexeu em `p256.py`,
+  copie igual.
+- **`sudoers` em pedaços, nunca uma linha literal** (o `secret-scan` barra NOPASSWD+`:` +
+  caminho): uma linha por projeto voltável, sem `*`, gravada em
+  `.dervs-ajudante.novo`, `visudo -cf` e só então `os.replace`.
+- **A unidade dos pedidos é OUTRA** (`dervs-ajudante-ordens.service`) e NÃO tem
+  `NoNewPrivileges`, `CapabilityBoundingSet`, `ProtectSystem` nem `UMask` — sem isso o
+  `sudo` não roda. A unidade da B continua byte a byte igual e mais fechada; não "alinhe"
+  uma com a outra (`AUnidadeDosPedidos`).
+- **Prazos:** só se entrega ordem assinada há até `banco.ENTREGA_ATE` (120 s, senão
+  `nao_pegou`); entregue sem desfecho ocupa a máquina `ORDEM_FAZENDO_ATE` (1800 s, depois
+  `sem_resposta`). A ordem vence em 300 s, e o ajudante tem teto de 6 por hora.
+- **Nenhum projeto é bloqueado nos pedidos (decisão do dono, 15/10/2026).** O Ajudei
+  reinicia e volta como qualquer outro; a proteção é o toque, a lista fechada e o teto.
+  O ajudante não tem lista de bloqueio nem o motivo `bloqueado`, e
+  `test_ajudante_acoes.NenhumProjetoEBloqueado` reprova se ele voltar a uma ponta só: a
+  tela já prometeu "todo dado de saúde" enquanto o código só pegava o nome `ajudei-saude`.
+- **A chave que assinou tem de estar viva na ENTREGA**, não só na assinatura:
+  `banco.entregar_ordem_de_servidor` confere `chave_de_acesso.revogada_em IS NULL` no
+  SELECT e no UPDATE. Revogar o aparelho desiste do que ele assinou e ainda não saiu.
+- **A frase é a mesma letra por letra:** `Hub._frase_do_pedido` e `fraseDoPedido`
+  (`painel.js`), com aspas curvas; `AFraseEAMesma` cobra em node.
+- **A promessa honesta** ("o aparelho mostra só dervs.com.br") está na tela, no roteiro e
+  em `A-APLICACAO.md` §5.8. Não a enfraqueça para "ninguém consegue": é falso.
+- **`PROJETOS_BLOQUEADOS` ainda vive no RESTO do DERVS** (auditoria, consertar,
+  desenvolver, provas, fila, execução, `/agente/voz/pedido`). Sai numa entrega própria
+  (memória `nenhum-projeto-bloqueado`); só os pedidos ao servidor já estão sem ele.
+- **O DERVS-VOZ não pede ação no servidor**: nenhuma rota `/agente/voz/*` mudou.
+- **Dívidas nomeadas:** a F-2 (VM com Docker/systemd/`visudo` de verdade, e o PIN do
+  Windows de verdade) não foi feita; na VPS, só depois de publicar e de duas revisões de
+  segurança, porque ela hospeda o Ajudei.
+  Menores, da revisão de 15/10/2026: cancelar a digital deixa o servidor "ocupado" por até
+  5 min (409 com frase enganosa); o desfecho não é reenviado se a rede falhar (vira "não
+  sei" em 30 min); `voltaveis` só se atualiza colando a linha de novo;
+  `_comando_de_publicar_ok` usa `lstat` (deploy como link simbólico desliga o voltar);
+  "sudo"/"Docker" aparecem na prosa da tela da entrega B.
+
 ## Testes
 
 - Cada `test_*.py` é um passo próprio na CI, listado **à mão** em
