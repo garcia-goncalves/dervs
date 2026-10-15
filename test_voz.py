@@ -621,15 +621,17 @@ class AServidorDeVerdade(unittest.TestCase):
         self.assertEqual((cruzado.status, cruzado.corpo),
                          (inexistente.status, inexistente.corpo))
 
-    def test_o_voz_nao_conserta_regra_de_seguranca_nem_projeto_bloqueado(self):
+    def test_o_voz_nao_conserta_regra_de_seguranca_mas_nenhum_projeto_e_bloqueado(self):
         r = self._pedir_conserto(
             self.t_a1, {"tipo": "enfileirar_conserto", "alerta_id": "x"},
             pendencias=[self._pend("x", regra="dependencia_insegura")])
         self.assertEqual(r.status, 403, r.corpo)
+        # Decisao do dono (15/10/2026): o Ajudei nao e recusado pelo nome.
         r = self._pedir_conserto(
             self.t_a1, {"tipo": "enfileirar_conserto", "alerta_id": "y"},
             pendencias=[self._pend("y", projeto="ajudei-saude")])
-        self.assertEqual(r.status, 403, r.corpo)
+        self.assertNotEqual(r.status, 403, r.corpo)
+        self.assertNotIn("bloquead", r.corpo)
 
     def test_o_pedido_do_voz_valida_tudo_e_exige_token(self):
         ok = {"tipo": "enfileirar_conserto", "alerta_id": "memoria_crlf:dervs"}

@@ -65,8 +65,6 @@ def trilho_de(pendencia: dict) -> str:
     projeto = (pendencia.get("projeto") or "").strip()
     if not projeto:
         return ""
-    if tarefas.projeto_bloqueado(projeto):
-        return ""
     return REGRAS_MECANICAS.get((pendencia.get("regra") or "").strip(), "")
 
 

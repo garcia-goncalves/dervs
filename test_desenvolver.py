@@ -300,7 +300,7 @@ class OPedidoDeDesenvolvimento(BaseServidorDeVerdade):
             "documento nao aprovado")
 
     def test_projeto_bloqueado_e_403_com_qualquer_caixa(self):
-        for nome in ("Ajudei-Saude", "ajudei-saude", "medconsultoria", "CCVP",
+        for nome in ("medconsultoria", "CCVP",
                      "zacareli", "sophia", "camargo-e-soares", "aninha-site",
                      "Nexa-x", "meu-nexa", "NEXA"):
             with self.subTest(projeto=nome):
@@ -593,22 +593,26 @@ class OsFatosDaTarefaDesenvolver(unittest.TestCase):
         self.assertFalse(tarefas.NUNCA_VERDE & tarefas.SEMPRE_VERMELHA)
 
     def test_projetos_que_nao_se_desenvolvem(self):
-        for nome in ("ajudei-saude", "Ajudei-Saude", "medconsultoria", "ccvp",
+        for nome in ("medconsultoria", "ccvp",
                      "zacareli", "sophia", "camargo-e-soares", "aninha-site",
                      "Nexa-x", "x-nexa-y", "NEXA", "", None, 7):
             with self.subTest(nome=nome):
                 self.assertFalse(tarefas.projeto_pode_desenvolver(nome))
+        # Decisao do dono (15/10/2026): nenhum projeto e bloqueado por dado
+        # sensivel. O Ajudei se desenvolve como qualquer projeto do dono.
+        for nome in ("ajudei-saude", "Ajudei-Saude", "Ajudei_Saude"):
+            with self.subTest(nome=nome):
+                self.assertTrue(tarefas.projeto_pode_desenvolver(nome))
         for nome in ("dervs", "dervs-voz", "grimoire"):
             with self.subTest(nome=nome):
                 self.assertTrue(tarefas.projeto_pode_desenvolver(nome))
 
     def test_nome_bloqueado_nao_escapa_por_separador_nem_sufixo(self):
-        for nome in ("ajudei-saude-web", "Ajudei_Saude", "ajudei saude",
-                     "ajudei.saude", "AJUDEI_SAUDE_api", "aninha-site-v2",
+        for nome in ("aninha-site-v2",
                      "aninha_site", "Aninha.Site", "ccvp-admin", "CCVP",
                      "medconsultoria_site", "zacareli.app", "sophia-2",
                      "camargo-e-soares-web", "camargo_e_soares",
-                     "  ajudei-saude  ", "nexa_core", "meu.nexa", "NEXA-x"):
+                     "  ccvp  ", "nexa_core", "meu.nexa", "NEXA-x"):
             with self.subTest(nome=nome):
                 self.assertFalse(tarefas.projeto_pode_desenvolver(nome))
         # parecidos que NAO sao bloqueados: prefixo so vale na fronteira de
@@ -619,34 +623,25 @@ class OsFatosDaTarefaDesenvolver(unittest.TestCase):
             with self.subTest(nome=nome):
                 self.assertTrue(tarefas.projeto_pode_desenvolver(nome))
 
-    def test_helper_unico_projeto_bloqueado(self):
-        for nome in ("ajudei-saude", "Ajudei_Saude", "ajudei saude",
-                     "AJUDEI.SAUDE-web", "  ajudei-saude "):
-            with self.subTest(nome=nome):
-                self.assertTrue(tarefas.projeto_bloqueado(nome))
-        for nome in ("dervs", "ajudei", "ajudei-saudavel", "ccvp", "", None, 7):
-            with self.subTest(nome=nome):
-                self.assertFalse(tarefas.projeto_bloqueado(nome))
-
-    def test_os_cinco_pontos_usam_o_helper_e_nao_o_nome_exato(self):
-        """Antes, auditoria/consertar/execucao/fila comparavam o nome exato em
-        minusculas e `Ajudei_Saude` escapava. Aqui o COMPORTAMENTO onde der e,
-        onde a funcao so roda com banco, o fonte."""
+    def test_nenhum_projeto_e_bloqueado_por_nome(self):
+        """Decisao do dono (15/10/2026): a lista de projetos bloqueados acabou
+        em todo o DERVS. A antiga so pegava `ajudei-saude` e prometia proteger
+        todo dado de saude. Se ela voltar a qualquer ponto, este caso acusa."""
         import fila
         self.assertEqual(fila.trilho_de(
-            {"projeto": "Ajudei_Saude", "regra": "memoria_crlf"}), "")
-        self.assertFalse(execucao.pode_resolver({"projeto": "Ajudei_Saude"}))
-        for arq in ("servir.py", "execucao.py", "fila.py"):
+            {"projeto": "Ajudei_Saude", "regra": "memoria_crlf"}), "mecanico")
+        self.assertTrue(execucao.pode_resolver({"projeto": "Ajudei_Saude"}))
+        self.assertFalse(hasattr(tarefas, "PROJETOS_BLOQUEADOS"))
+        self.assertFalse(hasattr(tarefas, "projeto_bloqueado"))
+        for arq in ("servir.py", "execucao.py", "fila.py", "tarefas.py"):
             fonte = (Path(__file__).resolve().parent / arq).read_text(
                 encoding="utf-8")
             with self.subTest(arquivo=arq):
-                self.assertNotIn(".lower() in tarefas.PROJETOS_BLOQUEADOS", fonte)
-                self.assertNotIn(".lower() in PROJETOS_BLOQUEADOS", fonte)
-                self.assertNotIn(".lower() in execucao.PROJETOS_BLOQUEADOS", fonte)
-                self.assertNotIn(".lower()\n                    not in tarefas.PROJETOS_BLOQUEADOS", fonte)
+                self.assertNotIn("PROJETOS_BLOQUEADOS", fonte)
+                self.assertNotIn("projeto_bloqueado(", fonte)
 
     def test_a_trava_do_agente_usa_a_mesma_normalizacao(self):
-        for nome in ("ajudei-saude-web", "Ajudei_Saude", "aninha-site-v2"):
+        for nome in ("ccvp-web", "Medconsultoria_Site", "aninha-site-v2"):
             with self.subTest(projeto=nome):
                 pode, motivo = tarefas.pode_rodar(
                     self.pendente(projeto=nome), 0.0, "", {}, {"executa": 1})
@@ -656,7 +651,7 @@ class OsFatosDaTarefaDesenvolver(unittest.TestCase):
     def test_o_agente_tambem_recusa_projeto_que_nao_se_desenvolve(self):
         """Segunda barreira, em `pode_rodar` (a pergunta que o AGENTE refaz):
         mesmo que o servidor deixasse passar, nao abre sessao."""
-        for nome in ("Nexa-x", "aninha-site", "ccvp", "ajudei-saude", ""):
+        for nome in ("Nexa-x", "aninha-site", "ccvp", "sophia", ""):
             with self.subTest(projeto=nome):
                 pode, motivo = tarefas.pode_rodar(
                     self.pendente(projeto=nome), 0.0, "", {}, {"executa": 1})

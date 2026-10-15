@@ -109,13 +109,12 @@ class Elegibilidade(unittest.TestCase):
     def test_sem_remoto_fica_de_fora(self):
         self.assertEqual(fila.trilho_de(self._p("sem_remoto")), "")
 
-    def test_projeto_bloqueado_nao_entra_nem_com_regra_aceita(self):
-        bloqueado = sorted(fila.execucao.PROJETOS_BLOQUEADOS)[0]
-        self.assertEqual(fila.trilho_de(self._p("memoria_crlf", bloqueado)), "")
-
-    def test_bloqueio_ignora_caixa_alta(self):
-        bloqueado = sorted(fila.execucao.PROJETOS_BLOQUEADOS)[0].upper()
-        self.assertEqual(fila.trilho_de(self._p("memoria_crlf", bloqueado)), "")
+    def test_nenhum_projeto_e_bloqueado(self):
+        """Decisao do dono (15/10/2026): o Ajudei entra na fila como qualquer
+        outro; quem decide e a regra e o clique, nao o nome do projeto."""
+        for nome in ("ajudei-saude", "AJUDEI-SAUDE"):
+            self.assertEqual(
+                fila.trilho_de(self._p("memoria_crlf", nome)), "mecanico", nome)
 
     def test_pendencia_sem_projeto_nao_tem_onde_agir(self):
         self.assertEqual(fila.trilho_de(self._p("memoria_crlf", "")), "")

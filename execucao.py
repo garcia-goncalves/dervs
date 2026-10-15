@@ -120,12 +120,6 @@ FERRAMENTAS_PROIBIDAS_NA_AUDITORIA = [
     "Task", "WebFetch", "WebSearch",
 ]
 
-# MUDOU DE CASA (revisao de seguranca de 02/09/2026) para `tarefas.py`: o
-# SERVIDOR precisa desta lista para recusar o pedido de auditoria de um
-# projeto bloqueado, e nao pode importar `execucao` (`test_rotas.AMPUTADOS`).
-# O nome continua aqui, e e' o MESMO objeto — nao ha uma segunda lista.
-PROJETOS_BLOQUEADOS = tarefas.PROJETOS_BLOQUEADOS
-
 # As 7 frases da linha de status, literais do design.md. Ficam aqui, e nao no
 # HTML, porque quem sabe em que pe a sessao esta e quem le os eventos.
 FRASE_COPIA = "Preparando uma cópia isolada de %s"
@@ -379,10 +373,7 @@ def montar_prompt(pendencia: dict) -> str:
 
 def pode_resolver(pendencia: dict) -> bool:
     """Ha o que resolver? Pendencia sem projeto (cota_actions) nao tem onde."""
-    projeto = (pendencia.get("projeto") or "").strip()
-    if not projeto:
-        return False
-    return not tarefas.projeto_bloqueado(projeto)
+    return bool((pendencia.get("projeto") or "").strip())
 
 
 def interpretar_linha(bruto):

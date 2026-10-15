@@ -204,11 +204,13 @@ guarda de código-fonte cobrando a ausência daquela linha no `SET`, porque a ch
 composta tornou o defeito **código morto** — e teste de comportamento não acusa
 código que não roda.
 
-**`PROJETOS_BLOQUEADOS` mora em `tarefas.py`.** Mudou de casa porque
-`_auditoria_pedir` precisa dela e `servir.py` não pode importar `execucao`.
-`execucao.py` **reexporta o mesmo objeto**, e um teste cobra a identidade (`is`).
-A comparação é insensível a caixa — havia um teste provando que `Ajudei-Saude`
-escapava.
+**Não existe lista de projetos bloqueados (decisão do dono, 15/10/2026).** A
+antiga `PROJETOS_BLOQUEADOS` saiu de todo o DERVS: só pegava o nome
+`ajudei-saude` e prometia proteger "todo dado de saúde" (Lei 2). A proteção é o
+clique do dono, a lista fechada de regras e os tetos.
+`test_desenvolver.test_nenhum_projeto_e_bloqueado_por_nome` reprova se ela
+voltar. **Não confunda** com `tarefas.PROJETOS_SEM_DESENVOLVIMENTO`: essa fica,
+e é sobre **dono** (TineHost, André, `aninha-site`), não sobre dado sensível.
 
 **Quem pede auditoria só pede dos projetos da própria conta**, e "não existe" e
 "não é seu" devolvem **a mesma resposta**. A tabela `fila` não tem `usuario_id`:
@@ -271,8 +273,9 @@ vez por servidor por sessão (nunca a cada repintura — cada medição pode lev
   `fila.py`: `servir.py` não pode importar `fila`. `fila.py` reexporta o mesmo
   objeto (teste de identidade). Fica **fora** dela `dependencia_insegura`,
   `auditoria_vencida` e todo achado de segurança — IA em segurança só com revisão.
-- **`consertavel` em `/api/dados` é posto DEPOIS do motor** e sai falso em projeto
-  de `PROJETOS_BLOQUEADOS`. Botão que o servidor sempre recusaria é botão que mente.
+- **`consertavel` em `/api/dados` é posto DEPOIS do motor**, e vem só da regra
+  (nenhum projeto é bloqueado desde 15/10/2026). Botão que o servidor sempre
+  recusaria é botão que mente: a condição tem de ser a mesma da rota.
 - **O id da fila leva o dono** (`regra:usuario:id_da_pendência`), pelo mesmo
   motivo da auditoria. `INSERT OR IGNORE` devolve 0 para linha existente em
   QUALQUER estado; por isso o pedido repetido lê a linha (com `usuario_id` no
@@ -358,11 +361,9 @@ a próxima sessão erraria:
   bloqueia por prefixo na fronteira do `-`. `test_progresso_fio.py` prova o fio
   inteiro (briefing real -> `/agente/relatorio` -> `/api/dados` e `/api/progresso`
   -> campos que o `painel.js` lê): renomear um campo de um lado só reprova.
-- **Quem pergunta "projeto bloqueado?" chama `tarefas.projeto_bloqueado`
-  (01/10/2026).** Cinco pontos comparavam `.lower() in PROJETOS_BLOQUEADOS` e
-  `Ajudei_Saude` escapava de auditoria, consertar, fila e execução. Comparação
-  nova só pelo helper (normaliza e bloqueia por prefixo na fronteira do `-`);
-  `test_desenvolver` lê o fonte e reprova a forma antiga. `so_dado` também
+- **"Pode desenvolver aqui?" só por `tarefas.projeto_pode_desenvolver`**
+  (normaliza `_`/espaço/`.` e recusa por prefixo na fronteira do `-`). O helper
+  `projeto_bloqueado` saiu em 15/10/2026, junto com a lista. `so_dado` também
   normaliza NFKC e tira caracteres Cf (`＜`, zero-width) e não tem mais
   backtracking quadrático (`\s{0,16}`, não `\s*`).
 - **O corte do leitor nunca é mudo.** Passar de `MAX_VARRIDOS` abertos ou de
@@ -642,9 +643,10 @@ I0-I6: `docs/superpowers/plans/dervs-conectar-acoes-c.md`. O que quebra em silê
   (`painel.js`), com aspas curvas; `AFraseEAMesma` cobra em node.
 - **A promessa honesta** ("o aparelho mostra só dervs.com.br") está na tela, no roteiro e
   em `A-APLICACAO.md` §5.8. Não a enfraqueça para "ninguém consegue": é falso.
-- **`PROJETOS_BLOQUEADOS` ainda vive no RESTO do DERVS** (auditoria, consertar,
-  desenvolver, provas, fila, execução, `/agente/voz/pedido`). Sai numa entrega própria
-  (memória `nenhum-projeto-bloqueado`); só os pedidos ao servidor já estão sem ele.
+- **`PROJETOS_BLOQUEADOS` saiu do resto do DERVS também** (auditoria, consertar,
+  desenvolver, provas, fila, execução, `/agente/voz/pedido`), em entrega própria
+  logo depois desta. O Ajudei agora só fica de fora de `desenvolver`/`provar` se
+  aparecer em `PROJETOS_SEM_DESENVOLVIMENTO` — e ele não está lá.
 - **O DERVS-VOZ não pede ação no servidor**: nenhuma rota `/agente/voz/*` mudou.
 - **Dívidas nomeadas:** a F-2 (VM com Docker/systemd/`visudo` de verdade, e o PIN do
   Windows de verdade) não foi feita; na VPS, só depois de publicar e de duas revisões de

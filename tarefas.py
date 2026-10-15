@@ -60,18 +60,16 @@ MAX_TENTATIVAS = 2
 # e mais facil que o contrario (a mesma logica de TETO_DIARIO_BRL, acima).
 TETO_AUDITORIA_USD = 1.50
 
-# Decisao do dono no portao de risco: prontuario sob LGPD fica fora da entrega
-# 1. Comparacao sempre em minusculas. MUDOU DE CASA (revisao de seguranca de
-# 02/09/2026): `servir._auditoria_pedir` precisa desta lista para nao
-# enfileirar auditoria de um projeto bloqueado, e o servidor nao pode importar
-# `execucao` (`test_rotas.AMPUTADOS`). `execucao.py` reexporta o MESMO
-# objeto — nao ha uma segunda lista no repositorio.
-PROJETOS_BLOQUEADOS = {"ajudei-saude"}
+# Nao ha lista de projetos bloqueados (decisao do dono, 15/10/2026: "nao quero
+# deixar nenhum projeto de lado"). A lista antiga so pegava o nome
+# `ajudei-saude` e prometia proteger "todo dado de saude" — garantia que o
+# codigo nao cumpria (Lei 2). A protecao e o clique do dono, a lista fechada de
+# regras e os tetos. `test_desenvolver` reprova se a lista voltar.
 
 # As regras que o botao "Consertar com IA" do painel pode enfileirar. So as
 # MECANICAS e seguras: `dependencia_insegura`, `auditoria_vencida` e os achados
 # de seguranca ficam de fora (a IA nao mexe em seguranca sem revisao humana).
-# Mora aqui, e nao em `fila.py`, pelo mesmo motivo de PROJETOS_BLOQUEADOS:
+# Mora aqui, e nao em `fila.py`, porque
 # `servir.py` aplica o filtro e nao pode importar `fila` (`test_rotas.AMPUTADOS`,
 # e o Dockerfile nao leva `fila.py`). `fila.py` reexporta o MESMO objeto, e
 # `test_fila` cobra que e subconjunto de `REGRAS_MECANICAS`.
@@ -248,11 +246,12 @@ SEMPRE_VERMELHA = frozenset({"desenvolver", "provar"})
 PROVAR = "provar"
 EXECUTOR_DA_PROVA = "prova"
 
-# Projetos em que o DERVS nao desenvolve nada (mais todo nome com "nexa", que e
-# do Andre). Somam-se a `PROJETOS_BLOQUEADOS`: dado de paciente, os cinco da
-# TineHost (revenda, sem runner) e o `aninha-site`. Comparacao em minusculas.
+# Projetos que NAO SAO DO DONO, e por isso o DERVS nao desenvolve neles (mais
+# todo nome com "nexa", que e do Andre): os cinco da TineHost (revenda, sem
+# runner) e o `aninha-site`. Nao e bloqueio por dado sensivel — esse nao existe
+# mais (15/10/2026); o Ajudei saiu desta lista. Comparacao normalizada.
 PROJETOS_SEM_DESENVOLVIMENTO = frozenset({
-    "ajudei-saude", "medconsultoria", "ccvp", "zacareli", "sophia",
+    "medconsultoria", "ccvp", "zacareli", "sophia",
     "camargo-e-soares", "aninha-site"})
 
 # Toda regra nasce vermelha. Nao ha lista de regras verdes escrita aqui: o
@@ -264,18 +263,6 @@ def _nome_normalizado(nome: str) -> str:
     """Minusculas, e `_`, espaco e `.` viram `-`: "Ajudei_Saude" e "ajudei.saude"
     sao o mesmo projeto que "ajudei-saude" para quem quer contornar a lista."""
     return re.sub(r"[_\s.]+", "-", nome.strip().lower())
-
-
-def projeto_bloqueado(nome) -> bool:
-    """O projeto esta em `PROJETOS_BLOQUEADOS`? Um helper so, para todo ponto que
-    pergunta isso (auditoria, consertar, fila, execucao, tela). Comparacao
-    normalizada e por prefixo na fronteira do `-`: `Ajudei_Saude` e
-    `ajudei-saude-web` sao o mesmo projeto bloqueado. Nome que nao e texto: False
-    (quem chama ja trata ausencia em outro lugar)."""
-    if not isinstance(nome, str):
-        return False
-    n = _nome_normalizado(nome)
-    return any(n == b or n.startswith(b + "-") for b in PROJETOS_BLOQUEADOS)
 
 
 # ---------------------------------------------------------------------------
@@ -344,11 +331,11 @@ def texto_da_ordem(campos):
 def projeto_pode_desenvolver(nome) -> bool:
     """O DERVS pode desenvolver neste projeto? Falha fechada: duvida e NAO.
 
-    Nome que nao e texto, vazio, bloqueado, da TineHost, do Andre (qualquer
-    nome com "nexa") ou o `aninha-site` dao `False` — igual ao nome da lista OU
-    comecando por ele na fronteira do `-` (`ajudei-saude-web`, `aninha-site-v2`).
+    Nome que nao e texto, vazio, da TineHost, do Andre (qualquer nome com
+    "nexa") ou o `aninha-site` dao `False` — igual ao nome da lista OU
+    comecando por ele na fronteira do `-` (`aninha-site-v2`).
     A comparacao e sempre normalizada: houve um teste provando que
-    `Ajudei-Saude` escapava de outra lista igual a esta. A fronteira do `-`
+    `Ajudei-Saude` escapava de uma lista igual a esta. A fronteira do `-`
     poupa os parecidos legitimos (`ccvpx`, `sophiana`).
     """
     if not isinstance(nome, str):
@@ -356,8 +343,8 @@ def projeto_pode_desenvolver(nome) -> bool:
     n = _nome_normalizado(nome)
     if not n or "nexa" in n:
         return False
-    for bloqueado in PROJETOS_BLOQUEADOS | PROJETOS_SEM_DESENVOLVIMENTO:
-        if n == bloqueado or n.startswith(bloqueado + "-"):
+    for de_outro_dono in PROJETOS_SEM_DESENVOLVIMENTO:
+        if n == de_outro_dono or n.startswith(de_outro_dono + "-"):
             return False
     return True
 

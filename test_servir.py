@@ -3678,31 +3678,16 @@ class OPedidoDeAuditoriaERecusadoFechado(BaseServidorDeVerdade):
             con.close()
 
     # ------------------------------------------------------------- defeito 2
-    def test_defeito2_projeto_bloqueado_nao_entra_na_fila_pela_rota(self):
-        """O cenario: uma conta com sessao manda
-        `{"projeto": "ajudei-saude"}`. Sem esta trava a tarefa entra elegivel,
-        e a maquina clona e roda uma sessao do Claude Code LENDO UM
-        REPOSITORIO DE PRONTUARIO SOB LGPD, excluido de proposito de
-        `execucao.PROJETOS_BLOQUEADOS`.
-
-        A rota escrevia `trilho: "claude"` a mao, pulando `fila.trilho_de` —
-        o unico lugar que aplicava a lista.
-        """
-        bloqueado = sorted(tarefas.PROJETOS_BLOQUEADOS)[0]
-        self.com_projeto(bloqueado)          # ele E um projeto desta conta
-        r = self.pedir_auditoria(bloqueado)
-        self.assertEqual(r.status, 403, r.corpo)
-        self.assertEqual(self.na_fila(bloqueado), 0,
-                         "o projeto bloqueado entrou na fila de auditoria")
-
-    def test_defeito2_o_bloqueio_nao_se_escapa_com_maiuscula(self):
-        """`fila.trilho_de` compara em minusculas. A rota tem de fazer o
-        mesmo, senao `Ajudei-Saude` atravessa."""
-        bloqueado = sorted(tarefas.PROJETOS_BLOQUEADOS)[0].upper()
-        self.com_projeto(bloqueado)
-        r = self.pedir_auditoria(bloqueado)
-        self.assertEqual(r.status, 403, r.corpo)
-        self.assertEqual(self.na_fila(bloqueado), 0)
+    def test_defeito2_saiu_nenhum_projeto_e_bloqueado_na_auditoria(self):
+        """O antigo defeito 2 (a rota pulava a lista de bloqueados) deixou de
+        existir com a lista: decisao do dono, 15/10/2026. O Ajudei, sendo
+        projeto DESTA conta, entra na fila de auditoria como qualquer outro —
+        e a auditoria continua esperando o clique e o teto."""
+        self.com_projeto("Ajudei-Saude")
+        r = self.pedir_auditoria("Ajudei-Saude")
+        self.assertNotEqual(r.status, 403, r.corpo)
+        self.assertNotIn("bloquead", r.corpo)
+        self.assertEqual(self.na_fila("Ajudei-Saude"), 1)
 
     # ------------------------------------------------------------- defeito 3
     def test_defeito3_projeto_da_conta_vizinha_nao_entra_na_fila(self):
@@ -4141,11 +4126,11 @@ class OBotaoConsertarComIA(BaseServidorDeVerdade):
         for p in fora:
             self.assertIs(p["consertavel"], False, p["id"])
 
-    def test_projeto_bloqueado_nao_e_consertavel_nem_com_caixa_diferente(self):
-        # A rota recusa com 403; a tela nao pode oferecer um botao que sempre falha.
+    def test_o_ajudei_e_consertavel_como_qualquer_projeto(self):
+        # Decisao do dono (15/10/2026): nenhum projeto e bloqueado.
         self.com_projeto("Ajudei-Saude", memoria_crlf=["a.md"])
         pend = {p["id"]: p for p in self.dados()["pendencias"]}
-        self.assertIs(pend["memoria_crlf:Ajudei-Saude"]["consertavel"], False)
+        self.assertIs(pend["memoria_crlf:Ajudei-Saude"]["consertavel"], True)
 
     def test_a_poda_e_depois_do_motor_montar_estado_ainda_tem_os_alertas(self):
         """Terceiro teste da poda (CLAUDE.md): `consertavel` e posto sobre o
@@ -4296,13 +4281,14 @@ class OBotaoConsertarComIA(BaseServidorDeVerdade):
                          {"erro": "esta regra nao e consertada por aqui"})
         self.assertEqual(self.linhas_da_fila(), [])
 
-    def test_projeto_bloqueado_com_maiuscula_e_403(self):
-        nome = sorted(tarefas.PROJETOS_BLOQUEADOS)[0].title()
+    def test_o_ajudei_entra_na_fila_de_conserto(self):
+        # Decisao do dono (15/10/2026): nenhum projeto e bloqueado. A tarefa
+        # nasce esperando o "Pode fazer", como a de qualquer projeto.
+        nome = "Ajudei-Saude"
         self.com_projeto(nome, memoria_crlf=["a.md"])
         r = self.consertar("memoria_crlf:%s" % nome)
-        self.assertEqual(r.status, 403, r.corpo)
-        self.assertEqual(json.loads(r.corpo), {"erro": "projeto bloqueado"})
-        self.assertEqual(self.linhas_da_fila(), [])
+        self.assertNotEqual(r.status, 403, r.corpo)
+        self.assertEqual(len(self.linhas_da_fila()), 1)
 
     # ------------------------------------------------------------------ avisos
     def aviso_de(self, nome):

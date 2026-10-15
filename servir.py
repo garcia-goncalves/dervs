@@ -910,11 +910,8 @@ class Hub(SimpleHTTPRequestHandler):
             # cru que o motor le os achados. A regra vem de UMA constante, a
             # mesma que `_consertar_pedir` confere do lado do servidor.
             for x in pend:
-                # Projeto bloqueado sai FALSO aqui: a rota o recusaria com 403, e
-                # um botao que sempre falha e um botao que mente.
                 x["consertavel"] = (
-                    x.get("regra") in tarefas.REGRAS_CONSERTAVEIS_PELA_TELA
-                    and not tarefas.projeto_bloqueado(x.get("projeto")))
+                    x.get("regra") in tarefas.REGRAS_CONSERTAVEIS_PELA_TELA)
             tend = memoria.tendencia(con, agora_iso)
             guardadas = banco.arquivadas_detalhe(usuario_id=usuario_id, con=con)
             provas_da_conta = banco.provas_da_conta(usuario_id, con=con)
@@ -3933,11 +3930,10 @@ class Hub(SimpleHTTPRequestHandler):
         `auditoria.EXECUTOR` — a MESMA constante usada em `auditoria.py` e
         `banco.enfileirar`, nunca a string escrita a mao duas vezes.
 
-        Duas travas antes de escrever, achadas na revisao de seguranca de
-        02/09/2026: o projeto tem de ser DESTA conta (`banco.montar_estado`),
-        e nao pode estar em `tarefas.PROJETOS_BLOQUEADOS` — a mesma lista que
-        `fila.trilho_de` aplica, comparada em minusculas para nao se escapar
-        com maiuscula. "Nao existe" e "nao e seu" devolvem a MESMA resposta:
+        Uma trava antes de escrever, achada na revisao de seguranca de
+        02/09/2026: o projeto tem de ser DESTA conta (`banco.montar_estado`).
+        (A segunda, a lista de projetos bloqueados, saiu por decisao do dono
+        em 15/10/2026.) "Nao existe" e "nao e seu" devolvem a MESMA resposta:
         distinguir diria a quem tem sessao quais projetos existem na conta do
         vizinho.
         """
@@ -3960,8 +3956,6 @@ class Hub(SimpleHTTPRequestHandler):
                           for p in estado["projetos"]}
         if projeto.lower() not in nomes_da_conta:
             return self._json(404, {"erro": "projeto nao encontrado"})
-        if tarefas.projeto_bloqueado(projeto):
-            return self._json(403, {"erro": "projeto bloqueado"})
         # O DONO entra NO ID, e nao so na coluna. `fila.id` continua sendo
         # TEXT PRIMARY KEY global (nao (usuario_id, id), como `achado`), e
         # sem o dono aqui duas contas com projeto de mesmo nome colidiam no
@@ -4067,8 +4061,6 @@ class Hub(SimpleHTTPRequestHandler):
         projeto = alvo.get("projeto") or ""
         if regra not in tarefas.REGRAS_CONSERTAVEIS_PELA_TELA:
             return 403, {"erro": "esta regra nao e consertada por aqui"}
-        if tarefas.projeto_bloqueado(projeto):
-            return 403, {"erro": "projeto bloqueado"}
         # O dono entra NO ID (fila.id e TEXT PRIMARY KEY global): sem ele, duas
         # contas com projeto de mesmo nome colidem e a segunda "pede" sem entrar.
         id_fila = "%s:%s:%s" % (regra, uid, pid)
