@@ -16,7 +16,9 @@ instala uma vez.
 - **Não lê** senhas, arquivos de configuração, variáveis dos sistemas nem os
   registros de funcionamento deles. Não guarda **quem** publicou: esse dado é
   descartado na leitura.
-- **Não recebe ordens** do DERVS e **não se atualiza sozinho**.
+- **Não recebe ordens** do DERVS e **não se atualiza sozinho** — salvo se você
+  colar a outra linha, a de **olhar e aceitar pedidos** (veja a seção com esse
+  nome). Por padrão, os pedidos ficam desligados.
 - **Para ficar de pé, a linha cria um usuário e um temporizador** no servidor.
   Você tira os dois quando quiser (veja "Como tirar").
 - **Roda separado**, num usuário só dele (`dervs-ajudante`), sem terminal de
@@ -89,6 +91,72 @@ propósito: um palpite com cara de certeza seria pior. A pasta do histórico
 costuma ser só do administrador; a instalação dá ao usuário do ajudante apenas
 **leitura** dela (por `setfacl`), se o programa existir no servidor.
 
+## Olhar e aceitar pedidos
+
+*Entrega C, 10/2026.* Além de olhar, o servidor pode aceitar **dois pedidos
+seus**, e nenhum outro: **reiniciar um sistema** que ele está vendo, e **voltar
+um projeto para a versão anterior** (a que estava no ar antes da última
+publicação). Ele não apaga, não para, não lê dados nem senhas e não aceita
+nenhuma ordem escrita.
+
+**Antes:** você precisa de uma **chave de acesso** cadastrada (a digital do
+celular ou o PIN do Windows), em **Conta → Formas de entrar**. Sem ela, a tela
+não mostra a linha com pedidos e explica como cadastrar.
+
+**Passo a passo:**
+
+1. Em **Conectar → Seus servidores → Ligar um servidor**, a tela mostra duas
+   linhas: **Só olhar** e **Olhar e aceitar pedidos**. Copie a segunda.
+2. Cole no terminal **do servidor** (o PuTTY ou o terminal do DERVS-VOZ) e
+   aperte Enter. Pode pedir a sua senha do servidor. Se o servidor já estava
+   ligado, ela troca o jeito dele sem perder o que ele já contou.
+3. **Se der certo**, o terminal diz:
+   `Pedidos ligados: reiniciar sistemas; voltar a versao de: <projetos>. O Ajudei fica de fora sempre.`
+   No painel, cada sistema ganha o botão **Reiniciar**, e aparece a lista de
+   projetos que podem voltar de versão.
+4. Para pedir: clique no botão, confira a frase (por exemplo
+   *Reiniciar o sistema “grimoire-web” no servidor “vps-ovh”*), confirme e
+   toque a digital ou digite o PIN. Em até 30 segundos o servidor pega o
+   pedido; a tela mostra *enviado*, *fazendo*, e por fim *feito* ou *não deu
+   certo* (com o código de saída).
+
+**Se der errado:**
+
+- `Pedidos ligados: reiniciar sistemas. Voltar a versao ficou de fora: ...` —
+  o reiniciar funciona; voltar não, pelo motivo escrito. Os três motivos:
+  *nenhum projeto deste servidor ja foi publicado* (publique pelo VS Code uma
+  vez e cole a linha de novo); *o programa de publicar nao esta onde ou como eu
+  espero* (o `/usr/local/bin/deploy` tem de existir, ser do administrador e não
+  aceitar escrita de mais ninguém); *o sistema nao aceitou a regra de voltar
+  versao* (o `visudo` reprovou a regra; nada foi gravado).
+- `As chaves da linha estao tortas; os pedidos NAO foram ligados.` — a linha
+  foi cortada ao copiar. Copie de novo, pelo botão **Copiar**.
+- `Nao consegui ... ficaram DESLIGADOS.` — o servidor continua só olhando.
+  Cole a linha de novo; se repetir, é sinal de `systemd` diferente do
+  esperado.
+- Na tela, *não pegou* = o servidor não buscou o pedido em 2 minutos, e nada
+  foi feito (confira se ele aparece como medido há pouco); *não sei* = pegou e
+  não contou como terminou em 30 minutos — confira o sistema na lista;
+  *recusado* = o próprio servidor conferiu e disse não, com o motivo.
+
+**Como desligar os pedidos:** cole no servidor a linha **Só olhar**. Os pedidos
+são desligados na hora (o servidor apaga o temporizador dos pedidos e a regra
+de voltar versão). O `remover` de "Como tirar" também desliga tudo.
+
+**O limite, com todas as letras.** O seu aparelho não mostra **qual** pedido
+você está aprovando — ele mostra só "dervs.com.br". Sem um toque seu, nada
+acontece. Mas se alguém tomasse o dervs.com.br, **cada toque seu poderia virar
+um pedido diferente do que a tela mostrou** — sempre um dos dois da lista,
+nunca no Ajudei, nunca um comando, nunca ler dado, e no máximo **6 por hora**.
+É por isso que o teto existe e que a lista é fechada no programa do servidor.
+
+**Onde ficam as peças dos pedidos:** a configuração em
+`/etc/dervs-ajudante/ordens.json`; os números já usados em
+`/var/lib/dervs-ajudante/numeros.json`; a regra de voltar versão em
+`/etc/sudoers.d/dervs-ajudante` (uma linha por projeto, sem curinga); o
+serviço e o temporizador em `/etc/systemd/system/dervs-ajudante-ordens.service`
+e `.timer`.
+
 ## Como tirar
 
 São dois passos, um em cada lado:
@@ -124,3 +192,10 @@ na unidade); a hora do histórico, que é a hora **local** do servidor — fuso
 diferente do esperado erra a hora, não o commit. A conferência numa máquina
 virtual, depois no servidor real, é a etapa F-2 do plano
 `docs/superpowers/plans/dervs-conectar-servidor-b.md`.
+
+Para os pedidos, o mesmo vale em dobro: os testes usam `visudo`, `sudo` e
+`docker restart` de mentira. **Só uma máquina de verdade confirma** que o
+`visudo -cf` aceita a regra, que o `sudo -n` funciona pela unidade dos pedidos,
+que o `deploy --voltar` volta mesmo, e que a digital ou o PIN do Windows assina
+de verdade. É a etapa F-2 de `docs/superpowers/plans/dervs-conectar-acoes-c.md`,
+e na VPS ela só acontece depois de publicar e de duas revisões de segurança.

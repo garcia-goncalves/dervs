@@ -654,6 +654,28 @@ repositórios ela mediu e um link para escolher repositórios no GitHub. Descone
 sendo no GitHub (revogar acesso mora do lado de quem dá o acesso). Briefing:
 `docs/esteira/github-varias-contas/briefing.md`.
 
+### 5.8 Os pedidos ao servidor (entrega C do Conectar simples, 10/2026)
+
+Um servidor ligado pode, **se o dono escolher**, aceitar **dois pedidos** pela tela:
+**reiniciar um sistema** que o ajudante está vendo e **voltar um projeto para a versão
+anterior** (`deploy <projeto> --voltar`). Nenhum outro — publicar ficou de fora, porque o
+servidor só publica a partir de um arquivo enviado pelo VS Code, e inventar outro caminho
+deixaria quem tomasse o site publicar o código dele.
+
+- **Desligado por padrão, nas duas pontas.** A tela oferece duas linhas: *Só olhar* e
+  *Olhar e aceitar pedidos*. Só a segunda liga, e colar a primeira desliga na hora.
+- **Cada pedido sai com a digital ou o PIN do dono** (chave de acesso), e é **o próprio
+  servidor** quem confere: o aparelho é do dono, o pedido tem no máximo 5 minutos, nunca foi
+  usado, e é um dos dois da lista. No máximo 6 por hora. O Ajudei e todo projeto com dado
+  de saúde ficam de fora **nas duas pontas**.
+- **A promessa honesta:** sem um toque do dono, nada acontece. Com o site tomado, cada
+  toque pode virar **um** pedido diferente do que a tela mostrou (o aparelho mostra só
+  "dervs.com.br"), sempre dentro da lista fechada. A tela diz isso com todas as letras.
+- **O DERVS-VOZ não ganha esse poder**: o pedido exige a assinatura do dono no navegador.
+
+Contrato: `docs/esteira/conectar-acoes/`; roteiro do dono:
+`docs/operacao/ligar-um-servidor.md`, seção "Olhar e aceitar pedidos".
+
 ## 13. Dívidas conhecidas, ainda abertas
 
 - ~~**A porta 2 nunca falou com o GitHub de verdade.**~~ **Fechado em 04/09/2026 (PR #25),
