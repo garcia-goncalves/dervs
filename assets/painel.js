@@ -3295,15 +3295,12 @@ function linhaDeSistema(x, s) {
   }
   if (partes.length) li.append(criar("span", "carimbo", partes.join(" · ")));
   /* Entrega C: só num servidor que aceita pedidos. O botão exige `reiniciavel
-     === true` (nunca "não é falso") e uma chave de acesso viva; o bloqueado
-     diz por que não tem botão, em vez de só sumir com ele. */
+     === true` (nunca "não é falso") e uma chave de acesso viva. */
   const o = s && s.ordens ? s.ordens : null;
   if (o) {
     const feito = ultimoPedido(s, "reiniciar", x.nome);
     if (feito) li.append(estadoDoPedido(feito));
-    if (x.bloqueado === true) {
-      li.append(criar("span", "carimbo", "fica de fora: guarda dado de saúde"));
-    } else if (x.reiniciavel === true && o.chaves_ok !== false) {
+    if (x.reiniciavel === true && o.chaves_ok !== false) {
       li.append(botaoDePedido(s, "reiniciar", x.nome, "Reiniciar"));
     }
   }
@@ -3330,7 +3327,6 @@ function fraseDoMotivo(motivo) {
     teto: "já foram 6 pedidos na última hora, o máximo. Tente de novo mais tarde.",
     vencida: "o pedido chegou depois dos 5 minutos. Peça de novo.",
     repetida: "este pedido já tinha sido usado.",
-    bloqueado: "este sistema guarda dado de saúde e fica de fora sempre.",
     desconhecido: "o servidor não encontrou esse sistema ou projeto agora.",
     outro_servidor: "o pedido era para outra ligação deste servidor. Recarregue a página e peça de novo.",
     cheio: "o servidor está com pedidos demais guardados. Tente daqui a 5 minutos."
@@ -3352,9 +3348,6 @@ function fraseDoErroDePedido(status, motivo) {
       sem_chave: "Nenhum aparelho seu é conhecido por este servidor. Cole a linha com pedidos de novo."
     };
     if (Object.prototype.hasOwnProperty.call(frases, motivo)) return frases[motivo];
-  }
-  if (status === 403 && motivo === "bloqueado") {
-    return "Este sistema guarda dado de saúde e fica de fora sempre.";
   }
   if (status === 404) return "Não achei este servidor na sua conta. Recarregue a página.";
   if (status === 400) return "Esse sistema não está mais na medição. Recarregue a página.";
@@ -3805,15 +3798,16 @@ function blocoDaLinhaDoAjudante(d) {
         + "nem senhas e não aceita nenhuma ordem escrita. Um pedido novo só existe numa versão nova deste "
         + "programa, que você colaria de novo."),
       criar("p", "mole", "Cada pedido sai com a sua digital ou o seu PIN, e é o próprio servidor quem "
-        + "confere que foi o seu aparelho, que o pedido é recente e que ainda não foi usado. O Ajudei e "
-        + "qualquer sistema com dado de saúde ficam de fora sempre, nas duas pontas."));
+        + "confere que foi o seu aparelho, que o pedido é recente e que ainda não foi usado."));
     const limite = criar("p", "mole");
     limite.append(criar("strong", "", "O limite, com todas as letras: "),
       "o seu aparelho não mostra qual pedido você está aprovando — ele mostra só “dervs.com.br”. Se "
       + "alguém tomasse o dervs.com.br, poderia trocar o pedido na hora do seu toque. Sem um toque seu, "
       + "nada acontece. Com o site tomado, cada toque vira no máximo um pedido desta lista — reiniciar "
-      + "um sistema ou voltar um projeto liberado —, nunca no Ajudei, nunca um comando, e no máximo 6 por "
-      + "hora em cada servidor. Se o seu aparelho pedir a digital sem você ter clicado em “Pode fazer”, recuse.");
+      + "um sistema ou voltar um projeto liberado —, nunca um comando, e no máximo 6 por hora em cada "
+      + "servidor. Se o seu aparelho pedir a digital sem você ter clicado em “Reiniciar” ou “Voltar” e "
+      + "confirmado com “Pode fazer”, recuse. Vale também ao entrar no DERVS: o toque de entrar é um só; "
+      + "se o aparelho pedir de novo logo depois, recuse.");
     fazPedidos.append(limite,
       criar("p", "mole", "Para isso, a linha dá ao programa do servidor a permissão de voltar a versão só "
         + "dos que ela lista, um por um, e de reiniciar os sistemas que ele vê. Para tirar tudo: cole a "

@@ -12,8 +12,8 @@ OpenSSL; aqui entram so as chaves PUBLICAS (a privada foi apagada).
 
 O que a conta P-256 do ajudante tem de ser: a MESMA do `p256.py` (comparada por
 `ast`, ja sem o docstring) e a que bate com a RFC 6979 A.2.5. Os casos que
-precisam de uma ordem para um alvo que o vetor nao cobre (bloqueado,
-desconhecido, repetida, teto...) usam um assinador de TESTE: ele so serve para
+precisam de uma ordem para um alvo que o vetor nao cobre (desconhecido,
+repetida, teto...) usam um assinador de TESTE: ele so serve para
 rotear a ordem ate a conferencia que se quer provar, nunca para provar a conta.
 """
 
@@ -470,32 +470,22 @@ class AsOnzeConferencias(unittest.TestCase):
         # chave sincronizada (BE/BS ligados) e normal
         self.assertIsNone(confere(ordem_de_teste(flags=0x1D)))
 
-    def test_9_voltar_bloqueado_pelo_nome_do_projeto(self):
-        # `voltar` so aceita minusculas e hifen; a variacao de caixa e de `_`
-        # so passa pela forma em `reiniciar` (testado abaixo).
+    def test_9_nenhum_projeto_e_bloqueado_pelo_nome(self):
+        """Decisao do dono (15/10/2026): o Ajudei passa como qualquer outro.
+        A protecao e o toque, a lista fechada e o teto."""
         for nome in ("ajudei-saude", "ajudei-saude-web"):
             with self.subTest(nome):
-                self.assertEqual("bloqueado", confere(
+                self.assertIsNone(confere(
                     ordem_de_teste("voltar", nome), config(voltaveis=[nome])))
-
-    def test_9_reiniciar_bloqueado_pelo_nome_do_conteiner(self):
-        for nome in ("ajudei-saude", "Ajudei_Saude", "ajudei.saude-web"):
+        for nome, rotulo in (("ajudei-saude", "outro"), ("Ajudei_Saude", "x"),
+                             ("grimoire-web", "ajudei-saude")):
             with self.subTest(nome):
-                self.assertEqual("bloqueado", confere(
-                    ordem_de_teste("reiniciar", nome), sist=sistemas((nome, "outro"))))
+                self.assertIsNone(confere(
+                    ordem_de_teste("reiniciar", nome),
+                    sist=sistemas((nome, rotulo))))
 
-    def test_9_reiniciar_bloqueado_pelo_rotulo_de_projeto(self):
-        """O nome do conteiner e inocente; o projeto dele nao."""
-        for rotulo in ("ajudei-saude", "Ajudei_Saude"):
-            with self.subTest(rotulo):
-                self.assertEqual("bloqueado", confere(
-                    ordem_de_teste("reiniciar", "grimoire-web"),
-                    sist=sistemas(("grimoire-web", rotulo))))
-
-    def test_9_vem_antes_do_alvo_conhecido(self):
-        """Bloqueado e bloqueado mesmo que o alvo nem exista: o motivo nao
-        revela se o sistema existe."""
-        self.assertEqual("bloqueado", confere(
+    def test_9_o_ajudei_que_nao_existe_e_so_desconhecido(self):
+        self.assertEqual("desconhecido", confere(
             ordem_de_teste("reiniciar", "ajudei-saude"), sist=sistemas()))
 
     def test_10_desconhecido(self):
@@ -852,33 +842,27 @@ class OFazer(unittest.TestCase):
     def test_o_motivo_e_a_lista_fechada(self):
         self.assertEqual(
             ("forma", "outro_servidor", "vencida", "assinatura", "desafio", "origem",
-             "aparelho", "bloqueado", "desconhecido", "repetida", "cheio", "teto"),
+             "aparelho", "desconhecido", "repetida", "cheio", "teto"),
             aj.MOTIVOS_DA_RECUSA)
 
 
 # ----------------------------------------------------------------- C11
 
-class OBloqueioEOMesmoDoDervs(unittest.TestCase):
+class NenhumProjetoEBloqueado(unittest.TestCase):
+    """Decisao do dono (15/10/2026). Se o bloqueio voltar a uma ponta so, a
+    tela volta a prometer o que o servidor nao cumpre."""
 
-    def test_o_conjunto_e_o_mesmo(self):
-        self.assertEqual(frozenset(tarefas.PROJETOS_BLOQUEADOS), aj.PROJETOS_BLOQUEADOS)
+    def test_o_ajudante_nao_tem_lista_de_bloqueio(self):
+        self.assertFalse(hasattr(aj, "PROJETOS_BLOQUEADOS"))
+        self.assertFalse(hasattr(aj, "_bloqueado"))
+        with open(aj.__file__, encoding="ascii") as f:
+            fonte = f.read().lower()
+        self.assertNotIn("bloquead", fonte)
+        self.assertNotIn("ajudei", fonte)
 
-    def test_a_resposta_e_a_mesma_numa_tabela_de_variacoes(self):
-        for nome in ("Ajudei-Saude", "ajudei_saude", "AJUDEI SAUDE", "ajudei.saude-web",
-                     "ajudeisaude", "ajudei-saudex", "grimoire", "", " ajudei-saude ",
-                     "ajudei--saude", "ajudei-saude-", "dervs"):
-            with self.subTest(nome):
-                self.assertEqual(tarefas.projeto_bloqueado(nome), aj._bloqueado(nome))
-
-    def test_o_que_tem_de_ser_bloqueado_e(self):
-        for nome in ("Ajudei-Saude", "ajudei_saude", "AJUDEI SAUDE", "ajudei.saude-web"):
-            self.assertTrue(aj._bloqueado(nome), nome)
-        for nome in ("ajudeisaude", "ajudei-saudex", "grimoire"):
-            self.assertFalse(aj._bloqueado(nome), nome)
-
-    def test_nao_texto_nao_e_bloqueado(self):
-        self.assertEqual(tarefas.projeto_bloqueado(None), aj._bloqueado(None))
-        self.assertFalse(aj._bloqueado(7))
+    def test_o_motivo_bloqueado_saiu_das_duas_pontas(self):
+        self.assertNotIn("bloqueado", aj.MOTIVOS_DA_RECUSA)
+        self.assertEqual(tarefas.MOTIVOS_DA_RECUSA, aj.MOTIVOS_DA_RECUSA)
 
 
 # ----------------------------------------------------------------- C2

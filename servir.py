@@ -2118,8 +2118,7 @@ class Hub(SimpleHTTPRequestHandler):
                 ("chaves", lambda v: isinstance(v, str) and len(v) == 16
                  and all(c in "0123456789abcdef" for c in v),
                  self.MAX_CHAVES_DE_ORDENS),
-                ("voltaveis", lambda v: self._nome_de_projeto_valido(v)
-                 and not tarefas.projeto_bloqueado(v),
+                ("voltaveis", self._nome_de_projeto_valido,
                  self.MAX_ITENS_DA_MEDICAO)):
             itens = bloco.get(chave)
             if not isinstance(itens, list):
@@ -2239,7 +2238,7 @@ class Hub(SimpleHTTPRequestHandler):
         """O dono pediu uma ordem: confere tudo, grava e devolve o desafio.
 
         A ordem do desafio e a do contrato: dono (404 igual para "nao existe"
-        e "nao e seu") -> bloqueado -> so olha -> sem dados -> alvo medido ->
+        e "nao e seu") -> so olha -> sem dados -> alvo medido ->
         chave que o servidor conhece -> vaga da maquina."""
         corpo, sessao = self._guarda_de_escrita()
         if corpo is None:
@@ -2260,13 +2259,6 @@ class Hub(SimpleHTTPRequestHandler):
             return self._json(404, {"erro": "nao achei"})
         sistemas = [s for s in ((m.get("dados") or {}).get("sistemas") or [])
                     if isinstance(s, dict)]
-        # O bloqueio olha o NOME e, para reiniciar, tambem o projeto do
-        # sistema (o rotulo): `ajudei-db` leva o rotulo `ajudei-saude`.
-        rotulos = [s.get("projeto") for s in sistemas
-                   if s.get("nome") == alvo] if tipo == "reiniciar" else []
-        if tarefas.projeto_bloqueado(alvo) or any(
-                tarefas.projeto_bloqueado(r) for r in rotulos):
-            return self._json(403, {"motivo": "bloqueado"})
         dados = m.get("dados")
         if not (isinstance(dados, dict)
                 and isinstance(dados.get("ordens"), dict)):
@@ -2485,10 +2477,7 @@ class Hub(SimpleHTTPRequestHandler):
                 continue
             item = {k: s.get(k) for k in ("nome", "projeto", "estado", "saude",
                                           "desde", "reinicios")}
-            bloqueado = (tarefas.projeto_bloqueado(item["nome"])
-                         or tarefas.projeto_bloqueado(item["projeto"]))
-            item["reiniciavel"] = bloco is not None and not bloqueado
-            item["bloqueado"] = bloqueado
+            item["reiniciavel"] = bloco is not None
             sistemas.append(item)
         ordens = None
         if bloco is not None:
@@ -2497,8 +2486,7 @@ class Hub(SimpleHTTPRequestHandler):
             ordens = {
                 "chaves_ok": any(v in conhecidas for v in vivas),
                 "linha_velha": conhecidas != set(vivas[:5]),
-                "voltaveis": [p for p in bloco["voltaveis"]
-                              if not tarefas.projeto_bloqueado(p)],
+                "voltaveis": list(bloco["voltaveis"]),
                 "pedidos": [Hub._pedido_do_painel(o, agora_s)
                             for o in (pedidos or [])]}
         mudo = (dados or {}).get("docker_mudo")

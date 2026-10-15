@@ -6,7 +6,7 @@ anterior"; o servidor faz, e cada pedido so anda com a digital ou o PIN. O que a
 tela nao pode fazer, e nenhum teste de "o botao existe" pega:
 
   - mostrar botao onde o servidor nao ofereceu (`reiniciavel` e `=== true`, nunca
-    "nao e falso") nem no sistema que guarda dado de saude;
+    "nao e falso");
   - mandar o pedido ao DERVS antes do "Pode fazer", ou mandar `maquina_id` como
     texto (um `dataset`/`<select>` entrega texto, e o servidor exige inteiro);
   - dizer "feito" por falta de resposta: o servidor que nao pegou o pedido, ou
@@ -49,10 +49,10 @@ def sistema(nome, extra=""):
 
 
 SISTEMAS = ", ".join([
-    sistema("grimoire-web", "reiniciavel: true, bloqueado: false"),
-    sistema("dervs-app", "reiniciavel: true, bloqueado: false"),
-    sistema("grimoire-db", "reiniciavel: true, bloqueado: false"),
-    sistema("ajudei-db", "reiniciavel: false, bloqueado: true"),
+    sistema("grimoire-web", "reiniciavel: true"),
+    sistema("dervs-app", "reiniciavel: true"),
+    sistema("grimoire-db", "reiniciavel: true"),
+    sistema("ajudei-db", "reiniciavel: false"),
 ])
 
 ORDENS = "{ chaves_ok: true, linha_velha: false, voltaveis: ['grimoire', 'dervs'], pedidos: [] }"
@@ -96,18 +96,19 @@ class OsBotoesSoExistemOndeOServidorOfereceu(unittest.TestCase):
         self.assertEqual(r["b"].count("Voltar"), 2)             # grimoire, dervs
         self.assertIn("Desligar este servidor", r["b"])
 
-    def test_o_sistema_de_saude_nao_tem_botao_e_diz_por_que(self):
-        r = vai(self, servidor(), "const li = linhaDe(c, 'sistema-do-servidor', 'ajudei-db');\n"
+    def test_nenhum_sistema_fica_de_fora_pelo_nome(self):
+        """Decisao do dono (15/10/2026): nenhum projeto e bloqueado."""
+        r = vai(self, servidor(sistemas=sistema("ajudei-db", "reiniciavel: true")), "const li = linhaDe(c, 'sistema-do-servidor', 'ajudei-db');\n"
                 "console.log(JSON.stringify({ t: li.textContent, b: rotulos(li) }));")
-        self.assertEqual(r["b"], [])
-        self.assertIn("fica de fora: guarda dado de saúde", r["t"])
+        self.assertEqual(r["b"], ["Reiniciar"])
+        self.assertNotIn("fica de fora", r["t"])
 
     def test_sem_o_campo_nao_ha_botao_nunca_pelo_nao_e_falso(self):
         """Sabotar `=== true` por `!== false` deixa o servidor antigo com botao."""
-        sem_campo = sistema("grimoire-web")                    # nem reiniciavel, nem bloqueado
+        sem_campo = sistema("grimoire-web")                    # sem reiniciavel
         r = vai(self, servidor(sistemas=sem_campo), "console.log(JSON.stringify({ b: rotulos(c) }));")
         self.assertNotIn("Reiniciar", r["b"])
-        falso = sistema("grimoire-web", "reiniciavel: false, bloqueado: false")
+        falso = sistema("grimoire-web", "reiniciavel: false")
         r = vai(self, servidor(sistemas=falso), "console.log(JSON.stringify({ b: rotulos(c) }));")
         self.assertNotIn("Reiniciar", r["b"])
 
@@ -325,7 +326,6 @@ class OFioDaTelaDoCliqueAteOServidor(unittest.TestCase):
             (409, "{motivo: 'sem_dados'}", "O servidor não conta nada há mais de 3 minutos. Espere ele voltar a medir."),
             (409, "{motivo: 'ocupado'}", "Já há um pedido em andamento neste servidor. Espere ele terminar."),
             (409, "{motivo: 'sem_chave'}", "Nenhum aparelho seu é conhecido por este servidor. Cole a linha com pedidos de novo."),
-            (403, "{motivo: 'bloqueado'}", "Este sistema guarda dado de saúde e fica de fora sempre."),
             (404, "{erro: 'nao achei'}", "Não achei este servidor na sua conta. Recarregue a página."),
             (400, "{erro: 'pedido invalido'}", "Esse sistema não está mais na medição. Recarregue a página."),
             (429, "{erro: 'nao deu'}", "Muitos pedidos em pouco tempo. Tente daqui a alguns minutos."),
@@ -423,7 +423,6 @@ class CadaEstadoDoPedidoDiz(unittest.TestCase):
             "teto": "já foram 6 pedidos na última hora, o máximo. Tente de novo mais tarde.",
             "vencida": "o pedido chegou depois dos 5 minutos. Peça de novo.",
             "repetida": "este pedido já tinha sido usado.",
-            "bloqueado": "este sistema guarda dado de saúde e fica de fora sempre.",
             "desconhecido": "o servidor não encontrou esse sistema ou projeto agora.",
             "outro_servidor": "o pedido era para outra ligação deste servidor. Recarregue a página e peça de novo.",
             "cheio": "o servidor está com pedidos demais guardados. Tente daqui a 5 minutos.",
@@ -526,8 +525,11 @@ class AsDuasLinhasParaColar(unittest.TestCase):
                 "mostra só “dervs.com.br”. Se alguém tomasse o dervs.com.br, poderia trocar o pedido na "
                 "hora do seu toque. Sem um toque seu, nada acontece.",
                 "cada toque vira no máximo um pedido desta lista — reiniciar um sistema ou voltar um projeto "
-                "liberado —, nunca no Ajudei, nunca um comando, e no máximo 6 por hora em cada servidor.",
-                "Se o seu aparelho pedir a digital sem você ter clicado em “Pode fazer”, recuse.",
+                "liberado —, nunca um comando, e no máximo 6 por hora em cada servidor.",
+                "Se o seu aparelho pedir a digital sem você ter clicado em “Reiniciar” ou “Voltar” e "
+                "confirmado com “Pode fazer”, recuse.",
+                "Vale também ao entrar no DERVS: o toque de entrar é um só; se o aparelho pedir de novo "
+                "logo depois, recuse.",
                 "cole a linha Só olhar (desliga os pedidos) ou a linha de remover, que já está acima."):
             with self.subTest(frase=frase[:40]):
                 self.assertIn(frase, r["t"])
@@ -622,7 +624,7 @@ class OsPedidosNaoFalamAlinguaDeQuemConstruiu(unittest.TestCase):
 
     def test_cada_funcao_le_os_campos_do_contrato(self):
         esperado = {
-            "linhaDeSistema": ("reiniciavel", "bloqueado"),
+            "linhaDeSistema": ("reiniciavel",),
             "linhaDeServidorLigado": ("ordens", "maquina_id"),
             "blocoDosPedidos": ("chaves_ok", "linha_velha", "voltaveis", "pedidos"),
             "estadoDoPedido": ("numero", "tipo", "alvo", "estado", "quando", "codigo", "motivo"),

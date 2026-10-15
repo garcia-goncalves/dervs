@@ -621,7 +621,7 @@ I0-I6: `docs/superpowers/plans/dervs-conectar-acoes-c.md`. O que quebra em silê
   repositório): `AContaP256EAMesmaDoP256` compara por `ast.dump`. Mexeu em `p256.py`,
   copie igual.
 - **`sudoers` em pedaços, nunca uma linha literal** (o `secret-scan` barra NOPASSWD+`:` +
-  caminho): uma linha por projeto voltável, sem `*`, nenhuma para bloqueado, gravada em
+  caminho): uma linha por projeto voltável, sem `*`, gravada em
   `.dervs-ajudante.novo`, `visudo -cf` e só então `os.replace`.
 - **A unidade dos pedidos é OUTRA** (`dervs-ajudante-ordens.service`) e NÃO tem
   `NoNewPrivileges`, `CapabilityBoundingSet`, `ProtectSystem` nem `UMask` — sem isso o
@@ -630,19 +630,21 @@ I0-I6: `docs/superpowers/plans/dervs-conectar-acoes-c.md`. O que quebra em silê
 - **Prazos:** só se entrega ordem assinada há até `banco.ENTREGA_ATE` (120 s, senão
   `nao_pegou`); entregue sem desfecho ocupa a máquina `ORDEM_FAZENDO_ATE` (1800 s, depois
   `sem_resposta`). A ordem vence em 300 s, e o ajudante tem teto de 6 por hora.
-- **`bloqueado` nas duas pontas:** `aj.PROJETOS_BLOQUEADOS` é cópia de
-  `tarefas.PROJETOS_BLOQUEADOS` e `aj._bloqueado` tem de concordar com
-  `tarefas.projeto_bloqueado` (`OBloqueioEOMesmoDoDervs`); o `reiniciar` confere também o
-  rótulo de projeto do sistema.
+- **Nenhum projeto é bloqueado nos pedidos (decisão do dono, 15/10/2026).** O Ajudei
+  reinicia e volta como qualquer outro; a proteção é o toque, a lista fechada e o teto.
+  O ajudante não tem lista de bloqueio nem o motivo `bloqueado`, e
+  `test_ajudante_acoes.NenhumProjetoEBloqueado` reprova se ele voltar a uma ponta só: a
+  tela já prometeu "todo dado de saúde" enquanto o código só pegava o nome `ajudei-saude`.
+- **A chave que assinou tem de estar viva na ENTREGA**, não só na assinatura:
+  `banco.entregar_ordem_de_servidor` confere `chave_de_acesso.revogada_em IS NULL` no
+  SELECT e no UPDATE. Revogar o aparelho desiste do que ele assinou e ainda não saiu.
 - **A frase é a mesma letra por letra:** `Hub._frase_do_pedido` e `fraseDoPedido`
   (`painel.js`), com aspas curvas; `AFraseEAMesma` cobra em node.
 - **A promessa honesta** ("o aparelho mostra só dervs.com.br") está na tela, no roteiro e
   em `A-APLICACAO.md` §5.8. Não a enfraqueça para "ninguém consegue": é falso.
-- **DECIDIDO 15/10/2026, AINDA NÃO FEITO: nenhum projeto é bloqueado.** O dono mandou
-  acabar com `PROJETOS_BLOQUEADOS` em todo o DERVS (memória `nenhum-projeto-bloqueado`). A
-  revisão de segurança provou que o bloqueio só pegava o nome `ajudei-saude` enquanto a tela
-  prometia "todo dado de saúde": até remover, a tela de pedidos MENTE (`painel.js` ~3805-3816).
-  Não mescle a entrega C sem tirar o bloqueio dos pedidos e corrigir esse texto.
+- **`PROJETOS_BLOQUEADOS` ainda vive no RESTO do DERVS** (auditoria, consertar,
+  desenvolver, provas, fila, execução, `/agente/voz/pedido`). Sai numa entrega própria
+  (memória `nenhum-projeto-bloqueado`); só os pedidos ao servidor já estão sem ele.
 - **O DERVS-VOZ não pede ação no servidor**: nenhuma rota `/agente/voz/*` mudou.
 - **Dívidas nomeadas:** a F-2 (VM com Docker/systemd/`visudo` de verdade, e o PIN do
   Windows de verdade) não foi feita; na VPS, só depois de publicar e de duas revisões de

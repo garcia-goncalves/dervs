@@ -459,16 +459,21 @@ class OQueATelaLeOServidorEntrega(_MundoDeReiniciar):
 
     def test_a_resposta_de_preparar_e_a_de_um_pedido_recusado(self):
         self.mundo()
-        recusa = self.dono("/api/maquinas/ordem/preparar", {
-            "maquina_id": self.maquina_id, "tipo": "voltar",
-            "alvo": "ajudei-saude"})
-        self.assertEqual(recusa.status, 403, recusa.corpo)
+        # Uma recusa com `motivo` sem mexer no mundo compartilhado: a conta
+        # "sem chave que o servidor conheca" e 409 antes de gravar a ordem.
+        with mock.patch.object(banco, "chaves_publicas_da_conta",
+                               lambda *a, **k: []):
+            recusa = self.dono("/api/maquinas/ordem/preparar", {
+                "maquina_id": self.maquina_id, "tipo": self.TIPO,
+                "alvo": self.ALVO})
+        self.assertEqual((recusa.status, json.loads(recusa.corpo)),
+                         (409, {"motivo": "sem_chave"}), recusa.corpo)
         lidos = campos("d", "fazerOPedido")
         self.contido(lidos, set(self.preparado[1]),
                      "/api/maquinas/ordem/preparar")
         self.contido(campos("corpo", "fazerOPedido"),
                      set(json.loads(recusa.corpo)),
-                     "o 403 de /api/maquinas/ordem/preparar")
+                     "o 409 de /api/maquinas/ordem/preparar")
 
     def test_o_corpo_que_a_tela_manda_ao_assinar_e_o_que_o_servidor_le(self):
         m = re.search(r'escrever\("/api/maquinas/ordem/assinar", \{(.*?)\}\)',

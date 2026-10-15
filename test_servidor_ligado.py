@@ -484,7 +484,7 @@ class OsDadosDoPainel(_Base):
                            "desde": "2026-10-08T12:00:00+00:00",
                            "reinicios": 2,
                            # Entrega C (I5): sem pedidos, nada e reiniciavel.
-                           "reiniciavel": False, "bloqueado": False}],
+                           "reiniciavel": False}],
                          s["sistemas"])
         n = self.projeto(estado)["no_ar"]
         self.assertEqual(1, len(n))

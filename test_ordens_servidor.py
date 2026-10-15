@@ -306,13 +306,16 @@ class AMedicaoComOBlocoDePedidos(_Base):
                          dados["ordens"]["chaves"])
         self.assertEqual(4, self.json(r)["invalidos"])
 
-    def test_voltavel_bloqueado_ou_torto_e_descartado(self):
+    def test_voltavel_torto_e_descartado_e_nenhum_projeto_e_bloqueado(self):
+        """Decisao do dono (15/10/2026): nenhum projeto e bloqueado. O Ajudei
+        volta de versao como qualquer outro; so o nome torto cai."""
         k = self.chave()
         voltaveis = ["grimoire", "ajudei-saude", "ajudei-saude-web",
                      "Grimoire", "a_b", "-x", "", 5, "x" * 64]
         r, dados = self.medir_com(dict(self.bloco(k), voltaveis=voltaveis))
-        self.assertEqual(["grimoire"], dados["ordens"]["voltaveis"])
-        self.assertEqual(8, self.json(r)["invalidos"])
+        self.assertEqual(["grimoire", "ajudei-saude", "ajudei-saude-web"],
+                         dados["ordens"]["voltaveis"])
+        self.assertEqual(6, self.json(r)["invalidos"])
 
     def test_201_voltaveis_passam_cortados_em_200(self):
         k = self.chave()
@@ -457,29 +460,37 @@ class PrepararOPedido(_Base):
         r = self.preparar(c, "voltar", "grimoire")
         self.assertEqual((409, {"motivo": "ocupado"}), (r.status, self.json(r)))
 
-    def test_projeto_bloqueado_por_nome_ou_pelo_rotulo_e_403(self):
-        c = self.cenario(sistemas=SISTEMAS + [
-            sistema("meu-banco", "Ajudei_Saude")])
-        c["chaves"]       # a chave ja esta no cenario
-        for tipo, alvo in (("voltar", "ajudei-saude"),
-                           ("reiniciar", "ajudei-db"),
-                           ("reiniciar", "meu-banco"),
-                           ("reiniciar", "Ajudei_Saude"),
-                           ("reiniciar", "AJUDEI SAUDE"),
-                           ("voltar", "ajudei-saude-web")):
+    def test_nenhum_projeto_e_bloqueado_nos_pedidos(self):
+        """Decisao do dono (15/10/2026): o Ajudei e pedido como qualquer
+        outro. A protecao e o toque, a lista fechada e o teto, nao o nome."""
+        for tipo, alvo, voltaveis in (
+                ("reiniciar", "ajudei-db", ("dervs",)),
+                ("voltar", "ajudei-saude", ("ajudei-saude",))):
+            c = self.cenario()
+            con = banco.conectar()
+            try:
+                dados = json.loads(con.execute(
+                    "SELECT dados FROM medicao_de_servidor WHERE maquina_id = ?",
+                    (c["m"]["id"],)).fetchone()[0])
+                dados["ordens"]["voltaveis"] = list(voltaveis)
+                con.execute("UPDATE medicao_de_servidor SET dados = ?"
+                            " WHERE maquina_id = ?",
+                            (json.dumps(dados), c["m"]["id"]))
+                con.commit()
+            finally:
+                con.close()
             r = self.preparar(c, tipo, alvo)
-            self.assertEqual((403, {"motivo": "bloqueado"}),
-                             (r.status, self.json(r)), alvo)
+            self.assertEqual(200, r.status, (alvo, r.corpo))
+            self.assertNotIn("bloquead", r.corpo)
 
-    def test_o_bloqueio_chama_o_helper_unico(self):
+    def test_o_preparar_nao_pergunta_mais_por_bloqueio(self):
         chamadas = []
-        real = tarefas.projeto_bloqueado
         c = self.cenario()
         with mock.patch.object(tarefas, "projeto_bloqueado",
-                               lambda n: chamadas.append(n) or real(n)):
-            self.preparar(c)
-        self.assertIn("grimoire-web", chamadas)
-        self.assertIn("grimoire", chamadas)         # o rotulo do sistema
+                               lambda n: chamadas.append(n) or True):
+            r = self.preparar(c)
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertEqual([], chamadas)
 
     def test_alvo_nao_medido_e_400(self):
         c = self.cenario()
@@ -758,6 +769,23 @@ class OAjudanteBusca(_Base):
         with fixo(T0 + 120):
             self.assertIsNotNone(self.json(self.buscar(c))["ordem"])
 
+    def test_assinada_com_chave_revogada_depois_nunca_sai(self):
+        """Revogar a chave e desistir de tudo que ela assinou e ainda nao saiu:
+        a entrega confere a chave viva, nao so a assinatura de 1 minuto atras."""
+        c = self.cenario()
+        with fixo(T0):
+            prep = self.pedido_assinado(c)
+        con = banco.conectar()
+        try:
+            con.execute("UPDATE chave_de_acesso SET revogada_em = '2026-01-01'"
+                        " WHERE cred_id = ?", (c["chaves"][0][2],))
+            con.commit()
+        finally:
+            con.close()
+        with fixo(T0 + 1):
+            self.assertEqual({"ordem": None}, self.json(self.buscar(c)))
+        self.assertIsNone(self.ordem_no_banco(prep["numero"])["entregue_em"])
+
     def test_ordem_de_outra_maquina_da_mesma_conta_nunca_sai(self):
         a = self.cenario("vps-a")
         b = self.cenario("vps-b", chaves=a["chaves"])
@@ -890,17 +918,15 @@ class OQueOPainelMostra(_Base):
         s = self.servidor_no_painel({"m": m, "sessao": self.sessao_e_token()})
         self.assertIsNone(s["ordens"])
 
-    def test_reiniciavel_e_bloqueado_por_sistema(self):
+    def test_todo_sistema_e_reiniciavel_e_nao_ha_campo_bloqueado(self):
         c = self.cenario(sistemas=SISTEMAS + [sistema("ajudei-saude-web")])
         s = self.servidor_no_painel(c)
-        por_nome = {x["nome"]: (x["reiniciavel"], x["bloqueado"])
-                    for x in s["sistemas"]}
-        self.assertEqual({"grimoire-web": (True, False),
-                          "dervs-app": (True, False),
-                          "ajudei-db": (False, True),
-                          "ajudei-saude-web": (False, True)}, por_nome)
+        por_nome = {x["nome"]: x["reiniciavel"] for x in s["sistemas"]}
+        self.assertEqual({"grimoire-web": True, "dervs-app": True,
+                          "ajudei-db": True, "ajudei-saude-web": True},
+                         por_nome)
         self.assertEqual({"nome", "projeto", "estado", "saude", "desde",
-                          "reinicios", "reiniciavel", "bloqueado"},
+                          "reinicios", "reiniciavel"},
                          set(s["sistemas"][0]))
 
     def test_o_bloco_com_chaves_ok_e_linha_em_dia(self):
@@ -946,10 +972,10 @@ class OQueOPainelMostra(_Base):
         o = self.servidor_no_painel(c)["ordens"]
         self.assertEqual((False, True), (o["chaves_ok"], o["linha_velha"]))
 
-    def test_voltaveis_nunca_leva_projeto_bloqueado(self):
+    def test_voltaveis_leva_o_ajudei_como_qualquer_projeto(self):
         c = self.cenario()
         con = banco.conectar()
-        try:      # um dado de antes da trava, ou gravado por fora
+        try:      # um dado gravado por fora
             dados = json.loads(con.execute(
                 "SELECT dados FROM medicao_de_servidor WHERE maquina_id = ?",
                 (c["m"]["id"],)).fetchone()[0])
@@ -960,7 +986,7 @@ class OQueOPainelMostra(_Base):
             con.commit()
         finally:
             con.close()
-        self.assertEqual(["dervs", "grimoire"],
+        self.assertEqual(["dervs", "grimoire", "ajudei-saude"],
                          self.servidor_no_painel(c)["ordens"]["voltaveis"])
 
     # ---- os 8 estados de `pedidos`, com o relogio preso

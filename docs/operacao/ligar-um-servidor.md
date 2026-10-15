@@ -111,11 +111,12 @@ não mostra a linha com pedidos e explica como cadastrar.
    aperte Enter. Pode pedir a sua senha do servidor. Se o servidor já estava
    ligado, ela troca o jeito dele sem perder o que ele já contou.
 3. **Se der certo**, o terminal diz:
-   `Pedidos ligados: reiniciar sistemas; voltar a versao de: <projetos>. O Ajudei fica de fora sempre.`
+   `Pedidos ligados: reiniciar sistemas; voltar a versao de: <projetos>.`
    No painel, cada sistema ganha o botão **Reiniciar**, e aparece a lista de
    projetos que podem voltar de versão.
 4. Para pedir: clique no botão, confira a frase (por exemplo
-   *Reiniciar o sistema “grimoire-web” no servidor “vps-ovh”*), confirme e
+   *Reiniciar o sistema “grimoire-web” no servidor “vps-ovh”*), clique em
+   **Pode fazer** e
    toque a digital ou digite o PIN. Em até 30 segundos o servidor pega o
    pedido; a tela mostra *enviado*, *fazendo*, e por fim *feito* ou *não deu
    certo* (com o código de saída).
@@ -129,7 +130,7 @@ não mostra a linha com pedidos e explica como cadastrar.
   espero* (o `/usr/local/bin/deploy` tem de existir, ser do administrador e não
   aceitar escrita de mais ninguém); *o sistema nao aceitou a regra de voltar
   versao* (o `visudo` reprovou a regra; nada foi gravado).
-- `As chaves da linha estao tortas; os pedidos NAO foram ligados.` — a linha
+- `A linha chegou incompleta; os pedidos NAO foram ligados.` — a linha
   foi cortada ao copiar. Copie de novo, pelo botão **Copiar**.
 - `Nao consegui ... ficaram DESLIGADOS.` — o servidor continua só olhando.
   Cole a linha de novo; se repetir, é sinal de `systemd` diferente do

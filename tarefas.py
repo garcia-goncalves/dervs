@@ -288,8 +288,8 @@ def projeto_bloqueado(nome) -> bool:
 
 # Lista fechada do porque uma ordem foi recusada. Igual nas tres pontas.
 MOTIVOS_DA_RECUSA = ("forma", "outro_servidor", "vencida", "assinatura",
-                     "desafio", "origem", "aparelho", "bloqueado",
-                     "desconhecido", "repetida", "cheio", "teto")
+                     "desafio", "origem", "aparelho", "desconhecido",
+                     "repetida", "cheio", "teto")
 
 _HEX_MINUSCULO = frozenset("0123456789abcdef")
 _ALNUM = frozenset("abcdefghijklmnopqrstuvwxyz"

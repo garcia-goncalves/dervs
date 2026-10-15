@@ -3726,7 +3726,9 @@ def entregar_ordem_de_servidor(maquina_id: int, usuario_id: int,
     """A ordem assinada mais velha desta maquina, ou None. Marca
     `entregue_em` no mesmo UPDATE que a escolhe (`entregue_em IS NULL`): quem
     nao levar `rowcount == 1` nao entrega. Assinada ha mais de 120 s nunca mais
-    sai — a tela ja disse "o servidor nao pegou"."""
+    sai — a tela ja disse "o servidor nao pegou".
+    A chave que assinou tem de estar VIVA na hora da entrega: revogar o
+    aparelho desiste do que ele assinou e ainda nao saiu."""
     fechar = con is None
     con = con or conectar()
     try:
@@ -3737,6 +3739,10 @@ def entregar_ordem_de_servidor(maquina_id: int, usuario_id: int,
             " WHERE maquina_id = ? AND usuario_id = ?"
             "   AND assinada_em IS NOT NULL AND entregue_em IS NULL"
             "   AND assinada_em >= ? AND vence >= ?"
+            "   AND EXISTS (SELECT 1 FROM chave_de_acesso c"
+            "               WHERE c.cred_id = ordem_de_servidor.cred_id"
+            "                 AND c.usuario_id = ordem_de_servidor.usuario_id"
+            "                 AND c.revogada_em IS NULL)"
             " ORDER BY assinada_em, criado LIMIT 1",
             (maquina_id, usuario_id, corte, agora_s)).fetchone()
         if not l:
@@ -3745,7 +3751,11 @@ def entregar_ordem_de_servidor(maquina_id: int, usuario_id: int,
             "UPDATE ordem_de_servidor SET entregue_em = ?"
             " WHERE numero = ? AND maquina_id = ? AND usuario_id = ?"
             "   AND entregue_em IS NULL AND assinada_em IS NOT NULL"
-            "   AND assinada_em >= ? AND vence >= ?",
+            "   AND assinada_em >= ? AND vence >= ?"
+            "   AND EXISTS (SELECT 1 FROM chave_de_acesso c"
+            "               WHERE c.cred_id = ordem_de_servidor.cred_id"
+            "                 AND c.usuario_id = ordem_de_servidor.usuario_id"
+            "                 AND c.revogada_em IS NULL)",
             (_iso_de(agora_s), l["numero"], maquina_id, usuario_id, corte,
              agora_s))
         con.commit()

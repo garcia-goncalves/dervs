@@ -88,13 +88,10 @@ PRAZO_DO_REINICIO = 120
 PRAZO_DA_VOLTA = 1200
 # Motivos de recusa: a mesma lista, na mesma ordem, nas tres pontas.
 MOTIVOS_DA_RECUSA = ("forma", "outro_servidor", "vencida", "assinatura", "desafio",
-                     "origem", "aparelho", "bloqueado", "desconhecido", "repetida",
-                     "cheio", "teto")
+                     "origem", "aparelho", "desconhecido", "repetida", "cheio",
+                     "teto")
 MAX_NUMEROS = 200
 TETO_POR_HORA = 6
-# Mesmo conjunto de `tarefas.PROJETOS_BLOQUEADOS` (dado de paciente); um teste
-# compara os dois e a resposta das duas funcoes.
-PROJETOS_BLOQUEADOS = frozenset({"ajudei-saude"})
 
 PASTA_DAS_ORDENS = "/etc/dervs-ajudante"
 ARQUIVO_DAS_ORDENS = PASTA_DAS_ORDENS + "/ordens.json"
@@ -871,15 +868,6 @@ def _b64url(cru):
     return base64.urlsafe_b64encode(cru).rstrip(b"=").decode("ascii")
 
 
-def _bloqueado(nome):
-    """Mesma regra de `tarefas.projeto_bloqueado`: minusculas, `_`, espaco e `.`
-    viram `-`; igual ou prefixo na fronteira do `-`."""
-    if not isinstance(nome, str):
-        return False
-    n = re.sub(r"[_\s.]+", "-", nome.strip().lower())
-    return any(n == b or n.startswith(b + "-") for b in PROJETOS_BLOQUEADOS)
-
-
 def _ponto_de(par):
     """`[x_hex, y_hex]` (64 hex cada) -> ponto NA CURVA, ou None."""
     if not (isinstance(par, list) and len(par) == 2
@@ -943,16 +931,11 @@ def _conferir(ordem, config, numeros, feitas, agora, sistemas_agora):
             or not flags & 0x01 or not flags & 0x04 or flags & 0xC0):
         return "aparelho"
     alvo = campos["alvo"]
-    if _bloqueado(alvo):
-        return "bloqueado"
     if campos["tipo"] == "voltar":
         if alvo not in (config.get("voltaveis") or []):
             return "desconhecido"
     else:
-        achados = [s for s in sistemas_agora() if s.get("nome") == alvo]
-        if achados and _bloqueado(achados[0].get("projeto")):
-            return "bloqueado"
-        if not achados:
+        if not any(s.get("nome") == alvo for s in sistemas_agora()):
             return "desconhecido"
     if campos["numero"] in numeros:
         return "repetida"
@@ -1174,8 +1157,7 @@ def _voltaveis(raiz):
     nomes = []
     for p in _publicacoes(raiz):
         nome = p["projeto"]
-        if (_ALVO_VOLTAR.fullmatch(nome) and not _bloqueado(nome)
-                and nome not in nomes):
+        if _ALVO_VOLTAR.fullmatch(nome) and nome not in nomes:
             nomes.append(nome)
     return nomes[:MAX_VOLTAVEIS]
 
@@ -1223,7 +1205,7 @@ def _ordens_ligar(textos, alvo, raiz, rodar, saida):
     host = urllib.parse.urlsplit(alvo).hostname
     if pares is None or not host:
         _ordens_desligar(raiz, rodar)
-        saida("As chaves da linha estao tortas; os pedidos NAO foram ligados."
+        saida("A linha chegou incompleta; os pedidos NAO foram ligados."
               " Copie a linha do painel de novo.")
         return False
     voltaveis, porque = [], ""
@@ -1272,10 +1254,10 @@ def _ordens_ligar(textos, alvo, raiz, rodar, saida):
         return False
     if voltaveis:
         saida("Pedidos ligados: reiniciar sistemas; voltar a versao de: "
-              + ", ".join(voltaveis) + ". O Ajudei fica de fora sempre.")
+              + ", ".join(voltaveis) + ".")
     else:
         saida("Pedidos ligados: reiniciar sistemas. Voltar a versao ficou de fora: "
-              + porque + ". O Ajudei fica de fora sempre.")
+              + porque + ".")
     return True
 
 
