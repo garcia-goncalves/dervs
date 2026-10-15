@@ -484,13 +484,10 @@ class PrepararOPedido(_Base):
             self.assertNotIn("bloquead", r.corpo)
 
     def test_o_preparar_nao_pergunta_mais_por_bloqueio(self):
-        chamadas = []
-        c = self.cenario()
-        with mock.patch.object(tarefas, "projeto_bloqueado",
-                               lambda n: chamadas.append(n) or True):
-            r = self.preparar(c)
+        # A pergunta acabou no DERVS inteiro (15/10/2026): nem existe mais.
+        self.assertFalse(hasattr(tarefas, "projeto_bloqueado"))
+        r = self.preparar(self.cenario())
         self.assertEqual(200, r.status, r.corpo)
-        self.assertEqual([], chamadas)
 
     def test_alvo_nao_medido_e_400(self):
         c = self.cenario()

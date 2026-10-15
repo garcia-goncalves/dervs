@@ -194,13 +194,21 @@ class ProvaPodeRodar(unittest.TestCase):
             self.assertFalse(pode, ex)
             self.assertIn("executor", motivo)
 
-    def test_projeto_bloqueado_ou_nexa_nao_roda(self):
-        for proj in ("ajudei-saude", "Ajudei_Saude", "ccvp", "Nexa-x",
-                     "aninha-site", "", None):
+    def test_projeto_de_outro_dono_ou_nexa_nao_roda(self):
+        for proj in ("ccvp", "Nexa-x", "aninha-site", "", None):
             pode, motivo = tarefas.pode_rodar(
                 self._prova(projeto=proj), 0.0, AGORA_ISO, {})
             self.assertFalse(pode, proj)
             self.assertIn("provas", motivo)
+
+    def test_o_ajudei_nao_e_recusado_pelo_nome(self):
+        """Decisao do dono (15/10/2026): nenhum projeto bloqueado. A prova
+        aprovada do Ajudei passa pelo filtro de projeto (o clique continua)."""
+        self.assertFalse(hasattr(tarefas, "PROJETOS_BLOQUEADOS"))
+        for proj in ("ajudei-saude", "Ajudei_Saude"):
+            _, motivo = tarefas.pode_rodar(
+                self._prova(projeto=proj), 0.0, AGORA_ISO, {})
+            self.assertNotIn("nao roda provas neste projeto", motivo, proj)
 
 
 class GuardaDaGuarda(unittest.TestCase):

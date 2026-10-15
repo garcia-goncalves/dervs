@@ -1158,9 +1158,6 @@ function frasePorQueNaoConsertou(status, corpo) {
   const erro = corpo && typeof corpo.erro === "string" ? corpo.erro : "";
   if (status === 401) return "Sua sessão acabou. Recarregue a página e entre de novo.";
   if (status === 404) return "Este alerta não está mais na lista. Volte ao painel para ver o que vale agora.";
-  if (status === 403 && erro === "projeto bloqueado") {
-    return "Este projeto não pode ser consertado pelo DERVS.";
-  }
   if (status === 403) return "Este tipo de alerta não é consertado por aqui.";
   if (status === 429) return "Você pediu conserto demais em pouco tempo. Espere um pouco e tente de novo.";
   return "Não deu para pedir o conserto agora (erro " + status + "). Tente de novo em instantes.";

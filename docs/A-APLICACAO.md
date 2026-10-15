@@ -287,7 +287,8 @@ escrito em um só lugar: [`A-DOCUMENTACAO-QUE-O-DERVS-LE.md`](A-DOCUMENTACAO-QUE
 - **"Desenvolver isto"** só aparece para critério de documento com a linha
   `Aprovado em: AAAA-MM-DD`. Cria uma tarefa `desenvolver` que **sempre espera o
   "Pode fazer"** e nunca anda sozinha; o resultado é um ramo para revisão. O
-  servidor recusa documento não aprovado, projeto bloqueado, critério de segurança
+  servidor recusa documento não aprovado, projeto que não é do dono (TineHost,
+  André, `aninha-site`), critério de segurança
   ou de dado de paciente e critério já marcado.
 - **Fora desta entrega:** migrar briefings antigos (aparecem
   "sem documentação") e aprovar pela tela.
@@ -460,8 +461,9 @@ com o mesmo clique.
   depois de a medição comum ter acontecido.
 - **Não conserta sozinha.** As cinco regras de achado ficam **fora** de
   `fila.REGRAS_MECANICAS`. O achado vira pendência; o conserto segue o semáforo.
-- **Não roda em projeto bloqueado.** `PROJETOS_BLOQUEADOS` agora mora em
-  `tarefas.py` justamente para a rota de pedido poder aplicá-la.
+- **Roda em qualquer projeto da conta, inclusive os de saúde** (decisão do dono,
+  15/10/2026: a antiga lista de projetos bloqueados acabou). O que segura é o
+  clique "Pode fazer", o teto de gasto e as ferramentas proibidas na auditoria.
 - **Não inventa estado.** Corrida que falha grava a falha com o motivo, **não
   apaga** os achados da corrida boa anterior, e o projeto mantém o carimbo antigo.
   Saída malformada vira **sem dados**, nunca "0 achados".

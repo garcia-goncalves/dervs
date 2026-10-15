@@ -217,9 +217,11 @@ class QuemPodeSerResolvido(unittest.TestCase):
     def test_sem_projeto_nao_resolve(self):
         self.assertFalse(execucao.pode_resolver({"projeto": ""}))
 
-    def test_projeto_bloqueado_nao_resolve_em_qualquer_caixa(self):
+    def test_nenhum_projeto_e_bloqueado(self):
+        """Decisao do dono (15/10/2026): o Ajudei resolve como qualquer outro."""
         for nome in ("ajudei-saude", "Ajudei-Saude", "AJUDEI-SAUDE"):
-            self.assertFalse(execucao.pode_resolver({"projeto": nome}), nome)
+            self.assertTrue(execucao.pode_resolver({"projeto": nome}), nome)
+        self.assertFalse(hasattr(execucao, "PROJETOS_BLOQUEADOS"))
 
     def test_projeto_normal_resolve(self):
         self.assertTrue(execucao.pode_resolver(PENDENCIA))
