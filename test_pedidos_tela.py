@@ -525,7 +525,7 @@ class AsDuasLinhasParaColar(unittest.TestCase):
                 "mostra só “dervs.com.br”. Se alguém tomasse o dervs.com.br, poderia trocar o pedido na "
                 "hora do seu toque. Sem um toque seu, nada acontece.",
                 "cada toque vira no máximo um pedido desta lista — reiniciar um sistema ou voltar um projeto "
-                "liberado —, nunca um comando, e no máximo 6 por hora em cada servidor.",
+                "que a linha lista —, nunca um comando, e no máximo 6 por hora em cada servidor.",
                 "Se o seu aparelho pedir a digital sem você ter clicado em “Reiniciar” ou “Voltar” e "
                 "confirmado com “Pode fazer”, recuse.",
                 "Vale também ao entrar no DERVS: o toque de entrar é um só; se o aparelho pedir de novo "
