@@ -666,8 +666,10 @@ deixaria quem tomasse o site publicar o código dele.
   *Olhar e aceitar pedidos*. Só a segunda liga, e colar a primeira desliga na hora.
 - **Cada pedido sai com a digital ou o PIN do dono** (chave de acesso), e é **o próprio
   servidor** quem confere: o aparelho é do dono, o pedido tem no máximo 5 minutos, nunca foi
-  usado, e é um dos dois da lista. No máximo 6 por hora. O Ajudei e todo projeto com dado
-  de saúde ficam de fora **nas duas pontas**.
+  usado, e é um dos dois da lista. No máximo 6 por hora **em cada servidor**. Hoje o código
+  ainda recusa nome que comece por `ajudei-saude` (só esse nome, não "todo dado de saúde"),
+  e o dono decidiu em 15/10/2026 que **nenhum projeto fica de fora**: esse resto de bloqueio
+  sai na próxima mudança.
 - **A promessa honesta:** sem um toque do dono, nada acontece. Com o site tomado, cada
   toque pode virar **um** pedido diferente do que a tela mostrou (o aparelho mostra só
   "dervs.com.br"), sempre dentro da lista fechada. A tela diz isso com todas as letras.

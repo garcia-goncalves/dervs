@@ -638,6 +638,11 @@ I0-I6: `docs/superpowers/plans/dervs-conectar-acoes-c.md`. O que quebra em silê
   (`painel.js`), com aspas curvas; `AFraseEAMesma` cobra em node.
 - **A promessa honesta** ("o aparelho mostra só dervs.com.br") está na tela, no roteiro e
   em `A-APLICACAO.md` §5.8. Não a enfraqueça para "ninguém consegue": é falso.
+- **DECIDIDO 15/10/2026, AINDA NÃO FEITO: nenhum projeto é bloqueado.** O dono mandou
+  acabar com `PROJETOS_BLOQUEADOS` em todo o DERVS (memória `nenhum-projeto-bloqueado`). A
+  revisão de segurança provou que o bloqueio só pegava o nome `ajudei-saude` enquanto a tela
+  prometia "todo dado de saúde": até remover, a tela de pedidos MENTE (`painel.js` ~3805-3816).
+  Não mescle a entrega C sem tirar o bloqueio dos pedidos e corrigir esse texto.
 - **O DERVS-VOZ não pede ação no servidor**: nenhuma rota `/agente/voz/*` mudou.
 - **Dívidas nomeadas:** a F-2 (VM com Docker/systemd/`visudo` de verdade, e o PIN do
   Windows de verdade) não foi feita; na VPS, só depois de publicar e de duas revisões de

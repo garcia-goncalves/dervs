@@ -147,7 +147,7 @@ de voltar versão). O `remover` de "Como tirar" também desliga tudo.
 você está aprovando — ele mostra só "dervs.com.br". Sem um toque seu, nada
 acontece. Mas se alguém tomasse o dervs.com.br, **cada toque seu poderia virar
 um pedido diferente do que a tela mostrou** — sempre um dos dois da lista,
-nunca no Ajudei, nunca um comando, nunca ler dado, e no máximo **6 por hora**.
+nunca um comando, nunca ler dado, e no máximo **6 por hora em cada servidor**.
 É por isso que o teto existe e que a lista é fechada no programa do servidor.
 
 **Onde ficam as peças dos pedidos:** a configuração em
