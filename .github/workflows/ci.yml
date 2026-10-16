@@ -286,6 +286,11 @@ jobs:
       - name: A tela do progresso
         run: python test_progresso_tela.py
 
+      # Repintar a mesma tela (relogio, medicao de servidor) nao sobe ao topo;
+      # so trocar de tela sobe.
+      - name: A rolagem da tela
+        run: python test_rolagem_tela.py
+
       # A tela "A sua conta do GitHub" com varias contas: nome no lugar do
       # numero, link so para github.com, nada por innerHTML.
       - name: A tela das contas do GitHub

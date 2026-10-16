@@ -449,8 +449,11 @@ const escrever = async (url, corpo) => { escritas.push([url, corpo]); return RES
                       "console.log(JSON.stringify({ texto: b.textContent, "
                       "botoes: achaTodos(b, n => n.tag === 'button').map(x => x.textContent) }));" % self.PEDIDO)
         self.assertIn("Autorizar este servidor?", r["texto"])
-        self.assertIn("Um servidor chamado vps-ovh quer se ligar à sua conta. Ele só vai olhar, mas "
-                      "precisa de poder de administrador no servidor.", r["texto"])
+        self.assertIn("Um servidor chamado vps-ovh quer se ligar à sua conta. Ele vai olhar o que "
+                      "roda nele e precisa de poder de administrador no servidor.", r["texto"])
+        # A linha COM pedidos liga reiniciar e voltar: "só vai olhar" mentia.
+        self.assertIn("reiniciar um sistema ou voltar uma versão", r["texto"])
+        self.assertNotIn("só vai olhar", r["texto"])
         self.assertEqual(r["botoes"], ["Autorizar este servidor"])
         self.assertNotIn("computador", r["texto"])
 

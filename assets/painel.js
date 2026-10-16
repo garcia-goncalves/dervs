@@ -169,6 +169,7 @@ function mostrar(tela, { aba = "", tambem = [] } = {}) {
   }
 }
 
+let TELA_PINTADA = null;  // a última tela que `navegar` pintou (nome/alvo)
 function navegar() {
   const antiga = ROTAS_ANTIGAS[rota().tela];
   if (antiga) history.replaceState(null, "", antiga);
@@ -203,7 +204,12 @@ function navegar() {
     default:             mostrar("painel"); pintarPainel(); break;
   }
   ligarFluxoDosServidores(tela);
-  window.scrollTo(0, 0);
+  /* Topo só quando a TELA mudou. `navegar` também repinta a tela atual (o
+     relógio de um minuto e cada medição de servidor, a cada 30 s): subir aí
+     tirava a pessoa do lugar em que estava lendo. `?autorizar=` não conta. */
+  const pintada = tela + "/" + alvo;
+  if (pintada !== TELA_PINTADA) window.scrollTo(0, 0);
+  TELA_PINTADA = pintada;
 }
 
 /* ================================================== 2. Painel ============ */
@@ -1549,8 +1555,10 @@ function pintarAutorizar(p) {
     const corpo = criar("p");
     if (servidor) {
       corpo.append("Um servidor chamado ", criar("strong", "", p.maquina || "sem nome"),
-                   " quer se ligar à sua conta. Ele só vai olhar, mas precisa de poder de "
-                   + "administrador no servidor.");
+                   " quer se ligar à sua conta. Ele vai olhar o que roda nele e precisa de "
+                   + "poder de administrador no servidor. Se a linha que você colou foi a "
+                   + "com pedidos, ele também poderá reiniciar um sistema ou voltar uma "
+                   + "versão, sempre só depois do seu toque na chave de acesso.");
       if (deFora) corpo.append(" Só autorize se foi você quem acabou de colar a linha nele.");
     } else if (deFora) {
       corpo.append("O computador ", criar("strong", "", p.maquina || "sem nome"),
