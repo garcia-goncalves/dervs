@@ -34,7 +34,7 @@ JS = (RAIZ / "assets" / "painel.js").read_text(encoding="utf-8")
 
 # C10 do plano: os nomes que o teste de fio (etapa F) le.
 FUNCOES = ("criar", "haQuanto", "hora", "marcaDaPorta", "botaoEmAcoes", "detalhes",
-           "desdeQuando", "linhaDeSistema", "linhaDeServidorLigado",
+           "desdeQuando", "linhaDeSistema", "msAteOServidorCalar", "linhaDeServidorLigado",
            "listaDeServidoresLigados", "blocoDaLinhaDoAjudante", "cartaoDosServidores", "ligarUmServidor",
            "linhaDoNoAr", "linhasDoNoAr", "fecharFluxoDosServidores",
            "ligarFluxoDosServidores", "desligarServidor",
@@ -129,6 +129,27 @@ class OCartaoDizOEstadoDeCadaServidor(unittest.TestCase):
         self.assertNotIn("medido há", r["texto"])
         self.assertNotIn("dervs-app", r["texto"])           # nada velho com cara de atual
         self.assertNotIn("de pé", r["texto"])
+
+    def test_medido_velho_na_pagina_vira_sem_dados_sem_esperar_o_servidor(self):
+        """Servidor que cala nao manda evento: o ESTADO da pagina ainda diz
+        "medido" por ate um minuto depois dos 180 s. A tela julga o prazo pelo
+        `medido_em` (achado do ensaio da F-2, 16/10/2026)."""
+        velho = VPS.replace("ha(12)", "ha(200)")
+        r = self.cartao("ESTADO = { servidores_ligados: [%s] };" % velho)
+        self.assertIn("Sem dados há 3 minutos — o servidor parou de contar.", r["texto"])
+        self.assertNotIn("ligado", r["texto"].split("Sem dados")[0])
+        self.assertNotIn("de pé", r["texto"])
+
+    def test_o_cartao_se_repinta_quando_o_medido_vence(self):
+        """Sem o relogio, a tela so mudaria no proximo `carregar`."""
+        prog = ("ESTADO = { servidores_ligados: [%s] };\ncartaoDosServidores();\n"
+                "const armado = !!cartaoDosServidores.vence;\n"
+                "ESTADO = { servidores_ligados: [%s] };\ncartaoDosServidores();\n"
+                "console.log(JSON.stringify({ armado, "
+                "depois: !!cartaoDosServidores.vence }));")
+        calado = VPS.replace('estado: "medido"', 'estado: "sem_dados"').replace("ha(12)", "ha(240)")
+        r = rode(self, prog % (VPS, calado))
+        self.assertEqual(r, {"armado": True, "depois": False})
 
     def test_pareado_e_ainda_sem_medicao_nao_diz_zero_sistemas(self):
         s = '{ maquina_id: 7, nome: "vps-ovh", estado: "sem_dados", medido_em: null, docker_mudo: null, sistemas: [] }'
@@ -584,7 +605,8 @@ class OTextoNaoTemJargaoNemHtml(unittest.TestCase):
     def test_cada_funcao_le_os_campos_do_contrato(self):
         esperado = {
             "cartaoDosServidores": ("servidores_ligados",),
-            "linhaDeServidorLigado": ("maquina_id", "nome", "estado", "medido_em", "docker_mudo", "sistemas"),
+            "msAteOServidorCalar": ("estado", "medido_em"),
+            "linhaDeServidorLigado": ("maquina_id", "nome", "medido_em", "docker_mudo", "sistemas"),
             "linhaDeSistema": ("nome", "estado", "saude", "desde", "reinicios"),
             "linhaDoNoAr": ("servidor", "estado", "publicado_em", "veredito", "atras"),   # medido_em e sha: so no JSON
             "blocoDaLinhaDoAjudante": ("linha", "sha256"),

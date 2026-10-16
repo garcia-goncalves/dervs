@@ -3621,10 +3621,20 @@ async function fazerOPedido(s, tipo, alvo) {
 
 /* Um servidor ligado: nome, a marca de estado (cor nunca sozinha), o carimbo e
    os sistemas. Passados os 180 s o servidor traz `estado: "sem_dados"`. */
+/* Milissegundos até o "medido" vencer (<= 0 ou NaN: já não vale). O prazo é o
+   do servidor (`regras.VALIDADE_DO_SERVIDOR`; test_servir cobra a cópia). A
+   tela confere sozinha porque um servidor que CALA não manda evento: sem isto
+   ela ficava verde até o relógio de um minuto trazer o `sem_dados`. */
+function msAteOServidorCalar(s) {
+  const VALIDADE_DO_SERVIDOR_S = 180;
+  if (s.estado !== "medido") return 0;
+  return Date.parse(s.medido_em || "") + VALIDADE_DO_SERVIDOR_S * 1000 - Date.now();
+}
+
 function linhaDeServidorLigado(s) {
   const li = criar("li", "servidor-ligado");
   li.dataset.maquina = String(s.maquina_id);
-  const medido = s.estado === "medido";
+  const medido = msAteOServidorCalar(s) > 0;
   const topo = criar("div", "servidor-ligado__topo");
   topo.append(criar("strong", "nome", s.nome || "sem nome"),
               medido ? marcaDaPorta("conectado", "ligado") : marcaDaPorta("sem_dados"));
@@ -3837,6 +3847,16 @@ function cartaoDosServidores() {
   if (LIGAR_SERVIDOR.fase === "ligando" && lista.length > LIGAR_SERVIDOR.antes) {
     LIGAR_SERVIDOR.fase = "";
     LIGAR_SERVIDOR.bloco = null;
+  }
+  /* Repinta o cartão no segundo em que o primeiro "medido" vence. `unref` só
+     existe fora do navegador (os testes em node): lá o relógio não segura o
+     processo aberto. */
+  clearTimeout(cartaoDosServidores.vence);
+  cartaoDosServidores.vence = null;
+  const vencem = lista.map(msAteOServidorCalar).filter(ms => ms > 0);
+  if (vencem.length) {
+    cartaoDosServidores.vence = setTimeout(cartaoDosServidores, Math.min(...vencem) + 1000);
+    if (cartaoDosServidores.vence && cartaoDosServidores.vence.unref) cartaoDosServidores.vence.unref();
   }
   const partes = [];
   if (lista.length) {

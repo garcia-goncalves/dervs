@@ -4410,6 +4410,14 @@ class OMotivoDaContaSoQuandoValeParaOProjeto(unittest.TestCase):
         self.assertTrue(m, "constante VALIDADE_GITHUB_S sumiu do painel.js")
         self.assertEqual(eval(m.group(1)), regras.VALIDADE["github"])  # noqa: S307
 
+    def test_a_validade_do_servidor_na_tela_e_a_do_servidor(self):
+        """O cartao do servidor julga o "medido" sozinho (servidor que cala nao
+        manda evento): o prazo da tela tem de ser `regras.VALIDADE_DO_SERVIDOR`."""
+        import regras
+        m = re.search(r"const VALIDADE_DO_SERVIDOR_S = ([0-9 *]+);", self.JS)
+        self.assertTrue(m, "constante VALIDADE_DO_SERVIDOR_S sumiu do painel.js")
+        self.assertEqual(eval(m.group(1)), regras.VALIDADE_DO_SERVIDOR)  # noqa: S307
+
     def _motivo(self, conta, nome="alfa"):
         import shutil
         import subprocess
