@@ -105,8 +105,12 @@ não mostra a linha com pedidos e explica como cadastrar.
 
 **Passo a passo:**
 
-1. Em **Conectar → Seus servidores → Ligar um servidor**, a tela mostra duas
-   linhas: **Só olhar** e **Olhar e aceitar pedidos**. Copie a segunda.
+1. Em **Conectar → Seus servidores → Ligar um servidor**, a tela mostra a
+   linha **Só olhar** e, embaixo, **Olhar e aceitar pedidos** com o botão
+   **Confirmar com a minha chave**. Clique, confirme com o PIN ou a digital de
+   sempre, e a segunda linha aparece. Copie-a. Ela leva **só a chave que você
+   acabou de usar**: uma chave que outra pessoa tenha cadastrado na sua conta
+   nunca entra no servidor por ela (desde 16/10/2026).
 2. Cole no terminal **do servidor** (o PuTTY ou o terminal do DERVS-VOZ) e
    aperte Enter. Pode pedir a sua senha do servidor. Se o servidor já estava
    ligado, ela troca o jeito dele sem perder o que ele já contou.

@@ -42,7 +42,7 @@ FUNCOES = ("criar", "haQuanto", "hora", "marcaDaPorta", "botaoEmAcoes", "detalhe
            # Os casos delas moram em test_pedidos_tela.py.
            "linhaParaColar", "fraseDoPedido", "fraseDoMotivo", "fraseDoErroDePedido", "ultimoPedido",
            "pedidoEmAndamento", "estadoDoPedido", "botaoDePedido", "faixaDoPedido", "linkParaConta",
-           "blocoDosPedidos", "base64urlParaBytes", "bytesParaBase64url", "pedirAoServidor",
+           "blocoDosPedidos", "confirmarComAChave", "base64urlParaBytes", "bytesParaBase64url", "pedirAoServidor",
            "fazerOPedido")
 
 ESTADO_INICIAL = r"""

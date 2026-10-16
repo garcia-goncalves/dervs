@@ -166,80 +166,11 @@ class _Base(_BaseLigado):
 
 # =========================================================== a linha (C1, I1)
 
-class ALinhaComPedidos(_Base):
-    FONTE = ('# -*- coding: ascii -*-\nALVO = ""   # DERVS:ALVO\n'
-             'print(ALVO)\n')
-
-    def setUp(self):
-        super().setUp()
-        self.pasta = tempfile.TemporaryDirectory()
-        self.addCleanup(self.pasta.cleanup)
-        arquivo = Path(self.pasta.name) / "ajudante_servidor.py"
-        arquivo.write_text(self.FONTE, encoding="utf-8")
-        trocar = mock.patch.object(servir.Hub, "AJUDANTE", arquivo)
-        trocar.start()
-        self.addCleanup(trocar.stop)
-
-    def linha_do_dono(self):
-        cookies, _ = self.sessao_e_token()
-        r = self.pedir("/api/ajudante/linha", cookies=cookies)
-        self.assertEqual(200, r.status, r.corpo)
-        return self.json(r)
-
-    @staticmethod
-    def forma(chave):
-        return "%064x.%064x" % chave[1]
-
-    def test_duas_chaves_a_linha_termina_nelas_e_o_resumo_e_o_mesmo(self):
-        k1 = self.chave(apelido="Celular do Thiago")
-        k2 = self.chave(apelido="PIN do notebook")
-        d = self.linha_do_dono()
-        self.assertEqual(
-            d["linha"] + " instalar --ordens "
-            + self.forma(k2) + "," + self.forma(k1), d["linha_com_ordens"])
-        self.assertEqual(["PIN do notebook", "Celular do Thiago"],
-                         d["chaves_na_linha"])
-        self.assertEqual({"linha", "sha256", "endereco", "linha_com_ordens",
-                          "chaves_na_linha"}, set(d))
-        # o arquivo e a linha so-olhar nao mudaram: o resumo e o do download
-        baixado = self.pedir("/ajudante/servidor.py", com_origem=False)
-        self.assertEqual(hashlib.sha256(baixado.corpo.encode("ascii"))
-                         .hexdigest(), d["sha256"])
-        self.assertTrue(d["linha"].endswith("sudo python3 -I dervs-ajudante.py"))
-
-    def test_sem_chave_viva_e_nulo_e_lista_vazia(self):
-        d = self.linha_do_dono()
-        self.assertIsNone(d["linha_com_ordens"])
-        self.assertEqual([], d["chaves_na_linha"])
-        self.assertTrue(d["linha"])
-
-    def test_chave_revogada_fica_de_fora(self):
-        k1 = self.chave(apelido="velha")
-        k2 = self.chave(apelido="nova")
-        con = banco.conectar()
-        try:
-            con.execute("UPDATE chave_de_acesso SET revogada_em = 'x'"
-                        " WHERE cred_id = ?", (k1[2],))
-            con.commit()
-        finally:
-            con.close()
-        d = self.linha_do_dono()
-        self.assertEqual(["nova"], d["chaves_na_linha"])
-        self.assertTrue(d["linha_com_ordens"].endswith(self.forma(k2)))
-        self.assertNotIn(self.forma(k1), d["linha_com_ordens"])
-
-    def test_no_maximo_cinco_chaves_as_mais_novas(self):
-        todas = [self.chave(apelido="c%d" % i) for i in range(7)]
-        d = self.linha_do_dono()
-        self.assertEqual(["c6", "c5", "c4", "c3", "c2"], d["chaves_na_linha"])
-        fim = d["linha_com_ordens"].split(" --ordens ")[1].split(",")
-        self.assertEqual([self.forma(k) for k in todas[:1:-1]][:5], fim)
-
-    def test_uma_chave_de_outra_conta_nao_entra(self):
-        outro = banco.criar_usuario("outro-%s@teste.local"
-                                    % banco.novo_token()[:6])
-        self.chave(uid=outro, apelido="dele")
-        self.assertIsNone(self.linha_do_dono()["linha_com_ordens"])
+# A linha com pedidos (C1) saiu de `GET /api/ajudante/linha` em 16/10/2026:
+# ela levava as 5 chaves mais novas da conta, e uma chave cadastrada com a
+# sessao roubada entrava junto. Agora so sai do toque e leva SO a chave
+# tocada: os casos (chave revogada, de outra conta, uma so) moram em
+# test_linha_com_toque.py.
 
 
 # ==================================================== a medicao (C2, I2)
