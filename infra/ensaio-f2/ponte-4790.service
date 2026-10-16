@@ -1,0 +1,10 @@
+[Unit]
+Description=Ponte do ensaio: 127.0.0.1:4790 -> DERVS no Windows
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/socat TCP-LISTEN:4790,bind=127.0.0.1,fork,reuseaddr TCP:host.docker.internal:4790
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
