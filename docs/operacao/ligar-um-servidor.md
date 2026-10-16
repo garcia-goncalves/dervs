@@ -37,8 +37,9 @@ Docker e acesso à internet. Você precisa poder usar `sudo` nele.
 1. No painel do DERVS, abra **Conectar** e, no cartão **Seus servidores**,
    clique em **Ligar um servidor**. Aparece uma linha comprida; clique em
    **Copiar**.
-2. Abra o terminal do servidor (o PuTTY ou o terminal do DERVS-VOZ) e entre
-   como de costume.
+2. Abra o terminal do servidor no **PuTTY** e entre como de costume. O terminal
+   do DERVS-VOZ recusa esta linha de propósito (desde 16/10/2026): ela só vale
+   colada por você, copiada da tela do DERVS na hora.
 3. **Cole a linha e aperte Enter.** Ela pode pedir a sua senha do servidor
    (é o `sudo`). A linha entra numa pasta nova e só sua, baixa o ajudante,
    **compara o arquivo com o código de conferência** (SHA-256) e só então o
@@ -111,7 +112,7 @@ não mostra a linha com pedidos e explica como cadastrar.
    sempre, e a segunda linha aparece. Copie-a. Ela leva **só a chave que você
    acabou de usar**: uma chave que outra pessoa tenha cadastrado na sua conta
    nunca entra no servidor por ela (desde 16/10/2026).
-2. Cole no terminal **do servidor** (o PuTTY ou o terminal do DERVS-VOZ) e
+2. Cole no terminal **do servidor**, no PuTTY (o do DERVS-VOZ recusa), e
    aperte Enter. Pode pedir a sua senha do servidor. Se o servidor já estava
    ligado, ela troca o jeito dele sem perder o que ele já contou.
 3. **Se der certo**, o terminal diz:

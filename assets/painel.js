@@ -3844,7 +3844,8 @@ function blocoDaLinhaDoAjudante(d) {
 
   const passos = criar("ol", "porta__lista");
   for (const t of [
-    "Abra o terminal do servidor (o PuTTY ou o terminal do DERVS-VOZ) e entre como de costume.",
+    "Abra o terminal do servidor no PuTTY e entre como de costume. O terminal do DERVS-VOZ "
+      + "recusa esta linha de propósito: ela só vale colada por você.",
     "Cole a linha de cima e aperte Enter. Ela pode pedir a sua senha do servidor.",
     "Vai aparecer um código de 8 letras e números, como K7M4-2QXP (mais um endereço). Abra "
       + "esta mesma tela no seu computador e clique em Autorizar (digite o código só se a tela "
