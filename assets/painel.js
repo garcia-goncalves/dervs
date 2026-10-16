@@ -3829,6 +3829,10 @@ function blocoDaLinhaDoAjudante(d) {
         + (quando ? ", cadastrada em " + quando.split(" ")[0] : "")
         + ". Os pedidos andam com essa mesma chave."));
     }
+    /* Quem roubasse a sessão ainda tira uma linha com a chave DELE; o que
+       sobra para ele é convencer o dono a colá-la (revisão de segurança). */
+    bloco.append(criar("p", "mole", "Cole só a linha que você tirou desta tela agora, depois do seu PIN. "
+      + "O DERVS nunca manda esta linha por recado, e-mail ou mensagem: se alguém mandar uma, não cole."));
     bloco.append(...linhaParaColar(d.linha_com_ordens, true),
       criar("p", "mole", "Cole a linha acima e aperte Enter. Ela pode pedir a sua senha do servidor. "
         + "Se o servidor já estava ligado, ela troca o jeito dele sem perder o que ele já contou."),

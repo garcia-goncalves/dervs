@@ -46,6 +46,22 @@ do Windows). Não há chave de pedidos separada nem senha nova.
 - A frase de revogar: "Tirou uma chave? Cole a linha de novo para tirá-la também
   do servidor."
 
+## Revisões (16/10/2026): segurança e Python, as duas "pode mergear"
+
+Aplicado: o arquivo do ajudante é lido ANTES do toque (503 não gasta o
+contador); o caso do uso único passou a distinguir bilhete gasto de contador
+parado (sabotado com `get` no lugar de `pop` e reprovou); corpo torto e teto de
+toques testados; e a frase contra engenharia social na tela ("O DERVS nunca
+manda esta linha por recado, e-mail ou mensagem"), porque quem roubar a sessão
+ainda tira uma linha com a chave DELE e só lhe resta convencer o dono a colá-la.
+
+Dívida nomeada: o bilhete do desafio não é amarrado ao fluxo nem à conta
+(`DESAFIOS` e o cookie `desafio` servem login, cadastro e esta rota). Um
+desafio do login entra em `/linha/pedidos` e pula o balcão `linha_desafio`;
+não dá nada além da linha com a chave que a pessoa mesma tocou. Abrir o
+cadastro de chave em outra aba no meio do toque troca o bilhete e o toque
+volta 401 (incômodo, não falha).
+
 ## Fora desta entrega (proposta)
 
 - Aviso de chave nova: faixa "Uma chave nova entrou na sua conta: «X», em data.

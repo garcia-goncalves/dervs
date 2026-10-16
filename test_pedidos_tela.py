@@ -502,6 +502,8 @@ class AsDuasLinhasParaColar(unittest.TestCase):
                       "Os pedidos andam com essa mesma chave.", r["t"])
         self.assertIn("Tirou uma chave da sua conta? Cole a linha de novo: só assim ela sai também do servidor.",
                       r["t"])
+        self.assertIn("O DERVS nunca manda esta linha por recado, e-mail ou mensagem: se alguém "
+                      "mandar uma, não cole.", r["t"])
         self.assertNotIn("Confirmar com a minha chave", r["botoes"])
         self.assertIn("Se o servidor já estava ligado, ela troca o jeito dele sem perder o que ele já contou.", r["t"])
         self.assertIn("Para voltar a só olhar, cole no servidor a linha Só olhar. Os pedidos são desligados na hora.", r["t"])

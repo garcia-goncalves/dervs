@@ -160,11 +160,36 @@ class OToqueDaALinhaComSoAChaveTocada(_Linha):
         self.assertEqual(7, banco.chave_de_acesso(dono[2])["contador"])
 
     def test_o_desafio_vale_uma_vez_so(self):
+        """O segundo toque e NOVO (contador 2, que o banco aceitaria): so o
+        bilhete gasto o recusa. Com o mesmo corpo, o contador parado tambem
+        recusaria, e o caso nao distinguiria (revisao de seguranca)."""
         dono = self.chave()
         r, cookies = self.desafio()
-        corpo = self.toque(dono, self.json(r))
-        self.assertEqual(200, self.pedidos(corpo, cookies).status)
-        self.assertEqual(401, self.pedidos(corpo, cookies).status)
+        d = self.json(r)
+        self.assertEqual(200, self.pedidos(self.toque(dono, d, contador=1), cookies).status)
+        self.assertEqual(401, self.pedidos(self.toque(dono, d, contador=2), cookies).status)
+        self.assertEqual(1, banco.chave_de_acesso(dono[2])["contador"])
+
+    def test_corpo_torto_e_recusado_sem_quebrar(self):
+        dono = self.chave()
+        bom = None
+        for torto in ({"cred_id": 7}, {"cred_id": dono[2], "cliente": "%%%"},
+                      {"cred_id": dono[2]}, {}):
+            r, cookies = self.desafio()
+            bom = bom or self.toque(dono, self.json(r))
+            corpo = dict(bom, **torto) if torto else {}
+            if "cliente" not in torto and torto:
+                corpo.pop("cliente", None)
+            with self.subTest(torto=torto):
+                self.assertEqual(401, self.pedidos(corpo, cookies).status)
+
+    def test_o_teto_de_toques_e_por_conta(self):
+        dono = self.chave()
+        teto = servir.Hub.TETO_DE_TOQUES_DA_LINHA
+        for _ in range(teto):
+            self.desafio()
+        r, _ = self.desafio()
+        self.assertEqual(429, r.status)
 
     def test_sem_o_bilhete_do_desafio_e_recusado(self):
         dono = self.chave()

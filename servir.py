@@ -2004,6 +2004,10 @@ class Hub(SimpleHTTPRequestHandler):
                 "usuario:%d" % uid, agora_s, balcao="linha_pedidos",
                 teto=self.TETO_DE_TOQUES_DA_LINHA):
             return self._json(429, self.RECUSA)
+        # O arquivo ANTES do toque: sem ele, o 503 nao gasta o contador.
+        bytes_ = self._bytes_do_ajudante()
+        if bytes_ is None:
+            return self._json(503, {"erro": "o ajudante nao esta nesta copia"})
         # O bilhete morre aqui, deu certo ou nao (como no login).
         desafio = DESAFIOS.resgatar(self._ler_cookie("desafio"), agora_s)
         self._apagar_cookie("desafio")
@@ -2026,9 +2030,6 @@ class Hub(SimpleHTTPRequestHandler):
             return self._json(401, self.RECUSA)
         if not banco.usar_chave_de_acesso(guardada["id"], lido["contador"]):
             return self._json(401, self.RECUSA)
-        bytes_ = self._bytes_do_ajudante()
-        if bytes_ is None:
-            return self._json(503, {"erro": "o ajudante nao esta nesta copia"})
         _resumo, _endereco, linha = self._linha_so_olhar(bytes_)
         x, y = guardada["chave"]
         criado_em = next((c["criado_em"] for c in banco.chaves_de_acesso(uid)
