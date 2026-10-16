@@ -32,12 +32,23 @@ O que ficou provado, visto e não suposto:
   passou por `sudo -n` (registrado no `journal` com o comando exato), o kit
   gravou `OK(voltou)` e o site respondeu **v1**.
 
+- **Reinício da máquina** (`docker restart` do container, systemd subindo do
+  zero): os dois temporizadores voltaram ativos, a primeira medição saiu com
+  `Result=success` e o painel a recebeu (13:14 UTC); o site do ensaio subiu sozinho.
+- **Painel fora do ar**: com o DERVS local desligado à noite, a unidade dos
+  pedidos saiu com código 5 (`SEM_REDE`) e não fez nada; na volta seguinte, normal.
+- **`remover`** (o comando que a instalação imprime): saíram as unidades, o
+  `sudoers`, `/opt`, `/var/lib` e `/etc` do ajudante, o usuário e a entrada dele
+  na ACL; o site do ensaio não foi tocado. Três minutos depois o painel disse
+  "Sem dados há 4 minutos — o servidor parou de contar", nunca "zero sistemas";
+  "Desligar este servidor" o tirou da lista.
+
 ## O que este ensaio NÃO prova
 
 - A VPS: nginx, o Docker e o fuso dela, o Ajudei ao lado, `dervs.com.br` como
   `rp_id`. Continua "na VPS só depois de publicar e de duas revisões de segurança".
-- Reiniciar o servidor (reboot) com o temporizador voltando sozinho.
-- A recusa com o site parado e o `remover` não foram feitos neste ensaio.
+- Um `voltar` que FALHA (`FALHOU-AO-VOLTAR` no kit → desfecho `falhou` na
+  tela): exige outra assinatura com o PIN do dono.
 - O container é `--privileged`: o que a contenção do systemd impede numa máquina
   comum pode passar aqui sem ser notado (o contrário não: o que funcionou com as
   diretivas ligadas funciona com elas).
@@ -49,6 +60,11 @@ O que ficou provado, visto e não suposto:
    medição de servidor (30 s). Consertado; `test_rolagem_tela.py` cobra.
 2. **A autorização de servidor dizia "Ele só vai olhar"** mesmo quando a linha
    colada liga os pedidos de reiniciar e voltar. Consertado no texto.
-3. A unidade dos pedidos sai com código 5 (`SEM_REDE`) quando o DERVS está fora
+3. **Dívida pequena (Lei 2):** servidor que cala não manda evento, então a tela
+   só descobre o "sem dados" no relógio de um minuto: por até ~60 s depois dos
+   180 s ela ainda mostra `[OK] ligado` e "medido há 3 minutos". O servidor já
+   responde `sem_dados` certo. Fechar = a tela julgar o prazo pelo `medido_em`
+   (como faz com o GitHub em `motivoDoGithubDaConta`). Não feito.
+4. A unidade dos pedidos sai com código 5 (`SEM_REDE`) quando o DERVS está fora
    do ar, e o systemd o rotula `NOTINSTALLED` — só o nome é estranho; a volta
    seguinte segue normal.
