@@ -606,6 +606,14 @@ O ajudante aceita **dois** pedidos assinados pela chave de acesso do dono: reini
 (`ARGV_DO_REINICIO`) e voltar (`ARGV_DA_VOLTA`, `deploy <p> --voltar`). Plano e contratos
 I0-I6: `docs/superpowers/plans/dervs-conectar-acoes-c.md`. O que quebra em silêncio:
 
+- **A linha com pedidos só sai do TOQUE, e leva só a chave tocada (16/10/2026).**
+  `GET /api/ajudante/linha` devolve `{linha, sha256, endereco, tem_chave}` e NUNCA
+  `--ordens`; a linha com pedidos sai de `POST /api/ajudante/linha/pedidos`, depois de
+  `/desafio` (uso único, `DESAFIOS`) e da mesma `passkey.conferir_entrada` do login, com a
+  chave viva e DA SESSÃO. Antes iam as 5 chaves mais novas, e uma chave cadastrada com
+  sessão roubada entrava no servidor (2ª revisão de segurança). Voltar a pôr chave na
+  linha do GET reprova `test_linha_com_toque`. No `test_acoes_fio` a conferência do toque
+  é dublê (a privada do vetor de fora foi apagada); o toque real é do teste novo.
 - **Desligado por padrão nas DUAS pontas.** Sem `/etc/dervs-ajudante/ordens.json` o
   subcomando `ordens` sai 0 sem tocar a rede; no DERVS, `ordens: null` na medição faz
   `preparar` responder 409 `so_olha`. Tirar uma ponta deixa a outra sozinha segurando.

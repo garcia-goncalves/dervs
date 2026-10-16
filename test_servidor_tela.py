@@ -42,7 +42,7 @@ FUNCOES = ("criar", "haQuanto", "hora", "marcaDaPorta", "botaoEmAcoes", "detalhe
            # Os casos delas moram em test_pedidos_tela.py.
            "linhaParaColar", "fraseDoPedido", "fraseDoMotivo", "fraseDoErroDePedido", "ultimoPedido",
            "pedidoEmAndamento", "estadoDoPedido", "botaoDePedido", "faixaDoPedido", "linkParaConta",
-           "blocoDosPedidos", "base64urlParaBytes", "bytesParaBase64url", "pedirAoServidor",
+           "blocoDosPedidos", "confirmarComAChave", "base64urlParaBytes", "bytesParaBase64url", "pedirAoServidor",
            "fazerOPedido")
 
 ESTADO_INICIAL = r"""
@@ -287,7 +287,8 @@ class OFluxoDaLinhaParaColar(unittest.TestCase):
         self.assertEqual(r["ordem"][0], "Copiar")                       # acima do bloco
         self.assertEqual(r["ordem"][1], "pre")
         self.assertEqual(r["passos"], [
-            "Abra o terminal do servidor (o PuTTY ou o terminal do DERVS-VOZ) e entre como de costume.",
+            "Abra o terminal do servidor no PuTTY e entre como de costume. O terminal do DERVS-VOZ "
+            "recusa esta linha de propósito: ela só vale colada por você.",
             "Cole a linha de cima e aperte Enter. Ela pode pedir a sua senha do servidor.",
             "Vai aparecer um código de 8 letras e números, como K7M4-2QXP (mais um endereço). Abra "
             "esta mesma tela no seu computador e clique em Autorizar (digite o código só se a tela "

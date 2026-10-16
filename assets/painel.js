@@ -3268,7 +3268,7 @@ async function gerarNumero() {
      é "não olhei"), nem "de pé" com medição velha: passada a validade o
      servidor é "sem dados" e a lista de sistemas some junto;
    - "igual ao GitHub" sem ter medido: veredito desconhecido é "não sei". */
-const LIGAR_SERVIDOR = { fase: "", antes: 0, bloco: null, pedido: { maquina: 0, tipo: "", alvo: "", fase: "", frase: "", aviso: "", em: 0 } };
+const LIGAR_SERVIDOR = { fase: "", antes: 0, bloco: null, dados: null, pedido: { maquina: 0, tipo: "", alvo: "", fase: "", frase: "", aviso: "", em: 0 } };
 const TELAS_DO_FLUXO_DOS_SERVIDORES = ["painel", "projeto", "conectar"];
 let FLUXO_SERVIDORES = null;   // o EventSource dos servidores, quando ligado
 
@@ -3723,40 +3723,129 @@ function linhaParaColar(linha, comPedidos) {
   return [acoes, aviso, pre];
 }
 
+/* O toque que libera a linha com pedidos. A linha leva SÓ a chave tocada: uma
+   chave que outra pessoa tenha cadastrado na conta mora no aparelho dela, e
+   nunca entra no servidor pela mão do dono (dervs-linha-com-toque.md). */
+async function confirmarComAChave() {
+  const t = LIGAR_SERVIDOR;
+  if (!t.dados || t.dados.toque === "tocando") return;
+  const pinta = (toque, extra) => {
+    t.dados = Object.assign({}, t.dados, extra || {}, { toque });
+    t.bloco = blocoDaLinhaDoAjudante(t.dados);
+    cartaoDosServidores();
+  };
+  if (!(typeof navigator !== "undefined" && navigator.credentials && navigator.credentials.get)) {
+    pinta("sem_suporte");
+    return;
+  }
+  pinta("tocando");
+  let r = null, d = null;
+  try { r = await escrever("/api/ajudante/linha/desafio", {}); } catch (_) { r = null; }
+  if (r && r.ok) { try { d = await r.json(); } catch (_) { d = null; } }
+  if (!d || typeof d.desafio !== "string" || typeof d.rp_id !== "string"
+      || !Array.isArray(d.chaves) || !d.chaves.length) {
+    pinta(r && r.status === 403 ? "" : "erro");    /* 403: a faixa do alto explica */
+    return;
+  }
+  let cred = null;
+  try {
+    cred = await navigator.credentials.get({ publicKey: {
+      challenge: base64urlParaBytes(d.desafio),
+      rpId: d.rp_id,
+      allowCredentials: d.chaves.map(id => ({ type: "public-key", id: base64urlParaBytes(id) })),
+      userVerification: "required",
+      timeout: (+d.segundos || 300) * 1000
+    } });
+  } catch (e) {
+    pinta(e && (e.name === "NotAllowedError" || e.name === "AbortError") ? "cancelado" : "erro");
+    return;
+  }
+  if (!cred || !cred.response) { pinta("cancelado"); return; }
+  const resp = cred.response;
+  let r2 = null, d2 = null;
+  try {
+    r2 = await escrever("/api/ajudante/linha/pedidos", {
+      cred_id: cred.id,
+      cliente: bytesParaBase64url(resp.clientDataJSON),
+      autenticador: bytesParaBase64url(resp.authenticatorData),
+      assinatura: bytesParaBase64url(resp.signature)
+    });
+  } catch (_) { r2 = null; }
+  if (r2 && r2.ok) { try { d2 = await r2.json(); } catch (_) { d2 = null; } }
+  if (!d2 || typeof d2.linha_com_ordens !== "string" || !d2.linha_com_ordens) {
+    pinta("erro");
+    return;
+  }
+  pinta("", { linha_com_ordens: d2.linha_com_ordens, chave: d2.chave || null });
+}
+
 function blocoDaLinhaDoAjudante(d) {
+  const FRASES_DO_TOQUE = {
+    cancelado: "Você cancelou. A linha com pedidos não foi mostrada; pode tentar de novo.",
+    erro: "Não deu para confirmar a sua chave. Tente de novo.",
+    sem_suporte: "Este navegador não sabe pedir a digital. Use o Chrome, o Edge ou o Safari atualizados."
+  };
   const bloco = criar("div", "ajudante");
-  /* Duas escolhas, uma embaixo da outra. A segunda só existe com chave de
-     acesso viva (`linha_com_ordens`): sem ela, a tela explica como cadastrar. */
+  /* Duas escolhas, uma embaixo da outra. A segunda só aparece com chave viva
+     (`tem_chave`), e a linha dela só depois do toque (`confirmarComAChave`).
+     Sem chave, a tela explica como cadastrar. */
   const comPedidos = typeof d.linha_com_ordens === "string" && d.linha_com_ordens !== "";
-  if (comPedidos) {
+  const escolhe = comPedidos || d.tem_chave === true;
+  if (escolhe) {
     bloco.append(criar("h3", "", "Só olhar"),
       criar("p", "mole", "O servidor conta o que está rodando nele. O DERVS não consegue pedir nada a ele."));
   }
   bloco.append(...linhaParaColar(d.linha, false));
-  if (d.linha_com_ordens === null) {
+  if (d.tem_chave === false && !comPedidos) {
     bloco.append(criar("p", "mole",
       "Para o servidor aceitar pedidos, você precisa de uma chave de acesso (a digital do celular "
       + "ou o PIN do computador). Cadastre uma e volte aqui."),
       linkParaConta("Cadastrar uma chave de acesso"));
   }
-  if (comPedidos) {
-    const aparelhos = Array.isArray(d.chaves_na_linha) ? d.chaves_na_linha : [];
+  if (escolhe) {
     bloco.append(criar("h3", "", "Olhar e aceitar pedidos"),
       criar("p", "mole", "Além de contar, o servidor aceita dois pedidos seus: reiniciar um sistema e "
         + "voltar um projeto para a versão anterior. Cada pedido só anda com a sua digital ou o seu PIN."));
-    if (aparelhos.length) {
-      bloco.append(criar("p", "mole", "Poderão mandar pedidos: " + aparelhos.join(", ") + "."));
+  }
+  if (escolhe && !comPedidos) {
+    const tocando = d.toque === "tocando";
+    const { acoes, botao } = botaoEmAcoes(tocando ? "Esperando a sua chave…" : "Confirmar com a minha chave",
+                                          true, confirmarComAChave);
+    if (tocando) { botao.disabled = true; botao.setAttribute("aria-busy", "true"); }
+    bloco.append(criar("p", "mole",
+      "Para ver esta linha, confirme com a sua chave: o mesmo PIN ou digital de sempre. "
+      + "Assim só a sua chave entra no servidor."), acoes);
+    if (FRASES_DO_TOQUE[d.toque]) {
+      const aviso = criar("p", "carimbo", FRASES_DO_TOQUE[d.toque]);
+      aviso.setAttribute("role", "status");
+      bloco.append(aviso);
     }
+  }
+  if (comPedidos) {
+    const c = d.chave && typeof d.chave === "object" ? d.chave : null;
+    if (c && c.apelido) {
+      const quando = desdeQuando(c.criado_em);
+      bloco.append(criar("p", "mole", "Esta linha confia só na chave “" + c.apelido + "”"
+        + (quando ? ", cadastrada em " + quando.split(" ")[0] : "")
+        + ". Os pedidos andam com essa mesma chave."));
+    }
+    /* Quem roubasse a sessão ainda tira uma linha com a chave DELE; o que
+       sobra para ele é convencer o dono a colá-la (revisão de segurança). */
+    bloco.append(criar("p", "mole", "Cole só a linha que você tirou desta tela agora, depois do seu PIN. "
+      + "O DERVS nunca manda esta linha por recado, e-mail ou mensagem: se alguém mandar uma, não cole."));
     bloco.append(...linhaParaColar(d.linha_com_ordens, true),
       criar("p", "mole", "Cole a linha acima e aperte Enter. Ela pode pedir a sua senha do servidor. "
         + "Se o servidor já estava ligado, ela troca o jeito dele sem perder o que ele já contou."),
       criar("p", "mole", "Para voltar a só olhar, cole no servidor a linha Só olhar. "
-        + "Os pedidos são desligados na hora."));
+        + "Os pedidos são desligados na hora."),
+      criar("p", "mole", "Tirou uma chave da sua conta? Cole a linha de novo: só assim ela sai "
+        + "também do servidor."));
   }
 
   const passos = criar("ol", "porta__lista");
   for (const t of [
-    "Abra o terminal do servidor (o PuTTY ou o terminal do DERVS-VOZ) e entre como de costume.",
+    "Abra o terminal do servidor no PuTTY e entre como de costume. O terminal do DERVS-VOZ "
+      + "recusa esta linha de propósito: ela só vale colada por você.",
     "Cole a linha de cima e aperte Enter. Ela pode pedir a sua senha do servidor.",
     "Vai aparecer um código de 8 letras e números, como K7M4-2QXP (mais um endereço). Abra "
       + "esta mesma tela no seu computador e clique em Autorizar (digite o código só se a tela "
@@ -3804,7 +3893,7 @@ function blocoDaLinhaDoAjudante(d) {
   faz.append(criar("p", "carimbo", "Código de conferência do arquivo (SHA-256): " + d.sha256
     + ". A linha já compara o arquivo com este código. Ele prova que chegou inteiro, não de quem veio."));
   bloco.append(faz);
-  if (comPedidos) {
+  if (escolhe) {
     const fazPedidos = detalhes("servidor-o-que-faz-pedidos", "O que isso faz? (olhar e aceitar pedidos)");
     fazPedidos.append(
       criar("p", "mole", "A linha faz tudo o que a de só olhar faz e mais uma coisa: deixa o servidor "
@@ -3847,6 +3936,7 @@ function cartaoDosServidores() {
   if (LIGAR_SERVIDOR.fase === "ligando" && lista.length > LIGAR_SERVIDOR.antes) {
     LIGAR_SERVIDOR.fase = "";
     LIGAR_SERVIDOR.bloco = null;
+    LIGAR_SERVIDOR.dados = null;
   }
   /* Repinta o cartão no segundo em que o primeiro "medido" vence. `unref` só
      existe fora do navegador (os testes em node): lá o relógio não segura o
@@ -3890,6 +3980,7 @@ async function ligarUmServidor() {
   LIGAR_SERVIDOR.antes = lista.length;
   LIGAR_SERVIDOR.fase = "buscando";
   LIGAR_SERVIDOR.bloco = null;
+  LIGAR_SERVIDOR.dados = null;
   cartaoDosServidores();
   let r = null;
   try { r = await fetch("/api/ajudante/linha"); } catch (_) { r = null; }
@@ -3902,6 +3993,7 @@ async function ligarUmServidor() {
     abrirFaixaPaginaVelha();
     LIGAR_SERVIDOR.fase = "";
   } else if (d && typeof d.linha === "string" && typeof d.sha256 === "string") {
+    LIGAR_SERVIDOR.dados = d;
     LIGAR_SERVIDOR.bloco = blocoDaLinhaDoAjudante(d);
     LIGAR_SERVIDOR.fase = "ligando";
   } else {

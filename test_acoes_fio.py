@@ -82,7 +82,7 @@ class _Mundo(BaseServidorDeVerdade):
     TIPO, ALVO, CASO, BASE = "reiniciar", "grimoire-web", "valido", CAMPOS
     CODIGO_DE_FAZER = 0
     DESLIGAR_ANTES_DE_BUSCAR = False
-    ESTADO = ("cookies", "csrf", "linha", "baixado", "chamadas", "raiz",
+    ESTADO = ("cookies", "csrf", "linha", "tocada", "baixado", "chamadas", "raiz",
               "preparado", "assinado", "feitos", "dados_depois", "ordem",
               "repetida", "repetida_feitos", "repetida_desfechos",
               "erros_da_linha", "saida", "token", "maquina_id",
@@ -144,8 +144,28 @@ class _Mundo(BaseServidorDeVerdade):
         self.linha = json.loads(r.corpo)
         self.assertEqual(hashlib.sha256(self.baixado).hexdigest(),
                          self.linha["sha256"])
-        com = self.linha["linha_com_ordens"]
+        # A linha com pedidos so sai do toque (dervs-linha-com-toque.md). A
+        # chave deste fio e o vetor de fora, cuja privada foi apagada: aqui a
+        # conferencia do toque e um duble, e o toque de verdade (assinatura,
+        # UV, chave da conta, uso unico) e provado em test_linha_com_toque.py.
+        # O resto do fio -- a rota, o desafio de uso unico, o contador no
+        # banco e a linha que o ajudante instala -- roda de verdade.
+        r = self.pedir("/api/ajudante/linha/desafio", "POST", {},
+                       cookies=self.cookies, cabecalhos={"X-Token": self.csrf})
+        self.assertEqual(r.status, 200, r.corpo)
+        com_bilhete = dict(self.cookies, desafio=r.cookies["desafio"])
+        with mock.patch.object(servir.passkey, "conferir_entrada",
+                               return_value={"contador": 0}):
+            r = self.pedir("/api/ajudante/linha/pedidos", "POST",
+                           {"cred_id": CRED_ID, "cliente": "AA",
+                            "autenticador": "AA", "assinatura": "AA"},
+                           cookies=com_bilhete,
+                           cabecalhos={"X-Token": self.csrf})
+        self.assertEqual(r.status, 200, r.corpo)
+        self.tocada = json.loads(r.corpo)
+        com = self.tocada["linha_com_ordens"]
         self.assertIsInstance(com, str)
+        self.assertNotIn("--ordens", self.linha["linha"])
         textos = com.split(" --ordens ", 1)[1].split(",")
 
         tmp = tempfile.TemporaryDirectory()
@@ -452,10 +472,15 @@ class OQueATelaLeOServidorEntrega(_MundoDeReiniciar):
         self.assertTrue(s["sistemas"][0]["reiniciavel"])
 
     def test_a_linha_com_pedidos(self):
-        d = self.mundo().linha
-        self.contido(campos("d", "blocoDaLinhaDoAjudante"), set(d),
-                     "/api/ajudante/linha")
-        self.assertEqual(d["chaves_na_linha"], ["Celular do teste"])
+        m = self.mundo()
+        # A tela junta o GET e a resposta do toque; `toque` e estado dela.
+        self.contido(campos("d", "blocoDaLinhaDoAjudante") - {"toque"},
+                     set(m.linha) | set(m.tocada),
+                     "/api/ajudante/linha + /api/ajudante/linha/pedidos")
+        self.contido({"linha_com_ordens", "chave"} & campos("d2", "confirmarComAChave"),
+                     set(m.tocada), "/api/ajudante/linha/pedidos")
+        self.assertEqual(m.tocada["chave"]["apelido"], "Celular do teste")
+        self.assertTrue(m.linha["tem_chave"])
 
     def test_a_resposta_de_preparar_e_a_de_um_pedido_recusado(self):
         self.mundo()

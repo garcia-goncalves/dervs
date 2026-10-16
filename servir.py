@@ -1944,6 +1944,19 @@ class Hub(SimpleHTTPRequestHandler):
         corpo = self._bytes_do_ajudante()
         if corpo is None:
             return self._json(503, {"erro": "o ajudante nao esta nesta copia"})
+        resumo, endereco, linha = self._linha_so_olhar(corpo)
+        # A linha COM pedidos NAO sai daqui: ela leva a chave que o servidor
+        # vai aceitar, e so nasce depois de um toque dessa chave
+        # (`_ajudante_linha_pedidos`). Antes ia com as 5 chaves mais novas da
+        # conta, e quem roubasse a sessao cadastrava a dele e esperava o dono
+        # colar a linha (2a revisao de seguranca da entrega C, 16/10/2026).
+        tem_chave = bool(banco.chaves_publicas_da_conta(sessao["usuario_id"],
+                                                        limite=1))
+        return self._json(200, {"linha": linha, "sha256": resumo,
+                                "endereco": endereco, "tem_chave": tem_chave})
+
+    def _linha_so_olhar(self, corpo):
+        """(resumo, endereco, linha) sobre os bytes de `_bytes_do_ajudante`."""
         resumo = hashlib.sha256(corpo).hexdigest()
         endereco = self._endereco_publico() + "/ajudante/servidor.py"
         # Pasta nova e privada (`mktemp -d`): na pasta em que a pessoa estava,
@@ -1952,18 +1965,78 @@ class Hub(SimpleHTTPRequestHandler):
         linha = ('d="$(mktemp -d)" && cd "$d" && curl -fsSL %s -o dervs-ajudante.py && '
                  'echo "%s  dervs-ajudante.py" | sha256sum -c - && sudo python3 '
                  '-I dervs-ajudante.py' % (endereco, resumo))
-        # A linha COM pedidos e a mesma, mais as chaves de acesso vivas da
-        # conta (as 5 mais novas): o arquivo e o resumo nao mudam, e o dono ve
-        # na propria linha o que esta entregando ao servidor (C1).
-        chaves = banco.chaves_publicas_da_conta(sessao["usuario_id"])
-        com_ordens = (linha + " instalar --ordens " + ",".join(
-            "%064x.%064x" % (c["x"], c["y"]) for c in chaves)
-            if chaves else None)
-        return self._json(200, {"linha": linha, "sha256": resumo,
-                                "endereco": endereco,
-                                "linha_com_ordens": com_ordens,
-                                "chaves_na_linha": [c["apelido"]
-                                                    for c in chaves]})
+        return resumo, endereco, linha
+
+    # Um toque por linha colada: 10 em 15 min sobram para errar o PIN e repetir.
+    TETO_DE_TOQUES_DA_LINHA = 10
+
+    def _ajudante_linha_desafio(self):
+        """O desafio do toque que libera a linha com pedidos. Lista as chaves
+        vivas DA CONTA para o navegador oferecer so elas."""
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        uid = sessao["usuario_id"]
+        if not cortina.registrar_tentativa(
+                "usuario:%d" % uid, time.time(), balcao="linha_desafio",
+                teto=self.TETO_DE_TOQUES_DA_LINHA):
+            return self._json(429, self.RECUSA)
+        bilhete, desafio = DESAFIOS.abrir(time.time())
+        self._por_cookie("desafio", bilhete, passkey.PRAZO_DO_DESAFIO)
+        return self._json(200, {
+            "desafio": passkey.b64url(desafio), "rp_id": self._rp_id(),
+            "chaves": [c["cred_id"] for c in
+                       banco.chaves_publicas_da_conta(uid, limite=1000)],
+            "segundos": passkey.PRAZO_DO_DESAFIO})
+
+    def _ajudante_linha_pedidos(self):
+        """O toque conferido devolve a linha com pedidos com SO aquela chave.
+
+        A mesma conferencia do login (`passkey.conferir_entrada`: origem,
+        rp_id, presenca E verificacao da pessoa) e o mesmo contador decidido
+        no banco. A chave tem de ser viva e DESTA sessao. Falha FECHADA: 401."""
+        corpo, sessao = self._guarda_de_escrita()
+        if corpo is None:
+            return
+        uid = sessao["usuario_id"]
+        agora_s = time.time()
+        if not cortina.registrar_tentativa(
+                "usuario:%d" % uid, agora_s, balcao="linha_pedidos",
+                teto=self.TETO_DE_TOQUES_DA_LINHA):
+            return self._json(429, self.RECUSA)
+        # O arquivo ANTES do toque: sem ele, o 503 nao gasta o contador.
+        bytes_ = self._bytes_do_ajudante()
+        if bytes_ is None:
+            return self._json(503, {"erro": "o ajudante nao esta nesta copia"})
+        # O bilhete morre aqui, deu certo ou nao (como no login).
+        desafio = DESAFIOS.resgatar(self._ler_cookie("desafio"), agora_s)
+        self._apagar_cookie("desafio")
+        if desafio is None:
+            return self._json(401, self.RECUSA)
+        cred_id = self._texto_do_corpo(corpo, "cred_id", teto=2048)
+        cliente = self._bytes_do_corpo(corpo, "cliente")
+        autenticador = self._bytes_do_corpo(corpo, "autenticador")
+        assinatura = self._bytes_do_corpo(corpo, "assinatura")
+        if not cred_id or cliente is None or autenticador is None \
+                or assinatura is None:
+            return self._json(401, self.RECUSA)
+        guardada = banco.chave_de_acesso(cred_id)
+        if guardada is None or guardada["usuario_id"] != uid:
+            return self._json(401, self.RECUSA)
+        lido = passkey.conferir_entrada(cliente, autenticador, assinatura,
+                                        guardada["chave"], desafio,
+                                        self._rp_id(), ORIGENS_OK)
+        if lido is None:
+            return self._json(401, self.RECUSA)
+        if not banco.usar_chave_de_acesso(guardada["id"], lido["contador"]):
+            return self._json(401, self.RECUSA)
+        _resumo, _endereco, linha = self._linha_so_olhar(bytes_)
+        x, y = guardada["chave"]
+        criado_em = next((c["criado_em"] for c in banco.chaves_de_acesso(uid)
+                          if c["id"] == guardada["id"]), "")
+        return self._json(200, {
+            "linha_com_ordens": linha + " instalar --ordens %064x.%064x" % (x, y),
+            "chave": {"apelido": guardada["apelido"], "criado_em": criado_em}})
 
     # A medicao. Um envio a cada 30 s = 30 por janela de 15 min; 60 e o
     # dobro, para reinicio e relogio torto. Balcao proprio, por maquina.
@@ -4873,6 +4946,8 @@ ROTAS = {
     "/ajudante/servidor.py":    Rota("GET",  Hub._ajudante_do_servidor,
                                      "aberta"),
     "/api/ajudante/linha":      Rota("GET",  Hub._ajudante_linha,   "dado"),
+    "/api/ajudante/linha/desafio": Rota("POST", Hub._ajudante_linha_desafio, "dado"),
+    "/api/ajudante/linha/pedidos": Rota("POST", Hub._ajudante_linha_pedidos, "dado"),
 
     # Os pedidos ao servidor (Conectar simples, C). As duas da tela sao `dado`
     # e escrevem: Origin, anti-CSRF e balcao proprio por conta. As duas do

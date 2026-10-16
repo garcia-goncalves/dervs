@@ -337,6 +337,11 @@ jobs:
       - name: Os pedidos no servidor
         run: python test_ordens_servidor.py
 
+      # A linha com pedidos so sai do toque e leva so a chave tocada: chave
+      # cadastrada com sessao roubada nao entra no servidor.
+      - name: A linha com pedidos depois do toque
+        run: python test_linha_com_toque.py
+
       - name: Os pedidos na tela
         run: python test_pedidos_tela.py
 

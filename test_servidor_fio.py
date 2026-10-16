@@ -277,7 +277,10 @@ class OQueATelaLeOServidorEntrega(_ComOAjudanteBaixado):
                      "/api/dados (projeto.no_ar)")
 
     def test_a_linha_para_colar(self):
-        self.contido(campos("d", "blocoDaLinhaDoAjudante"), set(self.linha),
+        # `linha_com_ordens` e `chave` vem da rota do toque (o fio que a prova
+        # e test_acoes_fio.OQueATelaLeOServidorEntrega); `toque` e estado da propria tela.
+        self.contido(campos("d", "blocoDaLinhaDoAjudante")
+                     - {"linha_com_ordens", "chave", "toque"}, set(self.linha),
                      "/api/ajudante/linha")
 
     def test_o_pedido_de_autorizar_de_servidor(self):

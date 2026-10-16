@@ -666,6 +666,11 @@ deixaria quem tomasse o site publicar o código dele.
 
 - **Desligado por padrão, nas duas pontas.** A tela oferece duas linhas: *Só olhar* e
   *Olhar e aceitar pedidos*. Só a segunda liga, e colar a primeira desliga na hora.
+- **A linha com pedidos só aparece depois de um toque do dono, e leva só a chave tocada**
+  (16/10/2026, achado da 2ª revisão de segurança). Antes ela levava as 5 chaves mais novas
+  da conta, e quem roubasse a sessão cadastrava a própria chave e esperava o dono colar a
+  linha. Uma chave só: a mesma que assina os pedidos. Tirar uma chave da conta só a tira
+  do servidor colando a linha de novo.
 - **Cada pedido sai com a digital ou o PIN do dono** (chave de acesso), e é **o próprio
   servidor** quem confere: o aparelho é do dono, o pedido tem no máximo 5 minutos, nunca foi
   usado, e é um dos dois da lista. No máximo 6 por hora **em cada servidor**. **Nenhum

@@ -471,9 +471,12 @@ class CadaEstadoDoPedidoDiz(unittest.TestCase):
 
 
 # ============================================================= a linha para colar
-LINHA2 = ("{ linha: 'LINHA-SO-OLHAR', sha256: '" + "a" * 64 + "', endereco: 'https://dervs.com.br/ajudante/servidor.py', "
-          "linha_com_ordens: 'LINHA-SO-OLHAR --ordens 00.11,22.33', "
-          "chaves_na_linha: ['Celular do Thiago', 'PIN do notebook'] }")
+# GET /api/ajudante/linha (sem toque) e, depois do toque, o que
+# `confirmarComAChave` junta da rota /api/ajudante/linha/pedidos.
+LINHA1 = ("{ linha: 'LINHA-SO-OLHAR', sha256: '" + "a" * 64 + "', endereco: 'https://dervs.com.br/ajudante/servidor.py', "
+          "tem_chave: true }")
+LINHA2 = LINHA1[:-2] + (", linha_com_ordens: 'LINHA-SO-OLHAR --ordens 00.11', "
+                        "chave: { apelido: 'PIN do notebook', criado_em: '2026-10-12T13:00:00+00:00' } }")
 
 
 class AsDuasLinhasParaColar(unittest.TestCase):
@@ -490,12 +493,18 @@ class AsDuasLinhasParaColar(unittest.TestCase):
     def test_com_chave_as_duas_escolhas_uma_embaixo_da_outra(self):
         r = self.bloco(LINHA2)
         self.assertEqual(r["h3"][:2], ["Só olhar", "Olhar e aceitar pedidos"])
-        self.assertEqual(r["pres"], ["LINHA-SO-OLHAR", "LINHA-SO-OLHAR --ordens 00.11,22.33"])
+        self.assertEqual(r["pres"], ["LINHA-SO-OLHAR", "LINHA-SO-OLHAR --ordens 00.11"])
         self.assertEqual(r["botoes"].count("Copiar"), 2)
         self.assertIn("O servidor conta o que está rodando nele. O DERVS não consegue pedir nada a ele.", r["t"])
         self.assertIn("Além de contar, o servidor aceita dois pedidos seus: reiniciar um sistema e voltar um "
                       "projeto para a versão anterior. Cada pedido só anda com a sua digital ou o seu PIN.", r["t"])
-        self.assertIn("Poderão mandar pedidos: Celular do Thiago, PIN do notebook.", r["t"])
+        self.assertIn("Esta linha confia só na chave “PIN do notebook”, cadastrada em 12/10/2026. "
+                      "Os pedidos andam com essa mesma chave.", r["t"])
+        self.assertIn("Tirou uma chave da sua conta? Cole a linha de novo: só assim ela sai também do servidor.",
+                      r["t"])
+        self.assertIn("O DERVS nunca manda esta linha por recado, e-mail ou mensagem: se alguém "
+                      "mandar uma, não cole.", r["t"])
+        self.assertNotIn("Confirmar com a minha chave", r["botoes"])
         self.assertIn("Se o servidor já estava ligado, ela troca o jeito dele sem perder o que ele já contou.", r["t"])
         self.assertIn("Para voltar a só olhar, cole no servidor a linha Só olhar. Os pedidos são desligados na hora.", r["t"])
         self.assertEqual(r["links"], [])                       # a escolha de cadastrar chave so aparece sem chave
@@ -507,7 +516,7 @@ class AsDuasLinhasParaColar(unittest.TestCase):
                        "const bs = achaTodos(b, n => n.tag === 'button' && n.textContent === 'Copiar');\n"
                        "await bs[1].clicar(); await bs[0].clicar();\n"
                        "var x = [copiados, bs.map(n => n.getAttribute('aria-label'))];\n")
-        self.assertEqual(r["x"][0], ["LINHA-SO-OLHAR --ordens 00.11,22.33", "LINHA-SO-OLHAR"])
+        self.assertEqual(r["x"][0], ["LINHA-SO-OLHAR --ordens 00.11", "LINHA-SO-OLHAR"])
         self.assertEqual(r["x"][1], ["Copiar a linha para colar no servidor",
                                      "Copiar a linha com pedidos para colar no servidor"])
 
@@ -535,8 +544,7 @@ class AsDuasLinhasParaColar(unittest.TestCase):
                 self.assertIn(frase, r["t"])
 
     def test_sem_chave_a_linha_com_pedidos_nao_existe_e_a_tela_ensina_a_cadastrar(self):
-        d = LINHA2.replace("linha_com_ordens: 'LINHA-SO-OLHAR --ordens 00.11,22.33'", "linha_com_ordens: null") \
-                  .replace("chaves_na_linha: ['Celular do Thiago', 'PIN do notebook']", "chaves_na_linha: []")
+        d = LINHA1.replace("tem_chave: true", "tem_chave: false")
         r = self.bloco(d)
         self.assertEqual(r["pres"], ["LINHA-SO-OLHAR"])
         self.assertNotIn("--ordens", r["t"])
@@ -546,11 +554,80 @@ class AsDuasLinhasParaColar(unittest.TestCase):
         self.assertNotIn("Olhar e aceitar pedidos", r["t"])
         self.assertEqual(r["det"], [[False, "O que isso faz?"]])
 
+    def test_com_chave_e_sem_toque_a_linha_com_pedidos_espera_o_pin(self):
+        """A linha que o servidor vai obedecer so nasce do toque: antes dele,
+        nenhum `--ordens` na tela, e o botao e o primeiro passo."""
+        r = self.bloco(LINHA1)
+        self.assertEqual(r["h3"][:2], ["Só olhar", "Olhar e aceitar pedidos"])
+        self.assertEqual(r["pres"], ["LINHA-SO-OLHAR"])
+        self.assertNotIn("--ordens", r["t"])
+        self.assertIn("Confirmar com a minha chave", r["botoes"])
+        self.assertIn("Para ver esta linha, confirme com a sua chave: o mesmo PIN ou digital de sempre. "
+                      "Assim só a sua chave entra no servidor.", r["t"])
+        self.assertEqual(r["links"], [])
+        # o limite dos pedidos e lido ANTES do PIN
+        self.assertIn([False, "O que isso faz? (olhar e aceitar pedidos)"], r["det"])
+
+    def test_o_toque_cancelado_diz_e_deixa_tentar_de_novo(self):
+        r = self.bloco(LINHA1[:-2] + ", toque: 'cancelado' }")
+        self.assertIn("Você cancelou. A linha com pedidos não foi mostrada; pode tentar de novo.", r["t"])
+        self.assertIn("Confirmar com a minha chave", r["botoes"])
+        self.assertNotIn("--ordens", r["t"])
+
+    def test_esperando_o_toque_o_botao_fica_parado(self):
+        r = self.bloco(LINHA1[:-2] + ", toque: 'tocando' }")
+        self.assertIn("Esperando a sua chave…", r["botoes"])
+        self.assertNotIn("Confirmar com a minha chave", r["botoes"])
+
     def test_servidor_antigo_sem_o_campo_mostra_so_a_linha_de_sempre(self):
         d = "{ linha: 'LINHA-SO-OLHAR', sha256: '" + "a" * 64 + "' }"
         r = self.bloco(d)
         self.assertEqual(r["pres"], ["LINHA-SO-OLHAR"])
         self.assertEqual((r["h3"], r["links"]), (["Se der errado"], []))
+
+
+DESAFIO_DA_LINHA = ("{ desafio: 'I1hYDAUhTGY5VpoQX-AjUNLOox129P1vbq2JZEUJDYQ', rp_id: 'dervs.com.br', "
+                    "chaves: ['AQID'], segundos: 300 }")
+LINHA_TOCADA = ("{ linha_com_ordens: 'LINHA-SO-OLHAR --ordens 00.11', "
+                "chave: { apelido: 'PIN do notebook', criado_em: '2026-10-12T13:00:00+00:00' } }")
+
+
+class OToqueDaLinhaDoCliqueAoServidor(unittest.TestCase):
+    """O botao "Confirmar com a minha chave": desafio -> PIN -> linha."""
+
+    def toque(self, respostas, navegador=""):
+        return rode(self, AJUDAS + NAVEGADOR + navegador
+                    + "LIGAR_SERVIDOR.dados = %s; LIGAR_SERVIDOR.fase = 'ligando';\n"
+                      "await confirmarComAChave();\n"
+                      "const b = LIGAR_SERVIDOR.bloco;\n"
+                      "console.log(JSON.stringify({ escritas, toque: LIGAR_SERVIDOR.dados.toque, "
+                      "pres: achaTodos(b, n => n.tag === 'pre').map(n => n.textContent), t: b.textContent, "
+                      "get: gets.length ? { rpId: gets[0].publicKey.rpId, uv: gets[0].publicKey.userVerification, "
+                      "ids: gets[0].publicKey.allowCredentials.map(a => Array.from(a.id)) } : null }));" % LINHA1,
+                    respostas)
+
+    def test_o_caminho_feliz_pede_o_pin_e_mostra_a_linha_com_so_a_chave_tocada(self):
+        r = self.toque("[resposta(200, %s), resposta(200, %s)]" % (DESAFIO_DA_LINHA, LINHA_TOCADA))
+        self.assertEqual([e[0] for e in r["escritas"]],
+                         ["/api/ajudante/linha/desafio", "/api/ajudante/linha/pedidos"])
+        self.assertEqual(r["escritas"][1][1], {"cred_id": "Y3JlZA", "cliente": "AQID",
+                                               "autenticador": "BAUGBw", "assinatura": "-vv8"})
+        self.assertEqual(r["get"], {"rpId": "dervs.com.br", "uv": "required", "ids": [[1, 2, 3]]})
+        self.assertEqual(r["pres"], ["LINHA-SO-OLHAR", "LINHA-SO-OLHAR --ordens 00.11"])
+        self.assertIn("Esta linha confia só na chave “PIN do notebook”", r["t"])
+
+    def test_cancelar_o_pin_nao_mostra_a_linha(self):
+        r = self.toque("[resposta(200, %s)]" % DESAFIO_DA_LINHA,
+                       "navegadorCom(async () => { const e = new Error('x'); e.name = 'NotAllowedError'; throw e; });\n")
+        self.assertEqual(r["toque"], "cancelado")
+        self.assertEqual(r["pres"], ["LINHA-SO-OLHAR"])
+        self.assertEqual(len(r["escritas"]), 1)
+
+    def test_o_servidor_recusar_o_toque_e_erro_e_nao_mostra_a_linha(self):
+        r = self.toque("[resposta(200, %s), resposta(401, {erro: 'nao deu'})]" % DESAFIO_DA_LINHA)
+        self.assertEqual(r["toque"], "erro")
+        self.assertEqual(r["pres"], ["LINHA-SO-OLHAR"])
+        self.assertIn("Não deu para confirmar a sua chave. Tente de novo.", r["t"])
 
 
 # ===================================================== texto, fonte e jargao
@@ -630,7 +707,8 @@ class OsPedidosNaoFalamAlinguaDeQuemConstruiu(unittest.TestCase):
             "estadoDoPedido": ("numero", "tipo", "alvo", "estado", "quando", "codigo", "motivo"),
             "fazerOPedido": ("numero", "desafio", "rp_id", "chaves", "segundos", "frase"),
             "fraseDoErroDePedido": ("motivo",),
-            "blocoDaLinhaDoAjudante": ("linha_com_ordens", "chaves_na_linha"),
+            "blocoDaLinhaDoAjudante": ("linha_com_ordens", "tem_chave", "chave", "toque"),
+            "confirmarComAChave": ("desafio", "rp_id", "chaves", "segundos", "linha_com_ordens", "chave"),
         }
         for nome, campos in esperado.items():
             corpo = funcao(nome)
