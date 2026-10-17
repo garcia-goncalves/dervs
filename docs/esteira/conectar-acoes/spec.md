@@ -229,8 +229,8 @@ motivo        TEXT     -- só a lista fechada de C3/C4
 
 Índice `(maquina_id, criado)`. Poda: ao preparar, apaga ordens da máquina além das 50 mais
 novas. Toda leitura e escrita leva `usuario_id` **e** `maquina_id` no `WHERE`. Uma ordem
-"em andamento" por máquina (preparada e não vencida, ou entregue sem desfecho há menos de
-30 min): a segunda dá 409 `ocupado`.
+"em andamento" por máquina (assinada e não vencida, ou entregue sem desfecho há menos de
+30 min): a segunda dá 409 `ocupado`. Preparada sem digital não ocupa: a nova a apaga (17/10/2026).
 
 **C7 — As rotas da tela** (sessão, `Origin` em `ORIGENS_OK`, `X-Token`, classe `dado`;
 nomes sem `acao|execucao|exec|terminal|pty|shell|comando|grafo`):

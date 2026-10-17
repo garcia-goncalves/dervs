@@ -3635,9 +3635,16 @@ def criar_ordem_de_servidor(usuario_id: int, maquina_id: int, ident: str,
     """Grava uma ordem preparada. False se a maquina ja tem uma em andamento.
 
     "Em andamento" e decidido AQUI, na mesma transacao que insere
-    (`BEGIN IMMEDIATE`): preparada e nao vencida, ou entregue sem desfecho ha
-    menos de 30 minutos. Conferir na rota e inserir depois deixaria duas
-    abas prepararem juntas. Poda alem das 50 mais novas da maquina."""
+    (`BEGIN IMMEDIATE`): ASSINADA e nao vencida, ou entregue sem desfecho ha
+    menos de 30 minutos. Poda alem das 50 mais novas da maquina.
+
+    PREPARADA SEM DIGITAL NAO OCUPA: e substituida. Antes ela ocupava ate
+    vencer, e o dono que cancelou a digital ouvia "ja ha um pedido em
+    andamento" por 5 minutos, de um pedido que nunca existiu (Lei 2). Duas
+    abas que preparam juntas continuam dando UMA ordem so: a nova apaga a
+    anterior nesta mesma transacao, e a digital da anterior da 401 (em
+    `ordem_para_assinar`, ou no UPDATE de `assinar_ordem_de_servidor` se a
+    troca entrou entre os dois)."""
     fechar = con is None
     con = con or conectar()
     try:
@@ -3646,13 +3653,18 @@ def criar_ordem_de_servidor(usuario_id: int, maquina_id: int, ident: str,
             ocupada = con.execute(
                 "SELECT 1 FROM ordem_de_servidor WHERE maquina_id = ?"
                 " AND usuario_id = ? AND desfecho IS NULL AND ("
-                "  (entregue_em IS NULL AND vence >= ?)"
+                "  (entregue_em IS NULL AND assinada_em IS NOT NULL"
+                "   AND vence >= ?)"
                 "  OR (entregue_em IS NOT NULL AND entregue_em > ?)) LIMIT 1",
                 (maquina_id, usuario_id, criado,
                  _iso_de(criado - ORDEM_FAZENDO_ATE))).fetchone()
             if ocupada:
                 con.rollback()
                 return False
+            con.execute(
+                "DELETE FROM ordem_de_servidor WHERE maquina_id = ?"
+                " AND usuario_id = ? AND assinada_em IS NULL",
+                (maquina_id, usuario_id))
             con.execute(
                 "INSERT INTO ordem_de_servidor (numero, usuario_id,"
                 " maquina_id, ident, tipo, alvo, criado, vence)"

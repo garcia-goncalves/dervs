@@ -106,7 +106,7 @@ O pedido vence em 5 minutos.
 
 **8. Digital cancelada.** O dono fechou o pedido do aparelho, ou ele expirou: faixa neutra
 "Você cancelou. Nada foi pedido ao servidor." O botão volta ao normal. (Uma ordem preparada e
-não aprovada simplesmente vence; nada desce ao servidor.)
+não aprovada é trocada pela próxima que o dono preparar; nada desce ao servidor.)
 
 **9. Pedido enviado.** O DERVS aceitou a digital: marca neutra "pedido enviado" + carimbo
 "há N s", na linha do alvo (sistema ou projeto). O fluxo de eventos já aberto (`event:

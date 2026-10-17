@@ -385,9 +385,25 @@ class PrepararOPedido(_Base):
         self.assertEqual((409, {"motivo": "sem_dados"}),
                          (r.status, self.json(r)))
 
-    def test_a_segunda_ordem_e_ocupado(self):
+    def test_depois_de_cancelar_a_digital_o_proximo_clique_prepara(self):
+        """A tela diz "Voce cancelou" e devolve o botao: o clique seguinte
+        nao pode dar "ja ha um pedido em andamento" (era 409 por 5 min)."""
         c = self.cenario()
-        self.assertEqual(200, self.preparar(c).status)
+        primeira = self.json(self.preparar(c))
+        r = self.preparar(c, "voltar", "grimoire")
+        self.assertEqual(200, r.status, r.corpo)
+        self.assertIsNone(self.ordem_no_banco(primeira["numero"]))
+
+    def test_com_uma_ordem_assinada_a_segunda_e_ocupado(self):
+        c = self.cenario()
+        primeira = self.json(self.preparar(c))
+        con = banco.conectar()
+        try:
+            con.execute("UPDATE ordem_de_servidor SET assinada_em = 'x'"
+                        " WHERE numero = ?", (primeira["numero"],))
+            con.commit()
+        finally:
+            con.close()
         r = self.preparar(c, "voltar", "grimoire")
         self.assertEqual((409, {"motivo": "ocupado"}), (r.status, self.json(r)))
 

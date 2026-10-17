@@ -4217,11 +4217,34 @@ class AsOrdensDeServidor(unittest.TestCase):
         self.assertEqual((6, 9), (lista[0]["x"], lista[0]["y"]))
         self.assertEqual("ap5", lista[0]["apelido"])
 
-    def test_a_segunda_ordem_em_andamento_e_recusada(self):
+    def test_preparada_sem_digital_nao_ocupa_e_a_nova_a_substitui(self):
+        """O dono cancelou a digital: o botao volta ao normal, e o clique
+        seguinte NAO pode ouvir "ja ha um pedido em andamento" por 5 minutos.
+        A nova apaga a preparada sem assinatura, e so uma chega a ser
+        assinada (duas abas: vale a mais nova)."""
         self.assertTrue(self.criar(1))
-        self.assertFalse(self.criar(2))                 # preparada, nao vencida
-        self.assertTrue(self.criar(3, quando=self.AGORA + 301))   # a 1a venceu
+        self.assertTrue(self.criar(2, quando=self.AGORA + 3))
+        self.assertIsNone(banco.ordem_para_assinar(
+            self.a, self.numero(1), self.AGORA + 4, con=self.con))
+        self.assertFalse(self.assinar(1, quando=self.AGORA + 4))
+        self.assertTrue(self.assinar(2, quando=self.AGORA + 4))
+
+    def test_assinada_e_nao_entregue_ocupa_ate_vencer(self):
+        self.assertTrue(self.criar(1))
+        self.assertTrue(self.assinar(1, quando=self.AGORA + 2))
+        self.assertFalse(self.criar(2, quando=self.AGORA + 10))
+        # A assinada nao e apagada pela tentativa recusada.
+        self.assertIsNotNone(self.con.execute(
+            "SELECT 1 FROM ordem_de_servidor WHERE numero = ?",
+            (self.numero(1),)).fetchone())
+        self.assertTrue(self.criar(3, quando=self.AGORA + 301))   # venceu
         self.assertTrue(self.criar(4, uid=self.b, mid=self.mb))   # outra maquina
+
+    def test_a_nova_nao_apaga_a_preparada_de_outra_maquina(self):
+        self.assertTrue(self.criar(1))
+        self.assertTrue(self.criar(2, uid=self.b, mid=self.mb))
+        self.assertIsNotNone(banco.ordem_para_assinar(
+            self.a, self.numero(1), self.AGORA + 1, con=self.con))
 
     def test_entregue_sem_desfecho_ocupa_por_30_minutos(self):
         self.criar(1)
@@ -4243,8 +4266,10 @@ class AsOrdensDeServidor(unittest.TestCase):
         self.assertTrue(self.criar(2, quando=self.AGORA + 10))
 
     def test_poda_deixa_as_50_mais_novas_da_maquina(self):
+        # ASSINADAS: a preparada sem digital ja e apagada pela seguinte.
         for i in range(1, 56):
             self.assertTrue(self.criar(i, quando=self.AGORA + i * 400), i)
+            self.assertTrue(self.assinar(i, quando=self.AGORA + i * 400), i)
         n = self.con.execute("SELECT COUNT(*) FROM ordem_de_servidor"
                              " WHERE maquina_id = ?", (self.ma,)).fetchone()[0]
         self.assertEqual(50, n)
