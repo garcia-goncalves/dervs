@@ -311,6 +311,25 @@ class AServidorDeVerdade(unittest.TestCase):
                self.dono(self.uid, "/api/voz").json["maquinas"]]
         self.assertNotIn(mid, ids)
 
+    def test_quem_nao_fala_com_o_voz_nao_aparece_nem_recebe_recado(self):
+        """Servidor e computador `so_mede` levam 403 em `/agente/voz/*`: um
+        recado para eles ficaria pendente 24 h, comendo vaga do teto. Visto em
+        produção em 17/10/2026: a VPS aparecia na lista do VOZ."""
+        for nome, tipo in (("so-mede", "computador"), ("vps", "servidor")):
+            with self.subTest(tipo=tipo):
+                _, mid = self._parear(self.uid, nome)
+                con = banco.conectar()
+                con.execute("UPDATE maquina SET so_mede = 1, tipo = ?"
+                            " WHERE id = ?", (tipo, mid))
+                con.commit()
+                con.close()
+                self.addCleanup(banco.revogar_maquina, mid, self.uid)
+                ids = [m["maquina_id"] for m in
+                       self.dono(self.uid, "/api/voz").json["maquinas"]]
+                self.assertNotIn(mid, ids)
+                self.assertIn(self.m_a1, ids)
+                self.assertEqual(self.recado(self.uid, mid).status, 404)
+
     # ---------------------------------------------------------------- estado
     def test_o_estado_e_guardado_e_o_painel_o_mostra(self):
         r = self.maquina(self.t_a1, "/agente/voz/estado", "POST", _estado_bom())

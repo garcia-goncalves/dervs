@@ -4042,7 +4042,8 @@ def _inserir_voz_recado(con, usuario_id, maquina_id, tipo, alvo, texto, nivel,
         return None, "nivel"
     if con.execute(
             "SELECT 1 FROM maquina WHERE id = ? AND usuario_id = ?"
-            " AND revogada_em IS NULL", (maquina_id, usuario_id)
+            # `so_mede` (inclusive servidor) nunca busca recado: 403 na rota.
+            " AND revogada_em IS NULL AND so_mede = 0", (maquina_id, usuario_id)
     ).fetchone() is None:
         return None, "sem_maquina"
     # Recado que ninguem buscou em 24 h nao e pendencia, e estado que nunca
@@ -4234,6 +4235,8 @@ def voz_do_usuario(usuario_id: int, agora_iso: str = None, con=None) -> dict:
                 "  FROM maquina m LEFT JOIN voz_estado e"
                 "    ON e.maquina_id = m.id AND e.usuario_id = m.usuario_id"
                 " WHERE m.usuario_id = ? AND m.revogada_em IS NULL"
+                # Servidor e `so_mede` levam 403 em /agente/voz/*: nao sao VOZ.
+                "   AND m.so_mede = 0"
                 " ORDER BY m.criado_em, m.id", (usuario_id,)):
             atraso = _segundos_desde(m["visto_em"], agora_iso)
             estado = None
